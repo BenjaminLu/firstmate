@@ -40,6 +40,10 @@
 #            session listing for the stable path; exit 1 with a reason when no
 #            open session exists. The URL never changes while the board keeps
 #            its path, because Lavish keys the session on the file's realpath.
+#            When the installed lavish-axi supports session names, build opens
+#            the board as `--name <name>` (FM_BEARINGS_BOARD_NAME, default
+#            `bearings`) and the URL is the memorable `/s/<name>` form; an
+#            older lavish-axi keeps the keyed `/session/<id>` form.
 # open       Print that URL and open it in the default browser (macOS `open`,
 #            else `xdg-open`), so the captain reaches the board without
 #            remembering the session id.
@@ -115,6 +119,7 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
+BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
 BOARD_SCHEMA=fm-bearings-board.v1
 
 usage() {
@@ -287,17 +292,27 @@ lavish_board_live() {  # <establish output> <canonical-board-path>
 # this board, which is exactly the attention `--reopen` exists for - and a
 # session that is still not live after that refuses the build rather than
 # arming a poll that can never attach.
+# The installed lavish-axi advertises session names in its own help text; an
+# older release gets the plain open so the board still works there.
+lavish_name_args() {
+  if lavish-axi 2>/dev/null | grep -q -- '--name <slug>'; then
+    printf -- '--name\n%s\n' "$BOARD_SESSION_NAME"
+  fi
+}
+
 establish_board_session() {  # <board>
   local board=$1 real out status version
+  local -a name_args=()
   BOARD_SESSION_REOPENED=0
   real=$(board_realpath "$board") || fail "cannot resolve the board path: $board"
-  out=$(lavish-axi "$board") || fail "cannot establish the board Lavish session"
+  while IFS= read -r line; do [ -n "$line" ] && name_args+=("$line"); done < <(lavish_name_args)
+  out=$(lavish-axi "$board" ${name_args[@]+"${name_args[@]}"}) || fail "cannot establish the board Lavish session"
   printf '%s\n' "$out"
   if lavish_board_live "$out" "$real"; then
     printf 'session: live\n'
     return 0
   fi
-  out=$(lavish-axi "$board" --reopen) || fail "cannot reopen the ended board Lavish session"
+  out=$(lavish-axi "$board" --reopen ${name_args[@]+"${name_args[@]}"}) || fail "cannot reopen the ended board Lavish session"
   printf '%s\n' "$out"
   if lavish_board_live "$out" "$real"; then
     BOARD_SESSION_REOPENED=1
