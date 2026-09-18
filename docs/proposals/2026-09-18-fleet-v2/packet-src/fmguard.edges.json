@@ -1,0 +1,27 @@
+[
+ {
+  "from": "primary-l",
+  "to": "agent-tool",
+  "evidence": "this session: Agent(claude-code-guide) was attempted"
+ },
+ {
+  "from": "agent-tool",
+  "to": "guard",
+  "evidence": "observed this session: permissionDecision deny, '[subagent-dispatch] the firstmate primary dispatches through the fleet'"
+ },
+ {
+  "from": "primary-r",
+  "to": "brief",
+  "evidence": "AGENTS.md section 7: write the brief before spawning"
+ },
+ {
+  "from": "brief",
+  "to": "spawn",
+  "evidence": "bin/fm-spawn.sh header: reads the brief's Delivery contract line and refuses a mismatch"
+ },
+ {
+  "from": "spawn",
+  "to": "crew",
+  "evidence": "bin/fm-spawn.sh header: isolated worktree, state/<id>.meta, backlog transition to In flight"
+ }
+]

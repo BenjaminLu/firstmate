@@ -232,6 +232,17 @@ fm_ask_user_escalation_block() {  # <data-dir> <task-id>
 EOF
 }
 
+# fm_dod_packet_block <task-id>: the decision-packet contract every ship brief
+# carries, rendered once here so the three delivery modes cannot drift.
+# bin/fm-packet.sh owns the packet format and the verify rules.
+fm_dod_packet_block() {  # <task-id>
+  local id=$1
+  cat <<EOF
+Before the \`done:\` line, and before any \`needs-decision:\` line, leave the decision packet: run \`$FM_ROOT/bin/fm-packet.sh scaffold $id\` (add \`--kind needs-decision\` when you are asking for a decision), fill every \`{FILL}\` placeholder in the packet it writes - above all "What only this session knows": every path you tried and dropped and why, every assumption you could not verify - then run \`$FM_ROOT/bin/fm-packet.sh verify $id\` and fix what it reports until it prints \`packet: ok\`.
+A status line is a wake, not an explanation; the packet is what firstmate and the captain read, so a \`done:\` or \`needs-decision:\` line without a verified packet is not accepted.
+EOF
+}
+
 fm_dod_block() {  # <mode> <task-id>
   local mode=$1 id=$2
   case "$mode" in
@@ -241,6 +252,7 @@ fm_dod_block() {  # <mode> <task-id>
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
+$(fm_dod_packet_block "$id")
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
@@ -252,6 +264,7 @@ Delivery contract: mode=local-only
 This task ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`fm/$id\`. Do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
+$(fm_dod_packet_block "$id")
 When it is implemented and committed, append \`done: ready in branch fm/$id\` to the status file and stop.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
@@ -261,6 +274,7 @@ EOF
 # Definition of done
 Delivery contract: mode=no-mistakes
 The task is complete only when committed on your branch.
+$(fm_dod_packet_block "$id")
 When you believe it is complete, append \`done: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 

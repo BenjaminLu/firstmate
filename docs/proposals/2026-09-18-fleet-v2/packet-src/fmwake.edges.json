@@ -1,0 +1,47 @@
+[
+ {
+  "from": "pane",
+  "to": "status",
+  "evidence": "bin/fm-brief.sh scaffold, states: working, needs-decision, blocked, paused, done, failed"
+ },
+ {
+  "from": "watch",
+  "to": "status",
+  "evidence": "bin/fm-classify-lib.sh header"
+ },
+ {
+  "from": "watch",
+  "to": "watch",
+  "evidence": "docs/architecture.md: absorbed wakes advance markers and keep the watcher blocking without a queue record or LLM turn"
+ },
+ {
+  "from": "watch",
+  "to": "watch",
+  "evidence": "state/.wake-queue: epoch<TAB>seq<TAB>kind<TAB>key<TAB>payload"
+ },
+ {
+  "from": "watch",
+  "to": "hook",
+  "evidence": "bin/fm-claude-stop-autoarm.sh: the Stop hook foregrounds bin/fm-watch-arm.sh"
+ },
+ {
+  "from": "hook",
+  "to": "fm",
+  "evidence": "bin/fm-claude-stop-autoarm.sh: exit 2 carries the rewake banner on stderr"
+ },
+ {
+  "from": "fm",
+  "to": "fm",
+  "evidence": "AGENTS.md section 8; bin/fm-wake-drain.sh header"
+ },
+ {
+  "from": "fm",
+  "to": "fm",
+  "evidence": "AGENTS.md section 8: WAKE_ACK_REQUIRED"
+ },
+ {
+  "from": "fm",
+  "to": "hook",
+  "evidence": "session-start supervision block: every turn end launches or attaches one watcher cycle"
+ }
+]

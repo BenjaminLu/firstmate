@@ -925,6 +925,32 @@ test_worker_role_scope() {
 }
 
 test_worker_role_scope
+# Every ship definition of done, and the scout's decision path, renders the
+# decision-packet contract with the absolute packet tool path, so a worker can
+# run it from its worktree without knowing where firstmate lives.
+test_ship_and_scout_render_the_packet_contract() {
+  local home id brief mode
+  home="$TMP_ROOT/packet-home"
+  mkdir -p "$home/data"
+  for mode in no-mistakes direct-PR local-only; do
+    id="brief-packet-$mode"
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1
+    brief="$home/data/$id/brief.md"
+    assert_present "$brief" "brief was not scaffolded for $mode"
+    assert_grep "$ROOT/bin/fm-packet.sh scaffold $id" "$brief" "$mode DOD lacks the packet scaffold command with an absolute path"
+    assert_grep "$ROOT/bin/fm-packet.sh verify $id" "$brief" "$mode DOD lacks the packet verify command"
+    assert_grep "without a verified packet is not accepted" "$brief" "$mode DOD does not make the packet a condition of done"
+    # shellcheck disable=SC2016  # the literal, unexpanded variable name is what must be absent
+    assert_no_grep '\$FM_ROOT/bin/fm-packet' "$brief" "$mode DOD left the packet path unexpanded"
+  done
+  id="brief-packet-scout"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --scout >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_grep "fm-packet.sh scaffold $id --kind needs-decision" "$brief" "scout brief lacks the needs-decision packet step"
+  assert_grep "Your report is the packet for" "$brief" "scout brief does not say the report stands in for a done packet"
+  pass "fm-brief.sh: ship and scout briefs render the packet contract"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -949,3 +975,4 @@ test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor
+test_ship_and_scout_render_the_packet_contract

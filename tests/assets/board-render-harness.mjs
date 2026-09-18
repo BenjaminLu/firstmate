@@ -5,7 +5,9 @@
 // Usage: node board-render-harness.mjs <built-board.html>
 // Prints one JSON document:
 //   { stats:[{n,label}], underway:[{title,sub,badges}],
-//     charted:[{title,sub,badges,pickable}], empty, more, error }
+//     charted:[{title,sub,badges,pickable}], empty, more,
+//     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips}],
+//     headings:[call,charted,underway,landed], error }
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -108,6 +110,30 @@ const rowsOf = (container) =>
       };
     });
 
+/* Captain's Call cards: badges, title, context rows (key -> value), option
+   labels with their consequences, evidence chips, and which language the
+   renderer chose (the html lang the renderer sets, when the shim has one). */
+const deck = byId.get("bb-call") || new Node("div");
+const findAll = (n, cls) => n.querySelectorAll("." + cls);
+const cards = deck.children
+  .filter((c) => c.className.split(/\s+/).includes("bb-decision"))
+  .map((card) => ({
+    badges: findAll(card, "fm-badge").map((b) => b.textContent),
+    title: findAll(card, "bb-decision__title")[0]?.textContent ?? "",
+    ctx: findAll(card, "bb-ctx__row").map((r) => ({
+      k: findAll(r, "bb-ctx__k")[0]?.textContent ?? "",
+      v: findAll(r, "bb-ctx__v")[0]?.textContent ?? "",
+    })),
+    options: findAll(card, "bb-opt").map((o) => ({
+      label: findAll(o, "bb-opt__label")[0]?.textContent ?? "",
+      consequence: findAll(o, "bb-opt__consequence")[0]?.textContent ?? "",
+      rec: findAll(o, "bb-opt__rec").length > 0,
+    })),
+    chips: findAll(card, "bb-chip").map((a) => a.textContent),
+  }));
+const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
+  .map((id) => byId.get(id)?.textContent ?? "");
+
 const uw = byId.get("bb-underway") || new Node("div");
 const underway = rowsOf(uw);
 
@@ -123,4 +149,4 @@ const empty = ch.children.filter((c) => c.className.includes("bb-empty")).map((c
 const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map((c) => c.textContent);
 
 process.stdout.write(
-  JSON.stringify({ stats, underway, charted, empty, more, error: errorText }) + "\n");
+  JSON.stringify({ stats, underway, charted, empty, more, cards, headings, error: errorText }) + "\n");

@@ -1,0 +1,157 @@
+{
+  "schema": "fm-bearings-board.v1",
+  "home": "firstmate (demo)",
+  "generated": "2026-09-18T09:20Z (demo data, rebuilt after two answers)",
+  "prs_live": false,
+  "lang": "hant",
+  "captains_call": [
+    {
+      "key": "update-firstmate-upstream",
+      "type": "decision",
+      "repo": "firstmate",
+      "risk": "low",
+      "reversible": "yes",
+      "title": {
+        "en": "Update this firstmate to upstream main (14 commits behind)",
+        "hant": "把這個 firstmate 更新到 upstream main（落後 14 個 commit）"
+      },
+      "decide": {
+        "en": "Update now, or wait until the board PR lands?",
+        "hant": "現在更新，還是等看板的 PR 合併再一起？"
+      },
+      "about": {
+        "en": "Upstream gained 14 commits since this home last synced, including 3eb5b633 'settle terminal contribution observations', which looks like the fix for the merged-PR read failures that woke you four times today.",
+        "hant": "這個 home 上次同步後 upstream 多了 14 個 commit，其中 3eb5b633「settle terminal contribution observations」看起來就是今天叫你四次的已合併 PR 讀取失敗的修法。"
+      },
+      "if_nothing": {
+        "en": "The noisy wake keeps arriving about every ten minutes, and the next PR is rebased on a main this home does not run yet.",
+        "hant": "那個噪音每十分鐘左右繼續來，而且下一個 PR 是 rebase 在這個 home 還沒跑的 main 上。"
+      },
+      "reversible_note": {
+        "en": "The update is a guarded fast-forward through /updatefirstmate; a bad update is undone by checking out the previous main commit.",
+        "hant": "更新走 /updatefirstmate 的 guarded fast-forward；出問題 checkout 回上一個 main commit 就好。"
+      },
+      "options": [
+        {
+          "value": "now",
+          "label": {
+            "en": "Update now",
+            "hant": "現在更新"
+          },
+          "consequence": {
+            "en": "This session restarts on the new main; the contribution fix is live within minutes.",
+            "hant": "這個 session 會在新的 main 上重啟；contribution 的修法幾分鐘內生效。"
+          }
+        },
+        {
+          "value": "after-pr",
+          "label": {
+            "en": "After the board PR merges",
+            "hant": "等看板 PR 合併後"
+          },
+          "consequence": {
+            "en": "One restart instead of two, but the noisy wake stays until then.",
+            "hant": "只重啟一次，但噪音會持續到那時候。"
+          }
+        }
+      ],
+      "recommend_value": "now",
+      "recommend_why": {
+        "en": "The fix is upstream and unrelated to the PR; every hour of delay is six more empty wakes.",
+        "hant": "修法已在 upstream 而且跟 PR 無關；每多等一小時就多六個空喚醒。"
+      },
+      "evidence": [
+        {
+          "label": {
+            "en": "upstream commit 3eb5b633",
+            "hant": "upstream commit 3eb5b633"
+          },
+          "url": "https://github.com/kunchenguid/firstmate/commit/3eb5b633"
+        },
+        {
+          "label": {
+            "en": "board PR #1",
+            "hant": "看板 PR #1"
+          },
+          "url": "https://github.com/BenjaminLu/firstmate/pull/1"
+        }
+      ],
+      "allow_freeform": true
+    }
+  ],
+  "underway": [
+    {
+      "id": "fleet-v2-board",
+      "repo": "firstmate",
+      "name": {
+        "en": "Fleet v2: trilingual decision board",
+        "hant": "Fleet v2：三語決策看板"
+      },
+      "state": "working",
+      "kind": "ship",
+      "doing": {
+        "en": "tests green, demo served",
+        "hant": "測試全綠，demo 已上線"
+      }
+    }
+  ],
+  "landed": [
+    {
+      "id": "bearings-board-i18n-pr",
+      "repo": "firstmate",
+      "what": {
+        "en": "Board PR opened on the fork: trilingual five-question cards",
+        "hant": "看板 PR 已在 fork 上開出：三語五問卡片"
+      },
+      "owner": "firstmate",
+      "pr_url": "https://github.com/BenjaminLu/firstmate/pull/1"
+    },
+    {
+      "id": "pr142-velora-merge",
+      "repo": "tokenlon-smart-order-router",
+      "what": {
+        "en": "Merge PR 142: ParaSwap to Velora API migration",
+        "hant": "合併 PR 142：ParaSwap 換到 Velora API"
+      },
+      "owner": "captain",
+      "pr_url": "https://github.com/consenlabs/tokenlon-smart-order-router/pull/142"
+    },
+    {
+      "id": "baton-one-skill",
+      "repo": "baton",
+      "what": {
+        "en": "baton collapsed into one /baton personal skill",
+        "hant": "baton 合併成單一 /baton 個人 skill"
+      },
+      "owner": "firstmate"
+    }
+  ],
+  "charted": [
+    {
+      "id": "contributions-poll-transient-wake",
+      "repo": "firstmate",
+      "title": {
+        "en": "Contributions poll: 5 s per-call bound below GitHub latency",
+        "hant": "Contributions poll：5 秒上限低於 GitHub 延遲"
+      },
+      "reason": {
+        "en": "waits on the decision above",
+        "hant": "等上面那個決定"
+      },
+      "dispatchable": false,
+      "filed": "2026-09-18"
+    },
+    {
+      "id": "packet-in-dod",
+      "repo": "firstmate",
+      "title": {
+        "en": "Fleet v2 phase 1: worker-produced decision packet in the definition of done",
+        "hant": "Fleet v2 第一階段：worker 自產 decision packet 進 DoD"
+      },
+      "reason": "",
+      "dispatchable": true,
+      "filed": "2026-09-18"
+    }
+  ],
+  "charted_more": 0
+}
