@@ -515,6 +515,14 @@
     {
       "path": "tests/captures/no-mistakes-v1.70.1/README.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/proposals/2026-09-18-fleet-v2/plan.md",
+      "audience": "maintainer-architecture"
+    },
+    {
+      "path": "docs/proposals/2026-09-18-fleet-v2/packet-src/context.md",
+      "audience": "maintainer-verification"
     }
   ]
 }
