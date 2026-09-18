@@ -857,6 +857,24 @@ test_build_refuses_malformed_copy_and_card_fields() {
   pass "build refuses malformed copy objects, card enums, evidence links, and languages"
 }
 
+test_url_reads_the_live_session_listing() {
+  local home data board out rc
+  home=$(make_home url)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  set +e; out=$(run_board "$home" url 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "url succeeded before any board was built"
+  assert_contains "$out" "no board has been built" "url did not explain the missing board: $out"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "a valid payload did not build"
+  out=$(run_board "$home" url) || fail "url failed for a built, open board: $out"
+  assert_contains "$out" "http://" "url did not print the session URL: $out"
+  end_session_as_captain "$home"
+  set +e; out=$(run_board "$home" url 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "url printed a URL for a session the captain ended"
+  pass "url prints the open session's URL and refuses when none is open"
+}
+
 test_path_is_stable_and_home_scoped
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
@@ -877,3 +895,4 @@ test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
 test_build_accepts_trilingual_copy_and_five_question_fields
 test_build_refuses_malformed_copy_and_card_fields
+test_url_reads_the_live_session_listing

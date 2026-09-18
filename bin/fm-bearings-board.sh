@@ -10,6 +10,8 @@
 # Usage:
 #   fm-bearings-board.sh build <data.json>
 #   fm-bearings-board.sh path
+#   fm-bearings-board.sh url
+#   fm-bearings-board.sh open
 #
 # build      Validate the payload, drop the Captain's Call cards whose subject
 #            already landed, give every surviving decision card the standard
@@ -34,6 +36,13 @@
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
 # path       Print the stable board path for this home.
+# url        Print the board's Lavish session URL, read from the server's live
+#            session listing for the stable path; exit 1 with a reason when no
+#            open session exists. The URL never changes while the board keeps
+#            its path, because Lavish keys the session on the file's realpath.
+# open       Print that URL and open it in the default browser (macOS `open`,
+#            else `xdg-open`), so the captain reaches the board without
+#            remembering the session id.
 #
 # A LIVE SESSION IS PROVED, NEVER ASSUMED. `lavish-axi <file>` exits 0 even
 # when it refuses to reopen a session the captain ended from the browser,
@@ -488,9 +497,36 @@ command_build() {
   fi
 }
 
+command_url() {
+  local board real listing url
+  board=$(board_path)
+  [ -f "$board" ] || fail "no board has been built yet at $board (run /bearings lavish)"
+  command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
+  real=$(board_realpath "$board") || fail "cannot resolve the board path"
+  listing=$(lavish-axi 2>/dev/null) || fail "lavish-axi did not answer"
+  url=$(printf '%s\n' "$listing" | awk -v file="$real" '
+    index($0, file) == 0 { next }
+    { line = $0; sub(/^[^,]*,/, "", line); split(line, f, ",");
+      if (f[1] == "open") { gsub(/"/, "", f[2]); print f[2]; exit } }')
+  [ -n "$url" ] || fail "the board has no open Lavish session (rebuild with /bearings lavish)"
+  printf '%s\n' "$url"
+}
+
+command_open() {
+  local url
+  url=$(command_url) || exit 1
+  printf '%s\n' "$url"
+  if command -v open >/dev/null 2>&1; then open "$url"
+  elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1
+  else fail "no browser opener found (open or xdg-open)"
+  fi
+}
+
 case "${1-}" in
   build) shift; command_build "$@" ;;
   path) board_path ;;
+  url) command_url ;;
+  open) command_open ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
