@@ -166,6 +166,12 @@ validate_payload() {  # <data.json>
       or (.[$name]
         | type == "string"
           and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
+    def optional_link_url($name):
+      (has($name) | not)
+      or (.[$name]
+        | type == "string"
+          and (test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$")
+            or test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$")));
     def version: type == "string" and test("^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$");
     def optional_subject:
       (has("subject") | not)
@@ -202,7 +208,7 @@ validate_payload() {  # <data.json>
       and (if .type == "merge" then true
         else ((has("risk") | not) or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
       and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
-      and (optional_https_url("packet_url"))
+      and (optional_link_url("packet_url"))
       and (optional_https_url("pr_url"))
       and optional_subject
       and (if has("subject") then .type == "decision" else true end)

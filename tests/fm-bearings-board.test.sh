@@ -801,7 +801,7 @@ test_build_accepts_trilingual_copy_and_five_question_fields() {
     | .captains_call[0].evidence = [
         {label: {en: "scout report", hant: "偵察報告"}, url: "https://example.test/report"},
         {label: "served packet", url: "http://127.0.0.1:4387/session/abc"}]
-    | .captains_call[0].packet_url = "https://example.test/packet.html"
+    | .captains_call[0].packet_url = "http://127.0.0.1:4387/s/packet-abc"
     | .charted[0].title = {en: "Queued work", hant: "排隊中的工作"}
     | .charted[0].reason = {en: "waits on the cutover", hant: "等切換完成"}
   ' "$data" > "$data.tmp" && mv "$data.tmp" "$data"

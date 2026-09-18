@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-packet.sh: the scaffold is generated from the
 # task's worktree, verify refuses a skeleton and accepts a filled packet, the
-# decision block is validated field by field, and card emits a board-ready
-# Captain's Call item.
+# decision block is validated field by field, card emits a board-ready
+# Captain's Call item, render writes one self-contained HTML page whose
+# decision card answers the five questions, and serve opens that page with
+# lavish-axi under a stable name and hands the card its URL.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -27,15 +29,63 @@ make_home() {  # <name> -> prints home; sets nothing else
   git -C "$wt" add b.txt
   git -C "$wt" -c user.name=t -c user.email=t@example.invalid commit -qm "add b"
   fm_write_meta "$home/state/pk-1.meta" "worktree=$wt" "project=$repo" "kind=ship"
+  make_lavish_stub "$home" nonames
   printf '%s\n' "$home"
+}
+run_packet_lavish() {  # <home> <args...>: run_packet with the stub's state bound
+  local home=$1; shift
+  LAVISH_FAKE_STATE="$home/lavish-state" run_packet "$home" "$@"
 }
 
 run_packet() {  # <home> <args...>
   local home=$1; shift
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    PATH="$TMP_ROOT/nogh:$PATH" "$PACKET" "$@"
+    PATH="$home/fakebin:$TMP_ROOT/nogh:$PATH" "$PACKET" "$@"
 }
 mkdir -p "$TMP_ROOT/nogh"  # no gh on PATH so the PR facts stay offline and deterministic
+# card and serve read lavish-axi's listing; without a stub a developer machine's
+# real server would answer, so every home gets one that lists nothing until a
+# serve opens the page. The listing shapes follow lavish-axi 0.1.71 (with
+# --name, a `name` column and the /s/<slug> URL) and an older release without.
+make_lavish_stub() {  # <home> <names|nonames>: a lavish-axi that records its args
+  local fakebin
+  fakebin=$(fm_fakebin "$1")
+  mkdir -p "$1/lavish-state"
+  cat > "$fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+state=${LAVISH_FAKE_STATE:?}
+case "${1-}" in
+  --version) printf '0.1.71\n'; exit 0 ;;
+  '')
+    if [ -e "$state/names" ]; then
+      printf 'sessions[1]{file,status,url,name,pending_prompts}:\n'
+      [ -s "$state/open" ] && printf '  %s,open,"http://127.0.0.1:4387/s/%s",%s,0\n' "$(cat "$state/open")" "$(cat "$state/name")" "$(cat "$state/name")"
+      printf 'help[2]: "Run `lavish-axi <html-file>` to open a session","Pass `--name <slug>` (lowercase letters, digits, hyphens) to give a session a stable URL"\n'
+    else
+      printf 'sessions[1]{file,status,url,pending_prompts}:\n'
+      [ -s "$state/open" ] && printf '  %s,open,"http://127.0.0.1:4387/session/deadbeef",0\n' "$(cat "$state/open")"
+      printf 'help[1]: "Run `lavish-axi <html-file>` to open a session"\n'
+    fi
+    exit 0 ;;
+esac
+file=$1; shift
+printf '%s\n' "$*" >> "$state/args"
+name=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in --name) name=$2; shift 2 ;; *) shift ;; esac
+done
+real=$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")
+printf '%s\n' "$real" > "$state/open"
+printf '%s\n' "$name" > "$state/name"
+printf 'session:\n  file: %s\n  status: opened\n' "$real"
+exit 0
+SH
+  chmod +x "$fakebin/lavish-axi"
+  rm -f "$1/lavish-state/names"
+  [ "$2" = names ] && : > "$1/lavish-state/names"
+  return 0
+}
 
 fill_prose() {  # <packet>: replace the two prose placeholders with real content
   python3 - "$1" <<'PY'
@@ -185,8 +235,140 @@ test_path_and_bad_ids_are_refused() {
   pass "path prints the packet location and malformed ids are refused"
 }
 
+# The page must open with no network at all: nothing may be fetched at load.
+# Author links (<a href>) are fine; stylesheets, scripts, fonts, images, and
+# CSS imports from a remote host are not.
+assert_no_external_fetch() {  # <page>
+  assert_no_grep '<link ' "$1" "the page links an external resource"
+  assert_no_grep '<script src=' "$1" "the page loads a remote script"
+  assert_no_grep '@import' "$1" "the page imports a remote stylesheet"
+  assert_no_grep '<img src="http' "$1" "the page loads a remote image"
+  assert_no_grep 'url(http' "$1" "the page references a remote url() asset"
+  assert_no_grep 'url("http' "$1" "the page references a remote url() asset"
+  assert_no_grep "url('http" "$1" "the page references a remote url() asset"
+}
+
+section_order() {  # <page> -> the section ids in document order, space-joined
+  grep -o 'id="s_[a-z]*"' "$1" | tr '\n' ' '
+}
+
+test_render_writes_a_self_contained_page_for_a_done_packet() {
+  local home out rc packet page
+  home=$(make_home render-done)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+  # A skeleton is refused: render never publishes a packet verify rejects.
+  set +e; out=$(run_packet "$home" render pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "render accepted an unverified skeleton"
+  assert_absent "$page" "render wrote a page for a skeleton"
+  fill_prose "$packet"
+  python3 - "$packet" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+s = s.replace("- the 15 s bound is unverified against the slowest repo",
+  "- the **15 s** bound is `unverified` against [the slowest repo](https://example.test/slow); see <b>escaped</b>")
+p.write_text(s)
+PY
+  out=$(run_packet "$home" render pk-1) || fail "render failed: $out"
+  assert_contains "$out" "page: $page" "render did not report the page path: $out"
+  assert_present "$page" "render wrote no page"
+  assert_no_grep '{FILL' "$page" "a placeholder survived into the page"
+  assert_no_external_fetch "$page"
+  assert_grep '<strong>15 s</strong>' "$page" "bold did not convert"
+  assert_grep '<code>unverified</code>' "$page" "inline code did not convert"
+  assert_grep '<a href="https://example.test/slow"' "$page" "the link did not convert"
+  assert_grep '&lt;b&gt;escaped&lt;/b&gt;' "$page" "raw HTML in the packet was not escaped"
+  assert_grep '<code>git -C' "$page" "the fenced pull-more block did not convert"
+  assert_grep '<li>tried a retry loop first' "$page" "the session list did not convert"
+  assert_no_grep 'id="pk-decision"' "$page" "a done packet rendered a decision card"
+  [ "$(section_order "$page")" = 'id="s_changed" id="s_session" id="s_evidence" id="s_more" ' ] \
+    || fail "sections are missing or out of packet order: $(section_order "$page")"
+  # Chrome carries all three languages; the raw markdown rides the page for the copy button.
+  assert_grep 'data-hant="只有這個 session 知道的事"' "$page" "the section chrome lacks 繁體"
+  assert_grep 'data-hans="只有这个 session 知道的事"' "$page" "the section chrome lacks 简体"
+  assert_grep 'id="pk-lang-hans"' "$page" "the language switch is missing"
+  assert_grep 'var RAW = "# Packet: pk-1' "$page" "the raw markdown is not embedded for the copy button"
+  assert_grep 'id="pk-copy"' "$page" "the copy button is missing"
+  assert_grep 'id="pk-raw-text"' "$page" "the selected-text fallback is missing"
+  out=$(run_packet "$home" render pk-1 --out "$home/elsewhere/page.html") || fail "render --out failed: $out"
+  assert_present "$home/elsewhere/page.html" "--out did not write the page there"
+  pass "render writes one self-contained page for a done packet"
+}
+
+test_render_decision_card_answers_the_five_questions() {
+  local home packet page
+  home=$(make_home render-decision)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed"
+  assert_no_grep '{FILL' "$page" "a placeholder survived into the page"
+  assert_no_external_fetch "$page"
+  assert_grep 'id="pk-decision"' "$page" "no decision card was rendered"
+  # 1. what to decide
+  assert_grep 'Ship which fix first?' "$page" "the card lacks the question"
+  # 2. per-option consequence
+  assert_grep 'Raise to 15 s' "$page" "the card lacks option A"
+  assert_grep 'failures stop' "$page" "the card lacks option A's consequence"
+  assert_grep 'Stop waking on merged' "$page" "the card lacks option B"
+  assert_grep 'noise stops, open PRs still fail' "$page" "the card lacks option B's consequence"
+  # 3. if nothing
+  assert_grep 'the wake keeps coming' "$page" "the card lacks the if-nothing answer"
+  # 4. reversible, 5. risk
+  assert_grep 'data-hant="可回頭"' "$page" "the card lacks the reversible answer"
+  assert_grep 'data-hant="風險 低"' "$page" "the card lacks the risk answer"
+  # recommendation and why
+  assert_grep '<span class="pk-rec">Raise to 15 s' "$page" "the card does not name the recommended option"
+  assert_grep 'measured latency is 0.9 to 4.4 s' "$page" "the card lacks the why behind the recommendation"
+  assert_grep 'class="bb-opt pk-opt pk-opt--rec"' "$page" "the recommended option is not marked"
+  # Copy objects render per language; plain strings render as written.
+  assert_grep 'data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限"' "$page" "the trilingual title lost a language or hans did not fall back to hant"
+  assert_no_grep 'data-en="Ship which fix first?"' "$page" "a plain string grew language attributes"
+  [ "$(section_order "$page")" = 'id="s_changed" id="s_session" id="s_decision" id="s_evidence" id="s_more" ' ] \
+    || fail "sections are missing or out of packet order: $(section_order "$page")"
+  pass "the rendered decision card answers all five questions and the recommendation"
+}
+
+test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it() {
+  local home out packet page real
+  home=$(make_home serve)
+  make_lavish_stub "$home" names
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  # Before any session is open, the card carries no packet link.
+  out=$(run_packet_lavish "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e 'has("packet_url") | not' >/dev/null || fail "card linked a page nobody served: $out"
+  out=$(run_packet_lavish "$home" serve pk-1) || fail "serve failed: $out"
+  assert_present "$page" "serve did not render the page"
+  assert_contains "$out" "page: $page" "serve did not report the page: $out"
+  assert_contains "$out" "url: http://127.0.0.1:4387/s/packet-pk-1" "serve did not print the named URL: $out"
+  assert_grep '--name packet-pk-1' "$home/lavish-state/args" "serve did not open the page under its stable name"
+  real=$(cd "$(dirname "$page")" && pwd -P)/packet.html
+  assert_equals "$(cat "$home/lavish-state/open")" "$real" "serve opened a different file"
+  out=$(run_packet_lavish "$home" card pk-1) || fail "card failed after serve: $out"
+  printf '%s' "$out" | jq -e '.packet_url == "http://127.0.0.1:4387/s/packet-pk-1"' >/dev/null \
+    || fail "card did not carry the served URL: $out"
+  # An older lavish-axi without --name gets the plain open and the keyed URL.
+  home=$(make_home serve-keyed)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  fill_prose "$home/data/pk-1/packet.md"
+  out=$(run_packet_lavish "$home" serve pk-1) || fail "serve failed without name support: $out"
+  assert_contains "$out" "url: http://127.0.0.1:4387/session/deadbeef" "serve did not print the keyed URL: $out"
+  assert_no_grep '--name' "$home/lavish-state/args" "serve passed --name to a lavish-axi that lacks it"
+  pass "serve opens the page under a stable name and the card links the served URL"
+}
+
 test_scaffold_is_generated_from_the_worktree_and_refuses_to_overwrite
 test_verify_refuses_a_skeleton_and_accepts_a_filled_packet
 test_verify_checks_the_decision_block_field_by_field
 test_card_emits_a_board_ready_decision_item
 test_path_and_bad_ids_are_refused
+test_render_writes_a_self_contained_page_for_a_done_packet
+test_render_decision_card_answers_the_five_questions
+test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it
