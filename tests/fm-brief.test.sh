@@ -940,6 +940,7 @@ test_ship_and_scout_render_the_packet_contract() {
     assert_grep "$ROOT/bin/fm-packet.sh scaffold $id" "$brief" "$mode DOD lacks the packet scaffold command with an absolute path"
     assert_grep "$ROOT/bin/fm-packet.sh verify $id" "$brief" "$mode DOD lacks the packet verify command"
     assert_grep "without a verified packet is not accepted" "$brief" "$mode DOD does not make the packet a condition of done"
+    # shellcheck disable=SC2016  # the literal, unexpanded variable name is what must be absent
     assert_no_grep '\$FM_ROOT/bin/fm-packet' "$brief" "$mode DOD left the packet path unexpanded"
   done
   id="brief-packet-scout"
