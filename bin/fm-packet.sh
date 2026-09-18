@@ -13,6 +13,8 @@
 #   fm-packet.sh scaffold <task-id> [--kind done|needs-decision] [--worktree <dir>] [--pr <url>] [--force]
 #   fm-packet.sh verify <task-id>
 #   fm-packet.sh card <task-id> [--repo <name>]
+#   fm-packet.sh render <task-id>
+#   fm-packet.sh serve <task-id>
 #   fm-packet.sh path <task-id>
 #
 # scaffold   Write the packet skeleton. The generated section is filled from
@@ -42,6 +44,29 @@
 #            payload. A copy object without `hant` is flattened to its `en`
 #            string so the board validator accepts it. --repo names the card's
 #            repo; otherwise the task's meta project= basename, else "".
+#            When the rendered page's Lavish session is listed open, the card
+#            also carries its URL as `packet_url`, so the bearings composer
+#            gets the link without a second lookup; a page older than the
+#            packet is re-rendered first, so the link never shows a stale
+#            packet.
+# render     Verify, then write the packet as ONE self-contained HTML page at
+#            data/<id>/packet.html: no network, no CDN, no external
+#            fonts, sections in packet order, the decision block as a card
+#            answering the five questions (decide, per-option consequence, if
+#            nothing, reversible, risk) plus the recommendation and why, the
+#            markdown sections converted by a small stdlib-only python3
+#            converter (headings, lists, fenced code, inline code, bold,
+#            links), a copy-the-context button that puts the raw markdown on
+#            the clipboard with a selected-text fallback for sandboxed
+#            iframes, and an EN / 繁體 / 简体 switch for the page chrome that
+#            shares the board's stored choice. Copy objects in the decision
+#            block render per language; plain strings render as written. A
+#            packet that fails verify is refused. Prints `page: <path>`.
+# serve      Render, then open the page with lavish-axi - under the stable
+#            session name packet-<task-id> when the installed lavish-axi
+#            advertises --name, else keyed - and print `url: <url>` read from
+#            the server's listing. A session the captain ended is reopened
+#            once, because serve is an explicit ask for their attention.
 # path       Print the packet path for the task.
 #
 # The worker's contract (bin/fm-dod-lib.sh renders it into every ship brief):
@@ -276,7 +301,7 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
 # ---- card -------------------------------------------------------------------
 
 command_card() {
-  local id='' repo='' packet project
+  local id='' repo='' packet project page real packet_url=''
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   id=$1; shift
   while [ "$#" -gt 0 ]; do
@@ -293,7 +318,16 @@ command_card() {
     project=$(meta_value "$id" project)
     [ -z "$project" ] || repo=${project##*/}
   fi
-  decision_block "$packet" | jq --arg repo "$repo" '
+  # The served page's URL rides the card only while its session is listed open,
+  # so the board never links a page nobody can reach.
+  if command -v lavish-axi >/dev/null 2>&1; then
+    page=$(page_path "$id")
+    if [ -e "$page" ]; then
+      [ ! "$packet" -nt "$page" ] || render_page "$id"
+      real=$(page_realpath "$page") && packet_url=$(lavish_open_url "$real")
+    fi
+  fi
+  decision_block "$packet" | jq --arg repo "$repo" --arg packet_url "${packet_url:-}" '
     def flat: if type == "object" then (if (.hant | type) == "string" then . else .en end) else . end;
     {
       key: .key, type: "decision", repo: $repo,
@@ -305,13 +339,605 @@ command_card() {
     }
     + (if has("risk") then {risk: .risk} else {} end)
     + (if has("recommend_why") then {recommend_why: (.recommend_why | flat)} else {} end)
-    + (if has("close") then {close: .close} else {} end)'
+    + (if has("close") then {close: .close} else {} end)
+    + (if $packet_url != "" then {packet_url: $packet_url} else {} end)'
+}
+
+# ---- render -----------------------------------------------------------------
+
+page_path() { printf '%s/%s/packet.html\n' "$DATA" "$1"; }
+
+# The page is one self-contained file: no network, no CDN, no external fonts.
+# Its chrome follows the bearings board's tokens so the two read as one system;
+# the board's Google Fonts import is deliberately left out and the same
+# fallback stacks carry the type. Copy objects in the decision block render per
+# language through data-en/hant/hans attributes the page's language switch
+# reads; plain strings render as written. The raw markdown rides the page for
+# the copy button. Stdlib python3 only, as bin/fm-doc-audience-check.sh already
+# requires.
+render_html() {  # <packet.md> <out.html> <task-id>
+  python3 - "$1" "$2" "$3" <<'PY'
+import html, json, re, sys, pathlib
+
+src, out, task = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+raw = src.read_text(encoding="utf-8")
+lines = raw.splitlines()
+
+# ---- parse: header key: value lines, then ## sections in order -------------
+meta = {}
+body_start = 0
+for i, line in enumerate(lines):
+    if line.startswith("## "):
+        body_start = i
+        break
+    m = re.match(r"^([a-z]+): (.*)$", line)
+    if m:
+        meta[m.group(1)] = m.group(2)
+sections = []  # [heading, [lines]]
+for line in lines[body_start:]:
+    if line.startswith("## "):
+        sections.append([line[3:].strip(), []])
+    elif sections:
+        sections[-1][1].append(line)
+
+DECISION_FENCE = "```json fm-packet-decision.v1"
+def split_decision(body):
+    """-> (lines without the fenced decision block, decision dict or None)"""
+    keep, block, inside, found = [], [], False, None
+    for line in body:
+        if not inside and line == DECISION_FENCE:
+            inside = True; block = []; continue
+        if inside and line == "```":
+            inside = False; found = json.loads("\n".join(block)); continue
+        (block if inside else keep).append(line)
+    return keep, found
+
+# ---- language ----------------------------------------------------------------
+LANGS = ("en", "hant", "hans")
+T = {
+  "en": {
+    "kind_done": "done", "kind_needs": "needs a decision",
+    "risk": "risk {r}", "risk_low": "low", "risk_medium": "medium", "risk_high": "high",
+    "rev_yes": "reversible", "rev_no": "cannot be undone", "rev_partly": "partly reversible",
+    "k_decide": "decide", "k_options": "options",
+    "k_nothing": "if nothing", "k_rev": "reversible?", "k_risk": "risk",
+    "k_rec": "recommendation", "k_why": "why", "rec": "rec",
+    "m_task": "task", "m_kind": "kind", "m_branch": "branch", "m_head": "head",
+    "m_base": "base", "m_generated": "generated", "m_worktree": "local copy",
+    "s_changed": "What changed", "s_generated": "generated from the local copy and the PR",
+    "s_session": "What only this session knows", "s_decision": "The decision",
+    "s_evidence": "Evidence", "s_more": "How to pull more",
+    "copy": "Copy the context", "copied": "Copied",
+    "copy_hint": "the whole packet as markdown, ready for any coding agent",
+    "raw_title": "Select all and copy", "close": "Close",
+  },
+  "hant": {
+    "kind_done": "已完成", "kind_needs": "等你決定",
+    "risk": "風險 {r}", "risk_low": "低", "risk_medium": "中", "risk_high": "高",
+    "rev_yes": "可回頭", "rev_no": "回不去", "rev_partly": "部分可回頭",
+    "k_decide": "決定什麼", "k_options": "選項",
+    "k_nothing": "什麼都不做", "k_rev": "能不能回頭", "k_risk": "風險",
+    "k_rec": "建議", "k_why": "為什麼", "rec": "建議",
+    "m_task": "任務", "m_kind": "狀態", "m_branch": "分支", "m_head": "head",
+    "m_base": "base", "m_generated": "產生於", "m_worktree": "本機副本",
+    "s_changed": "改了什麼", "s_generated": "由本機副本與 PR 產生",
+    "s_session": "只有這個 session 知道的事", "s_decision": "這個決定",
+    "s_evidence": "證據", "s_more": "怎麼再往下挖",
+    "copy": "複製完整 context", "copied": "已複製",
+    "copy_hint": "整份 packet 的 markdown，可直接貼給任何 coding agent",
+    "raw_title": "全選後複製", "close": "關閉",
+  },
+  "hans": {
+    "kind_done": "已完成", "kind_needs": "等你决定",
+    "risk": "风险 {r}", "risk_low": "低", "risk_medium": "中", "risk_high": "高",
+    "rev_yes": "可回头", "rev_no": "回不去", "rev_partly": "部分可回头",
+    "k_decide": "决定什么", "k_options": "选项",
+    "k_nothing": "什么都不做", "k_rev": "能不能回头", "k_risk": "风险",
+    "k_rec": "建议", "k_why": "为什么", "rec": "建议",
+    "m_task": "任务", "m_kind": "状态", "m_branch": "分支", "m_head": "head",
+    "m_base": "base", "m_generated": "生成于", "m_worktree": "本机副本",
+    "s_changed": "改了什么", "s_generated": "由本机副本与 PR 生成",
+    "s_session": "只有这个 session 知道的事", "s_decision": "这个决定",
+    "s_evidence": "证据", "s_more": "怎么再往下挖",
+    "copy": "复制完整 context", "copied": "已复制",
+    "copy_hint": "整份 packet 的 markdown，可直接贴给任何 coding agent",
+    "raw_title": "全选后复制", "close": "关闭",
+  },
+}
+SECTION_KEYS = {
+    "What changed (generated)": "s_changed", "What only this session knows": "s_session",
+    "The decision": "s_decision", "Evidence": "s_evidence", "How to pull more": "s_more",
+}
+
+def esc(s): return html.escape(str(s), quote=True)
+
+def tri(key, **vars):
+    """chrome string: EN text plus the three data-* attributes the switch reads"""
+    def fmt(l):
+        s = T[l][key]
+        for k, v in vars.items(): s = s.replace("{" + k + "}", str(v))
+        return s
+    return (esc(fmt("en")), " ".join('data-%s="%s"' % (l, esc(fmt(l))) for l in LANGS))
+
+def copy_attrs(v):
+    """packet copy: a plain string renders as written; an {en,hant?,hans?} object per language"""
+    if isinstance(v, dict):
+        en = v.get("en", "")
+        hant = v.get("hant") or en
+        hans = v.get("hans") or hant
+        return esc(en), 'data-en="%s" data-hant="%s" data-hans="%s"' % (esc(en), esc(hant), esc(hans))
+    return esc(v), ""
+
+def span(cls, text, attrs, tag="span"):
+    return "<%s class=\"%s\"%s>%s</%s>" % (tag, cls, (" " + attrs) if attrs else "", text, tag)
+
+# ---- markdown: headings, lists, fenced code, inline code, bold, links --------
+SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+def safe_href(url):
+    m = SCHEME.match(url)
+    return m is None or m.group(1).lower() in ("http", "https", "mailto")
+def inline(text):
+    parts = re.split(r"(`[^`]*`)", text)
+    out = []
+    for p in parts:
+        if p.startswith("`") and p.endswith("`") and len(p) >= 2:
+            out.append("<code>%s</code>" % esc(p[1:-1])); continue
+        p = esc(p)
+        p = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", p)
+        def link(m):
+            label, url = m.group(1), html.unescape(m.group(2))
+            if not safe_href(url):
+                return m.group(0)
+            return '<a href="%s" target="_blank" rel="noopener" data-lavish-action="open-link">%s</a>' % (esc(url), label)
+        p = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", link, p)
+        out.append(p)
+    return "".join(out)
+
+def md(body):
+    out, i, n = [], 0, len(body)
+    def para(buf):
+        if buf: out.append("<p>%s</p>" % "<br>".join(inline(l) for l in buf))
+    buf = []
+    while i < n:
+        line = body[i]
+        if line.startswith("```"):
+            para(buf); buf = []
+            lang = line[3:].strip()
+            code = []; i += 1
+            while i < n and not body[i].startswith("```"):
+                code.append(body[i]); i += 1
+            i += 1
+            out.append('<pre%s><code>%s</code></pre>' % ((' data-lang="%s"' % esc(lang)) if lang else "", esc("\n".join(code))))
+            continue
+        m = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if m:
+            para(buf); buf = []
+            level = min(len(m.group(1)) + 2, 6)
+            out.append("<h%d>%s</h%d>" % (level, inline(m.group(2)), level)); i += 1; continue
+        lm = re.match(r"^\s*([-*]|\d+[.)])\s+(.*)$", line)
+        if lm:
+            para(buf); buf = []
+            ordered = lm.group(1)[0].isdigit()
+            items = []
+            while i < n:
+                lm = re.match(r"^\s*([-*]|\d+[.)])\s+(.*)$", body[i])
+                if not lm or lm.group(1)[0].isdigit() != ordered: break
+                items.append(lm.group(2)); i += 1
+            tag = "ol" if ordered else "ul"
+            out.append("<%s>%s</%s>" % (tag, "".join("<li>%s</li>" % inline(x) for x in items), tag))
+            continue
+        if not line.strip():
+            para(buf); buf = []; i += 1; continue
+        buf.append(line); i += 1
+    para(buf)
+    return "\n".join(out)
+
+# ---- the decision card: the five questions and the recommendation ----------
+def row(key, value_html, tone=""):
+    k_text, k_attrs = tri(key)
+    return ('<div class="bb-ctx__row%s">%s%s</div>'
+            % ((" bb-ctx__row--" + tone) if tone else "", span("bb-ctx__k", k_text, k_attrs), span("bb-ctx__v", value_html, "")))
+
+def badge(tone, key, **vars):
+    text, attrs = tri(key, **vars)
+    return span("fm-badge fm-badge--" + tone, text, attrs)
+
+def risk_badge(r):
+    word = T["en"]["risk_" + r]  # substituted per language below
+    text = esc(T["en"]["risk"].replace("{r}", word))
+    attrs = " ".join('data-%s="%s"' % (l, esc(T[l]["risk"].replace("{r}", T[l]["risk_" + r]))) for l in LANGS)
+    return span("fm-badge fm-badge--" + {"low": "neutral", "medium": "warn", "high": "danger"}[r], text, attrs)
+
+def rev_badge(rv):
+    tone, key = {"yes": ("online", "rev_yes"), "no": ("danger", "rev_no"), "partly": ("warn", "rev_partly")}[rv]
+    return badge(tone, key)
+
+def decision_card(d):
+    title, title_attrs = copy_attrs(d["title"])
+    badges = [badge("solid", "kind_needs")]
+    if d.get("risk"): badges.append(risk_badge(d["risk"]))
+    badges.append(rev_badge(d["reversible"]))
+    parts = ['<section class="fm-card fm-card--poster bb-decision pk-decision" id="pk-decision">',
+             '<div class="bb-decision__pad">',
+             '<div class="bb-decision__top"><span class="bb-decision__badges">%s</span><span class="bb-decision__repo">%s</span></div>'
+             % ("".join(badges), esc(d.get("key", task))),
+             span("bb-decision__title", title, title_attrs, tag="h2")]
+    ctx = [row("k_decide", span("", *copy_attrs(d["decide"])), "decide")]
+    opts = []
+    for o in d["options"]:
+        label, label_attrs = copy_attrs(o["label"])
+        cons, cons_attrs = copy_attrs(o["consequence"])
+        rec = ""
+        if o["value"] == d.get("recommend_value"):
+            rec_text, rec_attrs = tri("rec")
+            rec = span("bb-opt__rec", rec_text, rec_attrs)
+        opts.append('<div class="bb-opt pk-opt%s"><span class="bb-opt__body">%s%s</span>%s</div>'
+                    % (" pk-opt--rec" if rec else "", span("bb-opt__label", label, label_attrs),
+                       span("bb-opt__consequence", cons, cons_attrs), rec))
+    ctx.append(row("k_options", '<div class="bb-opts">%s</div>' % "".join(opts)))
+    ctx.append(row("k_nothing", span("", *copy_attrs(d["if_nothing"])), "nothing"))
+    ctx.append(row("k_rev", rev_badge(d["reversible"])))
+    if d.get("risk"): ctx.append(row("k_risk", risk_badge(d["risk"])))
+    rec_opt = next((o for o in d["options"] if o["value"] == d.get("recommend_value")), None)
+    if rec_opt:
+        ctx.append(row("k_rec", span("pk-rec", *copy_attrs(rec_opt["label"])), "rec"))
+    if d.get("recommend_why"):
+        ctx.append(row("k_why", span("", *copy_attrs(d["recommend_why"])), "rec"))
+    parts.append('<div class="bb-ctx">%s</div>' % "".join(ctx))
+    parts.append("</div></section>")
+    return "\n".join(parts)
+
+# ---- assemble ----------------------------------------------------------------
+kind = meta.get("kind", "done")
+kind_badge = badge("solid" if kind == "needs-decision" else "online", "kind_needs" if kind == "needs-decision" else "kind_done")
+meta_rows = []
+for key in ("task", "kind", "branch", "head", "base", "generated", "worktree"):
+    if key in meta:
+        k_text, k_attrs = tri("m_" + key)
+        meta_rows.append("<div class=\"pk-meta__row\">%s<span class=\"pk-meta__v\">%s</span></div>"
+                         % (span("pk-meta__k", k_text, k_attrs), esc(meta[key])))
+
+section_html = []
+for heading, body in sections:
+    body, decision = split_decision(body)
+    key = SECTION_KEYS.get(heading)
+    if key:
+        h_text, h_attrs = tri(key)
+    else:
+        h_text, h_attrs = esc(heading), ""
+    sub = ""
+    if key == "s_changed":
+        s_text, s_attrs = tri("s_generated")
+        sub = span("pk-section__sub", s_text, s_attrs)
+    inner = md(body)
+    if decision is not None:
+        inner = decision_card(decision) + inner
+    section_html.append('<section class="fm-card pk-section" id="%s">%s%s<div class="pk-prose">%s</div></section>'
+                        % (esc(key or heading), span("fm-sign fm-sign--eyebrow pk-section__h", h_text, h_attrs, tag="h2"), sub, inner))
+
+copy_t, copy_a = tri("copy"); hint_t, hint_a = tri("copy_hint")
+rawt_t, rawt_a = tri("raw_title"); close_t, close_a = tri("close")
+raw_js = json.dumps(raw).replace("</", "<\\/").replace("<!--", "<\\!--")
+
+page = r'''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Packet - TASK_ID</title>
+<style>
+/* Tokens follow the bearings board (Firstmate Design System) so the packet
+   page and the board read as one system. No external font import: the page
+   must render with no network at all, so the fallback stacks carry the type. */
+:root {
+  --rust-700: #8f2f17; --rust-600: #a93a1f; --rust-500: #c0452a;
+  --rust-400: #d35f3f; --rust-300: #e08365; --rust-100: #f4d8c9; --rust-050: #fbece3;
+  --navy-700: #1a2238; --navy-600: #222c49; --navy-500: #2a3656;
+  --navy-300: #6c7796; --navy-100: #d9deea;
+  --gold-600: #b5791c; --gold-500: #e0a52e; --gold-300: #f0d38c; --gold-100: #f8ecc9;
+  --ocean-600: #2f6688; --ocean-500: #3c7ea6; --ocean-200: #b6d4e2; --ocean-050: #e8f1f5;
+  --sea-700: #234e3a; --sea-500: #2f6b4f; --sea-200: #b9d4c5; --sea-050: #e9f2ec;
+  --paper-000: #fbf4e2; --paper-100: #f6ecd3; --paper-200: #f0e3c4; --paper-300: #e7d6ae;
+  --cream-line: #ddc89c;
+  --ink-900: #241c14; --ink-700: #3f3224; --ink-500: #6f5e46; --ink-300: #9c8a6c;
+  --white: #fffdf7;
+  --bg-page: var(--paper-100);
+  --surface-card: var(--white);
+  --surface-card-warm: var(--paper-000);
+  --text-strong: var(--ink-900); --text-body: var(--ink-700);
+  --text-muted: var(--ink-500); --text-faint: var(--ink-300);
+  --border-default: var(--cream-line); --border-soft: var(--paper-300);
+  --status-warn: var(--gold-600); --status-danger: var(--rust-600);
+  --font-display: "Cooper Black", Rockwell, Georgia, serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "PingFang TC", "Noto Sans CJK TC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-h3: 1.4rem; --fs-h4: 1.15rem; --fs-base: 1rem; --fs-sm: 0.9375rem;
+  --fs-xs: 0.8125rem; --fs-2xs: 0.6875rem;
+  --ls-caps: 0.16em;
+  --radius-xs: 6px; --radius-sm: 9px; --radius-md: 12px; --radius-banner: 7px;
+  --radius-lg: 18px; --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(36, 28, 20, 0.06), 0 4px 10px rgba(36, 28, 20, 0.06);
+  --shadow-hard: 4px 4px 0 var(--ink-900);
+  --shadow-hard-sm: 3px 3px 0 var(--ink-900);
+  --focus-ring: 0 0 0 3px var(--gold-300);
+  --container-app: 900px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { font-family: var(--font-sans); color: var(--text-body); background: var(--bg-page); line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--ocean-600); }
+.fm-badge { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-2xs); font-weight: 800; line-height: 1;
+  padding: 5px 9px 4px; text-transform: uppercase; letter-spacing: 0.07em; border-radius: var(--radius-xs);
+  border: 1.5px solid var(--ink-900); box-shadow: 2px 2px 0 var(--ink-900); white-space: nowrap; }
+.fm-badge--online { background: var(--sea-500); color: var(--paper-000); }
+.fm-badge--warn { background: var(--gold-500); color: var(--navy-700); }
+.fm-badge--danger { background: var(--rust-600); color: var(--paper-000); }
+.fm-badge--neutral { background: var(--paper-000); color: var(--ink-900); }
+.fm-badge--solid { background: var(--rust-500); color: var(--paper-000); }
+.fm-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-family: var(--font-sans); font-weight: 800;
+  line-height: 1; white-space: nowrap; border: 2px solid transparent; border-radius: var(--radius-banner); cursor: pointer; text-decoration: none; }
+.fm-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.fm-btn:active { transform: translateY(1px); }
+.fm-btn--sm { font-size: var(--fs-xs); padding: 8px 16px; }
+.fm-btn--primary { background: var(--rust-500); color: var(--white); border-color: var(--ink-900); box-shadow: var(--shadow-hard-sm); }
+.fm-btn--primary:hover { background: var(--rust-600); }
+.fm-btn--primary.is-done { background: var(--sea-500); }
+.fm-btn--ghost { background: transparent; color: var(--text-muted); border-color: var(--border-default); }
+.fm-btn--ghost:hover { color: var(--text-strong); border-color: var(--ink-300); }
+.fm-card { background: var(--surface-card); border: 1px solid var(--border-default); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); overflow: hidden; }
+.fm-card--poster { border: 2px solid var(--ink-900); box-shadow: var(--shadow-hard); border-radius: var(--radius-md); }
+.fm-sign { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; text-transform: uppercase; letter-spacing: var(--ls-caps); font-size: var(--fs-xs); line-height: 1; }
+.fm-sign--eyebrow { color: var(--rust-500); }
+.bb-nav { position: sticky; top: 0; z-index: 20; background: var(--paper-100); border-bottom: 1px solid var(--border-default); }
+.bb-nav__inner { max-width: var(--container-app); margin: 0 auto; padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.bb-brand { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
+.bb-brand__disc { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 999px; background: var(--rust-500); color: var(--paper-000); border: 2px solid var(--ink-900); box-shadow: var(--shadow-hard-sm); }
+.bb-brand__disc svg { width: 60%; height: 60%; }
+.bb-brand__wm { font-family: var(--font-display); font-size: 22px; color: var(--text-strong); line-height: 1; }
+.bb-meta-mono { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-lang { display: inline-flex; flex: none; border: 1.5px solid var(--border-default); border-radius: var(--radius-pill); overflow: hidden; background: var(--surface-card); }
+.bb-lang__btn { font-family: var(--font-sans); font-size: var(--fs-xs); font-weight: 700; color: var(--text-muted); background: transparent; border: 0; padding: 6px 12px; cursor: pointer; }
+.bb-lang__btn:hover { color: var(--text-strong); }
+.bb-lang__btn.is-active { background: var(--navy-700); color: var(--paper-000); }
+.bb-lang__btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.pk-main { max-width: var(--container-app); margin: 0 auto; padding: 24px 24px 72px; display: flex; flex-direction: column; gap: 18px; }
+.pk-head { display: flex; flex-direction: column; gap: 10px; }
+.pk-head__badges { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.pk-head h1 { margin: 0; font-family: var(--font-display); font-size: var(--fs-h3); color: var(--text-strong); line-height: 1.2; overflow-wrap: anywhere; }
+.pk-meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 18px; font-size: var(--fs-xs); }
+.pk-meta__row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; min-width: 0; }
+.pk-meta__k { font-family: var(--font-mono); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); white-space: nowrap; }
+.pk-meta__v { font-family: var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+.pk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.pk-actions__hint { font-size: var(--fs-xs); color: var(--text-muted); }
+.pk-section { padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pk-section__h { margin: 0; }
+.pk-section__sub { font-size: var(--fs-xs); color: var(--text-faint); margin-top: -6px; }
+.pk-prose { font-size: var(--fs-sm); min-width: 0; }
+.pk-prose > :first-child { margin-top: 0; } .pk-prose > :last-child { margin-bottom: 0; }
+.pk-prose p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.pk-prose h3, .pk-prose h4, .pk-prose h5, .pk-prose h6 { margin: 14px 0 6px; color: var(--text-strong); font-size: var(--fs-base); }
+.pk-prose ul, .pk-prose ol { margin: 0 0 10px; padding-left: 22px; }
+.pk-prose li { margin: 3px 0; overflow-wrap: anywhere; }
+.pk-prose code, .bb-decision code { font-family: var(--font-mono); font-size: 0.9em; background: var(--paper-200); border-radius: 4px; padding: 1px 5px; }
+.pk-prose pre, .bb-decision pre { margin: 0 0 10px; padding: 12px 14px; background: var(--navy-700); color: var(--paper-000); border-radius: var(--radius-sm); overflow-x: auto; font-size: var(--fs-xs); line-height: 1.5; }
+.pk-prose pre code, .bb-decision pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+.pk-decision { margin-bottom: 14px; }
+.bb-decision__pad { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; }
+.bb-decision__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.bb-decision__badges { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.bb-decision__repo { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-faint); white-space: nowrap; }
+.bb-decision__title { margin: 0; font-size: var(--fs-h4); font-weight: 800; color: var(--text-strong); line-height: 1.25; }
+.bb-ctx { display: flex; flex-direction: column; gap: 8px; }
+.bb-ctx__row { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.bb-ctx__k { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-faint); white-space: nowrap; }
+.bb-ctx__v { font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.4; min-width: 0; }
+.bb-ctx__row--decide .bb-ctx__v { color: var(--text-strong); font-weight: 700; }
+.bb-ctx__row--nothing .bb-ctx__k { color: var(--status-warn); }
+.bb-ctx__row--nothing .bb-ctx__v { color: var(--text-body); }
+.bb-ctx__row--rec .bb-ctx__k { color: var(--sea-700); }
+.pk-rec { font-weight: 700; color: var(--text-strong); }
+.bb-opts { display: flex; flex-direction: column; gap: 7px; }
+.bb-opt { display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; background: var(--surface-card-warm); border: 1.5px solid var(--border-default); border-radius: var(--radius-sm); }
+.pk-opt--rec { border-color: var(--gold-600); }
+.bb-opt__body { min-width: 0; flex: 1 1 auto; }
+.bb-opt__label { display: block; font-size: var(--fs-sm); font-weight: 700; color: var(--text-strong); line-height: 1.3; }
+.bb-opt__consequence { display: block; font-size: var(--fs-xs); color: var(--text-body); margin-top: 3px; padding-top: 3px; border-top: 1px dashed var(--border-soft); }
+.bb-opt__rec { flex: none; align-self: center; font-size: var(--fs-2xs); font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--navy-700); background: var(--gold-300); border: 1px solid var(--gold-600); border-radius: var(--radius-xs); padding: 3px 7px 2px; }
+.pk-raw { border: 2px solid var(--ink-900); border-radius: var(--radius-md); box-shadow: var(--shadow-hard); padding: 16px; width: min(720px, 92vw); background: var(--surface-card); }
+.pk-raw::backdrop { background: rgba(36, 28, 20, 0.45); }
+.pk-raw textarea { width: 100%; height: 50vh; font-family: var(--font-mono); font-size: var(--fs-xs); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 10px; resize: vertical; }
+.pk-raw__foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; }
+@media (max-width: 560px) { .bb-ctx__row, .pk-meta__row { grid-template-columns: 1fr; gap: 2px; } }
+</style>
+</head>
+<body>
+<header class="bb-nav">
+  <div class="bb-nav__inner">
+    <span class="bb-brand">
+      <span class="bb-brand__disc"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6v16"/><path d="m19 13 2-1a9 9 0 0 1-18 0l2 1"/><path d="M9 11h6"/><circle cx="12" cy="4" r="2"/></svg></span>
+      <span class="bb-brand__wm">packet</span>
+      <span class="bb-meta-mono">TASK_ID</span>
+    </span>
+    <span class="bb-lang" role="group" aria-label="Language">
+      <button type="button" class="bb-lang__btn is-active" id="pk-lang-en" lang="en">EN</button>
+      <button type="button" class="bb-lang__btn" id="pk-lang-hant" lang="zh-Hant">繁</button>
+      <button type="button" class="bb-lang__btn" id="pk-lang-hans" lang="zh-Hans">简</button>
+    </span>
+  </div>
+</header>
+<main class="pk-main" data-lavish-action="packet">
+  <section class="pk-head">
+    <span class="pk-head__badges">KIND_BADGE</span>
+    <h1>Packet: TASK_ID</h1>
+    <div class="pk-meta">META_ROWS</div>
+  </section>
+  <div class="pk-actions">
+    <button type="button" class="fm-btn fm-btn--sm fm-btn--primary" id="pk-copy" COPY_ATTRS>COPY_TEXT</button>
+    <span class="pk-actions__hint" HINT_ATTRS>HINT_TEXT</span>
+  </div>
+SECTIONS
+</main>
+<dialog class="pk-raw" id="pk-raw">
+  <div class="fm-sign fm-sign--eyebrow" RAWT_ATTRS>RAWT_TEXT</div>
+  <textarea id="pk-raw-text" readonly></textarea>
+  <div class="pk-raw__foot"><span></span><button type="button" class="fm-btn fm-btn--sm fm-btn--ghost" id="pk-raw-close" CLOSE_ATTRS>CLOSE_TEXT</button></div>
+</dialog>
+<script>
+(function () {
+  var RAW = RAW_JS;
+  var LANGS = ["en", "hant", "hans"];
+  var KEY = "fm-bearings-lang";  /* shared with the bearings board so one choice covers both */
+  var lang = "en";
+  function stored() { try { var s = window.localStorage && window.localStorage.getItem(KEY); return LANGS.indexOf(s) >= 0 ? s : null; } catch (e) { return null; } }
+  function store(l) { try { if (window.localStorage) window.localStorage.setItem(KEY, l); } catch (e) { /* private mode */ } }
+  function setLang(l) {
+    lang = l;
+    document.documentElement.lang = l === "en" ? "en" : (l === "hant" ? "zh-Hant" : "zh-Hans");
+    var nodes = document.querySelectorAll("[data-en]");
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i], s = n.getAttribute("data-" + l);
+      if (!s && l === "hans") s = n.getAttribute("data-hant");
+      n.textContent = s || n.getAttribute("data-en");
+    }
+    LANGS.forEach(function (x) {
+      var b = document.getElementById("pk-lang-" + x);
+      b.className = "bb-lang__btn" + (x === l ? " is-active" : "");
+      b.setAttribute("aria-pressed", x === l ? "true" : "false");
+    });
+  }
+  LANGS.forEach(function (x) {
+    document.getElementById("pk-lang-" + x).addEventListener("click", function () { if (x !== lang) { setLang(x); store(x); } });
+  });
+  setLang(stored() || "en");
+
+  /* Copy is the one action the page exists to enable, so it has to work
+     wherever the page opens. Inside a sandboxed iframe (a served page) the
+     async clipboard is often denied; the rungs are the async API, the legacy
+     command, then a panel with the text already selected, which needs no
+     permission anywhere. */
+  var raw = document.getElementById("pk-raw"), rawText = document.getElementById("pk-raw-text");
+  function showRaw() {
+    rawText.value = RAW;
+    if (typeof raw.showModal === "function") raw.showModal(); else raw.setAttribute("open", "");
+    rawText.focus(); rawText.select();
+  }
+  document.getElementById("pk-raw-close").addEventListener("click", function () { if (typeof raw.close === "function") raw.close(); else raw.removeAttribute("open"); });
+  var cp = document.getElementById("pk-copy");
+  cp.addEventListener("click", function () {
+    function done(ok) {
+      if (!ok) { showRaw(); return; }
+      cp.classList.add("is-done"); cp.textContent = cp.getAttribute("data-copied-" + lang);
+      setTimeout(function () { cp.classList.remove("is-done"); cp.textContent = cp.getAttribute("data-" + lang); }, 2000);
+    }
+    function legacy() {
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = RAW; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        var ok = document.execCommand("copy"); ta.remove(); return ok;
+      } catch (e) { return false; }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(RAW).then(function () { done(true); }, function () { done(legacy()); });
+    } else { done(legacy()); }
+  });
+})();
+</script>
+</body>
+</html>
+'''
+copied_attrs = " ".join('data-copied-%s="%s"' % (l, esc(T[l]["copied"])) for l in LANGS)
+slots = {
+    "TASK_ID": esc(task), "KIND_BADGE": kind_badge, "META_ROWS": "".join(meta_rows),
+    "COPY_ATTRS": copy_a + " " + copied_attrs, "COPY_TEXT": copy_t,
+    "HINT_ATTRS": hint_a, "HINT_TEXT": hint_t,
+    "RAWT_ATTRS": rawt_a, "RAWT_TEXT": rawt_t,
+    "CLOSE_ATTRS": close_a, "CLOSE_TEXT": close_t,
+    "SECTIONS": "\n".join(section_html), "RAW_JS": raw_js,
+}
+page = re.sub(r"\b(?:%s)\b" % "|".join(slots), lambda m: slots[m.group(0)], page)
+out.write_text(page, encoding="utf-8")
+PY
+}
+
+render_page() {  # <task-id> ; writes data/<id>/packet.html beside the verified packet
+  local packet page
+  command -v python3 >/dev/null 2>&1 || fail "python3 is required to render the packet page"
+  packet=$(packet_path "$1"); page=$(page_path "$1")
+  [ ! -L "$page" ] || fail "page path is a symlink: $page"
+  render_html "$packet" "$page" "$1" || fail "rendering $packet failed"
+}
+
+command_render() {  # <task-id> ; prints `page: <path>`
+  local id=${1-}
+  [ -n "$id" ] || { usage >&2; exit 2; }
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  command_verify "$id" >/dev/null || exit 1
+  render_page "$id"
+  printf 'page: %s\n' "$(page_path "$id")"
+}
+
+# ---- serve ------------------------------------------------------------------
+# Verified against lavish-axi 0.1.71: `lavish-axi <file>` exits 0 even when it
+# refuses to reopen a session the captain ended, so liveness is read from the
+# server's own listing (`<file>,<status>,"<url>",...`), exactly as
+# bin/fm-bearings-board.sh does. The installed lavish-axi advertises `--name
+# <slug>` in its help text; an older release gets the plain open and its keyed
+# URL.
+
+page_realpath() {  # <page>
+  perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$1" 2>/dev/null
+}
+
+page_session_name() {  # <task-id> -> the stable lavish session slug
+  printf 'packet-%s\n' "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+}
+
+lavish_names_supported() { lavish-axi 2>/dev/null | grep -q -- '--name <slug>'; }
+
+lavish_open_url() {  # <canonical-page-path> -> the open session's url, or nothing
+  local listing
+  listing=$(lavish-axi 2>/dev/null) || return 1
+  printf '%s\n' "$listing" | awk -v path="$1" '
+    { line = $0; sub(/^[[:space:]]+/, "", line) }
+    index(line, path ",") == 1 {
+      rest = substr(line, length(path) + 2)
+      split(rest, field, ",")
+      if (field[1] == "open") { gsub(/"/, "", field[2]); print field[2]; exit }
+    }'
+}
+
+command_serve() {  # <task-id> ; renders, opens the page, prints `page:` and `url:`
+  local id=${1-} page real url name
+  local -a name_args=()
+  [ -n "$id" ] || { usage >&2; exit 2; }
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
+  command_render "$id" || exit 1
+  page=$(page_path "$id")
+  real=$(page_realpath "$page") || fail "cannot resolve the page path: $page"
+  if lavish_names_supported; then
+    name=$(page_session_name "$id")
+    name_args=(--name "$name")
+  fi
+  lavish-axi "$page" ${name_args[@]+"${name_args[@]}"} >/dev/null || fail "cannot open the packet page with lavish-axi"
+  url=$(lavish_open_url "$real")
+  if [ -z "$url" ]; then
+    lavish-axi "$page" --reopen ${name_args[@]+"${name_args[@]}"} >/dev/null || fail "cannot reopen the packet page with lavish-axi"
+    url=$(lavish_open_url "$real")
+  fi
+  [ -n "$url" ] || fail "the packet page has no open Lavish session after opening it (lavish-axi $(lavish-axi --version 2>/dev/null | tr -d '[:space:]'))"
+  printf 'url: %s\n' "$url"
 }
 
 case "${1-}" in
   scaffold) shift; command_scaffold "$@" ;;
   verify) shift; command_verify "$@" ;;
   card) shift; command_card "$@" ;;
+  render) shift; command_render "$@" ;;
+  serve) shift; command_serve "$@" ;;
   path)
     shift
     if [ "$#" -ne 1 ] || ! fm_pr_task_id_valid "$1"; then usage >&2; exit 2; fi
