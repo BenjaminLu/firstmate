@@ -6,6 +6,10 @@
 # These tests drive the real spawn path with a fake terminal, then prove it
 # starts the worker from the fetched origin tip, launches a clean origin-less
 # pool as-is, or stops when a configured origin is unusable.
+# The fetch-count cases prove that refresh costs one fetch of origin per spawn,
+# that the remote-HEAD query runs only when the slot has no usable
+# refs/remotes/origin/HEAD, and that the slot is acquired without treehouse's
+# own fetch whenever the installed treehouse advertises `--no-fetch`.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -743,8 +747,170 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
+# --- one fetch per spawn ------------------------------------------------------
+
+# Every git call fm-spawn makes lands in FM_FAKE_GIT_LOG through the logging
+# git on the fakebin PATH; only spawn's own top-level calls are recorded.
+git_log_count() {  # <log> <pattern>
+  local log=$1 pattern=$2
+  [ -e "$log" ] || { printf '0\n'; return; }
+  grep -cE "$pattern" "$log" || true
+}
+
+fetch_count() {  # <log>
+  git_log_count "$1" '(^| )fetch( |$)'
+}
+
+set_head_count() {  # <log>
+  git_log_count "$1" '(^| )remote set-head( |$)'
+}
+
+run_counting_spawn() {  # <id> [spawn args...]
+  local id=$1
+  shift
+  fm_test_fake_git_log "$FAKEBIN_DIR" || fail "could not install the logging git"
+  FM_FAKE_GIT_LOG="$CASE_DIR/git.log" FM_FAKE_SEND_LOG="$CASE_DIR/send.log" \
+    run_spawn "$id" "$@"
+}
+
+test_refresh_fetches_origin_exactly_once_and_skips_set_head_when_origin_head_resolves() {
+  local rec id out status current fetches set_heads
+  id='pool-one-fetch-resolved-r1'
+  rec=$(make_case one-fetch-resolved "$id")
+  read_case_record "$rec"
+  # A clone's slot already carries refs/remotes/origin/HEAD; reproduce that
+  # shape with local operations only, before anything talks to origin.
+  git -C "$POOL_DIR" update-ref refs/remotes/origin/main "$INITIAL_SHA"
+  git -C "$POOL_DIR" remote set-head origin main
+  git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null \
+    || fail "fixture did not give the slot a resolvable origin/HEAD"
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should refresh a slot whose origin/HEAD already resolves"$'\n'"$out"
+  fetches=$(fetch_count "$CASE_DIR/git.log")
+  set_heads=$(set_head_count "$CASE_DIR/git.log")
+  [ "$fetches" = 1 ] || fail "spawn fetched origin $fetches times, not once:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$set_heads" = 0 ] || fail "spawn queried origin's HEAD although refs/remotes/origin/HEAD already resolved:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  current=$(git -C "$POOL_DIR" rev-parse origin/main)
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$current" ] \
+    || fail "the single fetch did not leave the slot at current origin/main"
+  [ "$current" != "$INITIAL_SHA" ] || fail "fixture did not prove origin/main advanced past the pool base"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# git calls with origin/HEAD resolvable:\n'; cat "$CASE_DIR/git.log"
+  fi
+  pass "a slot whose origin/HEAD resolves refreshes with one fetch and no remote-HEAD query"
+}
+
+test_refresh_queries_remote_head_only_when_origin_head_is_missing() {
+  local rec id out status fetches set_heads
+  id='pool-one-fetch-missing-r1'
+  rec=$(make_case one-fetch-missing "$id")
+  read_case_record "$rec"
+  ! git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 \
+    || fail "fixture unexpectedly gave the slot an origin/HEAD"
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should refresh a slot with no origin/HEAD"$'\n'"$out"
+  fetches=$(fetch_count "$CASE_DIR/git.log")
+  set_heads=$(set_head_count "$CASE_DIR/git.log")
+  [ "$fetches" = 1 ] || fail "spawn fetched origin $fetches times, not once:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$set_heads" = 1 ] || fail "spawn ran the remote-HEAD query $set_heads times for a slot missing origin/HEAD:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse origin/main)" ] \
+    || fail "spawn did not leave the slot at current origin/main after resolving its default branch"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# git calls with origin/HEAD missing:\n'; cat "$CASE_DIR/git.log"
+  fi
+  pass "a slot with no origin/HEAD pays for the remote-HEAD query once and still fetches once"
+}
+
+test_dangling_origin_head_is_repaired_by_the_remote_head_query() {
+  local rec id out status set_heads
+  id='pool-one-fetch-dangling-r1'
+  rec=$(make_case one-fetch-dangling "$id")
+  read_case_record "$rec"
+  git -C "$POOL_DIR" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/gone
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should repair a dangling origin/HEAD"$'\n'"$out"
+  set_heads=$(set_head_count "$CASE_DIR/git.log")
+  [ "$set_heads" = 1 ] || fail "spawn trusted a dangling origin/HEAD instead of querying origin:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$(git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD)" = refs/remotes/origin/main ] \
+    || fail "spawn left origin/HEAD dangling"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 1 ] || fail "repairing origin/HEAD cost more than one fetch"
+  pass "a dangling origin/HEAD is repaired through the remote-HEAD query, still with one fetch"
+}
+
+test_originless_pool_still_launches_with_no_fetch_at_all() {
+  local rec id out status
+  id='pool-one-fetch-originless-r1'
+  rec=$(make_originless_case one-fetch-originless "$id")
+  read_case_record "$rec"
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "an origin-less pool should still launch"$'\n'"$out"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 0 ] || fail "spawn fetched for an origin-less pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$(set_head_count "$CASE_DIR/git.log")" = 0 ] || fail "spawn queried a remote HEAD for an origin-less pool"
+  pass "an origin-less pool launches with no fetch and no remote-HEAD query"
+}
+
+test_dirty_pool_still_refuses_before_any_fetch() {
+  local rec id out status
+  id='pool-one-fetch-dirty-r1'
+  rec=$(make_case one-fetch-dirty "$id")
+  read_case_record "$rec"
+  printf 'keep this local work\n' > "$POOL_DIR/uncommitted.txt"
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn succeeded despite a dirty pooled worktree"
+  assert_contains "$out" "is not clean" "spawn did not refuse the dirty pooled worktree"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 0 ] || fail "spawn fetched before refusing a dirty pool"
+  assert_grep 'keep this local work' "$POOL_DIR/uncommitted.txt" "spawn discarded local work"
+  pass "a dirty pooled worktree still refuses, before any fetch"
+}
+
+test_treehouse_get_skips_its_own_fetch_only_when_the_flag_is_advertised() {
+  local rec id out status advertised sent
+  for advertised in 1 0; do
+    id="pool-treehouse-nofetch-${advertised}-r1"
+    rec=$(make_case "treehouse-nofetch-$advertised" "$id")
+    read_case_record "$rec"
+    fm_test_fake_treehouse_help "$FAKEBIN_DIR" "$advertised"
+
+    out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+    status=$?
+    expect_code 0 "$status" "spawn should launch with treehouse --no-fetch advertised=$advertised"$'\n'"$out"
+    sent=$(grep -E '(^| )treehouse get' "$CASE_DIR/send.log" || true)
+    [ -n "$sent" ] || fail "spawn never sent a treehouse get line (advertised=$advertised)"
+    if [ "$advertised" = 1 ]; then
+      assert_contains "$sent" 'treehouse get --no-fetch' \
+        "spawn let treehouse fetch although --no-fetch is advertised: $sent"
+    else
+      assert_not_contains "$sent" '--no-fetch' \
+        "spawn passed --no-fetch to a treehouse that does not advertise it: $sent"
+      assert_contains "$sent" 'treehouse get' "spawn did not send plain treehouse get: $sent"
+    fi
+    [ "$(fetch_count "$CASE_DIR/git.log")" = 1 ] \
+      || fail "spawn's own fetch count changed with the treehouse flag (advertised=$advertised)"
+    if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+      printf '# treehouse --no-fetch advertised=%s sent: %s\n' "$advertised" "$sent"
+    fi
+  done
+  pass "treehouse get carries --no-fetch exactly when the installed treehouse advertises it"
+}
+
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
+test_refresh_fetches_origin_exactly_once_and_skips_set_head_when_origin_head_resolves
+test_refresh_queries_remote_head_only_when_origin_head_is_missing
+test_dangling_origin_head_is_repaired_by_the_remote_head_query
+test_originless_pool_still_launches_with_no_fetch_at_all
+test_dirty_pool_still_refuses_before_any_fetch
+test_treehouse_get_skips_its_own_fetch_only_when_the_flag_is_advertised
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching

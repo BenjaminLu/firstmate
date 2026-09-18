@@ -202,13 +202,22 @@
 #   set (its header owns the refusal). A secondmate runs in its own home and is
 #   not marked.
 #   Only after this isolation check, every fresh ship or scout requires a clean
-#   task worktree. When an origin configuration is detected, spawn fetches it,
-#   resolves the current remote default branch, and resets to its tip. When none
-#   is detected, spawn skips that remote freshness check and launches from the
-#   clean worktree's current HEAD. Relaunch reuses the recorded worktree without
-#   fetching or resetting its base. An unreachable detected origin, unresolved
-#   default branch, or non-clean worktree refuses a fresh spawn rather than
-#   risking a PR based on stale history or discarding local work.
+#   task worktree. When an origin configuration is detected, spawn fetches it
+#   exactly once, resolves the current remote default branch, and resets to its
+#   tip. That one `git fetch origin` is the spawn's only network round trip:
+#   the pool slot is acquired with `treehouse get --no-fetch` whenever the
+#   installed treehouse advertises that flag in `treehouse get --help` (probed
+#   once per spawn; an older treehouse gets plain `treehouse get` and fetches
+#   on its own), `git remote set-head origin --auto` runs only when
+#   refs/remotes/origin/HEAD is missing or points at a ref that does not
+#   resolve, and the default branch's remote-tracking ref is trusted as the
+#   fetch just left it rather than fetched a second time. When no origin
+#   configuration is detected, spawn skips that remote freshness check and
+#   launches from the clean worktree's current HEAD. Relaunch reuses the
+#   recorded worktree without fetching or resetting its base. An unreachable
+#   detected origin, unresolved default branch, or non-clean worktree refuses a
+#   fresh spawn rather than risking a PR based on stale history or discarding
+#   local work.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.
@@ -2802,6 +2811,13 @@ spawn_worktree_has_origin_config() { # <worktree>
   return 1
 }
 
+spawn_worktree_origin_head_resolves() { # <worktree>
+  local worktree=$1 ref
+  ref=$(git -C "$worktree" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) || return 1
+  [ -n "$ref" ] || return 1
+  git -C "$worktree" rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1
+}
+
 freshen_spawn_worktree_base() { # <worktree>
   local worktree=$1 default target expected actual status
   status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
@@ -2823,7 +2839,11 @@ freshen_spawn_worktree_base() { # <worktree>
     echo "error: could not fetch origin for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   fi
-  if ! git -C "$worktree" remote set-head origin --auto >/dev/null 2>&1; then
+  # A clone already holds refs/remotes/origin/HEAD, so asking origin again for
+  # the same value is a wasted round trip; only a slot with no usable
+  # remote-HEAD symref pays for the network query.
+  if ! spawn_worktree_origin_head_resolves "$worktree" \
+    && ! git -C "$worktree" remote set-head origin --auto >/dev/null 2>&1; then
     echo "error: could not resolve origin's current default branch for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   fi
@@ -2832,10 +2852,8 @@ freshen_spawn_worktree_base() { # <worktree>
     return 1
   }
   target="origin/$default"
-  if ! git -C "$worktree" fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default"; then
-    echo "error: could not fetch '$target' for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
-    return 1
-  fi
+  # The fetch above already updated refs/remotes/origin/<default>; a second
+  # fetch narrowed to that ref would be a subset of it.
   expected=$(git -C "$worktree" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
     echo "error: '$target' is not a commit for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
@@ -3230,6 +3248,21 @@ fi
 # WT_TARGET to $T for them (and for any future backend) - the shared treehouse-get +
 # worktree-detection steps below must never reference an unbound WT_TARGET under set -u.
 : "${WT_TARGET:=$T}"
+# The interactive `treehouse get` fetches origin before handing the slot over,
+# and freshen_spawn_worktree_base fetches again right after; only the second
+# fetch is load-bearing. Skip treehouse's own fetch when the installed version
+# advertises `--no-fetch`, probing `treehouse get --help` once per spawn; an
+# older treehouse keeps its plain command and its own fetch, at the cost of the
+# extra round trip.
+SPAWN_TREEHOUSE_GET_COMMAND=
+spawn_resolve_treehouse_get_command() { # sets SPAWN_TREEHOUSE_GET_COMMAND
+  [ -z "$SPAWN_TREEHOUSE_GET_COMMAND" ] || return 0
+  if treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--no-fetch([^[:alnum:]_-]|$)'; then
+    SPAWN_TREEHOUSE_GET_COMMAND='treehouse get --no-fetch'
+  else
+    SPAWN_TREEHOUSE_GET_COMMAND='treehouse get'
+  fi
+}
 spawn_send_text_line() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_text_line "$1" "$2" ;;
@@ -3594,7 +3627,8 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  spawn_resolve_treehouse_get_command
+  spawn_send_text_line "$WT_TARGET" "$SPAWN_TREEHOUSE_GET_COMMAND"
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
