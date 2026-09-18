@@ -1,0 +1,62 @@
+[
+ {
+  "from": "captain",
+  "to": "firstmate",
+  "evidence": "AGENTS.md section 1: the captain talks only to the first mate"
+ },
+ {
+  "from": "firstmate",
+  "to": "crewmate",
+  "evidence": "bin/fm-spawn.sh and bin/fm-send.sh headers"
+ },
+ {
+  "from": "crewmate",
+  "to": "files",
+  "evidence": "bin/fm-brief.sh scaffold: echo \"{state}: {note}\" >> state/<id>.status"
+ },
+ {
+  "from": "watcher",
+  "to": "files",
+  "evidence": "bin/fm-watch.sh header: classifies status and turn-end signals, polls the inbox ladder"
+ },
+ {
+  "from": "watcher",
+  "to": "queue",
+  "evidence": "docs/architecture.md: actionable wakes are written to state/.wake-queue, then the watcher exits"
+ },
+ {
+  "from": "watcher",
+  "to": "runner",
+  "evidence": "bin/fm-procevent.sh header: reconcile is the idempotent liveness entry the watcher calls on its ordinary cycle"
+ },
+ {
+  "from": "runner",
+  "to": "queue",
+  "evidence": "bin/fm-watch.sh header: check: process-event result captured"
+ },
+ {
+  "from": "queue",
+  "to": "firstmate",
+  "evidence": "bin/fm-claude-stop-autoarm.sh: exit 2 delivers the rewake banner; bin/fm-wake-drain.sh presents the rows"
+ },
+ {
+  "from": "firstmate",
+  "to": "board",
+  "evidence": "bin/fm-bearings-board.sh build: template + payload, then lavish-axi serves it and the session is proved live"
+ },
+ {
+  "from": "board",
+  "to": "server",
+  "evidence": "lavish-axi <html-file> opens a session on http://127.0.0.1:4387"
+ },
+ {
+  "from": "captain",
+  "to": "server",
+  "evidence": ".agents/skills/bearings/SKILL.md: the captain answers Captain's Call items directly on the board"
+ },
+ {
+  "from": "runner",
+  "to": "server",
+  "evidence": "bin/fm-procevent-lavish.sh header: wraps `lavish-axi poll <html-file>`, which long-polls indefinitely and destructively clears feedback"
+ }
+]

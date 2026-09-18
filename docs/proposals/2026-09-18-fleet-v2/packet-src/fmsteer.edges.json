@@ -1,0 +1,47 @@
+[
+ {
+  "from": "fm",
+  "to": "send",
+  "evidence": "bin/fm-send.sh header; bin/fm-task-inbox-lib.sh header"
+ },
+ {
+  "from": "send",
+  "to": "inbox",
+  "evidence": "bin/fm-send.sh header; bin/fm-task-inbox-lib.sh header"
+ },
+ {
+  "from": "send",
+  "to": "pane",
+  "evidence": "fm_task_inbox_doorbell_line: ': Firstmate instruction waiting: list <dir>/*.msg …'"
+ },
+ {
+  "from": "send",
+  "to": "fm",
+  "evidence": "bin/fm-send.sh header; bin/fm-task-inbox-lib.sh header"
+ },
+ {
+  "from": "pane",
+  "to": "inbox",
+  "evidence": "bin/fm-brief.sh inbox section"
+ },
+ {
+  "from": "pane",
+  "to": "inbox",
+  "evidence": "bin/fm-task-inbox-lib.sh: the worker's mv here IS the acknowledgement"
+ },
+ {
+  "from": "watch",
+  "to": "inbox",
+  "evidence": "bin/fm-task-inbox-lib.sh: .ring-state '<msg>\\t<count>\\t<epoch>'"
+ },
+ {
+  "from": "watch",
+  "to": "pane",
+  "evidence": "FM_TASK_INBOX_GRACE_SECS=90, FM_TASK_INBOX_RING_MAX=3"
+ },
+ {
+  "from": "watch",
+  "to": "fm",
+  "evidence": "bin/fm-watch.sh header: stale: <window> (unread firstmate instruction: ...)"
+ }
+]

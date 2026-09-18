@@ -1,0 +1,57 @@
+[
+ {
+  "from": "fm",
+  "to": "lavish",
+  "evidence": "bin/fm-bearings-board.sh header"
+ },
+ {
+  "from": "fm",
+  "to": "hold",
+  "evidence": "bin/fm-bearings-board.sh header: bind ALWAYS precedes arm"
+ },
+ {
+  "from": "fm",
+  "to": "runner",
+  "evidence": ".agents/skills/process-event-sources/SKILL.md"
+ },
+ {
+  "from": "runner",
+  "to": "lavish",
+  "evidence": "bin/fm-procevent-lavish.sh header: plain blocking form, no timeout flag"
+ },
+ {
+  "from": "captain",
+  "to": "lavish",
+  "evidence": ".agents/skills/bearings/SKILL.md Lavish board mode"
+ },
+ {
+  "from": "lavish",
+  "to": "runner",
+  "evidence": "bin/fm-procevent-lavish.sh header: LOSS LIMITATION"
+ },
+ {
+  "from": "runner",
+  "to": "runner",
+  "evidence": "bin/fm-procevent-lib.sh: fm_procevent_inbox_dir"
+ },
+ {
+  "from": "runner",
+  "to": "hold",
+  "evidence": "bin/fm-procevent-lavish.sh header: `answers` reports <task-id>\\t<answer>\\t<label>; bin/fm-captain-hold.sh answers"
+ },
+ {
+  "from": "runner",
+  "to": "fm",
+  "evidence": "bin/fm-watch.sh header (via state/.wake-queue and the Stop hook rewake)"
+ },
+ {
+  "from": "fm",
+  "to": "runner",
+  "evidence": ".agents/skills/process-event-sources/SKILL.md Handling a wake"
+ },
+ {
+  "from": "runner",
+  "to": "runner",
+  "evidence": "bin/fm-procevent-lavish.sh header: AN EMPTY BOARD CLOSE IS NOT NEWS"
+ }
+]
