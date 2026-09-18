@@ -214,13 +214,22 @@ fm_brief_task_content_valid() {  # <file>
   [ -n "$(printf '%s' "$task" | tr -d '[:space:]')" ]
 }
 
-# Print the first `## Captain's intent` body line that opens with an operator
-# address spelling; fail when there is none. The body is never rewritten.
-fm_brief_intent_address_line() {  # <file>
-  fm_brief_task_heading_body "$1" "## Captain's intent" | awk '
+# Print the first line of the captain-intent text on stdin that opens with an
+# operator address spelling; fail when there is none. This is the one owner of
+# that spelling set: bin/fm-spawn.sh applies it to a filled brief through the
+# wrapper below, and bin/fm-dispatch.sh applies it to the ask file before any
+# brief exists, so the two refusals cannot drift.
+fm_brief_intent_address_line_of_text() {  # < text
+  awk '
     /^[[:space:]]*(Captain('\''s (words|ask|intent))?:|Captain,)/ { print; found = 1; exit }
     END { exit !found }
   '
+}
+
+# Print the first `## Captain's intent` body line that opens with an operator
+# address spelling; fail when there is none. The body is never rewritten.
+fm_brief_intent_address_line() {  # <file>
+  fm_brief_task_heading_body "$1" "## Captain's intent" | fm_brief_intent_address_line_of_text
 }
 
 fm_ask_user_escalation_block() {  # <data-dir> <task-id>
