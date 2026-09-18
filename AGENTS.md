@@ -321,7 +321,7 @@ Treat file or subsystem overlap as a risk signal rather than an automatic reason
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
 Write the task-specific brief under section 11 before spawning.
 Fill the task subsections according to section 11.
-Once intake has resolved the project, mode, `yolo` posture, ask, and spec, `bin/fm-dispatch.sh` files the item, scaffolds and fills the brief, resolves the profile, and spawns in one call; the intake above still owns every judgment and that script owns only the mechanics.
+Once intake has resolved the project, mode, `yolo` posture, ask, spec, and any deviation reason, `bin/fm-dispatch.sh` scaffolds and fills the brief, resolves the profile, files the item with its repo and mode note, and spawns in one call; with a `config/crew-dispatch.json` present, any resolution that is not `clear` stops before filing and hands the profile back to you to re-run with explicit `--harness/--model/--effort`; the intake above still owns every judgment and that script owns only the mechanics.
 
 ### Dispatch and supervision handoff
 

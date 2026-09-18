@@ -88,8 +88,10 @@ fm_brief_task_placeholders_present() {  # <file>
 
 # Parse an exact ATX heading outside fenced blocks. Body mode prints through
 # the next unfenced heading at the same or a higher level; present mode reports
-# whether the heading exists.
-fm_brief_heading_parse() {  # <file|-> <heading> <body|present>
+# whether the heading exists; terminator mode prints the first unfenced heading
+# at the same or a higher level as <heading> anywhere in the input, the line
+# that would end <heading>'s body, and fails when there is none.
+fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
     input=/dev/stdin
@@ -128,6 +130,17 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present>
         }
       }
 
+      if (mode == "terminator") {
+        if (is_fence || was_fenced) next
+        level = 0
+        while (substr(scan, level + 1, 1) == "#") level++
+        if (level > 0 && level <= target_level && substr(scan, level + 1, 1) ~ /^[[:space:]]?$/) {
+          print line
+          found = 1
+          exit
+        }
+        next
+      }
       if (!found && !was_fenced && line == heading) {
         found = 1
         if (mode == "present") next
@@ -146,9 +159,18 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present>
       print line
     }
     END {
-      if (mode == "present" && !found) exit 1
+      if ((mode == "present" || mode == "terminator") && !found) exit 1
     }
   ' "$input"
+}
+
+# Print the first line of the text on stdin that fm_brief_heading_parse would
+# treat as the end of <heading>'s body: an unfenced ATX heading at the same or
+# a higher level. Fail when there is none. bin/fm-dispatch.sh applies it to the
+# ask and spec files before splicing them under their headings, so a heading
+# inside either cannot silently truncate the section the parser later extracts.
+fm_brief_body_terminator_line_of_text() {  # <heading> < text
+  fm_brief_heading_parse - "$1" terminator
 }
 
 fm_brief_heading_body() {  # <file> <heading>
