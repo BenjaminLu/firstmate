@@ -268,6 +268,8 @@ import sys, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 s = s.replace("- the 15 s bound is unverified against the slowest repo",
   "- the **15 s** bound is `unverified` against [the slowest repo](https://example.test/slow); see <b>escaped</b>")
+s = s.replace("- the merged-record rule assumes settle_final runs before publish",
+  "- the RAW_JS and TASK_ID slots are named here on purpose\n- [a data link](data:text/html,x) and [a vb link](VBScript:x) stay text")
 p.write_text(s)
 PY
   out=$(run_packet "$home" render pk-1) || fail "render failed: $out"
@@ -278,6 +280,10 @@ PY
   assert_grep '<strong>15 s</strong>' "$page" "bold did not convert"
   assert_grep '<code>unverified</code>' "$page" "inline code did not convert"
   assert_grep '<a href="https://example.test/slow"' "$page" "the link did not convert"
+  assert_no_grep 'href="data:' "$page" "a data: link was made clickable"
+  assert_no_grep 'href="VBScript:' "$page" "a vbscript: link was made clickable"
+  assert_grep '[a vb link](VBScript:x) stay text' "$page" "the refused link was not kept as text"
+  assert_grep '<li>the RAW_JS and TASK_ID slots are named here on purpose</li>' "$page" "prose naming a template slot was rewritten"
   assert_grep '&lt;b&gt;escaped&lt;/b&gt;' "$page" "raw HTML in the packet was not escaped"
   assert_grep '<code>git -C' "$page" "the fenced pull-more block did not convert"
   assert_grep '<li>tried a retry loop first' "$page" "the session list did not convert"
@@ -291,8 +297,7 @@ PY
   assert_grep 'var RAW = "# Packet: pk-1' "$page" "the raw markdown is not embedded for the copy button"
   assert_grep 'id="pk-copy"' "$page" "the copy button is missing"
   assert_grep 'id="pk-raw-text"' "$page" "the selected-text fallback is missing"
-  out=$(run_packet "$home" render pk-1 --out "$home/elsewhere/page.html") || fail "render --out failed: $out"
-  assert_present "$home/elsewhere/page.html" "--out did not write the page there"
+  assert_no_grep 'id="pk-show-raw"' "$page" "the page grew a second entry point to the fallback"
   pass "render writes one self-contained page for a done packet"
 }
 
@@ -327,6 +332,7 @@ test_render_decision_card_answers_the_five_questions() {
   # Copy objects render per language; plain strings render as written.
   assert_grep 'data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限"' "$page" "the trilingual title lost a language or hans did not fall back to hant"
   assert_no_grep 'data-en="Ship which fix first?"' "$page" "a plain string grew language attributes"
+  assert_no_grep 'pk-raw-json' "$page" "the card dumped the decision JSON a second time"
   [ "$(section_order "$page")" = 'id="s_changed" id="s_session" id="s_decision" id="s_evidence" id="s_more" ' ] \
     || fail "sections are missing or out of packet order: $(section_order "$page")"
   pass "the rendered decision card answers all five questions and the recommendation"
@@ -354,6 +360,13 @@ test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it() {
   out=$(run_packet_lavish "$home" card pk-1) || fail "card failed after serve: $out"
   printf '%s' "$out" | jq -e '.packet_url == "http://127.0.0.1:4387/s/packet-pk-1"' >/dev/null \
     || fail "card did not carry the served URL: $out"
+  # The worker edits the packet after serve: card re-renders the stale page before linking it.
+  fill_decision "$packet" "$(printf '%s' "$GOOD_DECISION" | jq -c '.recommend_why = "the slowest repo measured 4.4 s"')"
+  touch -t 202001010000 "$page"
+  out=$(run_packet_lavish "$home" card pk-1) || fail "card failed on a stale page: $out"
+  printf '%s' "$out" | jq -e '.packet_url == "http://127.0.0.1:4387/s/packet-pk-1"' >/dev/null \
+    || fail "card dropped the served URL after re-rendering: $out"
+  assert_grep 'the slowest repo measured 4.4 s' "$page" "card linked a page rendered from the old packet"
   # An older lavish-axi without --name gets the plain open and the keyed URL.
   home=$(make_home serve-keyed)
   run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"

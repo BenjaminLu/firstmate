@@ -13,7 +13,7 @@
 #   fm-packet.sh scaffold <task-id> [--kind done|needs-decision] [--worktree <dir>] [--pr <url>] [--force]
 #   fm-packet.sh verify <task-id>
 #   fm-packet.sh card <task-id> [--repo <name>]
-#   fm-packet.sh render <task-id> [--out <file>]
+#   fm-packet.sh render <task-id>
 #   fm-packet.sh serve <task-id>
 #   fm-packet.sh path <task-id>
 #
@@ -46,9 +46,11 @@
 #            repo; otherwise the task's meta project= basename, else "".
 #            When the rendered page's Lavish session is listed open, the card
 #            also carries its URL as `packet_url`, so the bearings composer
-#            gets the link without a second lookup.
+#            gets the link without a second lookup; a page older than the
+#            packet is re-rendered first, so the link never shows a stale
+#            packet.
 # render     Verify, then write the packet as ONE self-contained HTML page at
-#            data/<id>/packet.html (or --out): no network, no CDN, no external
+#            data/<id>/packet.html: no network, no CDN, no external
 #            fonts, sections in packet order, the decision block as a card
 #            answering the five questions (decide, per-option consequence, if
 #            nothing, reversible, risk) plus the recommendation and why, the
@@ -299,7 +301,7 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
 # ---- card -------------------------------------------------------------------
 
 command_card() {
-  local id='' repo='' packet project real packet_url=''
+  local id='' repo='' packet project page real packet_url=''
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   id=$1; shift
   while [ "$#" -gt 0 ]; do
@@ -319,7 +321,11 @@ command_card() {
   # The served page's URL rides the card only while its session is listed open,
   # so the board never links a page nobody can reach.
   if command -v lavish-axi >/dev/null 2>&1; then
-    real=$(page_realpath "$(page_path "$id")" 2>/dev/null) && packet_url=$(lavish_open_url "$real")
+    page=$(page_path "$id")
+    if [ -e "$page" ]; then
+      [ ! "$packet" -nt "$page" ] || render_page "$id"
+      real=$(page_realpath "$page") && packet_url=$(lavish_open_url "$real")
+    fi
   fi
   decision_block "$packet" | jq --arg repo "$repo" --arg packet_url "${packet_url:-}" '
     def flat: if type == "object" then (if (.hant | type) == "string" then . else .en end) else . end;
@@ -390,10 +396,10 @@ def split_decision(body):
 LANGS = ("en", "hant", "hans")
 T = {
   "en": {
-    "brand": "packet", "kind_done": "done", "kind_needs": "needs a decision",
+    "kind_done": "done", "kind_needs": "needs a decision",
     "risk": "risk {r}", "risk_low": "low", "risk_medium": "medium", "risk_high": "high",
     "rev_yes": "reversible", "rev_no": "cannot be undone", "rev_partly": "partly reversible",
-    "k_decide": "decide", "k_options": "options", "k_consequence": "consequence",
+    "k_decide": "decide", "k_options": "options",
     "k_nothing": "if nothing", "k_rev": "reversible?", "k_risk": "risk",
     "k_rec": "recommendation", "k_why": "why", "rec": "rec",
     "m_task": "task", "m_kind": "kind", "m_branch": "branch", "m_head": "head",
@@ -401,15 +407,15 @@ T = {
     "s_changed": "What changed", "s_generated": "generated from the local copy and the PR",
     "s_session": "What only this session knows", "s_decision": "The decision",
     "s_evidence": "Evidence", "s_more": "How to pull more",
-    "copy": "Copy the context", "copied": "Copied", "raw": "Show markdown",
+    "copy": "Copy the context", "copied": "Copied",
     "copy_hint": "the whole packet as markdown, ready for any coding agent",
-    "raw_title": "Select all and copy", "close": "Close", "raw_json": "decision block (raw JSON)",
+    "raw_title": "Select all and copy", "close": "Close",
   },
   "hant": {
-    "brand": "packet", "kind_done": "已完成", "kind_needs": "等你決定",
+    "kind_done": "已完成", "kind_needs": "等你決定",
     "risk": "風險 {r}", "risk_low": "低", "risk_medium": "中", "risk_high": "高",
     "rev_yes": "可回頭", "rev_no": "回不去", "rev_partly": "部分可回頭",
-    "k_decide": "決定什麼", "k_options": "選項", "k_consequence": "後果",
+    "k_decide": "決定什麼", "k_options": "選項",
     "k_nothing": "什麼都不做", "k_rev": "能不能回頭", "k_risk": "風險",
     "k_rec": "建議", "k_why": "為什麼", "rec": "建議",
     "m_task": "任務", "m_kind": "狀態", "m_branch": "分支", "m_head": "head",
@@ -417,15 +423,15 @@ T = {
     "s_changed": "改了什麼", "s_generated": "由本機副本與 PR 產生",
     "s_session": "只有這個 session 知道的事", "s_decision": "這個決定",
     "s_evidence": "證據", "s_more": "怎麼再往下挖",
-    "copy": "複製完整 context", "copied": "已複製", "raw": "顯示 markdown",
+    "copy": "複製完整 context", "copied": "已複製",
     "copy_hint": "整份 packet 的 markdown，可直接貼給任何 coding agent",
-    "raw_title": "全選後複製", "close": "關閉", "raw_json": "決策原始 JSON",
+    "raw_title": "全選後複製", "close": "關閉",
   },
   "hans": {
-    "brand": "packet", "kind_done": "已完成", "kind_needs": "等你决定",
+    "kind_done": "已完成", "kind_needs": "等你决定",
     "risk": "风险 {r}", "risk_low": "低", "risk_medium": "中", "risk_high": "高",
     "rev_yes": "可回头", "rev_no": "回不去", "rev_partly": "部分可回头",
-    "k_decide": "决定什么", "k_options": "选项", "k_consequence": "后果",
+    "k_decide": "决定什么", "k_options": "选项",
     "k_nothing": "什么都不做", "k_rev": "能不能回头", "k_risk": "风险",
     "k_rec": "建议", "k_why": "为什么", "rec": "建议",
     "m_task": "任务", "m_kind": "状态", "m_branch": "分支", "m_head": "head",
@@ -433,9 +439,9 @@ T = {
     "s_changed": "改了什么", "s_generated": "由本机副本与 PR 生成",
     "s_session": "只有这个 session 知道的事", "s_decision": "这个决定",
     "s_evidence": "证据", "s_more": "怎么再往下挖",
-    "copy": "复制完整 context", "copied": "已复制", "raw": "显示 markdown",
+    "copy": "复制完整 context", "copied": "已复制",
     "copy_hint": "整份 packet 的 markdown，可直接贴给任何 coding agent",
-    "raw_title": "全选后复制", "close": "关闭", "raw_json": "决策原始 JSON",
+    "raw_title": "全选后复制", "close": "关闭",
   },
 }
 SECTION_KEYS = {
@@ -466,7 +472,10 @@ def span(cls, text, attrs, tag="span"):
     return "<%s class=\"%s\"%s>%s</%s>" % (tag, cls, (" " + attrs) if attrs else "", text, tag)
 
 # ---- markdown: headings, lists, fenced code, inline code, bold, links --------
-SAFE_HREF = re.compile(r"^(https?://|mailto:|#|\.{0,2}/|[A-Za-z0-9_.-])")
+SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+def safe_href(url):
+    m = SCHEME.match(url)
+    return m is None or m.group(1).lower() in ("http", "https", "mailto")
 def inline(text):
     parts = re.split(r"(`[^`]*`)", text)
     out = []
@@ -477,7 +486,7 @@ def inline(text):
         p = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", p)
         def link(m):
             label, url = m.group(1), html.unescape(m.group(2))
-            if not SAFE_HREF.match(url) or url.lower().startswith("javascript:"):
+            if not safe_href(url):
                 return m.group(0)
             return '<a href="%s" target="_blank" rel="noopener" data-lavish-action="open-link">%s</a>' % (esc(url), label)
         p = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", link, p)
@@ -575,9 +584,6 @@ def decision_card(d):
     if d.get("recommend_why"):
         ctx.append(row("k_why", span("", *copy_attrs(d["recommend_why"])), "rec"))
     parts.append('<div class="bb-ctx">%s</div>' % "".join(ctx))
-    raw_t, raw_a = tri("raw_json")
-    parts.append('<details class="pk-raw-json"><summary %s>%s</summary><pre><code>%s</code></pre></details>'
-                 % (raw_a, raw_t, esc(json.dumps(d, ensure_ascii=False, indent=2))))
     parts.append("</div></section>")
     return "\n".join(parts)
 
@@ -609,7 +615,7 @@ for heading, body in sections:
     section_html.append('<section class="fm-card pk-section" id="%s">%s%s<div class="pk-prose">%s</div></section>'
                         % (esc(key or heading), span("fm-sign fm-sign--eyebrow pk-section__h", h_text, h_attrs, tag="h2"), sub, inner))
 
-copy_t, copy_a = tri("copy"); raw_t, raw_a = tri("raw"); hint_t, hint_a = tri("copy_hint")
+copy_t, copy_a = tri("copy"); hint_t, hint_a = tri("copy_hint")
 rawt_t, rawt_a = tri("raw_title"); close_t, close_a = tri("close")
 raw_js = json.dumps(raw).replace("</", "<\\/").replace("<!--", "<\\!--")
 
@@ -739,8 +745,6 @@ a { color: var(--ocean-600); }
 .bb-opt__consequence { display: block; font-size: var(--fs-xs); color: var(--text-body); margin-top: 3px; padding-top: 3px; border-top: 1px dashed var(--border-soft); }
 .bb-opt__rec { flex: none; align-self: center; font-size: var(--fs-2xs); font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--navy-700); background: var(--gold-300); border: 1px solid var(--gold-600); border-radius: var(--radius-xs); padding: 3px 7px 2px; }
-.pk-raw-json summary { cursor: pointer; font-family: var(--font-mono); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); }
-.pk-raw-json pre { margin-top: 8px; }
 .pk-raw { border: 2px solid var(--ink-900); border-radius: var(--radius-md); box-shadow: var(--shadow-hard); padding: 16px; width: min(720px, 92vw); background: var(--surface-card); }
 .pk-raw::backdrop { background: rgba(36, 28, 20, 0.45); }
 .pk-raw textarea { width: 100%; height: 50vh; font-family: var(--font-mono); font-size: var(--fs-xs); border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 10px; resize: vertical; }
@@ -771,7 +775,6 @@ a { color: var(--ocean-600); }
   </section>
   <div class="pk-actions">
     <button type="button" class="fm-btn fm-btn--sm fm-btn--primary" id="pk-copy" COPY_ATTRS>COPY_TEXT</button>
-    <button type="button" class="fm-btn fm-btn--sm fm-btn--ghost" id="pk-show-raw" RAW_ATTRS>RAW_TEXT</button>
     <span class="pk-actions__hint" HINT_ATTRS>HINT_TEXT</span>
   </div>
 SECTIONS
@@ -820,7 +823,6 @@ SECTIONS
     if (typeof raw.showModal === "function") raw.showModal(); else raw.setAttribute("open", "");
     rawText.focus(); rawText.select();
   }
-  document.getElementById("pk-show-raw").addEventListener("click", showRaw);
   document.getElementById("pk-raw-close").addEventListener("click", function () { if (typeof raw.close === "function") raw.close(); else raw.removeAttribute("open"); });
   var cp = document.getElementById("pk-copy");
   cp.addEventListener("click", function () {
@@ -847,38 +849,34 @@ SECTIONS
 </html>
 '''
 copied_attrs = " ".join('data-copied-%s="%s"' % (l, esc(T[l]["copied"])) for l in LANGS)
-page = (page.replace("TASK_ID", esc(task))
-        .replace("KIND_BADGE", kind_badge)
-        .replace("META_ROWS", "".join(meta_rows))
-        .replace("COPY_ATTRS", copy_a + " " + copied_attrs).replace("COPY_TEXT", copy_t)
-        .replace("RAW_ATTRS", raw_a).replace("RAW_TEXT", raw_t)
-        .replace("HINT_ATTRS", hint_a).replace("HINT_TEXT", hint_t)
-        .replace("RAWT_ATTRS", rawt_a).replace("RAWT_TEXT", rawt_t)
-        .replace("CLOSE_ATTRS", close_a).replace("CLOSE_TEXT", close_t)
-        .replace("SECTIONS", "\n".join(section_html))
-        .replace("RAW_JS", raw_js))
+slots = {
+    "TASK_ID": esc(task), "KIND_BADGE": kind_badge, "META_ROWS": "".join(meta_rows),
+    "COPY_ATTRS": copy_a + " " + copied_attrs, "COPY_TEXT": copy_t,
+    "HINT_ATTRS": hint_a, "HINT_TEXT": hint_t,
+    "RAWT_ATTRS": rawt_a, "RAWT_TEXT": rawt_t,
+    "CLOSE_ATTRS": close_a, "CLOSE_TEXT": close_t,
+    "SECTIONS": "\n".join(section_html), "RAW_JS": raw_js,
+}
+page = re.sub(r"\b(?:%s)\b" % "|".join(slots), lambda m: slots[m.group(0)], page)
 out.write_text(page, encoding="utf-8")
 PY
 }
 
-command_render() {  # <task-id> [--out <file>] ; prints `page: <path>`
-  local id='' out='' packet
-  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
-  id=$1; shift
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --out) out=${2-}; shift 2 ;;
-      *) usage >&2; exit 2 ;;
-    esac
-  done
-  command_verify "$id" >/dev/null || exit 1
+render_page() {  # <task-id> ; writes data/<id>/packet.html beside the verified packet
+  local packet page
   command -v python3 >/dev/null 2>&1 || fail "python3 is required to render the packet page"
-  packet=$(packet_path "$id")
-  [ -n "$out" ] || out=$(page_path "$id")
-  [ ! -L "$out" ] || fail "page path is a symlink: $out"
-  mkdir -p "${out%/*}" || fail "cannot create ${out%/*}"
-  render_html "$packet" "$out" "$id" || fail "rendering $packet failed"
-  printf 'page: %s\n' "$out"
+  packet=$(packet_path "$1"); page=$(page_path "$1")
+  [ ! -L "$page" ] || fail "page path is a symlink: $page"
+  render_html "$packet" "$page" "$1" || fail "rendering $packet failed"
+}
+
+command_render() {  # <task-id> ; prints `page: <path>`
+  local id=${1-}
+  [ -n "$id" ] || { usage >&2; exit 2; }
+  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  command_verify "$id" >/dev/null || exit 1
+  render_page "$id"
+  printf 'page: %s\n' "$(page_path "$id")"
 }
 
 # ---- serve ------------------------------------------------------------------

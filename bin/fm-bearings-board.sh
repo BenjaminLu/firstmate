@@ -161,17 +161,15 @@ validate_payload() {  # <data.json>
     def optional_filed:
       (has("filed") | not) or (.filed == null) or (.filed | valid_filed);
     def optional_string($name): (has($name) | not) or (.[$name] | type == "string");
-    def optional_https_url($name):
-      (has($name) | not)
-      or (.[$name]
-        | type == "string"
-          and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
-    def optional_link_url($name):
-      (has($name) | not)
-      or (.[$name]
-        | type == "string"
-          and (test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$")
-            or test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$")));
+    def https_url:
+      type == "string"
+      and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$");
+    # A served page (packet_url, evidence) may also live on the local Lavish server.
+    def link_url:
+      https_url
+      or (type == "string" and test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
+    def optional_https_url($name): (has($name) | not) or (.[$name] | https_url);
+    def optional_link_url($name): (has($name) | not) or (.[$name] | link_url);
     def version: type == "string" and test("^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$");
     def optional_subject:
       (has("subject") | not)
@@ -180,10 +178,7 @@ validate_payload() {  # <data.json>
           and (keys | sort) == ["artifact", "version"]
           and (.artifact | slug(128))
           and (.version | version));
-    def evidence_item:
-      type == "object" and (.label | copy) and (.url | type == "string")
-      and ((.url | test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"))
-        or (.url | test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$")));
+    def evidence_item: type == "object" and (.label | copy) and (.url | link_url);
     def call_item:
       type == "object"
       and (.key | slug(128))
