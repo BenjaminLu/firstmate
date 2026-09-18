@@ -610,10 +610,24 @@ __FM_BEARINGS_BOARD_DATA__
   var CHECK_SVG = '<svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var CHECK_ROW_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
-  /* answered state survives a language switch: keyed by decision key */
-  var queuedKeys = {};
+  /* Answered state survives a language switch and a reload: keyed by decision
+     key and scoped to this build's `generated` stamp, so a rebuilt board (which
+     drops acted-on cards) starts clean while a plain reload of the same board
+     still shows what was already queued. */
+  var answeredStore = "fm-bearings-answered:" + String(data.generated || "");
+  var queuedKeys = (function () {
+    try {
+      var raw = window.localStorage && window.localStorage.getItem(answeredStore);
+      var parsed = raw ? JSON.parse(raw) : null;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (e) { return {}; }
+  })();
+  function rememberAnswered(key) {
+    queuedKeys[key] = true;
+    try { if (window.localStorage) window.localStorage.setItem(answeredStore, JSON.stringify(queuedKeys)); } catch (e) { /* private mode */ }
+  }
   var dispatchQueued = false;
-  var active = 0;
+  var active = -1;
 
   function render() {
   try {
@@ -794,7 +808,7 @@ __FM_BEARINGS_BOARD_DATA__
               data: ctxData }
           );
         }
-        queuedKeys[item.key] = true;
+        rememberAnswered(item.key);
         card.classList.add("is-queued");
         /* deal the next card once this one is answered */
         setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, 450);
@@ -828,6 +842,13 @@ __FM_BEARINGS_BOARD_DATA__
     if (cards.length) {
       stackPrev.onclick = function () { showCard(active - 1); };
       stackNext.onclick = function () { showCard(active + 1); };
+      if (active < 0) {
+        /* first open: deal the first card that still needs an answer */
+        active = 0;
+        for (var k = 0; k < data.captains_call.length; k++) {
+          if (!queuedKeys[data.captains_call[k].key]) { active = k; break; }
+        }
+      }
       showCard(active);
       if (stackNav) stackNav.hidden = false;
     } else {
