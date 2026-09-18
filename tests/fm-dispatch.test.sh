@@ -269,7 +269,66 @@ test_mode_mismatch_with_existing_brief_refuses() {
   status=$?
   expect_code 1 "$status" "a scout dispatch over a ship brief should refuse: $out"
   assert_contains "$out" "is a ship brief (Delivery contract: mode=local-only) but this dispatch is --scout" "scout-over-ship refusal missing"
+
+  # The mirror: a scout brief left behind by a stopped scout dispatch must not
+  # be reused as the ship brief of a later --mode call.
+  id=dispatch-mismatch-e5-scout
+  FM_HOME="$case_dir/home" FM_DATA_OVERRIDE="$case_dir/home/data" FM_STATE_OVERRIDE="$case_dir/home/state" \
+    "$ROOT/bin/fm-brief.sh" "$id" project --scout >/dev/null || fail "could not scaffold the existing scout brief"
+  brief="$case_dir/home/data/$id/brief.md"
+  before=$(cat "$brief")
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" --harness claude)
+  status=$?
+  expect_code 1 "$status" "a ship dispatch over a scout brief should refuse: $out"
+  assert_contains "$out" "is a scout brief (no Delivery contract line) but this dispatch passes --mode no-mistakes" "ship-over-scout refusal missing"
+  after=$(cat "$brief")
+  assert_equals "$before" "$after" "a scout brief under a ship dispatch must not be touched"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "a ship dispatch over a scout brief must not file an item"
+  assert_absent "$case_dir/home/state/$id.meta" "a ship dispatch over a scout brief must not spawn"
   pass "a mode mismatch with an existing brief refuses without touching it"
+}
+
+test_herdr_lab_reaches_the_scaffold_and_must_match_on_rerun() {
+  local case_dir id out status brief
+  id=dispatch-herdr-m4
+  case_dir=$(make_case herdr)
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" --herdr-lab \
+    --backend nope-backend)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn on an unknown backend should refuse: $out"
+  brief="$case_dir/home/data/$id/brief.md"
+  assert_contains "$out" "brief: filled $brief" "brief was not scaffolded and filled"
+  fm_brief_heading_present "$brief" "# Herdr isolation - HARD SAFETY CONTRACT" || fail "--herdr-lab did not reach fm-brief.sh: the brief lacks the isolation contract"
+  fm_brief_heading_present "$brief" "# Herdr lifecycle declaration - NOT ENABLED" && fail "a --herdr-lab brief still carries the NOT ENABLED declaration"
+
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md")
+  status=$?
+  expect_code 1 "$status" "a re-run without --herdr-lab over a guarded brief should refuse: $out"
+  assert_contains "$out" "carries the Herdr isolation contract (scaffolded with --herdr-lab) but this dispatch omits --herdr-lab" "guarded-brief refusal missing"
+  assert_equals "queued" "$(row_state "$case_dir" "$id")" "a Herdr mismatch must leave the item queued"
+  assert_absent "$case_dir/home/state/$id.meta" "a Herdr mismatch must not spawn"
+
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" --herdr-lab)
+  status=$?
+  expect_code 0 "$status" "the matching re-run should reuse the guarded brief and spawn: $out"
+  assert_contains "$out" "brief: reused $brief" "matching re-run did not reuse the brief"
+  assert_contains "$out" "spawned $id harness=claude kind=ship" "matching re-run did not spawn"
+
+  # The reverse mismatch: an unguarded brief cannot be promoted by the flag alone.
+  id=dispatch-herdr-m4-plain
+  FM_HOME="$case_dir/home" FM_DATA_OVERRIDE="$case_dir/home/data" FM_STATE_OVERRIDE="$case_dir/home/state" \
+    "$ROOT/bin/fm-brief.sh" "$id" project --scout >/dev/null || fail "could not scaffold the plain brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" --herdr-lab)
+  status=$?
+  expect_code 1 "$status" "--herdr-lab over an unguarded brief should refuse: $out"
+  assert_contains "$out" "was scaffolded without --herdr-lab (Herdr lifecycle declaration - NOT ENABLED) but this dispatch passes --herdr-lab" "unguarded-brief refusal missing"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "the reverse Herdr mismatch must not file an item"
+  pass "--herdr-lab reaches the scaffold and a re-run must agree with the existing brief"
 }
 
 test_scout_call_files_and_spawns_a_scout() {
@@ -429,6 +488,7 @@ test_second_call_reuses_item_and_brief
 test_empty_ask_refuses_before_any_record
 test_captain_labelled_ask_refuses
 test_mode_mismatch_with_existing_brief_refuses
+test_herdr_lab_reaches_the_scaffold_and_must_match_on_rerun
 test_scout_call_files_and_spawns_a_scout
 test_explicit_profile_flags_reach_the_spawn
 test_projects_prefix_resolves_against_the_projects_dir

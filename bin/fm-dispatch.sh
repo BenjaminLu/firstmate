@@ -5,7 +5,7 @@
 # Usage:
 #   fm-dispatch.sh <task-id> --project <dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --ask <file> --spec <file> [options]
 #   fm-dispatch.sh <task-id> --project <dir> --scout --ask <file> --spec <file> [options]
-#   options: [--title <text>] [--reason <text>] [--harness <name>] [--model <name>] [--effort <level>] [--backend <name>]
+#   options: [--title <text>] [--reason <text>] [--herdr-lab] [--harness <name>] [--model <name>] [--effort <level>] [--backend <name>]
 #
 # --project accepts the same forms as fm-spawn: a directory path, or
 # `projects/<name>` resolved against FM_PROJECTS_OVERRIDE, else $FM_HOME/projects.
@@ -20,12 +20,18 @@
 #      unfenced level-1 or level-2 heading, because the brief parser ends
 #      `## Captain's intent` and `## Firstmate spec` at the next such heading
 #      and the spliced text would be silently truncated for the worker and the
-#      reviewer. An existing brief whose recorded "Delivery contract:
-#      mode=<mode>" line disagrees with --mode, or that carries one under
-#      --scout, is refused here as a mode mismatch before any record is made.
+#      reviewer. An existing brief is refused here, before any record is
+#      made, when it disagrees with this call: its recorded "Delivery
+#      contract: mode=<mode>" line differs from --mode, it carries one under
+#      --scout, it carries none (a scout brief) under --mode, or its Herdr
+#      section (bin/fm-brief.sh writes `# Herdr isolation - HARD SAFETY
+#      CONTRACT` with --herdr-lab and `# Herdr lifecycle declaration - NOT
+#      ENABLED` without) disagrees with this call's --herdr-lab.
 #   2. Brief: scaffold data/<id>/brief.md through bin/fm-brief.sh with the same
-#      --mode or --scout when it does not exist, naming the project by the
-#      basename of --project. Then replace the exact `{TASK}` placeholder line
+#      --mode or --scout, and --herdr-lab when given (mandatory for a task that
+#      drives Herdr lifecycle commands; fm-brief.sh owns that contract), when
+#      it does not exist, naming the project by the basename of --project.
+#      Then replace the exact `{TASK}` placeholder line
 #      with the bytes of --ask and the exact `{FIRSTMATE_SPEC}` line with the
 #      bytes of --spec; a file whose last byte is not a newline gets one so the
 #      next heading stays on its own line. A brief that is already filled is
@@ -106,7 +112,7 @@ RULES_PATH="$CONFIG/crew-dispatch.json"
 
 die() { printf 'error: %s\n' "$1" >&2; exit "${2:-1}"; }
 
-ID='' PROJECT='' MODE='' YOLO='' SCOUT=0 ASK='' SPEC='' TITLE='' REASON=''
+ID='' PROJECT='' MODE='' YOLO='' SCOUT=0 HERDR_LAB=0 ASK='' SPEC='' TITLE='' REASON=''
 HARNESS='' MODEL='' EFFORT='' BACKEND=''
 MODE_SET=0 YOLO_SET=0
 need() { [ $# -ge 2 ] || die "$1 requires a value"; }
@@ -116,6 +122,7 @@ while [ $# -gt 0 ]; do
     --mode) need "$@"; MODE=$2; MODE_SET=1; shift 2 ;;
     --yolo) need "$@"; YOLO=$2; YOLO_SET=1; shift 2 ;;
     --scout) SCOUT=1; shift ;;
+    --herdr-lab) HERDR_LAB=1; shift ;;
     --ask) need "$@"; ASK=$2; shift 2 ;;
     --spec) need "$@"; SPEC=$2; shift 2 ;;
     --title) need "$@"; TITLE=$2; shift 2 ;;
@@ -175,18 +182,28 @@ if [ -e "$BRIEF" ]; then
   BRIEF_MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
   if [ "$SCOUT" -eq 1 ]; then
     [ -z "$BRIEF_MODE" ] || die "$BRIEF is a ship brief (Delivery contract: mode=$BRIEF_MODE) but this dispatch is --scout; move that brief aside or drop --scout"
-  elif [ -n "$BRIEF_MODE" ] && [ "$BRIEF_MODE" != "$MODE" ]; then
+  elif [ -z "$BRIEF_MODE" ]; then
+    die "$BRIEF is a scout brief (no Delivery contract line) but this dispatch passes --mode $MODE; move that brief aside or pass --scout"
+  elif [ "$BRIEF_MODE" != "$MODE" ]; then
     die "$BRIEF records Delivery contract: mode=$BRIEF_MODE but this dispatch passes --mode $MODE; re-scaffold the brief or pass the recorded mode"
+  fi
+  if fm_brief_heading_present "$BRIEF" "# Herdr isolation - HARD SAFETY CONTRACT"; then
+    [ "$HERDR_LAB" -eq 1 ] || die "$BRIEF carries the Herdr isolation contract (scaffolded with --herdr-lab) but this dispatch omits --herdr-lab; pass the flag or re-scaffold the brief"
+  else
+    [ "$HERDR_LAB" -eq 0 ] || die "$BRIEF was scaffolded without --herdr-lab (Herdr lifecycle declaration - NOT ENABLED) but this dispatch passes --herdr-lab; re-scaffold the brief or drop the flag"
   fi
 fi
 
 # ---- 2. brief ------------------------------------------------------------------------
 if [ "$BRIEF_EXISTS" -eq 0 ]; then
+  BRIEF_ARGS=("$ID" "$REPO")
   if [ "$SCOUT" -eq 1 ]; then
-    "$SCRIPT_DIR/fm-brief.sh" "$ID" "$REPO" --scout >/dev/null || exit $?
+    BRIEF_ARGS+=(--scout)
   else
-    "$SCRIPT_DIR/fm-brief.sh" "$ID" "$REPO" --mode "$MODE" >/dev/null || exit $?
+    BRIEF_ARGS+=(--mode "$MODE")
   fi
+  [ "$HERDR_LAB" -eq 0 ] || BRIEF_ARGS+=(--herdr-lab)
+  "$SCRIPT_DIR/fm-brief.sh" "${BRIEF_ARGS[@]}" >/dev/null || exit $?
   [ -f "$BRIEF" ] || die "fm-brief.sh reported success but $BRIEF is missing"
 fi
 
