@@ -97,7 +97,7 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
 `bin/fm-bearings-board.sh` owns every board mechanic - the stable board path, the deterministic payload skeleton, fm-bearings-board.v1 payload validation, template injection, live Lavish session verification and ended-session reopening, the any-origin answer binding, and listener registration - so the per-invocation work is filling the skeleton and running its `build`.
 
 Never hand-write the payload from the snapshot.
-Start from `bin/fm-bearings-board.sh compose --lang <captain's language> --out <file>`, which reads the same snapshot command and maps every structured row deterministically: Underway, Recently Landed, and Charted Next rows, one decision card per live captain hold, and a merge card per merge-ready PR (the script header owns the exact mapping and the placeholder shapes).
+Start from `bin/fm-bearings-board.sh compose --lang <captain's language> --out <file>`, which reads the same snapshot command and maps every structured row deterministically: Underway, Recently Landed, and Charted Next rows, one decision card per live captain hold, and a merge card per merge-ready PR that an owning task claims (the script header owns the exact mapping and the placeholder shapes).
 Pass the snapshot's live-PR opt-in to the snapshot command yourself when the captain asked for PRs; compose reads a fresh snapshot without it unless you hand it one with `--snapshot`.
 Then apply your judgment to the skeleton and nothing else:
 

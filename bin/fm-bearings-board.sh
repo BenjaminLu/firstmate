@@ -43,7 +43,8 @@
 #            fills prose and translations instead of hand-writing the whole
 #            payload. Structured state maps as follows: every in_flight row
 #            becomes an Underway row (name from the snapshot's durable label,
-#            doing from its run state); every landed row becomes a Landed row
+#            doing from its run detail, or its state word when the detail is
+#            blank); every landed row becomes a Landed row
 #            (pr_url when its artifact is an https link); every gate becomes
 #            a Charted Next row, `warning` and non-dispatchable for the
 #            action-free integrity notices (a parenthesised id, the main
@@ -52,8 +53,11 @@
 #            hold reason; every live captain hold becomes exactly one decision
 #            card keyed by its task id; every merge-ready candidate PR (checks
 #            passing, mergeable, review not CHANGES_REQUESTED, present only
-#            under the snapshot's --include-prs) becomes a merge card with
-#            pr_url set and risk left for the composer. A held task's title,
+#            under the snapshot's --include-prs) that an owning task claims
+#            becomes a merge card keyed merge.<task-id> with pr_url set and
+#            risk left for the composer; a PR with no owning task gets no
+#            card, because only a task-keyed merge answer can be routed
+#            through `bin/fm-captain-hold.sh`. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
@@ -464,15 +468,26 @@ await_source_owner() {  # <source-id>
 # `{TRANSLATE: <english>}` marks a translation of the English beside it.
 PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
 
+# A scalar from `tasks-axi show`: a value that needed quoting is JSON-quoted
+# (\" and \\ inside), so it is decoded as a JSON string.
+show_value() {  # <show output> <field>
+  local raw
+  raw=$(printf '%s\n' "$1" | sed -n "s/^  $2: //p" | head -1)
+  case "$raw" in
+    \"*\") printf '%s\n' "$raw" | jq -r . 2>/dev/null || printf '%s\n' "$raw" ;;
+    *) printf '%s\n' "$raw" ;;
+  esac
+}
+
 # This home's backlog record for a task: {title, kind, repo} or null when the
 # backlog cannot be read or the task is not there.
 task_record() {  # <task-id>
   local show title kind repo
   command -v tasks-axi >/dev/null 2>&1 || { printf 'null\n'; return 0; }
   show=$("$SCRIPT_DIR/fm-tasks-axi.sh" show "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
-  title=$(printf '%s\n' "$show" | sed -n 's/^  title: //p' | head -1 | sed 's/^"\(.*\)"$/\1/')
-  kind=$(printf '%s\n' "$show" | sed -n 's/^  kind: //p' | head -1 | sed 's/^"\(.*\)"$/\1/')
-  repo=$(printf '%s\n' "$show" | sed -n 's/^  repo: //p' | head -1 | sed 's/^"\(.*\)"$/\1/')
+  title=$(show_value "$show" title)
+  kind=$(show_value "$show" kind)
+  repo=$(show_value "$show" repo)
   [ "$repo" != - ] || repo=''
   [ "$kind" != - ] || kind=''
   jq -n --arg title "$title" --arg kind "$kind" --arg repo "$repo" \
@@ -512,7 +527,7 @@ command_compose_check() {  # <data.json>
 }
 
 command_compose() {
-  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids
+  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
@@ -554,6 +569,7 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" '
     def t($s): {en: $s, hant: ("{TRANSLATE: " + $s + "}")};
@@ -576,9 +592,9 @@ EOF
          {value: "option-b", label: fill("option B label"), consequence: fill("option B consequence")}],
        recommend_why: fill("recommend_why"), allow_freeform: true}
       + hold_close;
-    def packet_seeded($card):
-      $card
-      + {repo: ($card.repo | if . == null or . == "" then repo_of(.id) else . end),
+    def packet_seeded($card): . as $row
+      | $card
+      + {repo: ($card.repo | if . == null or . == "" then repo_of($row.id) else . end),
          title: ($card.title | i18n), decide: ($card.decide | i18n), if_nothing: ($card.if_nothing | i18n),
          about: fill("about"),
          options: [$card.options[] | .label |= i18n | .consequence |= i18n]}
@@ -587,8 +603,7 @@ EOF
     def decision_card: . as $row | ($cards[$row.id] // null) as $card
       | if $card == null then placeholder_card else packet_seeded($card) end;
     def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
-    def merge_card:
-      (if .task != "-" then .task else ((.repo | slugify) + "." + .num) end) as $task
+    def merge_card: .task as $task
       | ((record($task) | if . == null then null else .title end)
          // ([$snap.in_flight[]? | select(.id == $task) | .name] | .[0])) as $title
       | {key: ("merge." + $task), type: "merge",
@@ -608,8 +623,9 @@ EOF
       prs_live: (.prs | startswith("checked")),
       captains_call: (
         [ .decisions_open[]? | select(.verb == "captain-hold") | decision_card ]
-        + [ .candidate_prs[]? | select(merge_ready) | merge_card ]),
-      underway: [ .in_flight[]? | {id, repo, name: (.name | t(.)), state, doing: (.doing | t(.)), kind} ],
+        + [ .candidate_prs[]? | select(.task != "-" and merge_ready) | merge_card ]),
+      underway: [ .in_flight[]? | {id, repo, name: (.name | t(.)), state, kind,
+        doing: ((if .doing == "" then .state else .doing end) | t(.))} ],
       landed: [ .landed[]? | {id, repo: repo_of(.id), what: (.what | t(.)), owner}
         + (if (.artifact | https) then {pr_url: .artifact} else {} end) ],
       charted: [ .gates[]? | . as $g
@@ -620,11 +636,18 @@ EOF
            filed: .filed} ],
       charted_more: charted_more,
       charted_warning_more: 0
-    }' > "${out:-/dev/stdout}" || fail "cannot compose the board skeleton"
-  if [ -n "$out" ]; then
-    validate_payload "$out" || fail "the composed skeleton does not satisfy $BOARD_SCHEMA: $out"
-    printf 'skeleton: %s\n' "$out"
+    }' > "$tmp" || { rm -f -- "$tmp"; fail "cannot compose the board skeleton"; }
+  if ! validate_payload "$tmp"; then
+    rm -f -- "$tmp"
+    fail "the composed skeleton does not satisfy $BOARD_SCHEMA"
   fi
+  if [ -n "$out" ]; then
+    cat "$tmp" > "$out" || { rm -f -- "$tmp"; fail "cannot write the board skeleton: $out"; }
+    printf 'skeleton: %s\n' "$out"
+  else
+    cat "$tmp"
+  fi
+  rm -f -- "$tmp"
 }
 
 command_build() {

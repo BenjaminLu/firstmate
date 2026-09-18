@@ -998,6 +998,78 @@ test_compose_lang_and_snapshot_arguments() {
   pass "compose honors --lang and refuses a foreign snapshot"
 }
 
+test_compose_seeds_a_packet_card_without_a_recorded_project() {
+  local home skeleton
+  home=$(make_compose_home compose-no-project)
+  fm_write_meta "$home/state/gated-work.meta" "worktree=$home" "kind=ship"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a verified packet whose meta records no project"
+  jq -e '
+    (.captains_call[0] | .key == "gated-work" and .type == "decision"
+      and .title == {en: "Rollout order", hant: "上線順序"} and .repo == "firstmate")
+    and ([.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"])
+  ' "$skeleton" >/dev/null || fail "the packet card did not fall back to the backlog repo: $(cat "$skeleton")"
+  pass "compose seeds a packet card whose meta has no project from the backlog repo"
+}
+
+test_compose_degrades_a_blank_run_detail_to_the_state_word() {
+  local home skeleton
+  home=$(make_compose_home compose-blank-doing)
+  jq '.in_flight[0].doing = ""' "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose in-flight row has a blank run detail"
+  jq -e '.underway[0] | .state == "unknown" and .doing == {en: "unknown", hant: "{TRANSLATE: unknown}"}' \
+    "$skeleton" >/dev/null || fail "a blank doing was not degraded to the state word: $(cat "$skeleton")"
+  pass "compose degrades a blank run detail to the row's state word"
+}
+
+test_compose_cards_no_merge_for_a_pr_without_an_owning_task() {
+  local home skeleton
+  home=$(make_compose_home compose-taskless-pr)
+  jq '.candidate_prs += [{num: "12", repo: "example/firstmate", task: "-",
+        url: "https://github.com/example/firstmate/pull/12",
+        review: "APPROVED", mergeable: "MERGEABLE", checks: "passing"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying a task-less PR"
+  jq -e '
+    ([.captains_call[] | select(.type == "merge") | .key] == ["merge.ship-task"])
+    and ([.captains_call[] | .pr_url? // empty] | index("https://github.com/example/firstmate/pull/12") == null)
+  ' "$skeleton" >/dev/null || fail "a green PR with no owning task was carded: $(cat "$skeleton")"
+  pass "compose cards a merge only for a PR an owning task claims"
+}
+
+test_compose_validates_the_skeleton_on_stdout_too() {
+  local home out rc
+  home=$(make_compose_home compose-stdout-validate)
+  jq '.in_flight[0].name = ""' "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  set +e; out=$(run_board "$home" compose --snapshot "$home/snapshot.json" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "compose emitted an unvalidated skeleton on stdout"
+  assert_contains "$out" "does not satisfy fm-bearings-board.v1" "compose did not name the validator as the reason: $out"
+  case "$out" in
+    *'"schema"'*) fail "compose still printed the refused skeleton: $out" ;;
+  esac
+  pass "compose validates the skeleton before printing it to stdout"
+}
+
+test_compose_decodes_a_quoted_backlog_title() {
+  local home skeleton
+  home=$(make_compose_home compose-quoted-title)
+  sed -i.bak 's/^- \[ \] pick-route - Pick the route /- [ ] pick-route - Pick the "fast" \\ route /' "$home/data/backlog.md"
+  rm -f "$home/data/backlog.md.bak"
+  grep -q 'Pick the "fast" \\ route' "$home/data/backlog.md" || fail "the fixture backlog title was not rewritten"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a backlog whose title needs quoting"
+  jq -e '.captains_call[1] | .key == "pick-route" and .title.en == "Pick the \"fast\" \\ route"
+    and .title.hant == "{TRANSLATE: Pick the \"fast\" \\ route}"' "$skeleton" >/dev/null \
+    || fail "the quoted title reached the card with its escapes intact: $(cat "$skeleton")"
+  pass "compose decodes a quoted backlog title instead of carrying its escapes"
+}
+
 test_skeleton_fails_build_until_its_placeholders_are_filled() {
   local home skeleton filled board out rc
   home=$(make_compose_home compose-build)
@@ -1073,5 +1145,10 @@ test_build_refuses_malformed_copy_and_card_fields
 test_compose_maps_every_section_from_the_recorded_snapshot
 test_compose_cards_every_live_hold_and_merge_ready_pr
 test_compose_lang_and_snapshot_arguments
+test_compose_seeds_a_packet_card_without_a_recorded_project
+test_compose_degrades_a_blank_run_detail_to_the_state_word
+test_compose_cards_no_merge_for_a_pr_without_an_owning_task
+test_compose_validates_the_skeleton_on_stdout_too
+test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled
 test_url_reads_the_live_session_listing
