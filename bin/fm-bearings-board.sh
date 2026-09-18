@@ -8,6 +8,8 @@
 # agent never authors board UI at invocation time.
 #
 # Usage:
+#   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
+#   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh url
@@ -35,6 +37,40 @@
 #            Every dropped card is named on stderr as a `dropped-landed-card:`
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
+# compose    Print an fm-bearings-board.v1 payload SKELETON mapped
+#            deterministically from `bin/fm-bearings-snapshot.sh --json`
+#            (or the recorded snapshot named by --snapshot), so the composer
+#            fills prose and translations instead of hand-writing the whole
+#            payload. Structured state maps as follows: every in_flight row
+#            becomes an Underway row (name from the snapshot's durable label,
+#            doing from its run state); every landed row becomes a Landed row
+#            (pr_url when its artifact is an https link); every gate becomes
+#            a Charted Next row, `warning` and non-dispatchable for the
+#            action-free integrity notices (a parenthesised id, the main
+#            inventory or away-return reasons) and `queued` otherwise, with
+#            dispatchable true only when the gate names no blocker and no
+#            hold reason; every live captain hold becomes exactly one decision
+#            card keyed by its task id; every merge-ready candidate PR (checks
+#            passing, mergeable, review not CHANGES_REQUESTED, present only
+#            under the snapshot's --include-prs) becomes a merge card with
+#            pr_url set and risk left for the composer. A held task's title,
+#            repo, and kind come from this home's backlog record when
+#            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
+#            than captain) gets `close: release`, a question omits close. When
+#            `bin/fm-packet.sh verify` accepts the held task's packet, the card
+#            is seeded from `bin/fm-packet.sh card <id>` instead of
+#            placeholders. Every captain-facing copy field is emitted as
+#            {"en": <english>, "hant": "{TRANSLATE: <english>}"} so hant (and
+#            optionally hans) is filled without re-typing the English; the
+#            fixed merge choices carry their known translations. A card's
+#            decide, about, if_nothing, options[].consequence, recommend_why,
+#            and a merge card's risk are {FILL: ...} placeholders, and
+#            reversible and risk on a decision card are left for the composer
+#            to add. The top-level lang comes from --lang (default hant). The
+#            skeleton satisfies the payload validator as-is, but build refuses
+#            it until every placeholder is gone.
+#            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
+#            placeholder as `<path>: <value>` and exits 1 while any remain.
 # path       Print the stable board path for this home.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
@@ -90,7 +126,8 @@
 #
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
-# the fm-bearings-board.v1 types and item invariants below. Every fleet row and
+# the fm-bearings-board.v1 types and item invariants below, and no string may
+# still carry a compose placeholder. Every fleet row and
 # Captain's Call item explicitly carries `repo`; the composer fills it from the
 # snapshot and task records wherever known, and uses null or an empty string
 # only as the deliberate genuinely-no-repo marker. In that exceptional case
@@ -419,6 +456,177 @@ await_source_owner() {  # <source-id>
   printf '%s\n' "${owner:-none}"
 }
 
+# --- compose -----------------------------------------------------------------
+# The skeleton is a deterministic projection of the snapshot; the composer's
+# judgment (ranking, prose, translations, risk, reversibility) is written into
+# it afterwards, and build refuses the payload while any placeholder remains.
+# The placeholder shapes: `{FILL: ...}` marks prose the composer writes, and
+# `{TRANSLATE: <english>}` marks a translation of the English beside it.
+PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
+
+# This home's backlog record for a task: {title, kind, repo} or null when the
+# backlog cannot be read or the task is not there.
+task_record() {  # <task-id>
+  local show title kind repo
+  command -v tasks-axi >/dev/null 2>&1 || { printf 'null\n'; return 0; }
+  show=$("$SCRIPT_DIR/fm-tasks-axi.sh" show "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
+  title=$(printf '%s\n' "$show" | sed -n 's/^  title: //p' | head -1 | sed 's/^"\(.*\)"$/\1/')
+  kind=$(printf '%s\n' "$show" | sed -n 's/^  kind: //p' | head -1 | sed 's/^"\(.*\)"$/\1/')
+  repo=$(printf '%s\n' "$show" | sed -n 's/^  repo: //p' | head -1 | sed 's/^"\(.*\)"$/\1/')
+  [ "$repo" != - ] || repo=''
+  [ "$kind" != - ] || kind=''
+  jq -n --arg title "$title" --arg kind "$kind" --arg repo "$repo" \
+    '{title: (if $title == "" then null else $title end),
+      kind: (if $kind == "" then null else $kind end),
+      repo: (if $repo == "" then null else $repo end)}'
+}
+
+# The verified packet's board card for a held task, or null when the task has
+# no packet, its packet does not verify, or it is a done packet.
+packet_card() {  # <task-id>
+  local card
+  card=$("$SCRIPT_DIR/fm-packet.sh" card "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
+  printf '%s\n' "$card" | jq -c . 2>/dev/null || printf 'null\n'
+}
+
+list_placeholders() {  # <data.json> -> "<path>: <value>" lines
+  jq -r --arg re "$PLACEHOLDER_RE" '
+    . as $doc
+    | [paths(type == "string" and test($re))] | .[]
+    | . as $p | ($p | map(tostring) | join(".")) + ": " + ($doc | getpath($p))
+  ' "$1"
+}
+
+command_compose_check() {  # <data.json>
+  local data=$1 found
+  [ -f "$data" ] || fail "board data does not exist: $data"
+  jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
+  found=$(list_placeholders "$data") || fail "cannot scan the board data: $data"
+  if [ -z "$found" ]; then
+    printf 'placeholders: none\n'
+    return 0
+  fi
+  printf '%s\n' "$found"
+  printf 'placeholders: %s\n' "$(printf '%s\n' "$found" | wc -l | tr -d ' ')"
+  return 1
+}
+
+command_compose() {
+  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
+      --lang) lang=${2-}; shift 2 ;;
+      --out) out=${2-}; shift 2 ;;
+      --snapshot) snapshot_file=${2-}; shift 2 ;;
+      *) usage >&2; exit 2 ;;
+    esac
+  done
+  case "$lang" in en|hant|hans) ;; *) fail "--lang must be en, hant, or hans" ;; esac
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  if [ -n "$snapshot_file" ]; then
+    [ -f "$snapshot_file" ] || fail "snapshot does not exist: $snapshot_file"
+    snapshot=$(cat "$snapshot_file")
+  else
+    snapshot=$("$SCRIPT_DIR/fm-bearings-snapshot.sh" --json) || fail "cannot read the bearings snapshot"
+  fi
+  printf '%s\n' "$snapshot" | jq -e '.schema == "fm-bearings.v1"' >/dev/null 2>&1 \
+    || fail "the snapshot is not an fm-bearings.v1 projection"
+  # Main-home rows are enriched from this home's own records; secondmate rows
+  # keep the snapshot's projection because their books live elsewhere.
+  ids=$(printf '%s\n' "$snapshot" | jq -r '
+    [ (.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id),
+      (.landed[]? | select(.owner == "(main)") | .id),
+      (.gates[]? | select(.owner == "(main)" and (.id | startswith("(") | not)) | .id),
+      (.candidate_prs[]? | select(.task != "-") | .task) ]
+    | unique | .[]')
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    record=$(task_record "$id")
+    records=$(jq -n --argjson acc "$records" --arg id "$id" --argjson record "$record" '$acc + {($id): $record}')
+  done <<EOF
+$ids
+EOF
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    card=$(packet_card "$id")
+    cards=$(jq -n --argjson acc "$cards" --arg id "$id" --argjson card "$card" '$acc + {($id): $card}')
+  done <<EOF
+$(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
+EOF
+  printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
+    --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" '
+    def t($s): {en: $s, hant: ("{TRANSLATE: " + $s + "}")};
+    def fill($what): {en: ("{FILL: " + $what + "}"), hant: ("{FILL: " + $what + "}")};
+    def i18n: if type == "string" then t(.) else . end;
+    def slugify: gsub("[^A-Za-z0-9._-]"; "-") | gsub("^-+|-+$"; "") | if length == 0 then "row" else . end;
+    def record($id): $records[$id] // null;
+    def repo_of($id): record($id) | if . == null then null else .repo end;
+    def https: type == "string" and test("^https://");
+    def warning_gate: (.id | startswith("(")) or .reason == "main inventory" or .reason == "away-return catch-up";
+    def hold_title: (record(.id) | if . == null then null else .title end)
+      // (.summary | split(": ") | .[0]);
+    def hold_close: record(.id) as $r
+      | if $r != null and $r.kind != null and $r.kind != "captain" then {close: "release"} else {} end;
+    def placeholder_card:
+      {key: .key, type: "decision", repo: repo_of(.id), title: t(hold_title),
+       about: fill("about"), decide: fill("decide"), if_nothing: fill("if_nothing"),
+       options: [
+         {value: "option-a", label: fill("option A label"), consequence: fill("option A consequence")},
+         {value: "option-b", label: fill("option B label"), consequence: fill("option B consequence")}],
+       recommend_why: fill("recommend_why"), allow_freeform: true}
+      + hold_close;
+    def packet_seeded($card):
+      $card
+      + {repo: ($card.repo | if . == null or . == "" then repo_of(.id) else . end),
+         title: ($card.title | i18n), decide: ($card.decide | i18n), if_nothing: ($card.if_nothing | i18n),
+         about: fill("about"),
+         options: [$card.options[] | .label |= i18n | .consequence |= i18n]}
+      + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n)} else {} end)
+      + (if $card.close != null then {close: $card.close} else hold_close end);
+    def decision_card: . as $row | ($cards[$row.id] // null) as $card
+      | if $card == null then placeholder_card else packet_seeded($card) end;
+    def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
+    def merge_card:
+      (if .task != "-" then .task else ((.repo | slugify) + "." + .num) end) as $task
+      | ((record($task) | if . == null then null else .title end)
+         // ([$snap.in_flight[]? | select(.id == $task) | .name] | .[0])) as $title
+      | {key: ("merge." + $task), type: "merge",
+         repo: (.repo | split("/") | last),
+         title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo))),
+         detail: t("checks " + .checks + ", review " + .review),
+         pr_url: .url, risk: "{FILL: low | medium | high}",
+         options: [
+           {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
+           {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
+         allow_freeform: true};
+    def charted_more:
+      [ .omitted[]? | .surface | capture("^gates showing (?<shown>[0-9]+) of (?<total>[0-9]+)") ]
+      | if length == 0 then 0 else ((.[0].total | tonumber) - (.[0].shown | tonumber)) end;
+    {
+      schema: $schema, home: .home, generated: .generated, lang: $lang,
+      prs_live: (.prs | startswith("checked")),
+      captains_call: (
+        [ .decisions_open[]? | select(.verb == "captain-hold") | decision_card ]
+        + [ .candidate_prs[]? | select(merge_ready) | merge_card ]),
+      underway: [ .in_flight[]? | {id, repo, name: (.name | t(.)), state, doing: (.doing | t(.)), kind} ],
+      landed: [ .landed[]? | {id, repo: repo_of(.id), what: (.what | t(.)), owner}
+        + (if (.artifact | https) then {pr_url: .artifact} else {} end) ],
+      charted: [ .gates[]? | . as $g
+        | {id: (.id | slugify), repo: repo_of(.id), title: (.title | t(.)),
+           reason: (if .reason == "-" then "" else (.reason | t(.)) end),
+           dispatchable: ((warning_gate | not) and .blocked_by == "-" and .reason == "-"),
+           kind: (if warning_gate then "warning" else "queued" end),
+           filed: .filed} ],
+      charted_more: charted_more,
+      charted_warning_more: 0
+    }' > "${out:-/dev/stdout}" || fail "cannot compose the board skeleton"
+  if [ -n "$out" ]; then
+    validate_payload "$out" || fail "the composed skeleton does not satisfy $BOARD_SCHEMA: $out"
+    printf 'skeleton: %s\n' "$out"
+  fi
+}
+
 command_build() {
   local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
@@ -426,6 +634,9 @@ command_build() {
   [ -f "$data" ] || fail "board data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
   validate_payload "$data" || fail "board data does not satisfy $BOARD_SCHEMA: $data"
+  if [ -n "$(list_placeholders "$data")" ]; then
+    fail "board data still carries compose placeholders (run: fm-bearings-board.sh compose --check $data)"
+  fi
   [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "board template is missing: $TEMPLATE"
   [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \
     || fail "board template does not carry exactly one data slot: $TEMPLATE"
@@ -539,6 +750,7 @@ command_open() {
 }
 
 case "${1-}" in
+  compose) shift; command_compose "$@" ;;
   build) shift; command_build "$@" ;;
   path) board_path ;;
   url) command_url ;;

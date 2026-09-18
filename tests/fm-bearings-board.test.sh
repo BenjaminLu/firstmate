@@ -61,7 +61,11 @@ case "${1-}" in
     exit 0
     ;;
   '')
-    if [ -e "$state/end-before-next-list" ]; then
+    # The marker ends the session at the next listing AFTER it was opened;
+    # the build also lists before any open to probe for session-name support,
+    # and that probe must not spend the marker on a session that does not
+    # exist yet.
+    if [ -e "$state/end-before-next-list" ] && [ -s "$state/open" ]; then
       : > "$state/open"
       rm -f "$state/end-before-next-list"
     fi
@@ -857,6 +861,177 @@ test_build_refuses_malformed_copy_and_card_fields() {
   pass "build refuses malformed copy objects, card enums, evidence links, and languages"
 }
 
+# --- part 4: compose a trilingual skeleton from a recorded snapshot ----------
+# The fixture under tests/assets/bearings-compose/ is a recorded
+# `bin/fm-bearings-snapshot.sh --json --include-prs` output (its shape is owned
+# by that script's header) beside the backlog it was recorded from, so the
+# mapping is exercised against real projected rows rather than hand-typed ones.
+COMPOSE_ASSETS="$ROOT/tests/assets/bearings-compose"
+
+# The packet's decision block for the held work item, keyed to its task id.
+COMPOSE_DECISION='{"key":"gated-work","title":{"en":"Rollout order","hant":"上線順序"},"decide":"Which rollout order ships first?","if_nothing":"the release waits","reversible":"partly","risk":"medium","options":[{"value":"canary","label":"Canary first","consequence":"slower, safer"},{"value":"all","label":{"en":"All at once"},"consequence":"faster, riskier"}],"recommend_value":"canary","recommend_why":"the canary caught the last regression"}'
+
+make_compose_home() {  # <name> -> a board home whose backlog and packet match the fixture
+  local home packet
+  home=$(make_home "$1")
+  cp "$COMPOSE_ASSETS/backlog.md" "$home/data/backlog.md"
+  fm_write_meta "$home/state/gated-work.meta" "worktree=$home" "project=firstmate" "kind=ship"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    PATH="$home/fakebin:$PATH" "$ROOT/bin/fm-packet.sh" scaffold gated-work --kind needs-decision --worktree "$home" >/dev/null \
+    || fail "cannot scaffold the fixture packet"
+  packet="$home/data/gated-work/packet.md"
+  python3 - "$packet" "$COMPOSE_DECISION" <<'PY2'
+import sys, re, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+s = re.sub(r"\{FILL: every path you tried.*?\}", "- tried a flag; dropped it\n- the bound is unverified\n- the order assumes one region", s, flags=re.S)
+s = re.sub(r"\{FILL: file:line.*?\}", "- bin/example.sh:1 the change", s, flags=re.S)
+s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
+s = re.sub(r"```json fm-packet-decision.v1\n.*?\n```", "```json fm-packet-decision.v1\n" + sys.argv[2] + "\n```", s, flags=re.S)
+p.write_text(s)
+PY2
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-packet.sh" verify gated-work >/dev/null || fail "the fixture packet does not verify"
+  printf '%s\n' "$home"
+}
+
+# Replace every compose placeholder with prose, the way the composer does.
+fill_skeleton() {  # <skeleton.json> <filled.json>
+  jq '
+    walk(if type == "string" then
+      (if test("^\\{TRANSLATE: ") then ("譯: " + (.[12:-1]))
+       elif test("^\\{FILL: low") then "low"
+       elif test("^\\{FILL: ") then ("filled " + (.[7:-1]))
+       else . end)
+    else . end)
+    | .captains_call |= map(if .type == "decision" and (has("reversible") | not) then . + {reversible: "yes", risk: "low"} else . end)
+  ' "$1" > "$2"
+}
+
+test_compose_maps_every_section_from_the_recorded_snapshot() {
+  local home skeleton
+  home=$(make_compose_home compose-map)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  jq -e '
+    .schema == "fm-bearings-board.v1" and .lang == "hant" and .prs_live == true
+    and (.home | type == "string") and (.generated | type == "string")
+    # Underway: the durable label and run state, both trilingual-ready.
+    and (.underway | length == 1)
+    and (.underway[0] | .id == "ship-task" and .repo == "firstmate" and .kind == "ship"
+      and .name.en == "Ship the thing" and .name.hant == "{TRANSLATE: Ship the thing}"
+      and (.doing.en | length > 0) and (.doing.hant | startswith("{TRANSLATE: ")))
+    # Landed: pr_url only for an https artifact, repo from the backlog record.
+    and (.landed | length == 2)
+    and (.landed[0] | .id == "done-a" and .repo == "firstmate" and .what.en == "Landed thing"
+      and .pr_url == "https://github.com/example/firstmate/pull/7")
+    and (.landed[1] | .id == "scout-b" and .repo == "sample" and (has("pr_url") | not))
+    # Charted: queued rows keep their filed date; only the unblocked, unheld
+    # row is dispatchable; the integrity notice is a non-dispatchable warning
+    # under a slug id.
+    and (.charted | length == 4)
+    and (.charted[0] | .id == "plain-queued" and .kind == "queued" and .dispatchable == true
+      and .reason == "" and .filed == "2026-09-16" and .repo == "sample")
+    and (.charted[1] | .id == "live-gate" and .kind == "queued" and .dispatchable == false)
+    and (.charted[2] | .id == "later-call" and .kind == "queued" and .dispatchable == false
+      and (.reason.en | startswith("until 2030-01-01")) and (.reason.hant | startswith("{TRANSLATE: until")))
+    and (.charted[3] | .id == "main-inventory" and .kind == "warning" and .dispatchable == false
+      and .filed == null and .repo == null)
+    and .charted_more == 0 and .charted_warning_more == 0
+  ' "$skeleton" >/dev/null || fail "the skeleton did not map the fleet sections as recorded: $(cat "$skeleton")"
+  pass "compose maps underway, landed, and charted rows from the recorded snapshot"
+}
+
+test_compose_cards_every_live_hold_and_merge_ready_pr() {
+  local home skeleton
+  home=$(make_compose_home compose-cards)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  jq -e '
+    ([.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"])
+    # The held WORK item is seeded from its verified packet: the packet copy
+    # is kept, English-only packet strings gain a translation slot, about is
+    # still the composer'"'"'s, and the work-item hold releases on answer.
+    and (.captains_call[0] | .type == "decision" and .repo == "firstmate"
+      and .title == {en: "Rollout order", hant: "上線順序"}
+      and .decide == {en: "Which rollout order ships first?", hant: "{TRANSLATE: Which rollout order ships first?}"}
+      and .if_nothing.en == "the release waits"
+      and .reversible == "partly" and .risk == "medium"
+      and ([.options[].value] == ["canary", "all"])
+      and .options[1].label == {en: "All at once", hant: "{TRANSLATE: All at once}"}
+      and .options[0].consequence.hant == "{TRANSLATE: slower, safer}"
+      and .recommend_value == "canary" and .recommend_why.en == "the canary caught the last regression"
+      and .about.en == "{FILL: about}" and .close == "release" and .allow_freeform == true)
+    # The question-shaped hold without a packet gets placeholders, its title
+    # and repo from the backlog record, and no close.
+    and (.captains_call[1] | .type == "decision" and .repo == "sample"
+      and .title == {en: "Pick the route", hant: "{TRANSLATE: Pick the route}"}
+      and .decide.en == "{FILL: decide}" and .if_nothing.hant == "{FILL: if_nothing}"
+      and ([.options[].value] == ["option-a", "option-b"])
+      and .options[0].consequence.en == "{FILL: option A consequence}"
+      and .recommend_why.en == "{FILL: recommend_why}"
+      and (has("close") | not) and (has("recommend_value") | not))
+    # Only the green, mergeable PR becomes a merge card, keyed by its task,
+    # with the URL set and the risk left to fill; the red PR never appears.
+    and (.captains_call[2] | .type == "merge" and .repo == "firstmate"
+      and .pr_url == "https://github.com/example/firstmate/pull/9"
+      and .title.en == "Merge: Ship the thing" and (.risk | startswith("{FILL: "))
+      and ([.options[].value] == ["merge", "hold"]) and .options[0].label.hant == "立即合併")
+    and ([.captains_call[] | .options[].value] | index("reconcile") == null)
+  ' "$skeleton" >/dev/null || fail "the skeleton did not card the holds and PRs as expected: $(cat "$skeleton")"
+  pass "compose seeds a card from the verified packet, placeholders otherwise, and cards merge-ready PRs"
+}
+
+test_compose_lang_and_snapshot_arguments() {
+  local home out rc
+  home=$(make_compose_home compose-args)
+  out=$(run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --lang en) \
+    || fail "compose --lang en failed"
+  printf '%s' "$out" | jq -e '.lang == "en" and (.underway[0].name.hant | startswith("{TRANSLATE: "))' >/dev/null \
+    || fail "--lang en changed more than the default language"
+  set +e; out=$(run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --lang fr 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an unsupported --lang was accepted"
+  printf '{"schema":"other"}\n' > "$home/not-a-snapshot.json"
+  set +e; out=$(run_board "$home" compose --snapshot "$home/not-a-snapshot.json" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a non-bearings snapshot was accepted"
+  pass "compose honors --lang and refuses a foreign snapshot"
+}
+
+test_skeleton_fails_build_until_its_placeholders_are_filled() {
+  local home skeleton filled board out rc
+  home=$(make_compose_home compose-build)
+  skeleton="$home/skeleton.json"
+  filled="$home/filled.json"
+  board="$home/.lavish/bearings-board.html"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  # The skeleton is structurally valid but still a skeleton: check names every
+  # placeholder and build refuses it because of them.
+  set +e; out=$(run_board "$home" compose --check "$skeleton" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "compose --check passed a skeleton full of placeholders"
+  assert_contains "$out" "captains_call.1.decide.en: {FILL: decide}" "check did not list the decide placeholder: $out"
+  assert_contains "$out" "underway.0.name.hant: {TRANSLATE: Ship the thing}" "check did not list the translation slot: $out"
+  assert_contains "$out" "captains_call.2.risk: {FILL: low | medium | high}" "check did not list the merge risk: $out"
+  set +e; out=$(run_board "$home" build "$skeleton" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "build accepted a skeleton with placeholders"
+  assert_contains "$out" "placeholders" "build did not name the placeholders as the reason: $out"
+  assert_absent "$board" "a refused skeleton still produced a board"
+  # Filled in, the same payload passes check and builds.
+  fill_skeleton "$skeleton" "$filled"
+  out=$(run_board "$home" compose --check "$filled") || fail "check refused the filled payload: $out"
+  assert_contains "$out" "placeholders: none" "check did not report the filled payload clean: $out"
+  out=$(run_board "$home" build "$filled" 2>&1) || fail "build refused the filled skeleton: $out"
+  assert_present "$board" "the filled skeleton produced no board"
+  extract_payload "$board" | jq -e '
+    .lang == "hant"
+    and (.underway[0].name.hant == "譯: Ship the thing")
+    and ([.captains_call[] | select(.type == "decision") | .options[] | select(.value == "reconcile")] | length == 2)
+    and (.captains_call[2].risk == "low")
+  ' >/dev/null || fail "the built board did not carry the filled copy"
+  pass "a skeleton fails build until filled, and the filled skeleton builds"
+}
+
 test_url_reads_the_live_session_listing() {
   local home data board out rc
   home=$(make_home url)
@@ -895,4 +1070,8 @@ test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
 test_build_accepts_trilingual_copy_and_five_question_fields
 test_build_refuses_malformed_copy_and_card_fields
+test_compose_maps_every_section_from_the_recorded_snapshot
+test_compose_cards_every_live_hold_and_merge_ready_pr
+test_compose_lang_and_snapshot_arguments
+test_skeleton_fails_build_until_its_placeholders_are_filled
 test_url_reads_the_live_session_listing

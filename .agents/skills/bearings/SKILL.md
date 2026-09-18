@@ -94,9 +94,20 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
 ## Lavish board mode
 
 `/bearings lavish` adds one deliverable beside the unchanged chat digest: the interactive fleet board, a myfirstmate-styled Lavish page where the captain answers Captain's Call items directly instead of replying in chat.
-`bin/fm-bearings-board.sh` owns every board mechanic - the stable board path, fm-bearings-board.v1 payload validation, template injection, live Lavish session verification and ended-session reopening, the any-origin answer binding, and listener registration - so the per-invocation work is composing the payload and running its `build`.
+`bin/fm-bearings-board.sh` owns every board mechanic - the stable board path, the deterministic payload skeleton, fm-bearings-board.v1 payload validation, template injection, live Lavish session verification and ended-session reopening, the any-origin answer binding, and listener registration - so the per-invocation work is filling the skeleton and running its `build`.
 
-Compose the payload from the same snapshot with the same ranking judgment as the chat digest, plus these board rules:
+Never hand-write the payload from the snapshot.
+Start from `bin/fm-bearings-board.sh compose --lang <captain's language> --out <file>`, which reads the same snapshot command and maps every structured row deterministically: Underway, Recently Landed, and Charted Next rows, one decision card per live captain hold, and a merge card per merge-ready PR (the script header owns the exact mapping and the placeholder shapes).
+Pass the snapshot's live-PR opt-in to the snapshot command yourself when the captain asked for PRs; compose reads a fresh snapshot without it unless you hand it one with `--snapshot`.
+Then apply your judgment to the skeleton and nothing else:
+
+- Fill every `{TRANSLATE: <english>}` slot with the 繁體 translation of the English beside it, and add `hans` (简体) alongside each `hant` you write, so the board's language switch has all three; never re-type or reword the English the skeleton carried over.
+- Fill every `{FILL: ...}` slot with the card prose the rules below require, and add `reversible`, `risk`, `recommend_value`, and `evidence` to each decision card, plus `packet_url` when the packet is served somewhere linkable.
+- A card the skeleton seeded from a verified packet already carries the worker's `decide`, `consequence`, `if_nothing`, `reversible`, `risk`, and `recommend_why`; keep that substance and translate it rather than rewriting it.
+- Rank, trim, and drop rows the way the chat digest does; the skeleton carries every row the snapshot exposed, and `charted_more` plus `charted_warning_more` must count what you cut.
+- Run `bin/fm-bearings-board.sh compose --check <file>` until it prints `placeholders: none`; `build` refuses a payload while any placeholder remains, so a half-filled skeleton can never reach the captain.
+
+The board rules that govern what you write into the skeleton:
 
 - A Captain's Call decision key is the captain-held TASK ID from `decisions_open` (legacy `<origin>-decision-<key>` rows are already task ids); a merge card's key is `merge.<task-id>`; the Charted Next dispatch picker's key is `dispatch.charted`.
 - Before carding a hold, check that its SUBJECT has not already landed, and omit it when it has. `build` drops a card whose task or PR appears in the payload's own landed rows, and one whose task is no longer an open captain call. When a hold waits on one specific PR, put that PR in the card's `pr_url`. When it concerns a published version, put the artifact and numeric three-part version in the card's structured `subject`; landed rows for releases carry the same identity, and a matching or newer version drops the card. Identity matching is structured only, so verify any subject without one of these identities against current reality before carding it.
@@ -116,7 +127,7 @@ Compose the payload from the same snapshot with the same ranking judgment as the
   Omit it or pass null for a row with no durable filed date - the main-inventory or return-catchup warning, an unavailable secondmate home, or a queued row filed before dates were recorded - and the board keeps those rows in payload order after every dated row.
 - Every Captain's Call item and every Underway, Recently Landed, and Charted Next row carries an explicit `repo` field. Fill it from the snapshot and task records wherever known; use null or an empty string only as the deliberate genuinely-no-repo marker, in which case the template may show the internal id. Ids otherwise stay in the payload only as the routing channel, and composed reasons name blockers in plain words.
 
-Run `build` once after composing the payload.
+Run `build` once after the filled skeleton passes `compose --check`.
 Its serve-first sequence publishes the board, establishes and verifies its Lavish session with `lavish-axi`, reopens an ended session when necessary, and only then binds the answer source and proves a live polling listener; use the session URL it prints in the chat digest.
 Never bind or arm the board before its session is listed open.
 Never run `lavish-axi poll` for the board yourself: the armed source's supervised runner owns the blocking poll, and both the build and the watcher's ordinary reconcile repair a missing listener, so no conversational turn ever blocks on the board.
