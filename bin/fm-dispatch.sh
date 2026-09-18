@@ -17,10 +17,11 @@
 #      readable non-empty files, the ask must not open with a Captain label or
 #      address (the same spelling set bin/fm-spawn.sh refuses on a filled
 #      brief; bin/fm-dod-lib.sh owns it), and neither file may contain an
-#      unfenced level-1 or level-2 heading, because the brief parser ends
-#      `## Captain's intent` and `## Firstmate spec` at the next such heading
-#      and the spliced text would be silently truncated for the worker and the
-#      reviewer. An existing brief is refused here, before any record is
+#      unfenced level-1 or level-2 heading or leave a code fence open at its
+#      end, because the brief parser ends `## Captain's intent` and
+#      `## Firstmate spec` at the next such heading and treats everything
+#      inside an open fence as fenced, so the spliced text would truncate or
+#      swallow sections for the worker and the reviewer. An existing brief is refused here, before any record is
 #      made, when it disagrees with this call: its recorded "Delivery
 #      contract: mode=<mode>" line differs from --mode, it carries one under
 #      --scout, it carries none (a scout brief) under --mode, or its Herdr
@@ -168,10 +169,10 @@ if ADDRESS_LINE=$(fm_brief_intent_address_line_of_text < "$ASK"); then
   die "--ask $ASK has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address, since the brief heading already records provenance"
 fi
 if HEADING_LINE=$(fm_brief_body_terminator_line_of_text "## Captain's intent" < "$ASK"); then
-  die "--ask $ASK has a heading line that would end ## Captain's intent: $HEADING_LINE; the brief parser stops the section at any unfenced level-1 or level-2 heading, so demote it to ### or deeper or fence it"
+  die "--ask $ASK has a line that would break ## Captain's intent: $HEADING_LINE; the brief parser stops the section at any unfenced level-1 or level-2 heading and an unclosed code fence swallows every section after it, so demote the heading to ### or deeper, or close the fence"
 fi
 if HEADING_LINE=$(fm_brief_body_terminator_line_of_text "## Firstmate spec" < "$SPEC"); then
-  die "--spec $SPEC has a heading line that would end ## Firstmate spec: $HEADING_LINE; the brief parser stops the section at any unfenced level-1 or level-2 heading, so demote it to ### or deeper or fence it"
+  die "--spec $SPEC has a line that would break ## Firstmate spec: $HEADING_LINE; the brief parser stops the section at any unfenced level-1 or level-2 heading and an unclosed code fence swallows every section after it, so demote the heading to ### or deeper, or close the fence"
 fi
 
 BRIEF="$DATA/$ID/brief.md"

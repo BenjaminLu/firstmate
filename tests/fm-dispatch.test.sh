@@ -394,7 +394,7 @@ test_heading_in_ask_or_spec_refuses_before_any_record() {
     --mode no-mistakes --yolo off --ask "$case_dir/heading-ask.md" --spec "$case_dir/spec.md")
   status=$?
   expect_code 1 "$status" "a level-2 heading in the ask should refuse: $out"
-  assert_contains "$out" "would end ## Captain's intent: ## Background" "refusal did not name the heading line"
+  assert_contains "$out" "would break ## Captain's intent: ## Background" "refusal did not name the heading line"
   assert_absent "$case_dir/home/data/$id" "a heading in the ask must not create the brief directory"
   assert_no_grep "$id" "$case_dir/home/data/backlog.md" "a heading in the ask must not file an item"
 
@@ -403,8 +403,19 @@ test_heading_in_ask_or_spec_refuses_before_any_record() {
     --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/heading-spec.md")
   status=$?
   expect_code 1 "$status" "a level-1 heading in the spec should refuse: $out"
-  assert_contains "$out" "would end ## Firstmate spec: # Plan" "refusal did not name the spec heading line"
+  assert_contains "$out" "would break ## Firstmate spec: # Plan" "refusal did not name the spec heading line"
   assert_absent "$case_dir/home/data/$id" "a heading in the spec must not create the brief directory"
+
+  # A fence opened and never closed would hide ## Firstmate spec and every
+  # section after it from the parser.
+  printf 'add the toggle\n```sh\necho pasted snippet\n' > "$case_dir/open-fence-ask.md"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/open-fence-ask.md" --spec "$case_dir/spec.md")
+  status=$?
+  expect_code 1 "$status" "an unclosed fence in the ask should refuse: $out"
+  assert_contains "$out" "would break ## Captain's intent: \`\`\`sh" "refusal did not name the unclosed fence line"
+  assert_absent "$case_dir/home/data/$id" "an unclosed fence must not create the brief directory"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "an unclosed fence must not file an item"
 
   # A fenced heading and a level-3 heading are ordinary content and reach the brief intact.
   printf 'add the toggle\n\n```sh\n# not a heading\n```\n### Notes\nkeep the layout\n' > "$case_dir/fenced-ask.md"
@@ -415,7 +426,7 @@ test_heading_in_ask_or_spec_refuses_before_any_record() {
   intent=$(fm_brief_task_heading_body "$case_dir/home/data/$id/brief.md" "## Captain's intent")
   assert_contains "$intent" '# not a heading' "fenced heading was dropped from the extracted intent"
   assert_contains "$intent" 'keep the layout' "text after the level-3 heading was dropped from the extracted intent"
-  pass "an unfenced level-1 or level-2 heading in the ask or spec refuses before any record"
+  pass "an unfenced level-1 or level-2 heading or an unclosed fence in the ask or spec refuses before any record"
 }
 
 test_resolver_clear_profile_reaches_the_spawn_unquoted() {

@@ -90,7 +90,9 @@ fm_brief_task_placeholders_present() {  # <file>
 # the next unfenced heading at the same or a higher level; present mode reports
 # whether the heading exists; terminator mode prints the first unfenced heading
 # at the same or a higher level as <heading> anywhere in the input, the line
-# that would end <heading>'s body, and fails when there is none.
+# that would end <heading>'s body, or the opening line of a fence still open
+# at end of input, which would swallow every heading after it; it fails when
+# there is neither.
 fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
@@ -125,6 +127,7 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
           fenced = 1
           fence_marker = marker
           fence_len = marker_len
+          fence_open_line = line
         } else if (marker == fence_marker && marker_len >= fence_len && rest ~ /^[[:space:]]*$/) {
           fenced = 0
         }
@@ -159,16 +162,22 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
       print line
     }
     END {
+      if (mode == "terminator" && !found && fenced) {
+        print fence_open_line
+        found = 1
+      }
       if ((mode == "present" || mode == "terminator") && !found) exit 1
     }
   ' "$input"
 }
 
-# Print the first line of the text on stdin that fm_brief_heading_parse would
-# treat as the end of <heading>'s body: an unfenced ATX heading at the same or
-# a higher level. Fail when there is none. bin/fm-dispatch.sh applies it to the
-# ask and spec files before splicing them under their headings, so a heading
-# inside either cannot silently truncate the section the parser later extracts.
+# Print the first line of the text on stdin that would break <heading>'s body
+# once spliced into a brief: an unfenced ATX heading at the same or a higher
+# level, which ends the body early, or the opening line of a fence left open
+# at end of input, which hides every heading after it. Fail when there is
+# neither. bin/fm-dispatch.sh applies it to the ask and spec files before
+# splicing them under their headings, so neither can silently truncate or
+# swallow the sections the parser later extracts.
 fm_brief_body_terminator_line_of_text() {  # <heading> < text
   fm_brief_heading_parse - "$1" terminator
 }
