@@ -1,0 +1,67 @@
+{
+  "schema": "fm-bearings-board.v1",
+  "home": "firstmate (demo)",
+  "generated": "2026-09-18T08:30Z (demo data - not the live fleet)",
+  "prs_live": false,
+  "lang": "hant",
+  "captains_call": [
+    {
+      "key": "contributions-poll-transient-wake",
+      "type": "decision",
+      "repo": "firstmate",
+      "risk": "low",
+      "reversible": "yes",
+      "title": {"en": "Stop the noisy GitHub-read wake for merged PRs", "hant": "已合併 PR 的 GitHub 讀取失敗，不要再吵你"},
+      "decide": {"en": "Which fix ships first?", "hant": "先出哪一種修法？"},
+      "about": {"en": "The contributions poll gives each gh call a hard 5 s bound; GitHub answers this repo in 0.9 to 4.4 s, so most polls fail and each failure wakes you. PR 142 merged on 2026-09-17 and its task is done.", "hant": "contributions poll 給每次 gh 呼叫 5 秒硬上限；GitHub 對這個 repo 要 0.9 到 4.4 秒回應，所以多數輪次失敗、每次失敗都叫你。PR 142 已在 9/17 合併，任務也結案。"},
+      "if_nothing": {"en": "About one wake every ten minutes keeps arriving; each costs a firstmate turn and none carries news.", "hant": "大約每十分鐘再吵一次；每次都花 firstmate 一個回合，而且沒有任何新消息。"},
+      "reversible_note": {"en": "Both options change only the poll's bound and wake rule; the durable records stay intact.", "hant": "兩個選項都只改 poll 的上限和喚醒規則，durable 紀錄不動。"},
+      "options": [
+        {"value": "bound", "label": {"en": "Raise the per-call bound to 15 s", "hant": "每次呼叫上限拉到 15 秒"},
+         "hint": {"en": "one-line change", "hant": "改一行"},
+         "consequence": {"en": "Failures stop for this repo; a genuinely slow forge can now hold the poll up to 15 s per call inside the same 20 s budget.", "hant": "這個 repo 不再失敗；真的慢的 forge 現在每次最多佔 15 秒，仍在 20 秒總預算內。"}},
+        {"value": "quiet", "label": {"en": "Keep the bound, stop waking on merged records", "hant": "上限不動，已合併的紀錄失敗不叫人"},
+         "hint": {"en": "rule change", "hant": "改規則"},
+         "consequence": {"en": "No more noise for done work; an open PR on a slow repo would still fail and still wake you.", "hant": "結案的工作不再吵；慢 repo 上還開著的 PR 仍會失敗、仍會叫你。"}},
+        {"value": "both", "label": {"en": "Both", "hant": "兩個都做"},
+         "consequence": {"en": "Removes the noise and the false failures; slightly larger diff, same test file.", "hant": "噪音和假失敗都消失；diff 稍大，同一個測試檔。"}}
+      ],
+      "recommend_value": "both",
+      "recommend_why": {"en": "The bound is wrong for GitHub's real latency, and a merged record has nothing to say; fixing only one leaves the other half of the symptom.", "hant": "上限本來就不符合 GitHub 的真實延遲，而已合併的紀錄本來就沒話要說；只修一邊會留下另一半症狀。"},
+      "evidence": [
+        {"label": {"en": "timings, 6 polls", "hant": "六輪量測"}, "url": "https://github.com/consenlabs/tokenlon-smart-order-router/pull/142"}
+      ],
+      "packet_url": "https://github.com/kunchenguid/firstmate",
+      "allow_freeform": true
+    },
+    {
+      "key": "merge.bearings-board-i18n",
+      "type": "merge",
+      "repo": "firstmate",
+      "risk": "low",
+      "reversible": "yes",
+      "title": {"en": "Merge: trilingual five-question board", "hant": "合併：三語五問看板"},
+      "detail": {"en": "Demo card. On a real board this row appears only when the PR's checks are green and a merge is the captain's call.", "hant": "示範卡。真實看板上，這一列只在 PR 檢查全綠、且合併是船長決定時才出現。"},
+      "pr_url": "https://github.com/kunchenguid/firstmate/pull/9999",
+      "if_nothing": {"en": "The PR stays open; the current board stays English-only.", "hant": "PR 維持開著；現在的看板仍是純英文。"},
+      "options": [
+        {"value": "merge", "label": {"en": "Merge now", "hant": "現在合併"}},
+        {"value": "hold", "label": {"en": "Not yet", "hant": "先不要"}}
+      ],
+      "allow_freeform": true
+    }
+  ],
+  "underway": [
+    {"id": "fleet-v2-board", "repo": "firstmate", "name": {"en": "Fleet v2: trilingual decision board", "hant": "Fleet v2：三語決策看板"}, "state": "working", "kind": "ship", "doing": {"en": "tests green, demo served", "hant": "測試全綠，demo 已上線"}}
+  ],
+  "landed": [
+    {"id": "pr142-velora-merge", "repo": "tokenlon-smart-order-router", "what": {"en": "Merge PR 142: ParaSwap to Velora API migration", "hant": "合併 PR 142：ParaSwap 換到 Velora API"}, "owner": "captain", "pr_url": "https://github.com/consenlabs/tokenlon-smart-order-router/pull/142"},
+    {"id": "baton-one-skill", "repo": "baton", "what": {"en": "baton collapsed into one /baton personal skill", "hant": "baton 合併成單一 /baton 個人 skill"}, "owner": "firstmate"}
+  ],
+  "charted": [
+    {"id": "bearings-board-i18n", "repo": "firstmate", "title": {"en": "Bearings board: EN / 繁體 / 简体 language switch", "hant": "Bearings 看板：EN / 繁體 / 简体 切換"}, "reason": {"en": "waits on no-mistakes and gh-axi being installed", "hant": "等 no-mistakes 和 gh-axi 裝好"}, "dispatchable": false, "filed": "2026-09-18"},
+    {"id": "contributions-poll-transient-wake", "repo": "firstmate", "title": {"en": "Contributions poll: 5 s per-call bound below GitHub latency", "hant": "Contributions poll：5 秒上限低於 GitHub 延遲"}, "reason": {"en": "waits on the decision above", "hant": "等上面那個決定"}, "dispatchable": false, "filed": "2026-09-18"},
+    {"id": "packet-in-dod", "repo": "firstmate", "title": {"en": "Fleet v2 phase 1: worker-produced decision packet in the definition of done", "hant": "Fleet v2 第一階段：worker 自產 decision packet 進 DoD"}, "reason": "", "dispatchable": true, "filed": "2026-09-18"}
+  ],
+  "charted_more": 0
+}

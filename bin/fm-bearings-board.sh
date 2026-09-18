@@ -63,6 +63,18 @@
 # keyed-answer intake as a blind close, are owned by
 # docs/captain-hold-lifecycle.md.
 #
+# Captain-facing copy (card titles, about/decide rows, option labels, hints,
+# consequences, underway names and doing, landed what, charted titles and
+# reasons) is a plain string or an {en, hant, hans?} object; the template
+# renders the language the captain picked (EN / 繁體 / 简体), defaulting to the
+# optional top-level `lang`. A decision card MAY answer the captain's five
+# questions with optional fields: `decide`, per-option `consequence`,
+# `if_nothing`, `reversible` (yes|no|partly) plus `reversible_note`, and
+# `recommend_why` beside `recommend_value`; `risk` (low|medium|high) badges a
+# decision card, and `evidence` ([{label, url}]) plus `packet_url` link the card
+# to its proof. Links must be https, or http on 127.0.0.1/localhost for a page
+# served by lavish-axi.
+#
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
 # the fm-bearings-board.v1 types and item invariants below. Every fleet row and
@@ -114,9 +126,16 @@ board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 validate_payload() {  # <data.json>
   jq -e --arg schema "$BOARD_SCHEMA" '
     def nonempty_string: type == "string" and length > 0;
+    # Captain-facing copy is a plain string or an {en, hant, hans?} object; the
+    # renderer resolves it for the language the captain chose.
+    def i18n: type == "object" and (.en | nonempty_string) and (.hant | nonempty_string)
+      and ((has("hans") | not) or (.hans | type == "string"));
+    def copy: nonempty_string or i18n;
+    def copy_or_empty: (type == "string") or i18n;
+    def optional_copy($name): (has($name) | not) or (.[$name] | copy);
     def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
     def repo_marker: has("repo") and (.repo == null or (.repo | type == "string"));
-    def name_marker: has("name") and (.name | nonempty_string);
+    def name_marker: has("name") and (.name | copy);
     def valid_filed:
       . as $filed
       | type == "string"
@@ -141,26 +160,39 @@ validate_payload() {  # <data.json>
           and (keys | sort) == ["artifact", "version"]
           and (.artifact | slug(128))
           and (.version | version));
+    def evidence_item:
+      type == "object" and (.label | copy) and (.url | type == "string")
+      and ((.url | test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"))
+        or (.url | test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$")));
     def call_item:
       type == "object"
       and (.key | slug(128))
       and (.type == "decision" or .type == "merge" or .type == "credential")
       and repo_marker
-      and (.title | nonempty_string)
+      and (.title | copy)
       and (.options | type == "array")
       and ((.options | length) > 0 or .allow_freeform == true)
       and ([.options[]
         | type == "object"
           and (.value | slug(128))
-          and (.label | nonempty_string)
-          and optional_string("hint")] | all)
-      and (optional_string("about"))
-      and (optional_string("decide"))
-      and (optional_string("detail"))
+          and (.label | copy)
+          and optional_copy("hint")
+          and optional_copy("consequence")] | all)
+      and (optional_copy("about"))
+      and (optional_copy("decide"))
+      and (optional_copy("detail"))
+      and (optional_copy("if_nothing"))
+      and (optional_copy("recommend_why"))
+      and (optional_copy("reversible_note"))
+      and ((has("reversible") | not) or (.reversible == "yes" or .reversible == "no" or .reversible == "partly"))
+      and (if .type == "merge" then true
+        else ((has("risk") | not) or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
+      and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
+      and (optional_https_url("packet_url"))
       and (optional_https_url("pr_url"))
       and optional_subject
       and (if has("subject") then .type == "decision" else true end)
-      and (optional_string("freeform_hint"))
+      and (optional_copy("freeform_hint"))
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
       and ((has("recommend_value") | not)
@@ -171,15 +203,15 @@ validate_payload() {  # <data.json>
       and (if .type == "merge" then (.risk | nonempty_string) else true end);
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
-      and (.state | nonempty_string) and (.doing | nonempty_string) and (.kind | nonempty_string);
+      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string);
     def landed_item:
       type == "object" and repo_marker and (.id | nonempty_string)
-      and (.what | nonempty_string) and (.owner | nonempty_string)
+      and (.what | copy) and (.owner | nonempty_string)
       and optional_https_url("pr_url")
       and optional_subject;
     def charted_item:
       type == "object" and repo_marker and (.id | slug(128))
-      and (.title | nonempty_string) and (.reason | type == "string")
+      and (.title | copy) and (.reason | copy_or_empty)
       and (.dispatchable | type == "boolean")
       and ((has("kind") | not) or (.kind == "queued" or .kind == "warning"))
       and optional_filed
@@ -189,6 +221,7 @@ validate_payload() {  # <data.json>
     and (.home | nonempty_string)
     and (.generated | nonempty_string)
     and (.prs_live | type == "boolean")
+    and ((has("lang") | not) or (.lang == "en" or .lang == "hant" or .lang == "hans"))
     and (.captains_call | type == "array")
     and (.underway | type == "array")
     and (.landed | type == "array")
@@ -330,8 +363,12 @@ effective_payload() {  # <data.json> <dest.json>
       | if .type == "decision"
         then .options += [{
           value: "reconcile",
-          label: "Reconcile",
-          hint: "Re-check the latest state, then close this with evidence or keep it open with a note"
+          label: {en: "Reconcile", hant: "重新核對", hans: "重新核对"},
+          hint: {
+            en: "Re-check the latest state, then close this with evidence or keep it open with a note",
+            hant: "重新核對最新狀態，然後附證據關閉，或留下註記讓它保持開放",
+            hans: "重新核对最新状态，然后附证据关闭，或留下注记让它保持开放"
+          }
         }]
         else . end
     ]' "$data" > "$dest" || return 1

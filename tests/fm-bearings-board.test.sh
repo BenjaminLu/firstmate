@@ -777,6 +777,86 @@ test_build_refuses_a_nondecision_reconcile_value() {
   pass "build reserves reconcile across non-decision cards"
 }
 
+# Captain-facing copy may be an {en, hant, hans?} object so the board renders
+# the language the captain picked; a decision card may carry the five-question
+# fields and evidence links. The validator accepts those shapes and refuses
+# the malformed ones before touching the board.
+test_build_accepts_trilingual_copy_and_five_question_fields() {
+  local home data board out
+  home=$(make_home i18n-accept)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  jq '
+    .lang = "hant"
+    | .captains_call[0].title = {en: "Perishable-first admission", hant: "易腐品優先入場"}
+    | .captains_call[0].decide = {en: "Adopt it?", hant: "要採用嗎？", hans: "要采用吗？"}
+    | .captains_call[0].if_nothing = {en: "The queue keeps admitting by arrival order", hant: "佇列繼續照到達順序入場"}
+    | .captains_call[0].reversible = "partly"
+    | .captains_call[0].reversible_note = {en: "config flips back; admitted rows stay", hant: "設定可切回；已入場的列留下"}
+    | .captains_call[0].risk = "medium"
+    | .captains_call[0].recommend_value = "yes"
+    | .captains_call[0].recommend_why = {en: "measured 40% fewer spoiled lots", hant: "量到報廢批次少 40%"}
+    | .captains_call[0].options[0].consequence = {en: "reorders the queue at the next tick", hant: "下個 tick 重排佇列"}
+    | .captains_call[0].evidence = [
+        {label: {en: "scout report", hant: "偵察報告"}, url: "https://example.test/report"},
+        {label: "served packet", url: "http://127.0.0.1:4387/session/abc"}]
+    | .captains_call[0].packet_url = "https://example.test/packet.html"
+    | .charted[0].title = {en: "Queued work", hant: "排隊中的工作"}
+    | .charted[0].reason = {en: "waits on the cutover", hant: "等切換完成"}
+  ' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build "$data") || fail "a trilingual five-question payload was refused: $out"
+  assert_present "$board" "the trilingual build produced no board"
+  extract_payload "$board" | jq -e '
+    .lang == "hant"
+    and (.captains_call[0].title.hant == "易腐品優先入場")
+    and (.captains_call[0].reversible == "partly")
+    and (.captains_call[0].evidence | length == 2)
+    and ([.captains_call[0].options[] | select(.value == "reconcile") | .label.hant] == ["重新核對"])
+  ' >/dev/null || fail "the built board lost the trilingual copy or the injected reconcile translation"
+  pass "build accepts trilingual copy, the five-question fields, and evidence links"
+}
+
+test_build_refuses_malformed_copy_and_card_fields() {
+  local home data board rc out
+  home=$(make_home i18n-refuse)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+
+  write_valid_payload "$data"
+  jq '.captains_call[0].title = {en: "Only English"}' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a copy object without hant was accepted"
+
+  write_valid_payload "$data"
+  jq '.captains_call[0].risk = "critical"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an unknown decision risk level was accepted"
+
+  write_valid_payload "$data"
+  jq '.captains_call[0].reversible = "maybe"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an unknown reversible value was accepted"
+
+  write_valid_payload "$data"
+  jq '.captains_call[0].evidence = [{label: "raw path", url: "/Users/someone/report.html"}]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an evidence link that is not a URL was accepted"
+
+  write_valid_payload "$data"
+  jq '.captains_call[0].evidence = [{label: "remote http", url: "http://example.test/report"}]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a plain-http evidence link to a remote host was accepted"
+
+  write_valid_payload "$data"
+  jq '.lang = "fr"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an unsupported default language was accepted"
+
+  assert_absent "$board" "a refused payload still produced a board"
+  pass "build refuses malformed copy objects, card enums, evidence links, and languages"
+}
+
 test_path_is_stable_and_home_scoped
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
@@ -795,3 +875,5 @@ test_build_fails_when_reconcile_cannot_establish_a_listener
 test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
+test_build_accepts_trilingual_copy_and_five_question_fields
+test_build_refuses_malformed_copy_and_card_fields

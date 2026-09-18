@@ -82,6 +82,89 @@ charted_next_count() {  # <render-json>
   printf '%s' "$1" | jq -r '.stats[] | select(.label == "charted next") | .n'
 }
 
+# Build the board from a complete payload document and return what the
+# renderer produced.
+render_payload() {  # <home> <payload-json>
+  local home=$1 data="$1/payload.json"
+  printf '%s\n' "$2" > "$data"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+  node "$HARNESS" "$home/.lavish/bearings-board.html" \
+    || fail "the built board could not be rendered"
+}
+
+five_question_payload() {  # <lang>
+  jq -n --arg lang "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-18T00:00Z",
+    prs_live:false, lang:$lang, underway:[], landed:[],
+    charted:[{id:"q1", repo:"sample", title:{en:"Queued work", hant:"排隊中的工作"},
+              reason:{en:"waits on the cutover", hant:"等切換完成"}, dispatchable:true}],
+    captains_call:[{
+      key:"sample-admission", type:"decision", repo:"sample",
+      title:{en:"Perishable-first admission", hant:"易腐品優先入場"},
+      decide:{en:"Adopt it?", hant:"要採用嗎？"},
+      about:{en:"Lots spoil while waiting", hant:"批次在等待時報廢"},
+      if_nothing:{en:"Arrival order keeps spoiling lots", hant:"照到達順序會繼續報廢"},
+      reversible:"partly", risk:"medium",
+      recommend_value:"yes",
+      recommend_why:{en:"40% fewer spoiled lots in the trial", hant:"試行時報廢少 40%"},
+      options:[
+        {value:"yes", label:{en:"Adopt", hant:"採用"}, consequence:{en:"reorders the queue", hant:"重排佇列"}},
+        {value:"no", label:{en:"Keep current", hant:"維持現狀"}}],
+      evidence:[{label:{en:"scout report", hant:"偵察報告"}, url:"https://example.test/report"}],
+      packet_url:"https://example.test/packet.html"
+    }]}'
+}
+
+test_a_decision_card_answers_the_five_questions_in_english_by_default() {
+  local home out
+  home=$(make_home five-en)
+  out=$(render_payload "$home" "$(five_question_payload en)")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the card: $out"
+  printf '%s' "$out" | jq -e '
+    .headings == ["Captain'"'"'s Call", "Charted Next", "Underway", "Recently Landed"]
+      and (.cards | length) == 1
+      and (.cards[0]
+        | .title == "Perishable-first admission"
+          and (.badges | index("decision") != null)
+          and (.badges | index("risk medium") != null)
+          and (.badges | index("partly reversible") != null)
+          and ([.ctx[] | .k] == ["decide", "about", "if nothing", "why"])
+          and (.ctx[2].v == "Arrival order keeps spoiling lots")
+          and (.options[0] | .label == "Adopt" and .consequence == "reorders the queue" and .rec == true)
+          and (.options[1] | .label == "Keep current" and .rec == false)
+          and ([.options[] | .label] | index("Reconcile") != null)
+          and (.chips == ["open the packet", "scout report"]))
+      and (.charted[0] | .title == "Queued work" and (.sub | test("waits on the cutover")))
+  ' >/dev/null || fail "the five-question card did not render in English: $out"
+  pass "a decision card answers the five questions in English by default"
+}
+
+test_the_payload_language_switches_every_visible_string() {
+  local home out
+  home=$(make_home five-hant)
+  out=$(render_payload "$home" "$(five_question_payload hant)")
+  printf '%s' "$out" | jq -e '
+    .headings == ["船長裁決", "排定的下一步", "進行中", "最近完成"]
+      and ([.stats[] | .label] == ["等你決定", "進行中", "最近完成", "排定的下一步"])
+      and (.cards[0]
+        | .title == "易腐品優先入場"
+          and (.badges | index("風險 中") != null)
+          and (.badges | index("部分可回頭") != null)
+          and ([.ctx[] | .k] == ["決定什麼", "背景", "什麼都不做", "為什麼"])
+          and (.options[0] | .label == "採用" and .consequence == "重排佇列")
+          and ([.options[] | .label] | index("重新核對") != null)
+          and (.chips == ["打開 packet", "偵察報告"]))
+      and (.charted[0] | .title == "排隊中的工作" and (.sub | test("等切換完成"))
+        and ([.badges[] | .text] == ["等待中"]))
+      and ([.charted[] | .title] | map(test("[A-Za-z]")) | any | not)
+  ' >/dev/null || fail "switching the payload language left English behind: $out"
+  pass "the payload language switches headings, stats, card copy, badges, and injected options"
+}
+
 test_a_warning_row_reads_as_a_repair_not_as_queued_work() {
   local home out
   home=$(make_home warning-badge)
@@ -237,3 +320,5 @@ test_warnings_are_excluded_from_the_charted_next_count
 test_a_board_of_only_warnings_still_reports_nothing_queued
 test_omitted_warnings_never_count_as_more_queued
 test_an_omitted_kind_keeps_the_existing_queued_rendering
+test_a_decision_card_answers_the_five_questions_in_english_by_default
+test_the_payload_language_switches_every_visible_string
