@@ -474,6 +474,45 @@ test_the_status_line_does_not_displace_the_language_switch() {
 # on exactly what it emitted and add nothing. All three shapes are driven here
 # together, because a test that exercises only the button case is what let a
 # reader and a writer disagree about an empty selection.
+# A shipped board that registers something outside the DOM on every run. Today's
+# template registers nothing at render time, so measuring it as-is would compare
+# nought with nought; this is the shape a sibling branch adds, and the rule has
+# to hold for it before it lands rather than after.
+template_registering_an_interval() {  # <out>
+  python3 - "$SHIPPED" "$1" <<'PY'
+import re, sys
+html = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'<script id="bearings-data" type="application/json">.*?</script>', html, re.S)
+tail = html[m.end():]
+i = tail.index("<script>") + len("<script>")
+open(sys.argv[2], "w", encoding="utf-8").write(
+    html[:m.end()] + tail[:i] + "\nsetInterval(function () {}, 100000);\n" + tail[i:])
+PY
+}
+
+# The board may be repainted any number of times and must cost the same every
+# time. A page that gets heavier the longer the captain leaves it open is broken
+# even when nothing looks wrong, so this counts registrations rather than
+# eyeballing the page.
+test_repainting_many_times_costs_the_same_as_once() {
+  local d=$TMP_ROOT/repaint-cost once many
+  mkdir -p "$d"
+  template_registering_an_interval "$d/template.html"
+  answerable_payload "$d/p.json"
+  FM_REMOTE_BOARD_TEMPLATE="$d/template.html" "$REMOTE" render "$d/p.json" --out "$d/page.html" >/dev/null
+
+  once=$(jq -r .registrations <<<"$(node "$HARNESS" "$d/page.html" live)")
+  many=$(jq -r .registrations <<<"$(node "$HARNESS" "$d/page.html" repaint-cost)")
+
+  # The fixture has to actually register something, or this compares nought
+  # with nought and proves nothing.
+  assert_not_equals "0" "$once" \
+    "the fixture board must register something outside the DOM, or this measures nothing"
+  assert_equals "$once" "$many" \
+    "twelve repaints must leave no more registered than one paint did"
+  pass "repainting many times costs the same as once"
+}
+
 test_an_answer_is_carried_exactly_as_the_board_wrote_it() {
   local d=$TMP_ROOT/answer-shape out rec
   transport_page "$d"
@@ -777,3 +816,4 @@ fi
 test_the_status_line_does_not_displace_the_language_switch
 test_the_derived_page_is_not_world_readable
 test_an_answer_is_carried_exactly_as_the_board_wrote_it
+test_repainting_many_times_costs_the_same_as_once

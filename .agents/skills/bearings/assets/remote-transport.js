@@ -32,6 +32,11 @@
  * for any other reason is treated as not rendered, so the board already on
  * screen stays and the link is never reported live.
  *
+ * THE BOARD MAY BE REPAINTED ANY NUMBER OF TIMES AND MUST COST THE SAME
+ * EVERY TIME. A page that gets heavier the longer the captain leaves it open
+ * is broken even when nothing looks wrong, so a repaint undoes what the
+ * previous one registered before it registers anything again.
+ *
  * bin/fm-remote-board.sh composes this file with the template; it is not
  * loaded on its own.
  */
@@ -194,13 +199,81 @@
     paintStatus();
   }
 
-  function runBoard() {
-    /* Appending a script element executes it; the shipped source stays one
-       copy, used for first paint and for every repaint after it. */
-    var s = document.createElement("script");
-    s.textContent = BOARD_SRC;
-    document.body.appendChild(s);
+  /* A repaint re-runs the shipped board script, and re-running a script that
+     registers things is only safe if the run before it is undone first. The
+     other option - updating the page without re-running - is not available
+     here: the board's render logic is private to its own IIFE, which is exactly
+     what embedding it verbatim buys, so there is nothing to call. So the re-run
+     tears down what the previous run registered.
+
+     Only what OUTLIVES the repaint is tracked: timers, and listeners on
+     document or window. Listeners the board puts on its own forms, buttons and
+     rows go when those nodes are replaced, so tracking them would be noise. */
+  var registered = { timers: [], listeners: [] };
+
+  function undoPreviousRun() {
+    registered.timers.forEach(function (t) {
+      if (t.repeating) { if (typeof clearInterval === "function") clearInterval(t.id); }
+      else if (typeof clearTimeout === "function") clearTimeout(t.id);
+    });
+    registered.listeners.forEach(function (l) {
+      if (l.target.removeEventListener) l.target.removeEventListener(l.type, l.fn, l.opts);
+    });
+    registered = { timers: [], listeners: [] };
   }
+
+  function runBoard() {
+    undoPreviousRun();
+
+    /* Shim the global the board's own bare setTimeout/setInterval calls resolve
+       to. In a browser that global IS window; under a test harness it need not
+       be, and shimming only window would quietly install nothing. */
+    var g = typeof globalThis !== "undefined" ? globalThis : window;
+    var real = {
+      g: g,
+      setInterval: g.setInterval,
+      setTimeout: g.setTimeout,
+      docAdd: document.addEventListener,
+      winAdd: window.addEventListener
+    };
+    function timerShim(fn, repeating) {
+      return function () {
+        var id = fn.apply(real.g, arguments);
+        registered.timers.push({ id: id, repeating: repeating });
+        return id;
+      };
+    }
+    function listenerShim(target, fn) {
+      return function (type, handler, opts) {
+        registered.listeners.push({ target: target, type: type, fn: handler, opts: opts });
+        return fn.call(target, type, handler, opts);
+      };
+    }
+    if (real.setInterval) g.setInterval = timerShim(real.setInterval, true);
+    if (real.setTimeout) g.setTimeout = timerShim(real.setTimeout, false);
+    if (real.docAdd) document.addEventListener = listenerShim(document, real.docAdd);
+    if (real.winAdd) window.addEventListener = listenerShim(window, real.winAdd);
+
+    try {
+      /* Appending a script element executes it; the shipped source stays one
+         copy, used for first paint and for every repaint after it. */
+      var s = document.createElement("script");
+      s.textContent = BOARD_SRC;
+      document.body.appendChild(s);
+    } finally {
+      if (real.setInterval) real.g.setInterval = real.setInterval;
+      if (real.setTimeout) real.g.setTimeout = real.setTimeout;
+      if (real.docAdd) document.addEventListener = real.docAdd;
+      if (real.winAdd) window.addEventListener = real.winAdd;
+    }
+  }
+
+  /* Only for the regression that proves the rule above: how much the last run
+     left behind. A number that grows across repaints is the leak. */
+  (typeof globalThis !== "undefined" ? globalThis : window).__fmBoardRegistrations =
+    function () {
+      return registered.timers.length + registered.listeners.length;
+    };
 
   var showing = null;
 

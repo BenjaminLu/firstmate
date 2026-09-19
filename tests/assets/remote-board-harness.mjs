@@ -23,6 +23,7 @@
 //   picks-sent  the same, and then the dispatch order is queued
 //   write-fails an answer is written, the write is refused, a payload follows
 //   stopped     the same, and then the page stops receiving readable payloads
+//   repaint-cost    twelve live payloads in a row, to weigh what each repaint left
 //   answer-button   a Captain's Call answer given by pressing an option
 //   answer-written  an answer given only in writing, no option pressed
 //   answer-both     an option pressed and a note written together
@@ -55,18 +56,24 @@ globalThis.Date = class extends RealDate {
   }
   static now() { return RealDate.now() + shift; }
 };
-let timers = [];
-let intervals = [];
-globalThis.setTimeout = (fn) => timers.push(fn);
-globalThis.setInterval = (fn) => intervals.push(fn);
+// Timers carry ids and can be cancelled, because the page under test tears down
+// what a previous board run registered; a harness that cannot cancel would show
+// a leak-free page for the wrong reason.
+let timers = new Map();
+let intervals = new Map();
+let timerSeq = 0;
+globalThis.setTimeout = (fn) => { timers.set(++timerSeq, fn); return timerSeq; };
+globalThis.setInterval = (fn) => { intervals.set(++timerSeq, fn); return timerSeq; };
+globalThis.clearTimeout = (id) => timers.delete(id);
+globalThis.clearInterval = (id) => intervals.delete(id);
 function waitMinutes(n) {
   shift += n * 60000;
-  intervals.forEach((fn) => fn());
+  [...intervals.values()].forEach((fn) => fn());
 }
 function flushTimers() {
-  for (let i = 0; i < 20 && timers.length; i++) {
-    const due = timers;
-    timers = [];
+  for (let i = 0; i < 20 && timers.size; i++) {
+    const due = [...timers.values()];
+    timers = new Map();
     due.forEach((fn) => fn());
   }
 }
@@ -319,7 +326,14 @@ function answerOn(card, { press, write }) {
   fire(card, "submit", { preventDefault() {} });
 }
 
-if (scenario === "answer-button") {
+if (scenario === "repaint-cost") {
+  // Repaint many times over and report what the last run left registered. A
+  // number that grows with the repaint count is the leak; it must not move.
+  for (let i = 0; i < 12; i += 1) {
+    push({ ...LIVE, generated: `2026-09-19T${10 + i}:00Z` });
+    await tick();
+  }
+} else if (scenario === "answer-button") {
   answerOn(openCard(), { press: true });
 } else if (scenario === "answer-written") {
   answerOn(openCard(), { write: "do it the slow way" });
@@ -424,4 +438,8 @@ process.stdout.write(JSON.stringify({
   stack: (shown("bb-stack-count") || {}).textContent || "",
   picks: body.querySelectorAll(".bb-pick:checked").length,
   writes,
+  registrations:
+    typeof globalThis.__fmBoardRegistrations === "function"
+      ? globalThis.__fmBoardRegistrations()
+      : null,
 }) + "\n");
