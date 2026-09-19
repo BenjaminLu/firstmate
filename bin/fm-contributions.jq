@@ -33,6 +33,20 @@ def known($input; $saved):
   | unique_by([.task,.url]);
 def latest_checks:
   group_by(.name) | map(sort_by([(.started_at // ""),(.id // 0)]) | last);
+# A merged or closed observation is final; poll never re-reads it, so it never expires.
+def observation_final($record):
+  $record.error == null and ((($record.observation // {}).state) | IN("merged","closed"));
+# The single definition of a measured contribution: the board's freshness rule
+# and the poll's own reading of which contributions it owes an observation.
+def observation_fresh($record; $url; $now; $max_age):
+  ($record.observation // {}) as $o
+  | (observation_final($record)
+     or ((($record.checked_at // "") | try fromdateiso8601 catch null) as $checked
+         | $checked != null and ($now - $checked) >= 0 and ($now - $checked) <= $max_age))
+    and (if $record.kind == "pr" then
+           $record.error == null and $record.observation != null and ($o.head | sha)
+         else $record.error == null and $record.observation != null end)
+    and ($url | startswith("https://github.com/"));
 def projected($input; $saved; $now; $max_age):
   known($input; $saved) as $known
   | [$known[] as $k
@@ -46,13 +60,8 @@ def projected($input; $saved; $now; $max_age):
     | ($task.merge_authority // "unknown") as $merge_authority
     | ($record.observation // {}) as $o
     | (if $record.error == null and $record.observation != null and ($o.head | sha) then $o.head else null end) as $observed_head
-    | (($record.checked_at // "") | try fromdateiso8601 catch null) as $checked
-    # A merged or closed observation is final; poll never re-reads it, so it never expires.
-    | ($record.error == null and ($o.state | IN("merged","closed"))) as $final
-    | (($final or ($checked != null and ($now - $checked) >= 0 and ($now - $checked) <= $max_age))
-       and (if $record.kind == "pr" then $observed_head != null
-            else $record.error == null and $record.observation != null end)
-       and ($k.url | startswith("https://github.com/"))) as $fresh
+    | observation_final($record) as $final
+    | observation_fresh($record; $k.url; $now; $max_age) as $fresh
     | (($o.checks // []) | latest_checks) as $checks
     | [$checks[] | select(.status == "completed" and (.conclusion == null or .conclusion == ""))] as $no_verdict
     | [$checks[] | select(.status != "completed")] as $pending
