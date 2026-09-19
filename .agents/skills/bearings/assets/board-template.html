@@ -264,6 +264,30 @@ body {
 }
 .bb-empty { padding: 18px; font-size: var(--fs-sm); color: var(--text-muted); }
 
+/* ---- the state between the captain's click and its consequence ----
+   One pill, rendered on whichever row the captain clicked: a Captain's Call
+   card or a Charted Next row, the only two surfaces his controls sit on.
+   Acting and waiting share the gold of an unfinished thing and are told apart
+   by their words and by the pulse; a refusal takes the danger rust and brings
+   its reason with it. */
+.bb-ack {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; line-height: 1;
+  border: 1.5px solid currentColor; border-radius: var(--radius-xs); padding: 4px 8px 3px;
+}
+.bb-ack::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.bb-ack--acting, .bb-ack--late { color: var(--gold-600); }
+.bb-ack--refused { color: var(--rust-600); }
+@media (prefers-reduced-motion: no-preference) {
+  .bb-ack--acting::before { animation: bb-ack-pulse 1.6s ease-in-out infinite; }
+  @keyframes bb-ack-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+}
+.bb-ack__why {
+  margin-top: 6px; font-size: var(--fs-xs); color: var(--text-body); line-height: 1.4;
+  border-inline-start: 2px solid var(--rust-600); padding-inline-start: 9px;
+}
+
 /* ---- Charted Next dispatch picker ---- */
 /* margin:0 kills the UA default checkbox margin so picker rows and spacer rows
    share one text left edge */
@@ -517,6 +541,7 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "pick queued work to dispatch", pick_n: "{n} picked for dispatch",
       pick_limit: "Selection limit reached (512 bytes maximum). ", pick_too_long: "Selection is too long to queue (512 bytes maximum). ",
       dispatch: "Queue dispatch order",
+      ack_acting: "acting on it", ack_refused: "not started", ack_late: "still waiting · {t}",
       err_title: "This board could not load", err_ask: " - ask firstmate to rebuild the board."
     },
     hant: {
@@ -545,6 +570,7 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "勾選排隊中的工作來派工", pick_n: "已選 {n} 項派工",
       pick_limit: "已達選取上限（512 bytes）。", pick_too_long: "選取內容太長，無法排入（上限 512 bytes）。",
       dispatch: "送出派工順序",
+      ack_acting: "處理中", ack_refused: "沒有派出", ack_late: "還在等處理 · {t}",
       err_title: "這個看板無法載入", err_ask: "，請 firstmate 重建看板。"
     },
     hans: {
@@ -573,6 +599,7 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "勾选排队中的工作来派工", pick_n: "已选 {n} 项派工",
       pick_limit: "已达选取上限（512 bytes）。", pick_too_long: "选取内容太长，无法排入（上限 512 bytes）。",
       dispatch: "提交派工顺序",
+      ack_acting: "处理中", ack_refused: "没有派出", ack_late: "还在等处理 · {t}",
       err_title: "这个看板无法加载", err_ask: "，请 firstmate 重建看板。"
     }
   };
@@ -667,6 +694,76 @@ __FM_BEARINGS_BOARD_DATA__
     a.setAttribute("data-lavish-action", "open-link");
     return a;
   }
+  /* ---- the captain's click, acknowledged -------------------------------
+     The acknowledgement lifecycle is stated once, in bin/fm-bearings-board.sh's
+     header, which owns it. This is the page's share of it and nothing more:
+     it DRAWS, and it holds the one clock the lifecycle's AGES stage names.
+     The click paints an `acting` pill straight onto the row and remembers the
+     key it was clicked on, so the board never looks as if nothing was heard
+     and a re-render - a language switch, a reload - cannot take the
+     acknowledgement away again. A publication carries the row's own `ack`,
+     which is what lets an acknowledgement resolve into a refusal that says
+     why; where both exist the NEWER wins, which is the SHOWN stage.
+     `kind` is machine vocabulary this template translates and `at` is the
+     stamp it ages from; only a refusal's `why` is prose the first mate wrote,
+     and so is the one field that is payload copy. An unknown kind renders
+     nothing rather than an unstyled pill under an unknown class. */
+  var ACK_KINDS = { acting: true, refused: true };
+  /* The captain's own figure: the acknowledgement is immediate, the real
+     consequence appears within about a minute. */
+  var ACK_LATE_SECONDS = 60;
+  /* The one clock on this page, and it drives nothing but these pills. */
+  var ACK_TICK_MS = 15000;
+  var ackPills = [];
+  function nowSeconds() { return Math.floor(Date.now() / 1000); }
+  function ackAge(a) {
+    if (typeof a.at !== "number") return 0;
+    var age = nowSeconds() - a.at;
+    return age > 0 ? age : 0;
+  }
+  /* Only ever asked about an acknowledgement that is already late, so the
+     smallest thing it can be handed is one minute: paintAck calls it under
+     `age >= ACK_LATE_SECONDS` and nowhere else. There is no sub-minute form
+     because the captain settled the report as a waiting time that begins
+     once the consequence has NOT arrived inside the minute. */
+  function ackElapsed(s) {
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h" + Math.floor((s % 3600) / 60) + "m";
+    return Math.floor(s / 86400) + "d" + Math.floor((s % 86400) / 3600) + "h";
+  }
+  function paintAck(pill, a) {
+    var age = a.kind === "acting" ? ackAge(a) : 0;
+    var late = age >= ACK_LATE_SECONDS;
+    pill.ack = a;
+    pill.className = "bb-ack bb-ack--" + (late ? "late" : a.kind);
+    pill.textContent = late ? t("ack_late", { t: ackElapsed(age) })
+      : (a.kind === "refused" ? t("ack_refused") : t("ack_acting"));
+  }
+  function appendAck(parent, a) {
+    if (!a || !ACK_KINDS[a.kind]) return;
+    var pill = el("span", "bb-ack");
+    paintAck(pill, a);
+    ackPills.push(pill);
+    parent.appendChild(pill);
+    if (a.why) parent.appendChild(el("div", "bb-ack__why", pick(a.why)));
+  }
+  /* The click's own half of that: the pill, on the element the captain
+     clicked, right now. A row already carrying an acknowledgement is answered
+     again rather than given a second pill, and the reason a refusal brought
+     with it is retired with the refusal it explained. */
+  function ackClicked(parent) {
+    var pill = parent.querySelectorAll(".bb-ack")[0];
+    var a = { kind: "acting", at: nowSeconds() };
+    if (!pill) { appendAck(parent, a); return; }
+    if (ackPills.indexOf(pill) < 0) ackPills.push(pill);
+    paintAck(pill, a);
+    Array.prototype.forEach.call(parent.querySelectorAll(".bb-ack__why"),
+      function (w) { w.hidden = true; });
+  }
+  /* How long an answered decision card holds before the deck deals the next
+     one. A human reading time: the acknowledgement the click just put on the
+     card must be readable before the card it sits on is dealt away. */
+  var CARD_DEAL_MS = 2400;
   function clear(n) { n.textContent = ""; }
   function setText(id, text) { document.getElementById(id).textContent = text; }
   /* Warnings ride the charted feed for layout only; they are alarms, not work,
@@ -690,11 +787,29 @@ __FM_BEARINGS_BOARD_DATA__
   var CHECK_SVG = '<svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var CHECK_ROW_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
-  /* Answered state survives a language switch and a reload: keyed by decision
-     key and scoped to this build's `generated` stamp, so a rebuilt board (which
-     drops acted-on cards) starts clean while a plain reload of the same board
-     still shows what was already queued. */
-  var answeredStore = "fm-bearings-answered:" + String(data.generated || "");
+  /* Answered state survives a language switch, a reload, AND a rebuild of the
+     board, because the store is keyed on the board's own stable identity
+     rather than on this build's `generated` stamp. That distinction is the
+     whole point: a click is not captured when it is made - it reaches
+     firstmate only when the captain presses Lavish's send, which may be
+     several cards later - so between the click and the send the pill exists
+     only here. A store scoped to the stamp would be emptied by any rebuild in
+     that window, and every queued-but-unsent row would silently lose its
+     pill at once: the board telling the captain his click did not happen,
+     which is the one thing this behaviour exists to stop.
+     Nothing is hard-coded to win as a result. A published acknowledgement
+     still outranks a remembered click whenever it is the later of the two -
+     see `ackFor`, which is the only precedence rule on this page.
+     The stored value is the second the click happened, which is what lets a
+     remembered acknowledgement age exactly like a published one. */
+  var answeredStore = "fm-bearings-answered:" + String(data.home || "");
+  /* A card key and a Charted Next row id are drawn from the same namespace,
+     so they are stored under the surface the captain clicked rather than bare:
+     a picked row whose id equalled a card's key would otherwise mark that card
+     answered, and the first-open deal SKIPS answered cards - hiding a decision
+     the captain never saw. A duplicate pill would be cosmetic; a card he never
+     sees is not. */
+  function answeredKey(surface, key) { return surface + ":" + String(key); }
   var queuedKeys = (function () {
     try {
       var raw = window.localStorage && window.localStorage.getItem(answeredStore);
@@ -702,15 +817,36 @@ __FM_BEARINGS_BOARD_DATA__
       return parsed && typeof parsed === "object" ? parsed : {};
     } catch (e) { return {}; }
   })();
-  function rememberAnswered(key) {
-    queuedKeys[key] = true;
+  function rememberAnswered(surface, key) {
+    queuedKeys[answeredKey(surface, key)] = nowSeconds();
     try { if (window.localStorage) window.localStorage.setItem(answeredStore, JSON.stringify(queuedKeys)); } catch (e) { /* private mode */ }
+  }
+  /* What this key's row shows: the published acknowledgement or the click this
+     page remembers, whichever happened later. Both carry the second they
+     happened, so neither is hard-coded to win - a publication that still
+     carries a ten-minute-old unsettled record must not bury a click made three
+     seconds ago, and an equal stamp goes to the publication because only it
+     can carry a refusal's reason. */
+  function ackFor(surface, key, published) {
+    var clicked = queuedKeys[answeredKey(surface, key)];
+    if (typeof clicked !== "number") return published || null;
+    if (published && published.at >= clicked) return published;
+    return { kind: "acting", at: clicked };
   }
   var dispatchQueued = false;
   var active = -1;
+  /* The deal a card's answer armed belongs to the render that armed it: its
+     cards and its showCard are the ones it closed over. A re-render replaces
+     both, so any deal still pending is dropped rather than left to fire into a
+     deck that no longer exists. */
+  var dealTimer = 0;
 
   function render() {
   try {
+    /* every pill on the page is rebuilt below, so the ageing list starts over
+       with it rather than holding elements no longer in the document */
+    ackPills = [];
+    clearTimeout(dealTimer);
     if (document.documentElement) {
       document.documentElement.lang = lang === "en" ? "en" : (lang === "hant" ? "zh-Hant" : "zh-Hans");
     }
@@ -1183,14 +1319,23 @@ __FM_BEARINGS_BOARD_DATA__
               data: ctxData }
           );
         }
-        rememberAnswered(item.key);
+        rememberAnswered("card", item.key);
         card.classList.add("is-queued");
-        /* deal the next card once this one is answered */
-        setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, 450);
+        ackClicked(pad);
+        /* Deal the next card once this one is answered, and once its
+           acknowledgement has been on screen long enough to read. Both the
+           answered card and the one to deal are bound HERE, at the answer; if
+           the captain has paged the deck himself while the hold ran, the card
+           he chose to look at outranks the one we were going to show him and
+           nothing is dealt at all. */
+        var dealt = active;
+        var next = dealt < cards.length - 1 ? dealt + 1 : dealt;
+        dealTimer = setTimeout(function () { if (active === dealt) showCard(next); }, CARD_DEAL_MS);
       }
 
-      if (queuedKeys[item.key]) card.classList.add("is-queued");
+      if (queuedKeys[answeredKey("card", item.key)]) card.classList.add("is-queued");
       pad.appendChild(form);
+      appendAck(pad, ackFor("card", item.key, item.ack));
       card.appendChild(pad);
       deck.appendChild(card);
     });
@@ -1204,7 +1349,7 @@ __FM_BEARINGS_BOARD_DATA__
     function showCard(i) {
       active = Math.max(0, Math.min(cards.length - 1, i));
       cards.forEach(function (c, j) { c.hidden = j !== active; });
-      var answered = Object.keys(queuedKeys).length;
+      var answered = data.captains_call.filter(function (c) { return queuedKeys[answeredKey("card", c.key)]; }).length;
       stackCount.textContent = t("card_of", { i: active + 1, n: cards.length }) +
         (answered ? " · " + t("answered", { n: answered }) : "");
       stackPrev.disabled = active === 0;
@@ -1221,7 +1366,7 @@ __FM_BEARINGS_BOARD_DATA__
         /* first open: deal the first card that still needs an answer */
         active = 0;
         for (var k = 0; k < data.captains_call.length; k++) {
-          if (!queuedKeys[data.captains_call[k].key]) { active = k; break; }
+          if (!queuedKeys[answeredKey("card", data.captains_call[k].key)]) { active = k; break; }
         }
       }
       showCard(active);
@@ -1314,6 +1459,7 @@ __FM_BEARINGS_BOARD_DATA__
       var chSub = x.repo || x.id;
       var reason = pick(x.reason);
       main.appendChild(el("div", "bb-row__sub", reason ? reason + " · " + chSub : chSub));
+      appendAck(main, ackFor("row", x.id, x.ack));
       row.appendChild(main);
       if (isWarning(x)) row.appendChild(badge("danger", t("needs_repair")));
       else if (reason) row.appendChild(badge("warn", t("waiting")));
@@ -1351,6 +1497,16 @@ __FM_BEARINGS_BOARD_DATA__
         }
         dispatchQueued = true;
         bar.classList.add("is-queued");
+        /* the answer is about the rows he picked, so that is where it is
+           acknowledged - the bar's own chip says only that something was sent.
+           Each id is remembered as well as painted, so the next re-render puts
+           the same pill back on the same row. */
+        Array.prototype.forEach.call(ch.querySelectorAll(".bb-pick"), function (c) {
+          if (!c.checked || !c.parentNode) return;
+          rememberAnswered("row", c.value);
+          var rowMain = c.parentNode.querySelectorAll(".bb-row__main")[0];
+          if (rowMain) ackClicked(rowMain);
+        });
       };
     } else {
       bar.hidden = true;
@@ -1370,6 +1526,18 @@ __FM_BEARINGS_BOARD_DATA__
     });
   });
   render();
+  /* An acknowledgement whose consequence never arrived has to be able to say
+     how long it has been waiting without the board being republished, because
+     a missed answer is exactly the case in which nothing republishes it.
+     A repaint re-runs this whole script, so the previous run's ticker is
+     cleared before a new one is registered: the board may be repainted any
+     number of times and must cost the same every time. The handle lives on
+     the page rather than in this closure precisely because the next run gets
+     a fresh closure and only the page survives between them. */
+  if (window.fmBearingsAckTick) clearInterval(window.fmBearingsAckTick);
+  window.fmBearingsAckTick = setInterval(function () {
+    ackPills.forEach(function (p) { paintAck(p, p.ack); });
+  }, ACK_TICK_MS);
 })();
 </script>
 </body>
