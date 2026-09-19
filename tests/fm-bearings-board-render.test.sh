@@ -355,6 +355,48 @@ test_an_underway_row_renders_its_step_ladder_trilingually() {
   pass "an Underway row renders its step ladder, timing, and freshness trilingually"
 }
 
+# The pipeline's real step ids, recorded from the CLI itself in
+# tests/captures/no-mistakes-v1.70.1/*.toon and read onto the row by
+# bin/fm-task-progress.sh. A ladder chip must carry this template's own label
+# for every one of them; a chip that reads back as the raw step id means the
+# label map is keyed on a name the pipeline never emits.
+PIPELINE_STEPS='["intent","rebase","review","test","document","lint","push","pr","ci"]'
+
+test_every_pipeline_step_renders_as_a_label_in_every_language() {
+  local home out payload
+  payload=$(jq -n --argjson steps "$PIPELINE_STEPS" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"en", captains_call:[], landed:[], charted:[],
+    underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
+      name:"Ship the thing", doing:"validating",
+      progress:{state:"working", detail:"validating", step:"document",
+        steps:[$steps[] | {step:., status:"pending"}], quiet:false,
+        refreshed:"2026-09-19T00:00:00Z"}}]}')
+
+  home=$(make_home steps-en)
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '
+    [.underway[0].progress.steps[] | .text]
+      == ["intent", "rebase", "review", "tests", "docs", "lint", "push", "pull request", "CI"]
+  ' >/dev/null || fail "the English ladder did not label every pipeline step: $out"
+
+  home=$(make_home steps-hant)
+  out=$(render_payload "$home" "$(printf '%s' "$payload" | jq '.lang = "hant"')")
+  printf '%s' "$out" | jq -e '
+    ([.underway[0].progress.steps[] | .text]
+      == ["意圖", "rebase", "審查", "測試", "文件", "lint", "推送", "PR", "CI"])
+    and (.underway[0].progress.meta | test("步驟 文件"))
+  ' >/dev/null || fail "the 繁體 ladder fell back to a raw pipeline step word: $out"
+
+  home=$(make_home steps-hans)
+  out=$(render_payload "$home" "$(printf '%s' "$payload" | jq '.lang = "hans"')")
+  printf '%s' "$out" | jq -e '
+    [.underway[0].progress.steps[] | .text]
+      == ["意图", "rebase", "审查", "测试", "文档", "lint", "推送", "PR", "CI"]
+  ' >/dev/null || fail "the 简体 ladder fell back to a raw pipeline step word: $out"
+  pass "every pipeline step renders as this template's own label in all three languages"
+}
+
 test_an_underway_row_without_progress_renders_exactly_as_before() {
   local home out
   home=$(make_home progress-absent)
@@ -379,4 +421,5 @@ test_an_omitted_kind_keeps_the_existing_queued_rendering
 test_a_decision_card_answers_the_five_questions_in_english_by_default
 test_the_payload_language_switches_every_visible_string
 test_an_underway_row_renders_its_step_ladder_trilingually
+test_every_pipeline_step_renders_as_a_label_in_every_language
 test_an_underway_row_without_progress_renders_exactly_as_before

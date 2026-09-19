@@ -216,6 +216,28 @@ test_a_refresh_lock_whose_owner_is_gone_is_reclaimed() {
   pass "a refresh lock left by a dead owner is reclaimed instead of wedging the board"
 }
 
+test_refresh_keeps_the_language_the_board_was_published_in() {
+  local home
+  home=$(make_home language)
+  seed_board "$home"
+  # No payload published yet, so the compose default is all a refresh can use.
+  refresh "$home" >/dev/null || fail "the first refresh failed"
+  jq -e '.lang == "hant"' "$home/.lavish/bearings-board.json" >/dev/null \
+    || fail "a first refresh did not fall back to the compose default: $(payload_of "$home")"
+
+  # A board built for an English-reading captain. The published payload beside
+  # the board is where that choice lives, so a fleet event must carry it
+  # forward rather than re-deciding it.
+  jq '.lang = "en"' "$home/.lavish/bearings-board.json" > "$home/en.json" \
+    && mv "$home/en.json" "$home/.lavish/bearings-board.json"
+  refresh "$home" >/dev/null || fail "the refresh after an English build failed"
+  jq -e '.lang == "en"' "$home/.lavish/bearings-board.json" >/dev/null \
+    || fail "a refresh moved the board off the captain's language: $(payload_of "$home")"
+  printf '%s' "$(injected_payload "$home")" | jq -e '.lang == "en"' >/dev/null \
+    || fail "the page the captain opens was republished in another language"
+  pass "a refresh republishes the board in the language it was published in"
+}
+
 test_refresh_carries_no_placeholder_to_the_captain() {
   local home
   home=$(make_home deterministic)
@@ -543,6 +565,7 @@ test_refresh_never_touches_the_session_or_its_armed_source
 test_refresh_refuses_when_no_board_has_been_built
 test_a_concurrent_refresh_is_a_no_op_rather_than_a_race
 test_a_refresh_lock_whose_owner_is_gone_is_reclaimed
+test_refresh_keeps_the_language_the_board_was_published_in
 test_refresh_carries_no_placeholder_to_the_captain
 test_refresh_reuses_the_stored_card_verbatim
 test_refresh_states_only_the_omission_total_the_snapshot_establishes

@@ -13,8 +13,7 @@
 #                                [--deterministic]
 #   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
-#   fm-bearings-board.sh refresh [--lang ...] [--snapshot <file>] [--payload-out <file>]
-#                                [--best-effort]
+#   fm-bearings-board.sh refresh [--snapshot <file>] [--best-effort]
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh payload-path
 #   fm-bearings-board.sh url
@@ -165,8 +164,13 @@
 #            build does, injects it into the board file, and writes the same
 #            payload beside the board as a plain JSON file (see payload-path),
 #            so a consumer other than the local page can pick it up without
-#            recomposing. Safe to run on every fleet event: it touches no Lavish
-#            session, so the board's URL, its process-event source, and its
+#            recomposing. It takes no language of its own: the payload already
+#            published names the language the board was built in, and a refresh
+#            carries that forward, so a republication can never move the board
+#            off what the captain chose. Only a home with no published payload
+#            yet falls back to the compose default. Safe to run on every fleet
+#            event: it touches no Lavish session, so the board's URL, its
+#            process-event source, and its
 #            keyed-answer binding all survive untouched, and a home-local
 #            exclusive lock makes a concurrent trigger a no-op rather than a
 #            race. That lock records its holder, so a refresh killed mid-flight
@@ -182,8 +186,11 @@
 #            publication. Output is `refreshed: <board>` and `payload: <path>`.
 # path       Print the stable board path for this home.
 # payload-path
-#            Print the stable path of the payload file refresh writes beside
-#            the board.
+#            Print the stable path of the payload file build and refresh write
+#            beside the board. Its consumer is the captain reading this same
+#            board from somewhere other than this machine - a page served
+#            outside this repository rendering the identical payload - so the
+#            file is a published interface, not a spare copy of the page.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
 #            open session exists. The URL never changes while the board keeps
@@ -1151,7 +1158,26 @@ command_build() {
 # event. Concurrency is a no-op rather than a race - a trigger that finds the
 # lock held simply leaves the board to the refresh already under way.
 
+# The board payload as a plain file beside the page. Its consumer is the
+# captain reading this same board away from this machine, through a page served
+# outside this repository: one canonical path, written by build and by every
+# refresh, so that reader never has to recompose or scrape the local page.
 payload_path() { printf '%s/.lavish/bearings-board.json\n' "$FM_HOME"; }
+
+# The language the published board was built in. A refresh republishes the
+# board the captain already has, so the language is read back rather than
+# re-decided; a home with nothing published yet has none to carry.
+published_lang() {
+  local payload lang
+  payload=$(payload_path)
+  [ -f "$payload" ] || return 1
+  lang=$(jq -r 'if (.lang | type) == "string" then .lang else empty end' "$payload" 2>/dev/null) \
+    || return 1
+  case "$lang" in
+    en|hant|hans) printf '%s\n' "$lang" ;;
+    *) return 1 ;;
+  esac
+}
 
 refresh_log() {  # <message>
   local log="$STATE/.bearings-board-refresh.log" size tmp
@@ -1273,20 +1299,19 @@ command_refresh() {
 }
 
 refresh_worker() {
-  local board payload_out='' lock='' skeleton effective leftover
+  local board payload_out lang lock='' skeleton effective leftover
   local -a compose_args=(--deterministic)
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --lang) compose_args+=(--lang "${2-}"); shift 2 ;;
       --snapshot) compose_args+=(--snapshot "${2-}"); shift 2 ;;
-      --payload-out) payload_out=${2-}; shift 2 ;;
       --best-effort) REFRESH_BEST_EFFORT=1; shift ;;
       *) usage >&2; exit 2 ;;
     esac
   done
   command -v jq >/dev/null 2>&1 || refresh_fail "jq is required"
   board=$(board_path)
-  [ -n "$payload_out" ] || payload_out=$(payload_path)
+  payload_out=$(payload_path)
+  if lang=$(published_lang); then compose_args+=(--lang "$lang"); fi
   # Refreshing means refreshing a board that exists. A home that never asked
   # for one is left alone rather than quietly given a page nobody armed.
   [ -f "$board" ] && [ ! -L "$board" ] \
