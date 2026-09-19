@@ -166,6 +166,9 @@ These hold for every surface the captain reads or acts on - the board, a card, a
 - The board is the captain's one surface, so render a packet, report, or decision inside its card rather than sending them somewhere else to look.
   `bin/fm-packet.sh card` composes that card and `serve` gives the packet page its own stable, reopenable URL that the card carries as `packet_url`.
   Never hand the captain a one-shot session URL whose content is lost when the tab closes; reopening the same URL must bring the content back.
+- Every captain-facing visual surface is trilingual EN / 繁體 / 简体, so every string the captain reads on it carries all three.
+  The board's skeleton enforces this through its `{TRANSLATE: ...}` slots above, and `bin/fm-packet.sh verify` enforces it for packet figures; a surface built by hand outside those two - a scout's own Lavish artifact, a one-off review page - carries the same rule with nothing checking it for you.
+  `bin/fm-packet.sh`'s header owns the one decided exception: packet prose and a figure's heading and caption stay in the single language the worker wrote, because the packet renders inside its trilingual card.
 - Build a captain-facing prototype from the shipped surface, never as a fresh mock.
   `AGENTS.md` section 7 owns the gate that holds a task queued until the prototype is approved; what belongs here is how to build one: copy the shipped template and a live payload, apply the proposed change to that copy, and show that.
   A hand-drawn mock cannot tell the captain whether the direction is right, because they cannot recognize it as the surface they actually use - which is the whole reason the gate exists.
