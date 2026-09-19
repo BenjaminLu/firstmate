@@ -413,7 +413,8 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
 Run `bin/fm-pr-check.sh <id> <PR url> --arm-only` as soon as a PR URL exists for a live task - the worker's pr step opening one, or a listing that shows one - rather than waiting for the worker to finish: it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll without announcing the work as ready.
 Run the same command without `--arm-only` once the task's own ready signal has arrived, which additionally publishes the child's PR-ready line to a parent channel.
-Both forms are idempotent, so arming early costs one slow check, while a merge that lands before the ready signal is otherwise watched by nothing.
+Both forms are idempotent, and arming is not a one-time cost: the armed poll runs on every `*.check.sh` sweep for as long as it stays armed, so arming at the PR rather than at the ready signal buys forge polls across the whole validation phase.
+Spend that deliberately, because a merge that lands before the ready signal is otherwise watched by nothing.
 Tell the captain the PR's full `https://...` URL copied from the worker's ready line or the task's `pr=` metadata, a concise outcome summary, and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
