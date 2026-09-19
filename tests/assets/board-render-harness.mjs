@@ -30,6 +30,9 @@
 //                       let the deal timer the answer armed fire
 // A third argument (en|hant|hans) then clicks that language button, so what
 // survives a re-render is asserted through the real control the captain has.
+// Set BOARD_REBUILD=<another built board.html> to load a DIFFERENT build of
+// the same board into the same page and storage after the click, which is what
+// a republication does to a captain who has clicked but not yet sent.
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -200,6 +203,22 @@ if (click === "dispatch") {
   runTimers();
 } else if (click) {
   throw new Error("unknown click: " + click);
+}
+
+/* Then, optionally, a REBUILD of the board: a different build of the same
+   board, loaded into the same page with the same browser storage, exactly as
+   a republication reaches a captain who has clicked but not yet sent. The
+   click above is deliberately not captured first, because that is the window
+   this models - a click reaches firstmate only when Lavish's send is pressed,
+   so a board rebuilt before that carries no acknowledgement for it and the
+   pill can only come from what this page remembered. */
+const rebuild = process.env.BOARD_REBUILD || "";
+if (rebuild) {
+  const html2 = readFileSync(rebuild, "utf8");
+  dataNode.textContent = html2
+    .split('<script id="bearings-data" type="application/json">')[1]
+    .split("</script>")[0];
+  new Function(html2.slice(html2.indexOf("<script>") + "<script>".length, html2.lastIndexOf("</script>")))();
 }
 
 /* Then, optionally, the language switch - a control the captain keeps, and a

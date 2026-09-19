@@ -78,6 +78,26 @@ render() {  # <home> <charted-json> [charted_more] [charted_warning_more]
   render_board "$1" '[]' "$2" "${3:-0}" "${4:-0}"
 }
 
+# Two builds of the SAME board (same `home`, different `generated`), so a
+# rebuild can be replayed into one page. Neither carries an ack: the point is
+# that the pill comes from what the page remembered, not from the payload.
+rebuild_payload() {  # <generated>
+  jq -n --arg gen "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:$gen,
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true}]}'
+}
+
+build_board_to() {  # <home> <destination> <payload-json>
+  local home=$1 dest=$2 data="$1/payload.json"
+  printf '%s\n' "$3" > "$data"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+  cp "$home/.lavish/bearings-board.html" "$dest"
+}
+
 charted_next_count() {  # <render-json>
   printf '%s' "$1" | jq -r '.stats[] | select(.label == "charted next") | .n'
 }
@@ -1124,6 +1144,26 @@ test_a_dispatch_acknowledgement_survives_the_language_switch() {
   pass "a dispatch acknowledgement survives the language switch, in the new language"
 }
 
+# The window the whole behaviour turns on: a click is not captured when it is
+# made - it reaches firstmate only when the captain presses Lavish's send - so
+# between the two the pill exists ONLY in this page's memory. If anything
+# rebuilds the board in that window, the republication carries no
+# acknowledgement for that key, and the row must still say the click was
+# heard. Every other survival test re-renders through the language switch,
+# which keeps the same build; this one replaces the build.
+test_a_queued_click_survives_a_rebuild_of_the_board() {
+  local home out
+  home=$(make_home ack-rebuild)
+  build_board_to "$home" "$home/a.html" "$(rebuild_payload "2026-09-19T00:00Z")"
+  build_board_to "$home" "$home/b.html" "$(rebuild_payload "2026-09-19T00:05Z")"
+  out=$(BOARD_REBUILD="$home/b.html" node "$HARNESS" "$home/a.html" dispatch) \
+    || fail "the rebuilt board could not be rendered"
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "acting")
+  ' >/dev/null || fail "a rebuild between the click and the send took the pill away: $out"
+  pass "a queued-but-unsent acknowledgement survives a rebuild of the board"
+}
+
 test_a_card_acknowledgement_survives_the_language_switch() {
   local home out
   home=$(make_home ack-answer-lang)
@@ -1258,3 +1298,4 @@ test_a_fresher_click_outranks_a_stale_published_acknowledgement
 test_the_deck_does_not_deal_over_a_card_the_captain_paged_to
 test_the_acknowledgement_speaks_the_captains_language
 test_repainting_the_board_never_accumulates_tickers
+test_a_queued_click_survives_a_rebuild_of_the_board

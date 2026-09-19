@@ -787,15 +787,22 @@ __FM_BEARINGS_BOARD_DATA__
   var CHECK_SVG = '<svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var CHECK_ROW_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
-  /* Answered state survives a language switch and a reload: keyed by whatever
-     the captain clicked - a decision key, or a Charted Next row id he picked
-     for dispatch - and scoped to this build's `generated` stamp, so a rebuilt
-     board (which drops acted-on cards and carries its own acknowledgements)
-     starts clean while a plain reload of the same board still shows what was
-     already queued. The stored value is the second the click happened, which
-     is what lets a remembered acknowledgement age exactly like a published
-     one. */
-  var answeredStore = "fm-bearings-answered:" + String(data.generated || "");
+  /* Answered state survives a language switch, a reload, AND a rebuild of the
+     board, because the store is keyed on the board's own stable identity
+     rather than on this build's `generated` stamp. That distinction is the
+     whole point: a click is not captured when it is made - it reaches
+     firstmate only when the captain presses Lavish's send, which may be
+     several cards later - so between the click and the send the pill exists
+     only here. A store scoped to the stamp would be emptied by any rebuild in
+     that window, and every queued-but-unsent row would silently lose its
+     pill at once: the board telling the captain his click did not happen,
+     which is the one thing this behaviour exists to stop.
+     Nothing is hard-coded to win as a result. A published acknowledgement
+     still outranks a remembered click whenever it is the later of the two -
+     see `ackFor`, which is the only precedence rule on this page.
+     The stored value is the second the click happened, which is what lets a
+     remembered acknowledgement age exactly like a published one. */
+  var answeredStore = "fm-bearings-answered:" + String(data.home || "");
   /* A card key and a Charted Next row id are drawn from the same namespace,
      so they are stored under the surface the captain clicked rather than bare:
      a picked row whose id equalled a card's key would otherwise mark that card
