@@ -541,8 +541,10 @@ The report is the only thing that survives, so anything worth keeping must be in
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
-   Installing a system package (Homebrew, apt, a global npm or pip install, and the like)
-   changes the machine outside your worktree: do not, even to unblock yourself.
+   Installing this project's own dependencies is part of investigating it, and a shared
+   package cache or store outside the worktree is expected: do that freely.
+   What is out is changing the MACHINE - a system package (Homebrew, apt, a global
+   npm or pip install, and the like): do not, even to unblock yourself.
    If the task genuinely needs one, report it and stop.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
    Name the repository explicitly on every PR or issue lookup (\`--repo <owner>/<name>\`):
@@ -634,8 +636,10 @@ If the top-level path is the primary checkout or not the worktree you were launc
 # Rules
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
-   Installing a system package (Homebrew, apt, a global npm or pip install, and the like)
-   changes the machine outside your worktree: do not, even to unblock yourself.
+   Installing this project's own dependencies is part of building and testing it,
+   and a shared package cache or store outside the worktree is expected: do that freely.
+   What is out is changing the MACHINE - a system package (Homebrew, apt, a global
+   npm or pip install, and the like): do not, even to unblock yourself.
    If the task genuinely needs one, report it and stop.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
    Name the repository explicitly on every PR or issue lookup (\`--repo <owner>/<name>\`):

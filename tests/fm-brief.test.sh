@@ -1268,8 +1268,12 @@ test_ship_and_scout_carry_the_machine_boundary_rules() {
     fi
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "brief was not scaffolded for $kind"
-    assert_grep "Installing a system package" "$brief" "$kind brief does not forbid installing a system package"
+    assert_grep "a system package" "$brief" "$kind brief does not name a system package as the thing that is out"
+    assert_grep "do not, even to unblock yourself" "$brief" "$kind brief does not forbid installing one"
     assert_grep "report it and stop" "$brief" "$kind brief does not say what to do when a system package is needed"
+    # The prohibition must not read as covering ordinary project dependencies,
+    # or a worker stops to ask on a routine install instead of validating.
+    assert_grep "this project's own dependencies" "$brief" "$kind brief does not carve out project dependencies"
     assert_grep "--repo <owner>/<name>" "$brief" "$kind brief does not require an explicit repository on a PR lookup"
     assert_grep "collide between a fork and its upstream" "$brief" "$kind brief does not say why an unqualified lookup is unsafe"
   done
