@@ -333,12 +333,32 @@ clicked_at() {  # <seconds-ago>
   printf '%s\n' "$(( $(date -u +%s) - $1 ))"
 }
 
-ack_payload() {  # <underway-ack-json>
-  jq -n --argjson ack "$1" '{
+# The acknowledgement rides the two surfaces the captain clicks. This fixture
+# is a Charted Next row - one of them - and beside it an Underway row that
+# carries an acknowledgement of its own, so the renderer can be seen to ignore
+# a surface with no control on it rather than merely never being handed one.
+ack_payload() {  # <charted-ack-json>
+  jq -n --argjson ack "$1" --argjson uwack "$(acting_ack 2)" '{
     schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
-    prs_live:false, captains_call:[], landed:[], charted:[],
-    underway:[{id:"acked", repo:"sample", name:"Acknowledged work", state:"working",
-               kind:"ship", doing:"under way"} + (if $ack == null then {} else {ack:$ack} end)]}'
+    prs_live:false, captains_call:[], landed:[],
+    underway:[{id:"running", repo:"sample", name:"Work already under way",
+               state:"working", kind:"ship", doing:"under way", ack:$uwack}],
+    charted:[{id:"acked", repo:"sample", title:"Acknowledged work", reason:"",
+              dispatchable:true} + (if $ack == null then {} else {ack:$ack} end)]}'
+}
+
+# The same acknowledgement on the other surface he clicks: a decision card.
+card_ack_payload() {  # <card-ack-json>
+  five_question_payload en | jq -c --argjson ack "$1" '.captains_call[0].ack = $ack'
+}
+
+# A deck deep enough that the card the captain pages to and the card the deal
+# would have shown him are different cards.
+four_card_payload() {
+  five_question_payload en | jq -c '
+    .captains_call[0] as $c
+    | .captains_call = (["card-one", "card-two", "card-three", "card-four"]
+        | map($c + {key: .}))'
 }
 
 acting_ack() {  # <seconds-ago>
@@ -350,7 +370,7 @@ test_an_acknowledged_row_says_it_is_being_acted_on() {
   home=$(make_home ack-acting)
   out=$(render_click "$home" "$(ack_payload "$(acting_ack 2)")")
   printf '%s' "$out" | jq -e '
-    .error == "" and (.underway[0].ack | .kind == "acting" and .label == "acting on it" and .why == null)
+    .error == "" and (.charted[0].ack | .kind == "acting" and .label == "acting on it" and .why == null)
   ' >/dev/null || fail "an acting acknowledgement did not reach the row: $out"
   pass "an acknowledged row says the answer is being acted on"
 }
@@ -358,15 +378,15 @@ test_an_acknowledged_row_says_it_is_being_acted_on() {
 test_a_refused_acknowledgement_says_so_with_its_reason() {
   local home out
   home=$(make_home ack-refused)
-  out=$(render_click "$home" "$(ack_payload "$(jq -nc --argjson at "$(clicked_at 5)" \
+  out=$(render_click "$home" "$(card_ack_payload "$(jq -nc --argjson at "$(clicked_at 5)" \
     '{kind:"refused", at:$at, why:"it is waiting on the board refresh, which is still in review"}')")")
   printf '%s' "$out" | jq -e '
     .error == ""
-      and (.underway[0].ack
+      and (.cards[0].ack
         | .kind == "refused" and .label == "not started"
           and .why == "it is waiting on the board refresh, which is still in review")
-  ' >/dev/null || fail "the refusal did not reach the row with its reason: $out"
-  pass "a refused acknowledgement says so on the row, with the reason"
+  ' >/dev/null || fail "the refusal did not reach the card with its reason: $out"
+  pass "a refused acknowledgement says so where he clicked, with the reason"
 }
 
 # The page ages the pill itself, from the stamp the click left on the record.
@@ -379,7 +399,7 @@ test_a_late_acknowledgement_says_how_long_it_has_waited() {
   home=$(make_home ack-late)
   out=$(render_click "$home" "$(ack_payload "$(acting_ack 185)")")
   printf '%s' "$out" | jq -e '
-    .error == "" and (.underway[0].ack | .kind == "late" and .label == "still waiting · 3m")
+    .error == "" and (.charted[0].ack | .kind == "late" and .label == "still waiting · 3m")
   ' >/dev/null || fail "an unanswered acknowledgement did not age into a waiting time: $out"
   pass "a late acknowledgement says it is still waiting and for how long"
 }
@@ -391,7 +411,7 @@ test_a_fresh_acknowledgement_has_not_aged_into_waiting() {
   home=$(make_home ack-fresh)
   out=$(render_click "$home" "$(ack_payload "$(acting_ack 45)")")
   printf '%s' "$out" | jq -e '
-    .error == "" and (.underway[0].ack | .kind == "acting" and .label == "acting on it")
+    .error == "" and (.charted[0].ack | .kind == "acting" and .label == "acting on it")
   ' >/dev/null || fail "an acknowledgement inside the minute already reported itself late: $out"
   pass "an acknowledgement inside the captain's minute still reads as being acted on"
 }
@@ -400,13 +420,13 @@ test_a_row_with_no_acknowledgement_is_unchanged() {
   local home with without
   home=$(make_home ack-absent)
   without=$(render_click "$home" "$(ack_payload null)")
-  printf '%s' "$without" | jq -e '.error == "" and .underway[0].ack == null' >/dev/null \
+  printf '%s' "$without" | jq -e '.error == "" and .charted[0].ack == null' >/dev/null \
     || fail "a row with no acknowledgement grew one: $without"
   # Everything else about that row reads exactly as it does with the field
   # absent, so the feature costs an unacknowledged board nothing.
   with=$(render_click "$home" "$(ack_payload "$(acting_ack 2)")")
-  printf '%s' "$with" | jq --argjson bare "$(printf '%s' "$without" | jq -c '.underway[0]')" -e '
-    (.underway[0] | del(.ack)) == ($bare | del(.ack))
+  printf '%s' "$with" | jq --argjson bare "$(printf '%s' "$without" | jq -c '.charted[0]')" -e '
+    (.charted[0] | del(.ack)) == ($bare | del(.ack))
   ' >/dev/null || fail "an acknowledgement changed the rest of the row: $with"
   pass "a row with no acknowledgement renders exactly as it does today"
 }
@@ -420,10 +440,10 @@ test_an_unknown_acknowledgement_kind_renders_nothing() {
   # renderer with one is to rewrite what was already published. The renderer's
   # own guard is the second, independent detection of the same class, and this
   # is what proves it is not decoration.
-  perl -pi -e 's/"kind":"acting"/"kind":"sudo-merge"/' "$board" \
+  perl -pi -e 's/"kind":"acting"/"kind":"sudo-merge"/g' "$board" \
     || fail "could not rewrite the published payload"
   out=$(node "$HARNESS" "$board") || fail "the rewritten board could not be rendered"
-  printf '%s' "$out" | jq -e '.error == "" and .underway[0].ack == null' >/dev/null \
+  printf '%s' "$out" | jq -e '.error == "" and .charted[0].ack == null' >/dev/null \
     || fail "an unknown acknowledgement kind rendered a pill: $out"
   pass "an unknown acknowledgement kind renders nothing at all"
 }
@@ -485,12 +505,59 @@ test_a_card_acknowledgement_survives_the_language_switch() {
   pass "an answered card keeps its acknowledgement across the language switch"
 }
 
+# The captain named three controls, and all three sit on a Captain's Call card
+# or a Charted Next row. An Underway row has nothing on it he clicks, so it
+# shows no pill even when the published payload puts one there.
+test_an_underway_row_never_carries_an_acknowledgement() {
+  local home out
+  home=$(make_home ack-underway)
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 2)")")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack.kind == "acting") and (.underway[0].ack == null)
+  ' >/dev/null || fail "an acknowledgement reached a row the captain cannot click: $out"
+  pass "an underway row shows no acknowledgement, even when the payload carries one"
+}
+
+# A publication can still be carrying an unsettled record when the captain
+# answers that row again. The board may tell him anything except that the
+# click he just made did not happen, so the newer of the two wins - here a
+# click made now against a published record ten minutes old, read back after
+# the language switch that re-renders every row from the payload.
+test_a_fresher_click_outranks_a_stale_published_acknowledgement() {
+  local home out
+  home=$(make_home ack-newer-click)
+  out=$(render_click "$home" "$(jq -n --argjson ack "$(acting_ack 600)" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"",
+              dispatchable:true, ack:$ack}]}')" dispatch hant)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "acting" and .label == "處理中")
+  ' >/dev/null || fail "a stale published acknowledgement buried a fresher click: $out"
+  pass "a click newer than the publication is what the row keeps showing"
+}
+
+# The answered card holds long enough to read its acknowledgement, and the
+# deck deals the next one after it. If the captain paged the deck himself
+# while that hold ran, the card he chose outranks the one the deal was going
+# to show him and nothing is dealt at all.
+test_the_deck_does_not_deal_over_a_card_the_captain_paged_to() {
+  local home out
+  home=$(make_home ack-deck-paging)
+  out=$(render_click "$home" "$(four_card_payload)" answer-then-paging)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.cards | length) == 4
+      and ([.cards[] | .hidden] == [true, true, false, true])
+  ' >/dev/null || fail "the deal moved the captain off the card he paged to: $out"
+  pass "the deal never moves the deck off a card the captain paged to himself"
+}
+
 test_the_acknowledgement_speaks_the_captains_language() {
   local home out
   home=$(make_home ack-lang)
   out=$(render_click "$home" "$(ack_payload "$(acting_ack 185)" | jq -c '.lang = "hant"')")
   printf '%s' "$out" | jq -e '
-    .error == "" and (.underway[0].ack.label == "還在等處理 · 3m")
+    .error == "" and (.charted[0].ack.label == "還在等處理 · 3m")
   ' >/dev/null || fail "the acknowledgement did not follow the board language: $out"
   pass "an acknowledgement is worded in the language the board is showing"
 }
@@ -516,4 +583,7 @@ test_the_dispatch_send_acknowledges_every_row_it_picked
 test_answering_a_decision_card_acknowledges_it_on_the_card
 test_a_dispatch_acknowledgement_survives_the_language_switch
 test_a_card_acknowledgement_survives_the_language_switch
+test_an_underway_row_never_carries_an_acknowledgement
+test_a_fresher_click_outranks_a_stale_published_acknowledgement
+test_the_deck_does_not_deal_over_a_card_the_captain_paged_to
 test_the_acknowledgement_speaks_the_captains_language

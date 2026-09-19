@@ -131,8 +131,8 @@
 #            placeholder as `<path>: <value>` and exits 1 while any remain.
 # ack        Write the acknowledgement the board shows on the row the captain
 #            clicked. <key> is the board's own routing key - a Captain's Call
-#            card key, or a Charted Next or Underway row id - because that is
-#            what the captain clicked and what the payload keys the row by.
+#            card key, or a Charted Next row id - because that is what the
+#            captain clicked and what the payload keys the row by.
 #            Exactly one mode is required. --acting records that the answer
 #            was received and is being acted on. --refused records that the
 #            picked item was verified and NOT set in motion, with the
@@ -220,14 +220,25 @@
 # itself. This script owns the durable half, so the acknowledgement survives
 # the next publication and can resolve into something other than success.
 #
-# Any Captain's Call item and any Underway or Charted Next row MAY therefore
-# carry `ack`: {kind, at, why?}. `kind` is `acting` (received, being acted on)
-# or `refused` (verified and not set in motion); the template renders each
-# one's words in the captain's language, because a deterministic publication
-# has no translator in the loop. `at` is the epoch second of the click, so the
-# page can say how long an answer has been waiting. `why` is the refusal's
-# reason and is the one ack field that is captain-facing copy, because the
-# first mate writes it.
+# ONLY the two surfaces the captain clicks carry it: a Captain's Call item and
+# a Charted Next row. Every control he named lives on one of those, and an
+# Underway row has nothing on it he clicks - a dispatched row is settled the
+# moment the work starts, so a pill could only reach Underway when a record
+# was left unsettled, and a surface whose only job is to display that bug is
+# not a surface.
+#
+# Either of those MAY therefore carry `ack`: {kind, at, why?}. `kind` is
+# `acting` (received, being acted on) or `refused` (verified and not set in
+# motion); the template renders each one's words in the captain's language,
+# because a deterministic publication has no translator in the loop. `at` is
+# the epoch second of the click, so the page can say how long an answer has
+# been waiting, and so it can tell this acknowledgement apart in time from one
+# the page itself remembers: where a published record and a remembered click
+# both exist for a key, the NEWER wins. A publication still carrying a
+# ten-minute-old unsettled record must not bury a click made three seconds
+# ago - telling the captain his click did not happen is the one thing this
+# whole behaviour exists to stop. `why` is the refusal's reason and is the one
+# ack field that is captain-facing copy, because the first mate writes it.
 #
 # THE CARRIER IS state/board-acks/<key>.json, and `ack` above is its ONLY
 # writer. Two callers write it: the captain's own answer, captured from the
@@ -498,8 +509,7 @@ validate_payload() {  # <data.json>
       and optional_ack;
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
-      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string)
-      and optional_ack;
+      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string);
     def landed_item:
       type == "object" and repo_marker and (.id | nonempty_string)
       and (.what | copy) and (.owner | nonempty_string)
@@ -956,7 +966,7 @@ EOF
           | merge_card ]
         | first_per_key | map(with_ack(.key))),
       underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
-        doing: t(.doing; .state)} | with_ack(.id) ],
+        doing: t(.doing; .state)} ],
       landed: [ .landed[]?
         | {id: (if owned then .id else (.owner + "/" + .id) end),
            repo: (if owned then repo_of(.id) else null end),
