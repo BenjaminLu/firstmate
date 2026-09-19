@@ -171,7 +171,7 @@ These hold for every surface the captain reads or acts on - the board, a card, a
   Revisit this exception once the redesigned board can host that iteration itself, which is already in flight.
 - Every captain-facing string carries 繁體 beside its English; 简体 is optional, and where it is absent the board shows the 繁體 text in its place rather than an empty cell.
   That is what the tooling requires and what the composing instruction above says, so the rule is stated at what is actually guaranteed rather than at a stricter promise nothing keeps.
-  Only packet figures are actually checked: `bin/fm-packet.sh verify` requires `data-en`, `data-hant` and `data-hans` on every `<text>` in a drawing.
+  The only place a check enforces it is a packet figure, and only where a brief asked for a packet at all: `bin/fm-packet.sh verify` then requires `data-en`, `data-hant` and `data-hans` on every `<text>` in a drawing.
   The board is not: its `{TRANSLATE: ...}` slots carry the `hant` translation, `hans` is added beside them by hand, and `bin/fm-bearings-board.sh`'s payload validator requires only `en` and `hant` - it accepts a copy object with no `hans`, and a plain English string with no translation at all.
   So on every captain-facing surface except a packet figure this rule rests on the composer following it, and saying that is the point: a check that cannot verify something reports that rather than passing by silence.
   `bin/fm-packet.sh`'s header owns the one decided exception: packet prose and a figure's heading and caption stay in the single language the worker wrote, because the packet renders inside its card.
