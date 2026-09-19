@@ -380,14 +380,21 @@ test_a_whitespace_only_refusal_reason_is_refused() {
   pass "a reason file that is only whitespace is refused and records nothing"
 }
 
+assert_flag_with_no_value_explains_itself() {
+  local home=$1; shift
+  local out rc
+  set +e; out=$(run_board "$home" "$@" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "'$*' with no value was accepted: $out"
+  [ -n "$out" ] || fail "'$*' with no value failed without saying anything"
+}
+
 test_a_flag_with_no_value_explains_itself() {
-  local home out rc
+  local home
   home=$(make_home ack-flag-no-value)
-  for args in "ack somekey --refused --why-file" "compose --lang" "compose --out" "compose --snapshot"; do
-    set +e; out=$(run_board "$home" $args 2>&1); rc=$?; set -e
-    [ "$rc" -ne 0 ] || fail "'$args' with no value was accepted: $out"
-    [ -n "$out" ] || fail "'$args' with no value failed without saying anything"
-  done
+  assert_flag_with_no_value_explains_itself "$home" ack somekey --refused --why-file
+  assert_flag_with_no_value_explains_itself "$home" compose --lang
+  assert_flag_with_no_value_explains_itself "$home" compose --out
+  assert_flag_with_no_value_explains_itself "$home" compose --snapshot
   [ ! -e "$home/state/board-acks/somekey.json" ] \
     || fail "a refusal with no reason file still wrote a record"
   pass "a flag whose value is missing says so instead of exiting silently"
