@@ -237,7 +237,17 @@
 #   created or updated that ref and the spawn launched, so this is a behavior
 #   change for such checkouts. Restoring that fetch would re-add a round trip
 #   the intent cut, so it is left to the captain; bin/fm-review-diff.sh keeps
-#   its own narrowed fetch for the same reason. When no origin
+#   its own narrowed fetch for the same reason. The refspec refusal therefore
+#   names that cause apart from an unreachable origin or an unresolvable
+#   default branch, names the clone, quotes that clone's own remote.origin.fetch
+#   beside the branch it does not cover, and prints one additive `remote
+#   set-branches --add` so the operator fixes the clone once instead of per
+#   spawn, without losing a narrowing they chose. That command only ever adds,
+#   so the message itself says it reaches only a refspec that omits the branch,
+#   not one whose `^` entry excludes it - the quoted refspec is what shows an
+#   operator which of the two they have. It still refuses rather than
+#   fetching. The branch it names is the default branch this clone records; the
+#   rename caveat above is why it does not claim to be origin's. When no origin
 #   configuration is detected, spawn skips that remote freshness check and
 #   launches from the clean worktree's current HEAD. Relaunch reuses the
 #   recorded worktree without fetching or resetting its base. An unreachable
@@ -2893,6 +2903,26 @@ spawn_worktree_fetch_covers_branch() { # <worktree> <branch>
   [ -n "$covered" ]
 }
 
+# The refusal for the one cause an operator can fix once and for all: this
+# clone's fetch refspec never maps the default branch this clone records onto
+# the ref spawn resets from, so the single fetch spawn makes cannot refresh it.
+# Say that in those words - not as an origin, network, or
+# default-branch-resolution failure - and quote the clone's own refspec beside
+# the branch, so an operator whose entries exclude it some other way than by
+# omission reads that off the message instead of off a command that would not
+# help. The remedy only ever adds an entry, and says so in those terms: a clone
+# narrowed on purpose keeps its narrowing, and an operator whose refspec
+# excludes the branch outright is told that adding will not reach them.
+spawn_report_refspec_cannot_refresh() { # <worktree> <branch> <target>
+  local worktree=$1 branch=$2 target=$3 spec specs=
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    specs="${specs:+$specs, }'$spec'"
+  done < <(git -C "$worktree" config --get-all remote.origin.fetch 2>/dev/null)
+  echo "error: the clone behind pooled worktree '$worktree' does not fetch '$branch', the default branch this clone records: its remote.origin.fetch is ${specs:-unset}, which never maps 'refs/heads/$branch' onto '$target' - the shape of a single-branch clone, or of a refspec narrowed by hand - so spawn's one fetch of origin left that ref exactly as this slot last saw it. Origin is reachable and that fetch succeeded; only the refspec is the problem; refusing to launch from a potentially stale base" >&2
+  echo "fix the clone once by widening the refspec - this adds '$branch' back only if nothing above excludes it, and an entry starting with '^' that matches it is itself the cause, which no added entry can undo: git -C '$worktree' remote set-branches --add origin '$branch'" >&2
+}
+
 freshen_spawn_worktree_base() { # <worktree>
   local worktree=$1 default target expected actual status
   status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
@@ -2934,7 +2964,7 @@ freshen_spawn_worktree_base() { # <worktree>
   # ref exactly as the slot last saw it, and resetting onto it would launch
   # from a stale base without a word; refuse instead.
   if ! spawn_worktree_fetch_covers_branch "$worktree" "$default"; then
-    echo "error: remote.origin.fetch for pooled worktree '$worktree' does not map 'refs/heads/$default' onto '$target', so the fetch of origin could not refresh it; refusing to launch from a potentially stale base" >&2
+    spawn_report_refspec_cannot_refresh "$worktree" "$default" "$target"
     return 1
   fi
   expected=$(git -C "$worktree" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
