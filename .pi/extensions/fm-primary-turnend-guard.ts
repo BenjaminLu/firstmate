@@ -470,7 +470,8 @@ function runGuard(): Promise<{ code: number; stderr: string }> {
 }
 
 // PreToolUse seatbelts (bin/fm-arm-pretool-check.sh, docs/arm-pretool-check.md;
-// bin/fm-cd-pretool-check.sh, docs/cd-guard.md). Both piggyback on this same
+// bin/fm-cd-pretool-check.sh, docs/cd-guard.md;
+// bin/fm-upstream-pretool-check.sh, docs/upstream-guard.md). All three piggyback on this same
 // extension file rather than separate ones so no extra Pi -e flag is needed at
 // launch - the primary already loads this file for the turn-end guard, and
 // pi.on("tool_call", ...) can block (verified 2026-07-09 against pi 0.80.5:
@@ -506,6 +507,15 @@ function runPretoolCheck(command: string): Promise<{ code: number; stderr: strin
 
 function runCdCheck(command: string): Promise<{ code: number; stderr: string }> {
   return runChecker("fm-cd-pretool-check.sh", command);
+}
+
+// The upstream-write seatbelt (bin/fm-upstream-pretool-check.sh,
+// docs/upstream-guard.md). Unlike the two above it is NOT scoped to the primary
+// checkout, because a worker in a task worktree is exactly who opened the pull
+// request it exists to refuse; the owner script is inert in any clone with no
+// upstream remote.
+function runUpstreamCheck(command: string): Promise<{ code: number; stderr: string }> {
+  return runChecker("fm-upstream-pretool-check.sh", command);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -591,6 +601,10 @@ export default function (pi: ExtensionAPI) {
     if (event.type !== "tool_call" || event.toolName !== "bash") return {};
     const command = String((event.input as { command?: unknown })?.command ?? "");
     if (!command) return {};
+    const upstreamResult = await runUpstreamCheck(command);
+    if (upstreamResult.code === 2) {
+      return { block: true, reason: upstreamResult.stderr.trim() || "denied by the upstream-guard PreToolUse seatbelt" };
+    }
     const cdResult = await runCdCheck(command);
     if (cdResult.code === 2) {
       return { block: true, reason: cdResult.stderr.trim() || "denied by the cd-guard PreToolUse seatbelt" };
