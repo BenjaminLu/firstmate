@@ -125,6 +125,14 @@ Afterwards, read the published page back and run `bin/fm-remote-board.sh check <
 That is the parity proof: it fails when the published board is not what today's template derives, which is how a feature the shipped board grew reaches the captain's phone instead of going missing unmeasured.
 If a feature genuinely cannot cross to this transport, say so in the change that introduces it rather than dropping it quietly.
 
+### The answer record
+
+The shipped template is the WRITER of a captain's answer, and what it emits is the shape - every reader conforms to it, and no surface invents its own.
+It hands one object to `window.lavish.queuePrompt`: `{schema: "fm-bearings-answer.v1", question, selection, note}` for a Captain's Call answer, carrying `close` as well when the card declares a close mode, and `{question: "dispatch.charted", answer}` for a dispatch order.
+`selection` is an empty string when the captain answered only in writing, and that is a real answer: a written note with no button pressed must never be discarded as blank.
+A surface carrying that answer writes the object as the template emitted it and adds nothing to it; anything it needs for its own addressing or bookkeeping stays outside the record.
+Two sides agreeing by coincidence is what this paragraph exists to prevent, so point at it rather than restating the field list.
+
 One feature does not cross yet, and it is the answer route.
 An answer given on the remote board is written to that board's own store and goes no further: nothing carries it back to firstmate, so a card ticking "queued" there means stored, not delivered.
 The page says that on its own face, and so does this procedure: until the answer wake lands, read remote answers off the board and act on them here.

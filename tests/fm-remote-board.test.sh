@@ -108,6 +108,13 @@ test_the_derived_board_has_one_copy_of_the_board_code() {
 # The derived page carries the same private fleet content as the desk board, and
 # the desk board's own sibling in that directory is deliberately 0600. Asserting
 # the mode rather than the code keeps this true however the file gets written.
+# Octal mode of one path, on both the BSD stat CI runs on macOS and the GNU one
+# it runs on Linux. Asserting the mode rather than an ls listing keeps this true
+# whatever the filename looks like.
+file_mode() {  # <path>
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+}
+
 test_the_derived_page_is_not_world_readable() {
   local home dir page
   home=$TMP_ROOT/perms
@@ -115,10 +122,10 @@ test_the_derived_page_is_not_world_readable() {
   valid_payload "$home/p.json"
   FM_HOME="$home" "$REMOTE" publish "$home/p.json" >/dev/null 2>&1 || true
   assert_present "$home/.lavish/remote-board.html" "publish must leave the derived page"
-  page=$(ls -l "$home/.lavish/remote-board.html" | cut -c1-10)
-  dir=$(ls -ld "$home/.lavish" | cut -c1-10)
-  assert_equals "-rw-------" "$page" "the derived page must not be readable by other accounts"
-  assert_equals "drwx------" "$dir" "the directory holding it must not be readable either"
+  page=$(file_mode "$home/.lavish/remote-board.html")
+  dir=$(file_mode "$home/.lavish")
+  assert_equals "600" "$page" "the derived page must not be readable by other accounts"
+  assert_equals "700" "$dir" "the directory holding it must not be readable either"
   pass "the derived page is not world-readable"
 }
 
@@ -463,6 +470,37 @@ test_the_status_line_does_not_displace_the_language_switch() {
   pass "the status line does not displace the language switch"
 }
 
+# The shipped template is the WRITER of an answer record; this carrier must pass
+# on exactly what it emitted and add nothing. All three shapes are driven here
+# together, because a test that exercises only the button case is what let a
+# reader and a writer disagree about an empty selection.
+test_an_answer_is_carried_exactly_as_the_board_wrote_it() {
+  local d=$TMP_ROOT/answer-shape out rec
+  transport_page "$d"
+
+  out=$(drive "$d" answer-button)
+  rec=$(jq -cS '.writes[0].record' <<<"$out")
+  assert_equals '{"note":"","question":"sample-perishable-first-admission-choice","schema":"fm-bearings-answer.v1","selection":"yes"}' \
+    "$rec" "a pressed option must be carried as the board wrote it, with no field added"
+
+  # A written answer with no button pressed is a real answer: empty selection,
+  # and it must reach the store rather than being discarded as blank.
+  out=$(drive "$d" answer-written)
+  rec=$(jq -cS '.writes[0].record' <<<"$out")
+  assert_equals '{"note":"do it the slow way","question":"sample-perishable-first-admission-choice","schema":"fm-bearings-answer.v1","selection":""}' \
+    "$rec" "a written-only answer must be carried with an empty selection, not dropped"
+
+  out=$(drive "$d" answer-both)
+  rec=$(jq -cS '.writes[0].record' <<<"$out")
+  assert_equals '{"note":"do it the slow way","question":"sample-perishable-first-admission-choice","schema":"fm-bearings-answer.v1","selection":"yes"}' \
+    "$rec" "an option and a note together must be carried as one record"
+
+  assert_equals "answers/sample-perishable-first-admission-choice" \
+    "$(jq -r '.writes[0].path' <<<"$out")" \
+    "the key addresses the document and is not part of the answer"
+  pass "an answer is carried exactly as the board wrote it"
+}
+
 test_a_live_payload_repaints_through_the_shipped_board() {
   local d=$TMP_ROOT/drive-live out
   transport_page "$d"
@@ -738,3 +776,4 @@ else
 fi
 test_the_status_line_does_not_displace_the_language_switch
 test_the_derived_page_is_not_world_readable
+test_an_answer_is_carried_exactly_as_the_board_wrote_it

@@ -23,6 +23,9 @@
 //   picks-sent  the same, and then the dispatch order is queued
 //   write-fails an answer is written, the write is refused, a payload follows
 //   stopped     the same, and then the page stops receiving readable payloads
+//   answer-button   a Captain's Call answer given by pressing an option
+//   answer-written  an answer given only in writing, no option pressed
+//   answer-both     an option pressed and a note written together
 //   lang        the board's own language switch is used
 //   no-db       the artifact store never hands over a db capability
 //
@@ -293,7 +296,36 @@ function push(payload) {
 
 await tick();
 
-if (scenario === "live") {
+// The three shapes a Captain's Call answer can take. The template is the writer
+// of an answer record, so these exist to pin what it actually emits and what a
+// carrier must pass on unchanged - a written-only answer included, which has an
+// empty selection and is still a real answer.
+// The card the deck opens on is the one that takes a written answer, so these
+// three drive it rather than whichever form happens to be last.
+const openCard = () => document.querySelectorAll("form[data-lavish-question]")[0];
+function answerOn(card, { press, write }) {
+  if (press) {
+    const radio = card.querySelector("input[type=radio]");
+    radio.checked = true;
+    fire(radio, "change", {});
+  }
+  if (write) {
+    const note = card.querySelector(".bb-freeform");
+    note.value = write;
+    document.activeElement = note;
+    fire(note, "input", {});
+  }
+  document.activeElement = null;
+  fire(card, "submit", { preventDefault() {} });
+}
+
+if (scenario === "answer-button") {
+  answerOn(openCard(), { press: true });
+} else if (scenario === "answer-written") {
+  answerOn(openCard(), { write: "do it the slow way" });
+} else if (scenario === "answer-both") {
+  answerOn(openCard(), { press: true, write: "do it the slow way" });
+} else if (scenario === "live") {
   push(LIVE);
 } else if (scenario === "unreadable") {
   push(null);

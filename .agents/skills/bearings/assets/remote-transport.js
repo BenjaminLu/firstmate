@@ -331,13 +331,12 @@
     var body = o.data || {};
     var key = o.queueKey || body.question;
     if (!key) return;
-    var record = {};
-    for (var k in body) { if (Object.prototype.hasOwnProperty.call(body, k)) record[k] = body[k]; }
-    record.key = key;
-    record.prompt = String(text || "");
-    record.at = new Date().toISOString();
-    record.lang = lang();
-    send(key, record);
+    /* The record is what the shipped board emitted, unchanged. This transport
+       is a carrier, not an author: the template is the writer of an answer and
+       the bearings skill's "The answer record" states that shape once. The key
+       addresses the document; it is not added to the answer. An empty
+       selection is a written-only answer and is carried, not dropped. */
+    send(key, body);
   };
 
   /* ---- data in ----------------------------------------------------------
