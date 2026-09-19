@@ -55,8 +55,19 @@ make_lavish_stub() {  # <home> <names|nonames>: a lavish-axi that records its ar
 #!/usr/bin/env bash
 set -u
 state=${LAVISH_FAKE_STATE:?}
+# Every invocation in order, so a test can assert what serve asked the vendor
+# for and when. A bare listing logs as `<list>`.
+printf '%s\n' "${*:-<list>}" >> "$state/calls"
 case "${1-}" in
   --version) printf '0.1.71\n'; exit 0 ;;
+  --help)
+    # Inert: help never opens, lists, or ends a session. A release that names
+    # sessions advertises the flag here; the `names` marker selects it.
+    printf 'help[1]: "Run `lavish-axi <html-file>` to open a session"\n'
+    if [ -e "$state/names" ]; then
+      printf 'help[2]: "Pass `--name <slug>` (lowercase letters, digits, hyphens) to give a session a stable URL"\n'
+    fi
+    exit 0 ;;
   '')
     if [ -e "$state/names" ]; then
       printf 'sessions[1]{file,status,url,name,pending_prompts}:\n'
@@ -82,7 +93,7 @@ printf 'session:\n  file: %s\n  status: opened\n' "$real"
 exit 0
 SH
   chmod +x "$fakebin/lavish-axi"
-  rm -f "$1/lavish-state/names"
+  rm -f "$1/lavish-state/names" "$1/lavish-state/calls"
   [ "$2" = names ] && : > "$1/lavish-state/names"
   return 0
 }
@@ -377,6 +388,25 @@ test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it() {
   pass "serve opens the page under a stable name and the card links the served URL"
 }
 
+test_name_support_probe_never_lists_before_the_session_is_opened() {
+  local home packet first
+  home=$(make_home name-probe-inert)
+  make_lavish_stub "$home" names
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  run_packet_lavish "$home" serve pk-1 >/dev/null || fail "serve failed"
+  # A listing is the read serve's open/reopen decision consumes, so nothing
+  # serve asks before opening the session may be one. Pinning the FIRST call
+  # keeps a future probe from answering a question serve has not asked yet.
+  first=$(sed -n '1p' "$home/lavish-state/calls")
+  case "$first" in
+    '<list>') fail "serve listed sessions before opening one" ;;
+  esac
+  pass "the session-name probe never lists sessions before the page session is opened"
+}
+
 test_scaffold_is_generated_from_the_worktree_and_refuses_to_overwrite
 test_verify_refuses_a_skeleton_and_accepts_a_filled_packet
 test_verify_checks_the_decision_block_field_by_field
@@ -385,3 +415,4 @@ test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet
 test_render_decision_card_answers_the_five_questions
 test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it
+test_name_support_probe_never_lists_before_the_session_is_opened
