@@ -590,7 +590,10 @@ case "$fault:$*" in
     printf 'HTTP 502\n' >&2; exit 1 ;;
   fail:'api repos/o/r/pulls/8/reviews?'*) printf 'HTTP 502\n' >&2; exit 1 ;;
   down:*) printf 'HTTP 502\n' >&2; exit 1 ;;
-  hang:'api graphql '*'-F n=8') sleep 10 ;;
+  hang:'api graphql '*)
+    for hung in $(cat "$FORGE/hang" 2>/dev/null || printf 8); do
+      case "$*" in *"-F n=$hung") sleep 10 ;; esac
+    done ;;
   head:'api graphql '*)
     # The branch tip moved under the snapshot: its rollup is not this head's.
     "$(dirname "$0")/gh-fixture" "$@" \
@@ -645,15 +648,70 @@ test_one_read_cannot_spend_the_whole_budget() {
   record "$home" second 12 open mergeable
   mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
   mutate_record "$home" second '.records[0].checked_at="2026-09-15T08:00:01Z"'
-  # A real clock: the point is how much of the budget the first read may spend.
+  # A real clock: the point is how much of the budget one hung read may spend.
   printf 'hang\n' > "$home/forge/fault"
-  out=$(with_home "$home" env FM_CONTRIBUTIONS_BUDGET=4 "$ROOT/bin/fm-contributions.sh" poll) \
-    || fail 'poll failed while one read hung'
-  [ -z "$out" ] || fail "a read the budget cut short printed a wake line: $out"
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'poll failed while one read hung'
+  [ "$out" = 'contributions: observation unavailable for https://github.com/o/r/pull/8' ] \
+    || fail "a read killed at its own bound with budget to spare was not a forge failure: $out"
   jq -e --arg now "$NOW" '.records[0] | .checked_at == $now and .error == null
     and .observation.state == "open"' "$home/data/second/contributions.json" >/dev/null \
     || fail "one hanging read spent the whole budget: $(cat "$home/data/second/contributions.json")"
-  pass 'one hanging read cannot spend the budget the rest of the poll needs'
+  pass 'one hanging read costs its own bound, not the budget the rest of the poll needs'
+}
+
+test_cut_short_attempts_are_observed_first_next_poll() {
+  local home out later=2026-09-17T08:00:00Z order task
+  home=$(new_home budget-tail)
+  forge_home "$home"
+  wrap_forge "$home"
+  record "$home" second 12 open mergeable
+  record "$home" third 14 open mergeable
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
+  mutate_record "$home" second '.records[0].checked_at="2026-09-15T08:00:01Z"'
+  mutate_record "$home" third '.records[0].checked_at="2026-09-15T08:00:02Z"'
+  # A fixture clock keeps the poll alive past the two cut-short reads, so all
+  # three rows are stamped with one and the same timestamp.
+  /bin/date +%s > "$home/forge/clock"
+  printf '12 14\n' > "$home/forge/hang"
+  printf 'hang\n' > "$home/forge/fault"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_BUDGET=1 "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'poll failed while its tail was cut short'
+  [ -z "$out" ] || fail "a cut-short attempt printed a wake line: $out"
+  jq -e --arg now "$NOW" '.records[0] | .checked_at == $now and .error == null' \
+    "$home/data/delivery/contributions.json" >/dev/null || fail 'the observed URL was not recorded'
+  for task in second third; do
+    jq -e --arg now "$NOW" '.records[0] | .checked_at == $now
+      and .error == "observation did not fit the poll budget"' \
+      "$home/data/$task/contributions.json" >/dev/null || fail "$task was not stamped as cut short"
+  done
+  : > "$home/forge/calls"
+  : > "$home/forge/fault"
+  with_home "$home" env FM_CONTRIBUTIONS_NOW="$later" FM_CONTRIBUTIONS_BUDGET=1 \
+    "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'the following poll failed'
+  # One GraphQL read per URL, so the numbers are the order the poll read them.
+  order=$(grep -o -- '-F n=[0-9]*' "$home/forge/calls" | sed 's/-F n=//' | tr '\n' ' ')
+  [ "$order" = "12 14 8 " ] \
+    || fail "rows stamped in one poll must not tie: the cut-short ones go first, got: $order"
+  pass 'attempts the budget cut short are observed before the rows that were recorded'
+}
+
+test_budget_stamp_does_not_suppress_the_next_failure() {
+  local home out later=2026-09-17T08:00:00Z
+  home=$(new_home budget-then-failure)
+  forge_home "$home"
+  wrap_forge "$home"
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
+  /bin/date +%s > "$home/forge/clock"
+  printf 'hang\n' > "$home/forge/fault"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_BUDGET=1 "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'the cut-short poll failed'
+  [ -z "$out" ] || fail "a cut-short attempt printed a wake line: $out"
+  printf 'down\n' > "$home/forge/fault"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_NOW="$later" "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'the failing poll failed'
+  [ "$out" = 'contributions: observation unavailable for https://github.com/o/r/pull/8' ] \
+    || fail "a budget stamp suppressed the wake for a genuine forge failure: $out"
+  pass 'an unmeasured read does not stand in for the failure that suppresses the next one'
 }
 
 test_unobservable_url_does_not_starve_the_others() {
@@ -942,6 +1000,7 @@ test_numeric_repository_name_is_observed() {
 
 failures=0
 for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_one_read_cannot_spend_the_whole_budget test_unobservable_url_does_not_starve_the_others \
+  test_cut_short_attempts_are_observed_first_next_poll test_budget_stamp_does_not_suppress_the_next_failure \
   test_observation_call_budget test_paged_check_contexts_keep_every_lane test_expected_context_is_no_lane \
   test_numeric_repository_name_is_observed; do
   ( "$test_name" ) || failures=$((failures + 1))
