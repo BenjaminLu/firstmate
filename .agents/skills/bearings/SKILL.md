@@ -168,7 +168,9 @@ These hold for every surface the captain reads or acts on - the board, a card, a
   That fallback is the one place this rule is not enforceable by the tooling, so say so when it applies rather than letting a losable URL pass as a stable one.
   Never hand the captain a one-shot session URL whose content is lost when the tab closes; reopening the same URL must bring the content back.
 - Every captain-facing visual surface is trilingual EN / 繁體 / 简体, so every string the captain reads on it carries all three.
-  The board's skeleton enforces this through its `{TRANSLATE: ...}` slots above, and `bin/fm-packet.sh verify` enforces it for packet figures; a surface built by hand outside those two - a scout's own Lavish artifact, a one-off review page - carries the same rule with nothing checking it for you.
+  Only packet figures are actually checked: `bin/fm-packet.sh verify` requires `data-en`, `data-hant` and `data-hans` on every `<text>` in a drawing.
+  The board is not: its `{TRANSLATE: ...}` slots carry the `hant` translation, `hans` is added beside them by hand, and `bin/fm-bearings-board.sh`'s payload validator requires only `en` and `hant` - it accepts a copy object with no `hans`, and a plain English string with no translation at all.
+  So on every captain-facing surface except a packet figure this rule rests on the composer following it, and saying that is the point: a check that cannot verify something reports that rather than passing by silence.
   `bin/fm-packet.sh`'s header owns the one decided exception: packet prose and a figure's heading and caption stay in the single language the worker wrote, because the packet renders inside its trilingual card.
 - Build a captain-facing prototype from the shipped surface, never as a fresh mock.
   `AGENTS.md` section 7 owns the gate that holds a task queued until the prototype is approved; what belongs here is how to build one: copy the shipped template and a live payload, apply the proposed change to that copy, and show that.
