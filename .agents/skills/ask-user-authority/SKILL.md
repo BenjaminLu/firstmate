@@ -12,13 +12,15 @@ metadata:
 
 # ask-user-authority
 
-This skill is the single owner of the decision policy for no-mistakes ask-user findings.
-`AGENTS.md` section 7 points here and does not restate this procedure.
+This skill is the single owner of the decision policy for a finding firstmate must rule on: a no-mistakes ask-user finding, and a finding a reviewer posted on a pull request under the `pr-review` path.
+Finding authority does not depend on which of those produced the finding, so both use the criteria below unchanged.
+`AGENTS.md` section 7 and the `pr-review` skill point here and do not restate this procedure.
 Finding authority is determined by the criteria below, not by `yolo`.
 Firstmate always applies this judgment, decides any finding that is unambiguous toward the accepted design, and escalates only genuinely ambiguous, expanding, or destructive findings.
 
-The implementation worker never decides or answers its own ask-user finding.
-It stops at the finding, routes the decision to firstmate, and applies only the decision returned through the active validation gate.
+The implementation worker never decides or answers its own finding.
+It stops at the finding, routes the decision to firstmate, and applies only the decision returned to it - through the active validation gate for a no-mistakes run, and as firstmate's steer naming the finding ids under the `pr-review` path.
+A reviewer likewise never rules on its own finding; `bin/fm-brief.sh`'s reviewer contract owns that boundary on the reviewer's side.
 
 ## Decide
 
@@ -29,9 +31,10 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
    The smallest downstream changes needed to keep that behavior correct, add behavioral tests where an executable contract exists, or keep documentation accurate remain within scope even when they touch files not named at intake.
    Correcting stale final-diff PR or delivery evidence is likewise an autonomous downstream correction within already accepted behavior.
 3. Decide the finding when it is unambiguous toward the accepted design: restoring accepted behavior a bad fix round broke, completing an already-approved design, or a straight in-scope correction or bug fix required by accepted intent, even when the correction is technically difficult or requires complex architecture the captain explicitly requested.
-4. Count the fix rounds already spent on the step this finding came from.
-   From the fourth round on one step, the correction rate is itself the evidence: each narrow remedy is producing the next finding.
-   The instructions firstmate passes with that gate's Fix stop naming a narrow remedy and instead ask for the coherent change - what keeps producing these findings, the single change that would close them together, and whether the honest answer is to revert a chunk of the work or narrow the task.
+4. Count the fix rounds already spent on the step this finding came from, then add one: the instruction you are about to pass opens that next round, and the threshold is on the number it opens, not on the count behind it.
+   From the third round on one step - two already spent, the one you are composing opening the third - the correction rate is itself the evidence: each narrow remedy is producing the next finding.
+   The instructions firstmate passes with that gate's Fix stop naming a narrow remedy and instead ask for the coherent change - what keeps producing these findings, the single change that would close them together, and whether the honest answer is to revert a chunk of the work or narrow the task - and ask the reviewer for the pass conditions: everything still wanted, stated as conditions to satisfy in one pass rather than as one more repair.
+   A worker refuses an instruction that still names a narrow remedy and appends `blocked:` instead, because the no-mistakes Definition of done in `bin/fm-dod-lib.sh` makes the coherent-change instruction the one answer that ends its refusal.
    Nothing carries a question to the reviewer and returns a reply, so never wait for one: `no-mistakes axi respond --action fix --findings --instructions` reaches the next fix round, and the only thing that comes back is the next gate report.
    Read that report as evidence, not authority: firstmate still decides, and escalates under step 5 when the coherent change would revert or narrow what the captain accepted.
    How a worker makes any one round close its finding for good is owned by the no-mistakes Definition of done in `bin/fm-dod-lib.sh`.

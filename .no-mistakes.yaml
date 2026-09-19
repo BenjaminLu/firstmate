@@ -33,8 +33,10 @@ document:
 commands:
   lint: 'bin/fm-lint.sh'
 
-# Publish each run's test evidence to the orphan no-mistakes/evidence branch linked from the PR.
-# The evidence is not committed to the feature or default branch.
+# Evidence is not published to a side branch any more. The captain's call on
+# 2026-09-19: the review itself now happens on the pull request - findings and
+# firstmate's rulings are posted there verbatim - so an evidence branch nobody
+# opens is a second place to look, which is the thing that change removed.
 test:
   evidence:
-    store_in_repo: true
+    store_in_repo: false

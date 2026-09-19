@@ -429,6 +429,72 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   assert_grep "Read the primary source before writing a check" "$brief" \
     "no-mistakes DOD lost the primary-source practice"
 
+  # The firstmate-side rule fires on a party that is not reading at the moment it
+  # matters, so the round threshold has to reach the worker holding the round
+  # number: without these the instruction arrives and nothing in the contract
+  # lets the worker refuse it.
+  assert_grep "From the third fix round on one step, " "$brief" \
+    "no-mistakes DOD lost the round threshold the worker enforces"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`ask-user-authority` requires firstmate to stop naming a narrow remedy' "$brief" \
+    "no-mistakes DOD must cross-reference the owner of the firstmate-side rule, not restate it"
+  assert_grep "Refuse an instruction that still names a narrow remedy: append " "$brief" \
+    "no-mistakes DOD lost the third-round refusal clause"
+  # Firstmate counts the round it is about to open; a worker counting rounds
+  # already spent fires one round later and the two deadlock a round apart.
+  # There is no machine source for the number, so the basis has to be legible
+  # from the brief alone.
+  assert_grep "the round it opens, counted the way step 4 of that skill counts it" "$brief" \
+    "no-mistakes DOD must fix the threshold on the arriving round, as its owner counts it"
+  assert_grep "where {n} is that arriving round number" "$brief" \
+    "no-mistakes DOD must leave the round number in the blocked line unambiguous"
+  # A refusal held quietly is the deadlock the refusal was supposed to prevent:
+  # firstmate reads status events, so the refusal has to surface as one, in the
+  # vocabulary the brief already defines.
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`blocked: fix round {n} on this step, instruction still names a narrow remedy`' "$brief" \
+    "no-mistakes DOD must raise the refusal as a status event firstmate can see"
+  # Without a way out the refusal never terminates, and the coherent change the
+  # refusal itself asked for is that way out.
+  assert_grep "One answer ends that refusal: the coherent-change instruction you asked for" "$brief" \
+    "no-mistakes DOD must leave the coherent-change instruction answerable at the gate"
+  assert_grep "A resend that still names a narrow remedy is not one, and the refusal stands" "$brief" \
+    "no-mistakes DOD must exclude a resent narrow remedy from the termination"
+  # A second exit that a narrow remedy can satisfy by declaring itself
+  # deliberate is a bypass, not a termination: the seventeen-round branch
+  # behaves identically under it.
+  assert_no_grep "states the narrow remedy is deliberate" "$brief" \
+    "no-mistakes DOD must not let an acknowledged narrow remedy end the refusal"
+  # The rule has two halves and the worker needs a lever for both. A declarative
+  # about what the response "carries" gives it nothing to do, so the second half
+  # is an imperative with an explicit permission to append the ask - otherwise a
+  # coherent-change instruction that omits it sails through the refusal test.
+  assert_grep "Ask the reviewer for the pass conditions in the same response you do answer that gate with" "$brief" \
+    "no-mistakes DOD lost the pass-conditions clause"
+  # The worker composes the ask, so it must be able to do that without opening
+  # another file - the same reason the refusal test is stated inline.
+  assert_grep "everything still wanted, stated as conditions to satisfy in one pass rather than as one more repair" "$brief" \
+    "no-mistakes DOD must state what the pass-conditions ask contains, not point at it"
+  # Most gates carry no ask-user finding at all and the worker writes its own
+  # --instructions, so hanging the ask on a firstmate decision arriving misses
+  # the majority path. The round is the trigger, not the finding class.
+  assert_grep "That ask rides with every response you send from this round on, whoever authored the instruction it accompanies" "$brief" \
+    "no-mistakes DOD must fire the pass-conditions ask on the round, not on a firstmate decision"
+  # The ask-user bullet forbids implementing the decision, which reads as
+  # forbidding additions, so the permission has to be squared with it in words.
+  assert_grep "where adding it is the one addition that is not implementing the decision" "$brief" \
+    "no-mistakes DOD must square the append permission with the feed-the-decision bullet"
+  assert_grep "Nothing carries that ask to the reviewer and returns a reply, so never wait for one" "$brief" \
+    "no-mistakes DOD must tell the worker no reviewer reply ever comes back"
+
+  # The ask-user bullet is read from round 1 and the threshold clause sits
+  # paragraphs below it, so the bullet has to carry its own exception or a
+  # worker feeds a round-3 narrow remedy straight to the gate.
+  assert_grep "From the third fix round on one step the round-threshold clause below narrows this" "$brief" \
+    "no-mistakes DOD must narrow the feed-the-decision bullet where the reader meets it"
+  assert_grep "goes back to firstmate instead of to the gate, and that clause is where the one answer you may give the gate instead is stated, along with the one thing you append to the decision you do send" "$brief" \
+    "no-mistakes DOD must not leave the feed-the-decision bullet contradicting the termination clause"
+
   # Every practice a worker could read as a worktree edit has to carry its own
   # mid-run half, because the no-hand-edit rule sits paragraphs away from these
   # bullets and a worker who reads only the bullet must not reach an edit.
@@ -466,6 +532,8 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     assert_present "$other_brief" "$other_mode: brief was not scaffolded"
     assert_no_grep "One site is a class" "$other_brief" \
       "$other_mode brief must not carry the no-mistakes fix-round technique"
+    assert_no_grep "From the third fix round on one step" "$other_brief" \
+      "$other_mode brief must not carry the third-round refusal, which has no rounds to count"
   done
   pass "fm-brief.sh: no-mistakes DOD carries the fix-round technique and the faster paths do not"
 }
@@ -1045,6 +1113,130 @@ test_ship_and_scout_render_the_packet_contract() {
   pass "fm-brief.sh: ship and scout briefs render the packet contract"
 }
 
+# The reviewer contract. Its deliverable is a review POSTED on a pull request,
+# so the brief must name the exact posting command, the read-back, and the four
+# disciplines carried over from the pipeline it replaces. A review whose
+# findings exist only in a session is the failure this whole path exists to
+# prevent, so the brief must say that in words the worker cannot read past.
+test_review_brief_posts_on_the_pull_request() {
+  local home brief
+  home="$TMP_ROOT/review-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-review-r1 alpha \
+    --review https://github.com/acme/widget/pull/77 >/dev/null 2>&1 \
+    || fail "fm-brief.sh review scaffold exited non-zero"
+  brief="$home/data/brief-review-r1/brief.md"
+  assert_present "$brief" "review brief was not scaffolded"
+  assert_grep "REVIEW task" "$brief" "review brief must declare itself a review task"
+  assert_grep "https://github.com/acme/widget/pull/77" "$brief" \
+    "review brief must name the pull request under review"
+  assert_grep "A review that exists only in this session is a failed review." "$brief" \
+    "review brief must rule out a session-only review"
+  assert_grep "gh-axi pr review 77 -R acme/widget --comment --body-file" "$brief" \
+    "review brief must give the exact posting command"
+  assert_grep "gh-axi pr view 77 -R acme/widget --reviews" "$brief" \
+    "review brief must require reading the posted review back"
+  assert_grep "## Captain's intent" "$brief" "review brief missing Captain's intent subsection"
+  assert_grep "{FIRSTMATE_SPEC}" "$brief" "review brief missing the spec placeholder"
+  pass "fm-brief.sh: a review brief delivers a review posted on the pull request"
+}
+
+# Each of the four disciplines was paid for by the pipeline this path replaces,
+# so each is pinned by a phrase that cannot survive being dropped. The scope
+# discipline is the one with a safety consequence: a reviewer that rules on a
+# scope-widening finding has taken a decision that is firstmate's.
+test_review_brief_carries_the_four_disciplines() {
+  local home brief
+  home="$TMP_ROOT/review-disciplines-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-review-r2 alpha \
+    --review https://github.com/acme/widget/pull/5 >/dev/null 2>&1
+  brief="$home/data/brief-review-r2/brief.md"
+  assert_grep "A finding is one instance of a class." "$brief" \
+    "review brief lost the class-not-instance discipline"
+  assert_grep "Read the primary source." "$brief" \
+    "review brief lost the primary-source discipline"
+  assert_grep "Not verified" "$brief" \
+    "review brief lost the requirement to name what could not be verified"
+  assert_grep "separate a defect from a preference" "$brief" \
+    "review brief lost the honest-severity discipline"
+  assert_grep "Scope is not yours." "$brief" \
+    "review brief lost the scope discipline that keeps a widening finding with firstmate"
+  assert_grep "Widens scope" "$brief" \
+    "review brief lost the finding field that marks a scope-widening fix"
+  pass "fm-brief.sh: a review brief carries all four review disciplines"
+}
+
+# Every gh-axi call must name its repository. A project clone can hold an
+# `upstream` fork parent beside `origin`, and gh-axi then resolves a repository
+# that is not the one the pull request lives in (docs/verification/pr-review.md
+# records the real failure). A bare command in the brief is the defect, so this
+# asserts the absence of one directly rather than only the presence of -R.
+test_review_brief_names_the_repository_on_every_gh_axi_call() {
+  local home brief bare
+  home="$TMP_ROOT/review-repo-flag-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-review-r3 alpha \
+    --review https://github.com/acme/widget/pull/12 >/dev/null 2>&1
+  brief="$home/data/brief-review-r3/brief.md"
+  bare=$(grep -o 'gh-axi pr [a-z-]* [0-9][^`]*' "$brief" | grep -v -- '-R acme/widget' || true)
+  [ -z "$bare" ] || fail "review brief has gh-axi commands without -R: $bare"
+  assert_no_grep "git fetch origin refs/pull/" "$brief" \
+    "review brief hand-fetches from a remote that need not host the pull request"
+  assert_grep "gh-axi pr checkout 12 -R acme/widget" "$brief" \
+    "review brief must check the head out through gh-axi with its repository named"
+  pass "fm-brief.sh: every gh-axi command in a review brief names its repository"
+}
+
+# The reviewer never commits, pushes, or opens a PR, and it never rules on a
+# finding. It is also scout-shaped for teardown: bin/fm-teardown.sh's scout gate
+# requires data/<id>/report.md, so the brief must ask for that local pointer.
+test_review_brief_writes_nothing_and_rules_on_nothing() {
+  local home brief
+  home="$TMP_ROOT/review-boundaries-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-review-r4 alpha \
+    --review https://github.com/acme/widget/pull/8 >/dev/null 2>&1
+  brief="$home/data/brief-review-r4/brief.md"
+  assert_grep "never commit, never push, never open a PR, never merge" "$brief" \
+    "review brief must forbid the worker delivering a change of its own"
+  assert_grep "You review; you never rule." "$brief" \
+    "review brief must keep rulings with firstmate"
+  assert_grep "$home/data/brief-review-r4/report.md" "$brief" \
+    "review brief must name the local record the scout teardown gate requires"
+  assert_no_grep "Delivery contract: mode=" "$brief" \
+    "a review brief must not carry a ship delivery contract"
+  pass "fm-brief.sh: a review brief writes no change, rules on nothing, and leaves the scout record"
+}
+
+# The URL is the only authority on which pull request and repository a review
+# targets, so a non-GitHub or malformed one must stop at scaffold time rather
+# than producing a brief whose deliverable gh-axi could not post.
+test_review_refuses_what_it_cannot_post_to() {
+  local home out rc
+  home="$TMP_ROOT/review-refusals-home"
+  mkdir -p "$home/data"
+  while IFS='|' read -r args expected; do
+    [ -n "$args" ] || continue
+    # shellcheck disable=SC2086  # deliberate word splitting of the fixture argument list
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" $args 2>&1); rc=$?
+    expect_code 1 "$rc" "expected refusal for: $args"
+    case "$out" in
+      *"$expected"*) ;;
+      *) fail "refusal for '$args' did not mention '$expected' (got: $out)" ;;
+    esac
+  done <<'CASES'
+brief-review-x1 alpha --review https://gitlab.com/g/p/-/merge_requests/3|requires a GitHub pull request URL
+brief-review-x2 alpha --review https://github.com/acme/widget/pull/0|requires a GitHub pull request URL
+brief-review-x3 alpha --review not-a-url|requires a GitHub pull request URL
+brief-review-x4 alpha --review https://github.com/acme/widget/pull/9 --mode direct-PR|--review and --mode are exclusive
+brief-review-x5 --secondmate --review https://github.com/acme/widget/pull/9|--review applies only to a crewmate review brief
+brief-review-x6 alpha --review|--review requires a value
+CASES
+  [ -e "$home/data/brief-review-x1/brief.md" ] && fail "a refused review call still wrote a brief"
+  pass "fm-brief.sh: a review refuses every URL and flag pairing it could not deliver"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1071,3 +1263,8 @@ test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor
 test_ship_and_scout_render_the_packet_contract
+test_review_brief_posts_on_the_pull_request
+test_review_brief_carries_the_four_disciplines
+test_review_brief_names_the_repository_on_every_gh_axi_call
+test_review_brief_writes_nothing_and_rules_on_nothing
+test_review_refuses_what_it_cannot_post_to

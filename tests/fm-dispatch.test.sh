@@ -331,6 +331,85 @@ test_herdr_lab_reaches_the_scaffold_and_must_match_on_rerun() {
   pass "--herdr-lab reaches the scaffold and a re-run must agree with the existing brief"
 }
 
+# A review dispatch is one call: it briefs with the reviewer contract, files a
+# scout item whose note records the reviewed pull request, and spawns as a
+# scout. The kind stays scout in meta because a review is scout-shaped in every
+# mechanical respect and is supervised and torn down by that path.
+test_review_call_files_a_review_item_and_spawns_a_scout() {
+  local case_dir id out status brief
+  id=dispatch-review-v2
+  case_dir=$(make_case review)
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --review https://github.com/acme/widget/pull/64 \
+    --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" --title "review the toggle PR")
+  status=$?
+  expect_code 0 "$status" "review dispatch should succeed: $out"
+  assert_contains "$out" "backlog: added $id (queued, kind=scout, repo=project)" "review item was not filed as a scout item"
+  assert_contains "$out" "spawned $id harness=claude kind=scout" "review spawn line missing"
+  assert_equals '"kind=review pr=https://github.com/acme/widget/pull/64"' "$(row_field "$case_dir" "$id" body)" "review note must record the reviewed pull request"
+  brief="$case_dir/home/data/$id/brief.md"
+  assert_grep "gh-axi pr review 64 -R acme/widget --comment --body-file" "$brief" "review brief did not reach the worker through the dispatch"
+  assert_no_grep 'Delivery contract:' "$brief" "a review brief must carry no delivery contract"
+  assert_grep "kind=scout" "$case_dir/home/state/$id.meta" "meta missing kind=scout"
+  pass "a review call files a review item and spawns it as a scout"
+}
+
+# --review is exclusive with the ship delivery flags, and an existing brief
+# whose review shape disagrees with the call is refused before anything is
+# filed - the same protection the --mode and --herdr-lab mismatches already get,
+# because filling the wrong contract would hand the worker a job it was not
+# dispatched for.
+test_review_flag_conflicts_and_brief_mismatch_refuse() {
+  local case_dir id out status
+  case_dir=$(make_case review-conflicts)
+  id=dispatch-review-conflict-v2
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --review https://github.com/acme/widget/pull/3 --mode direct-PR --yolo off \
+    --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" 2>&1)
+  status=$?
+  expect_code 1 "$status" "--review with --mode must refuse"
+  assert_contains "$out" "--review cannot be combined with --mode or --yolo" "wrong refusal for --review --mode"
+  [ -e "$case_dir/home/data/$id/brief.md" ] && fail "a refused review dispatch still scaffolded a brief"
+
+  # A scout brief already on disk, dispatched with --review.
+  id=dispatch-review-shape-v2
+  mkdir -p "$case_dir/home/data/$id"
+  FM_HOME="$case_dir/home" "$ROOT/bin/fm-brief.sh" "$id" project --scout >/dev/null 2>&1
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --review https://github.com/acme/widget/pull/3 \
+    --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" 2>&1)
+  status=$?
+  expect_code 1 "$status" "a scout brief dispatched with --review must refuse"
+  assert_contains "$out" "is not a review brief but this dispatch passes --review" "wrong refusal for a scout brief under --review"
+
+  # A review brief already on disk, dispatched as a plain scout.
+  id=dispatch-review-shape-b-v2
+  mkdir -p "$case_dir/home/data/$id"
+  FM_HOME="$case_dir/home" "$ROOT/bin/fm-brief.sh" "$id" project \
+    --review https://github.com/acme/widget/pull/3 >/dev/null 2>&1
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" --scout \
+    --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" 2>&1)
+  status=$?
+  expect_code 1 "$status" "a review brief dispatched with --scout must refuse"
+  assert_contains "$out" "is a review brief but this dispatch omits --review" "wrong refusal for a review brief under --scout"
+
+  # The URL must be validated here too. An already-scaffolded brief is reused
+  # without calling fm-brief.sh, so on that path this is the only check between
+  # a bad URL and the backlog note that records it.
+  id=dispatch-review-badurl-v2
+  mkdir -p "$case_dir/home/data/$id"
+  FM_HOME="$case_dir/home" "$ROOT/bin/fm-brief.sh" "$id" project \
+    --review https://github.com/acme/widget/pull/3 >/dev/null 2>&1
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --review https://gitlab.com/g/p/-/merge_requests/3 \
+    --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" 2>&1)
+  status=$?
+  expect_code 1 "$status" "a non-GitHub --review URL must refuse even when the brief already exists"
+  assert_contains "$out" "requires a GitHub pull request URL" "wrong refusal for a non-GitHub review URL"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "a refused review URL still reached the backlog"
+  pass "a review dispatch refuses ship flags, a disagreeing brief, and a URL it could not post to"
+}
+
 test_scout_call_files_and_spawns_a_scout() {
   local case_dir id out status brief
   id=dispatch-scout-f6
@@ -598,3 +677,5 @@ test_bullet_led_ask_titles_the_item_without_its_marker
 test_resolver_clear_profile_reaches_the_spawn_unquoted
 test_resolver_escalate_stops_before_filing
 test_resolver_off_with_rules_stops_before_filing
+test_review_call_files_a_review_item_and_spawns_a_scout
+test_review_flag_conflicts_and_brief_mismatch_refuse

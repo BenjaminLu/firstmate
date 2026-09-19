@@ -11,7 +11,9 @@
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
 # It is likewise the one owner of the fix-round technique a no-mistakes worker
-# applies to its own commit and to how it answers a Fix gate.
+# applies to its own commit, to how it answers a Fix gate, and to the
+# third-round refusal that returns a narrow-remedy instruction to firstmate,
+# the one answer that ends it, and the pass-conditions ask the worker carries.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
 # brief's `## Captain's intent` subsection plus later captain words, never
 # `## Firstmate spec` and never the worker's own tradeoffs.
@@ -362,6 +364,7 @@ Two firstmate-specific rules layer on top of that guidance:
 - ask-user findings are never yours to answer: escalate to firstmate using rule 6's ask-user format and stop.
   Firstmate applies \`ask-user-authority\` and obtains any required captain decision.
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
+  From the third fix round on one step the round-threshold clause below narrows this: a decision that still names a narrow remedy goes back to firstmate instead of to the gate, and that clause is where the one answer you may give the gate instead is stated, along with the one thing you append to the decision you do send.
 - NEVER pass \`--yes\` (or \`-y\`) to \`no-mistakes axi run\` or \`no-mistakes axi respond\`. It is banned fleet-wide.
   It auto-resolves every gate including ask-user findings with no escalation, and answering your own ask-user finding is a hard rule violation.
 
@@ -375,6 +378,14 @@ Apply these four to both, and when the \`greenlight\` skill is installed at \`~/
 - A behavioral test is not evidence until it has failed: before you start the run you prove that yourself, by reverting the production fix, confirming the test goes red, and restoring it.
   Once a run is active you never touch the worktree, so the proof is something you require in the \`--instructions\` you pass at the Fix gate instead of something you perform by hand.
 - Read the primary source before writing a check - the script, spec, or contract itself, not a comment beside it or a paraphrase in a design document.
+
+From the third fix round on one step, \`ask-user-authority\` requires firstmate to stop naming a narrow remedy and ask for the coherent change, and you are the party holding the round number when that instruction arrives - the round it opens, counted the way step 4 of that skill counts it.
+- Refuse an instruction that still names a narrow remedy: append \`blocked: fix round {n} on this step, instruction still names a narrow remedy\` to the status file, where {n} is that arriving round number, and ask firstmate for the coherent-change instruction instead of answering the gate with it.
+  Firstmate reads status events and does not watch your pane, so a refusal you hold quietly is a deadlock however correct it is.
+- One answer ends that refusal: the coherent-change instruction you asked for. Answer the gate with that. A resend that still names a narrow remedy is not one, and the refusal stands.
+- Ask the reviewer for the pass conditions in the same response you do answer that gate with: everything still wanted, stated as conditions to satisfy in one pass rather than as one more repair.
+  That ask rides with every response you send from this round on, whoever authored the instruction it accompanies - your own \`--instructions\` as much as a decision firstmate handed you, where adding it is the one addition that is not implementing the decision.
+  Nothing carries that ask to the reviewer and returns a reply, so never wait for one - the only thing that comes back is the next gate report.
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
