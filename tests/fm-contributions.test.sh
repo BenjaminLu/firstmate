@@ -1123,14 +1123,18 @@ test_full_budget_cut_is_read_last_next_poll() {
 }
 
 test_non_string_cut_marker_is_rejected_on_read() {
-  local home out shape
+  local home out shape value
   # jq orders null < numbers < strings < arrays < objects, so a non-string cut
   # marker would win the ordering key against every real timestamp and sink its
   # URL to the end of the queue on every poll. It has to be refused on read.
-  for shape in '{"a":1}' '["x"]'; do
-    home=$(new_home "bad-cut-marker-$(printf '%s' "$shape" | tr -dc 'a-z')")
+  for shape in object array; do
+    case "$shape" in
+      object) value='{"a":1}' ;;
+      *) value='["x"]' ;;
+    esac
+    home=$(new_home "bad-cut-marker-$shape")
     record "$home" invalid 12 open mergeable
-    mutate_record "$home" invalid ".records[0].cut_at = $shape"
+    mutate_record "$home" invalid ".records[0].cut_at = $value"
     bearings "$home" | jq -e '.contributions.known == 1 and .contributions.checked == 0
       and .contributions.complete == false and .contributions.unreadable_records == 1' >/dev/null \
       || fail "a record whose cut marker is $shape was accepted as readable"
