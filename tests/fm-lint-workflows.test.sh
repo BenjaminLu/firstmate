@@ -210,10 +210,13 @@ test_empty_workflows_dir_fails() {
   mkdir -p "$tmp/.github/workflows"
   rc=0
   out=$("$LINT_WF" --root "$tmp" 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail "empty workflows dir unexpectedly passed"$'\n'"$out"
+  # Fails closed, but not as findings: nothing was analysed, so exit 1 - the one
+  # status a gate reads as "actionlint reported problems" - is wrong here.
+  [ "$rc" -eq 2 ] \
+    || fail "empty workflows dir expected the usage exit 2, got $rc"$'\n'"$out"
   assert_contains "$out" "no GitHub workflow files found" \
     "empty workflows dir did not report the missing files"
-  pass "empty workflows directory fails closed"
+  pass "empty workflows directory fails closed without reporting findings"
 }
 
 test_explicit_broken_path_fails() {

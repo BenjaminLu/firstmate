@@ -1025,7 +1025,7 @@ test_missing_shellcheck_does_not_look_like_a_lint_failure() {
   # The two halves of the distinction, asserted against each other: the status
   # is neither ShellCheck's findings status nor a usage error, and the message
   # carries no finding vocabulary a reader could mistake for a result.
-  local tmp fakebin out rc tool stream
+  local tmp fakebin out err rc tool
   tmp=$(fm_test_tmproot fm-lint-noshellcheck-shape)
   fakebin=$(fm_fakebin "$tmp")
   for tool in bash dirname; do
@@ -1039,26 +1039,19 @@ test_missing_shellcheck_does_not_look_like_a_lint_failure() {
   assert_not_contains "$out" "SC2" \
     "missing ShellCheck emitted something shaped like a ShellCheck finding code"
 
-  # A merged capture is the ordinary case, so the message must not be doubled
-  # there even though it is written to both streams.
-  [ "$(printf '%s\n' "$out" | grep -c 'LINT NOT RUN')" -eq 1 ] \
-    || fail "the unrunnable message was repeated in a merged capture"$'\n'"$out"
-
-  # A gate that captures only one stream must still be told which tool is
-  # missing, so the same message goes to stdout and to stderr.
-  for stream in stdout stderr; do
-    rc=0
-    if [ "$stream" = stdout ]; then
-      out=$(PATH="$fakebin" CI=true GITHUB_ACTIONS=true "$LINT" 2>/dev/null) || rc=$?
-    else
-      out=$(PATH="$fakebin" CI=true GITHUB_ACTIONS=true "$LINT" 2>&1 >/dev/null) || rc=$?
-    fi
-    assert_contains "$out" "ShellCheck not found" \
-      "missing ShellCheck did not name the tool on $stream"
-    assert_contains "$out" "fm-install-shellcheck.sh" \
-      "missing ShellCheck did not name the installer on $stream"
-  done
-  pass "missing ShellCheck does not look like a lint failure on either stream"
+  # The message is a diagnostic, so it goes where every other diagnostic of this
+  # owner goes: stderr alone, leaving stdout carrying only lint data.
+  rc=0
+  err=$(PATH="$fakebin" CI=true GITHUB_ACTIONS=true "$LINT" 2>&1 >"$tmp/stdout") || rc=$?
+  [ "$rc" -eq "$UNRUNNABLE_STATUS" ] \
+    || fail "missing ShellCheck expected the unrunnable exit $UNRUNNABLE_STATUS, got $rc"$'\n'"$err"
+  assert_contains "$err" "ShellCheck not found" \
+    "missing ShellCheck did not name the tool on stderr"
+  assert_contains "$err" "fm-install-shellcheck.sh" \
+    "missing ShellCheck did not name the installer on stderr"
+  [ ! -s "$tmp/stdout" ] \
+    || fail "the unrunnable diagnostic leaked onto the data stream"$'\n'"$(cat "$tmp/stdout")"
+  pass "missing ShellCheck reports on stderr and does not look like a lint failure"
 }
 
 test_a_real_finding_still_reports_as_a_finding() {
@@ -1155,6 +1148,32 @@ SH
     || fail "findings must outrank an unrunnable workflow lint, got exit $rc"$'\n'"$out"
   assert_contains "$out" "SC2016" "the reported findings were lost"
   pass "real findings outrank an unrunnable workflow lint"
+}
+
+test_internal_failure_is_not_reported_as_findings() {
+  # The other status a run that analysed nothing must never borrow: an internal
+  # failure before any file is examined. An unusable TMPDIR makes the scratch
+  # directory impossible, which used to exit 1 and read at the gate as findings.
+  local tmp fakebin log lint_copy out rc
+  tmp=$(fm_test_tmproot fm-lint-internal-failure)
+  fakebin=$(fm_fakebin "$tmp")
+  log="$tmp/shellcheck.log"
+  mkdir -p "$tmp/repo/bin/backends" "$tmp/repo/tests"
+  lint_copy="$tmp/repo/bin/fm-lint.sh"
+  cp "$LINT" "$lint_copy"
+  cp "$UNRUNNABLE_LIB" "$tmp/repo/bin/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/fm-lint-workflows.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/backends/noop.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/tests/noop.test.sh"
+  chmod +x "$lint_copy" "$tmp/repo/bin/fm-lint-workflows.sh"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+
+  rc=0
+  out=$(cd "$tmp/repo" && CI=true TMPDIR="$tmp/no-such-dir" PATH="$fakebin:$PATH" \
+    "$lint_copy" 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "an unusable TMPDIR expected the internal-failure exit 2, got $rc"$'\n'"$out"
+  pass "an internal failure before analysis does not report the findings status"
 }
 
 test_rejects_wrong_shellcheck_version() {
@@ -1580,6 +1599,7 @@ test_missing_shellcheck_does_not_look_like_a_lint_failure
 test_a_real_finding_still_reports_as_a_finding
 test_unrunnable_workflow_lint_reaches_the_exit_status
 test_findings_outrank_an_unrunnable_workflow_lint
+test_internal_failure_is_not_reported_as_findings
 test_rejects_wrong_shellcheck_version
 test_catches_a_real_lint_defect
 test_rejects_direct_beads_cli_invocations

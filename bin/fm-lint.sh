@@ -57,7 +57,8 @@
 # Exit status:
 #   0   nothing to report
 #   1   the lint ran and found problems
-#   2   usage error or an internal lint failure
+#   2   usage error, an internal lint failure, or a workflow lint that found no
+#       workflow file to analyse: statuses for a run that reports no finding
 #   69  the lint could NOT run: a pinned linter is missing from PATH or off its
 #       pin, so no file was analysed. Distinct from 1 so a gate reading only the
 #       status never reports missing tooling as findings, and never hides a real
@@ -87,7 +88,7 @@ LOCAL_NOX_EXCLUDE=SC1091,SC2034,SC2153,SC2329
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SELF="$SELF_DIR/fm-lint.sh"
 ROOT="$(cd "$SELF_DIR/.." && pwd -P)"
-cd "$ROOT" || exit 1
+cd "$ROOT" || exit 2
 # shellcheck source=bin/fm-lint-unrunnable-lib.sh
 . "$SELF_DIR/fm-lint-unrunnable-lib.sh" || {
   printf 'fm-lint.sh: missing bin/fm-lint-unrunnable-lib.sh beside this script.\n' >&2
@@ -662,7 +663,7 @@ if [ -n "$TELEMETRY" ]; then
   }
 fi
 
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-lint.XXXXXX") || exit 1
+TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-lint.XXXXXX") || exit 2
 ACTIVE_PIDS=()
 # shellcheck disable=SC2329 # Registered by the EXIT and signal traps below.
 fm_lint_cleanup() {

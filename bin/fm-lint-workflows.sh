@@ -8,10 +8,12 @@
 # invokes this owner on its default (no explicit-path) path, which CI and
 # commands.lint both use.
 #
-# Exit status: 0 valid, 1 actionlint reported problems, 2 usage error, and 69
+# Exit status: 0 valid, 1 actionlint reported problems, 2 usage error - which
+# includes a root holding no workflow file for this owner to analyse - and 69
 # when actionlint is missing from PATH or off its pin, so no workflow file was
-# analysed. bin/fm-lint-unrunnable-lib.sh owns that status and its message
-# shape; bin/fm-lint.sh reports missing ShellCheck the same way.
+# analysed. Only 1 means findings: every status for a run that analysed nothing
+# stays out of it. bin/fm-lint-unrunnable-lib.sh owns 69 and its message shape;
+# bin/fm-lint.sh reports missing ShellCheck the same way.
 #
 # Usage:
 #   fm-lint-workflows.sh                 lint workflows under this repo
@@ -119,7 +121,7 @@ else
   if [ "${#FILES[@]}" -eq 0 ]; then
     printf 'fm-lint-workflows.sh: no GitHub workflow files found under %s\n' \
       "$workflow_dir" >&2
-    exit 1
+    exit 2
   fi
 fi
 
