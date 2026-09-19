@@ -210,7 +210,9 @@
 #   spawn never probes for it), `git remote set-head origin --auto` runs only
 #   when refs/remotes/origin/HEAD is missing or points at a ref that does not
 #   resolve, and the default branch's remote-tracking ref is trusted as the
-#   fetch just left it rather than fetched a second time. The fetch carries
+#   fetch just left it rather than fetched a second time - which holds whenever
+#   remote.origin.fetch covers that branch, as the wildcard refspec of a normal
+#   clone does. The fetch carries
 #   `-c remote.origin.followRemoteHEAD=always` so that a default-branch rename
 #   on origin repoints refs/remotes/origin/HEAD from that same round trip.
 #   RESIDUAL: `remote.origin.followRemoteHEAD` is git >= 2.48; below that floor
@@ -224,7 +226,16 @@
 #   one `git remote set-head origin --auto` in the primary clone (whose refs
 #   the slots share) on a git below that floor. Closing this in code by adding
 #   --prune would delete remote-tracking refs, a behavior change wider than
-#   this change's stated intent, so it is left to the captain. When no origin
+#   this change's stated intent, so it is left to the captain.
+#   RESIDUAL: a single-branch clone (`git clone --single-branch --branch dev`)
+#   narrows remote.origin.fetch to that one branch, so the broad fetch never
+#   creates refs/remotes/origin/<default>. Such a slot does not launch stale:
+#   the `'origin/<default>' is not a commit` refusal above fires and the spawn
+#   stops loudly. Before this change the narrowed fetch created that ref and
+#   the spawn launched, so this is a behavior change for single-branch
+#   checkouts only. Restoring that fetch would re-add a round trip the intent
+#   cut, so it too is left to the captain; bin/fm-review-diff.sh keeps its own
+#   narrowed fetch for the same reason. When no origin
 #   configuration is detected, spawn skips that remote freshness check and
 #   launches from the clean worktree's current HEAD. Relaunch reuses the
 #   recorded worktree without fetching or resetting its base. An unreachable
@@ -2865,8 +2876,12 @@ freshen_spawn_worktree_base() { # <worktree>
     return 1
   }
   target="origin/$default"
-  # The fetch above already updated refs/remotes/origin/<default>; a second
-  # fetch narrowed to that ref would be a subset of it.
+  # Whenever remote.origin.fetch covers the default branch - the wildcard a
+  # normal clone installs - the fetch above already updated
+  # refs/remotes/origin/<default>, so a second fetch narrowed to that ref would
+  # be a subset of it. A single-branch clone narrows that refspec and is the
+  # exception the header's RESIDUAL records; it refuses below rather than
+  # launching stale.
   expected=$(git -C "$worktree" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
     echo "error: '$target' is not a commit for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
