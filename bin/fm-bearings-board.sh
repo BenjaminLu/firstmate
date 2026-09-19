@@ -248,6 +248,8 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-lavish-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -638,14 +640,13 @@ lavish_board_live() {  # <establish output> <canonical-board-path>
 # this board, which is exactly the attention `--reopen` exists for - and a
 # session that is still not live after that refuses the build rather than
 # arming a poll that can never attach.
-# The installed lavish-axi advertises session names in its own help text; an
-# older release gets the plain open so the board still works there. The probe
-# reads `--help` rather than the bare session listing, because it runs before
-# the session is established and a listing is not inert: it is the same read the
-# liveness proof below depends on, so probing with one lets the probe answer a
-# question the build has not asked yet.
+# A build that advertises session names gets the stable `/s/<slug>` address; a
+# build without the flag gets the plain open so the board still works there.
+# fm-lavish-lib.sh owns that question - including why it is a capability probe
+# rather than a version floor - so only a positive verdict adds the flag and
+# both "no" and "could not tell" degrade to the plain open exactly as before.
 lavish_name_args() {
-  if lavish-axi --help 2>/dev/null | grep -q -- '--name <slug>'; then
+  if fm_lavish_named_session_support; then
     printf -- '--name\n%s\n' "$BOARD_SESSION_NAME"
   fi
 }

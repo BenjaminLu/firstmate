@@ -1016,7 +1016,7 @@ test_scout_lavish_line_follows_presentation_floor() {
     case_dir="$TMP_ROOT/scout-lavish-$n"
     mkdir -p "$case_dir/home/data"
     fakebin=$(fm_fakebin "$case_dir")
-    [ "$version" = absent ] || fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION "$version"
+    [ "$version" = absent ] || fm_fake_lavish_axi "$fakebin" FM_FAKE_LAVISH_AXI_VERSION "$version"
     PATH="$fakebin:$base" FM_HOME="$case_dir/home" \
       "$ROOT/bin/fm-brief.sh" scout-lavish alpha --scout >/dev/null \
       || fail "$label: scout scaffold failed"

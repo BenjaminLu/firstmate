@@ -133,6 +133,9 @@ New spawns choose the backend in this order: an explicit `--backend` flag that c
 If more than one runtime marker is present, detection resolves innermost-first: `$TMUX` is checked before `HERDR_ENV=1`, which is checked before cmux's primary `CMUX_WORKSPACE_ID` marker and its documented fallback signals - tmux or herdr started from inside a cmux terminal is the innermost, currently-executing layer, while cmux itself (a terminal application, not a nestable multiplexer) is always checked last.
 See [`docs/cmux-backend.md`](cmux-backend.md#runtime-detection) for why cmux can be selected when `CMUX_WORKSPACE_ID` is absent.
 Auto-detected herdr or cmux prints a stderr notice naming `config/backend` and `--backend tmux` as opt-outs; auto-detected tmux stays silent to preserve existing default behavior.
+Independently of that spawn-time notice, a session start states the resolved backend and which rung of this order chose it whenever that backend is experimental, however it was selected - so an explicitly configured `zellij` or `orca`, which auto-detection never picks and the notice therefore never mentions, is reported too.
+The verified reference backend is a verbose-only fact.
+Because auto-detection reads the runtime firstmate itself is executing inside, two clones of this repository launched from different terminals can resolve different backends until the choice is recorded in `config/backend`.
 Zellij and Orca are never auto-detected; select them by putting the name in a local `config/backend` file, by exporting `FM_BACKEND=<name>`, or by telling the first mate in chat.
 Any value other than `tmux`, `herdr`, `zellij`, `orca`, or `cmux` is rejected until another adapter is implemented and verified.
 `fm-spawn.sh` accepts `tmux`, `herdr`, `zellij`, `orca`, and `cmux` for ship and scout tasks; `backend=orca` and `backend=cmux` both still refuse `--secondmate` until secondmate launch semantics are designed for each.
@@ -388,6 +391,19 @@ A directory whose source cannot be derived is left out of the grant and named on
 It rides `--add-dir` rather than a `permissions.additionalDirectories` key in the launch's inline settings, which is where it started: `--settings` is a high-precedence settings source, and whether Claude Code unions or replaces a `permissions` key from lower scopes could not be measured, so that route risked dropping the operator's own `permissions.allow` rules for every worker - the same prompt stream by another path. `--add-dir` writes no settings key at all, so the question stops needing an answer.
 [`bin/fm-claude-launch-lib.sh`](../bin/fm-claude-launch-lib.sh)'s header owns the derivation, and [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns where the flag sits on the launch and why that position is load bearing.
 
+## Claude command allow-list (assets/claude-permissions.starter.json)
+
+The commands a firstmate worker runs are a property of this repository's toolchain rather than of any one machine, so the repository ships the allow-list they need at tracked `assets/claude-permissions.starter.json`.
+Without those rules a home running the `auto` permission mode above is asked to approve ordinary fleet commands - the validation pipeline above all - once per worker, per invocation.
+The list is derived from what this repository actually calls: bootstrap's own essential toolchain, the per-backend tool delta, the lint tools `bin/fm-lint.sh` and `bin/fm-lint-workflows.sh` refuse to run without, and the helper scripts under `bin/` that every generated brief tells a worker to run.
+The starter's own comment block is the single owner of what it deliberately leaves out and why, including interpreters and state-changing git.
+The `{{FM_ROOT}}` placeholder is substituted with this home's own checkout at merge time, so no machine's absolute path is ever committed.
+
+Bootstrap never merges it on its own.
+A session start reports how many of those commands are not yet pre-approved, and `bin/fm-bootstrap.sh install-permissions` performs the merge once the captain approves - the same detect-then-consent-then-install rule bootstrap uses for tool installs.
+The merge adds only the rules that are absent, keeps every other setting and every rule already present, and refuses rather than rewriting a settings file it cannot parse.
+It targets the operator's own Claude settings at `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json`, and homes whose crewmates run another harness are never offered it.
+
 ## Worker launch environment (config/launch-env-allowlist)
 
 The optional local, gitignored `config/launch-env-allowlist` limits the ambient environment passed to newly launched workers, scouts, and secondmates, including relaunches.
@@ -541,6 +557,8 @@ The essential universal toolchain is node, git, gh with GitHub auth via `gh auth
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 In that list, no-mistakes runs the validation pipeline, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
 Lavish is a presentation-only dependency for visual decisions and reports; nonvisual work can proceed with plain text when it is unavailable.
+Its version floor and the separate question of whether the installed build accepts `--name` are independent: `--name` is what gives the bearings board one stable `/s/<slug>` address, the published package does not carry it, and the published version is HIGHER than the fork build that does - so a floor cannot stand in for the capability and bootstrap probes it directly, reporting `PRESENTATION_UNSTABLE_URL` when the flag is absent or the probe could not run.
+[`bin/fm-lavish-lib.sh`](../bin/fm-lavish-lib.sh) owns that probe.
 The `diagram-design` skill is an optional worker-harness dependency bootstrap does not detect and cannot install: a decision packet's figures are drawn through that skill rather than hand-written, and `bin/fm-packet.sh verify` refuses a packet that owes figures and has none; [`bin/fm-packet.sh`'s header](../bin/fm-packet.sh) owns the figure contract.
 The per-backend delta is required only for the backend resolved from `FM_BACKEND`, then `config/backend`, then runtime auto-detection, then default `tmux`, so a home is never told to install a tool an inactive backend or feature would need.
 That delta is owned in code by `fm_backend_required_tools` in `bin/fm-backend.sh`: the resolved backend's own session-provider CLI (`tmux`, `herdr`, `zellij`, `orca`, or `cmux`), `jq` for the JSON-emitting adapters (`herdr`, `zellij`, `cmux`) whose spawn and liveness paths parse the backend's JSON output, and the `treehouse` worktree provider for every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`).

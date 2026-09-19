@@ -17,6 +17,10 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 ## Workflow
 
 1. Fork the repo, then clone the parent repo or set your local `origin` back to the parent (`git@github.com:kunchenguid/firstmate.git`).
+   Then open your fork's **Actions** tab once and enable workflows.
+   A fork's workflows stay dormant until its owner does that, and no API call substitutes for the click.
+   While they are dormant a pipeline run reaches its CI step, reports that no checks have arrived, and waits for the full `ci_timeout` - 168h by default - so the run looks alive for a week while doing nothing.
+   A session start reports this as a dormant-checks diagnostic, which is the cheaper way to find out.
 2. Create a branch and make your changes.
 3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate.git` (contributing to firstmate requires **no-mistakes v1.46.0+** for structured attestation; without a fork, plain `no-mistakes init` still works for maintainers with push access).
 4. Commit your changes.
