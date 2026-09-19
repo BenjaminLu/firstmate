@@ -837,6 +837,14 @@ test_build_refuses_malformed_copy_and_card_fields() {
   set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "an unknown decision risk level was accepted"
 
+  # One key is one keyed-intake address, so a hand-written payload may not
+  # carry two cards under it either.
+  write_valid_payload "$data"
+  jq '.captains_call += [.captains_call[0]]' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "two cards under one key were accepted"
+  assert_absent "$board" "a payload with duplicate card keys still produced a board"
+
   write_valid_payload "$data"
   jq '.captains_call[0].reversible = "maybe"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
   set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
@@ -1430,6 +1438,64 @@ test_compose_warns_instead_of_carding_a_hold_it_cannot_key() {
   pass "compose warns instead of carding a captain hold it cannot key"
 }
 
+test_compose_consolidates_a_task_held_more_than_once() {
+  local home skeleton
+  home=$(make_compose_home compose-repeat-hold)
+  # data/backlog.md is hand-maintained; a copy-pasted row keeps its id, and two
+  # cards under one key are two answers the keyed intake resolves to one task.
+  jq '.decisions_open += [{id: "pick-route", key: "pick-route", verb: "captain-hold",
+        summary: "Pick the route: and also pick the rollout window", owner: "(main)"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot holding one task twice"
+  jq -e '
+    ([.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"])
+    and (.captains_call[1] | .key == "pick-route" and (.decide.en | test("held 2 times")))
+  ' "$skeleton" >/dev/null || fail "a repeated hold was not consolidated: $(cat "$skeleton")"
+  pass "compose consolidates a task held more than once into one card"
+}
+
+test_compose_refuses_to_card_a_merge_two_prs_claim() {
+  local home skeleton
+  home=$(make_compose_home compose-merge-collision)
+  # headRefName carries no repo or fork owner, so two open PRs can derive the
+  # same task; a merge answer keyed to that task names only one of them.
+  jq '.candidate_prs += [{num: "21", repo: "example/other", task: "ship-task",
+        url: "https://github.com/example/other/pull/21",
+        review: "APPROVED", mergeable: "MERGEABLE", checks: "passing"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose PRs collide on one task"
+  jq -e '
+    ([.captains_call[] | select(.type == "merge")] | length == 0)
+    and (.charted[] | select(.id == "merge-collision-ship-task")
+      | .kind == "warning" and .dispatchable == false
+      and (.reason.en | test("pull/9") and test("pull/21")))
+  ' "$skeleton" >/dev/null || fail "a colliding merge was carded or hidden: $(cat "$skeleton")"
+  pass "compose refuses to card a merge two pull requests claim, and says so"
+}
+
+test_compose_drops_a_link_the_payload_contract_refuses() {
+  local home skeleton
+  home=$(make_compose_home compose-bad-links)
+  # A merge pr_url arrives as "-" when the snapshot has no url, and a landed
+  # artifact is scanned out of a hand-written Done line, so neither is a
+  # guaranteed well-formed link.
+  jq '.landed[0].artifact = "https://.bad/x"
+      | .candidate_prs[0].url = "-"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying a malformed link"
+  jq -e '
+    (.landed[0] | .id == "done-a" and (has("pr_url") | not))
+    and (.captains_call[] | select(.key == "merge.ship-task") | has("pr_url") | not)
+  ' "$skeleton" >/dev/null || fail "a malformed link was carried into the payload: $(cat "$skeleton")"
+  pass "compose drops a link the payload contract refuses instead of aborting"
+}
+
 test_compose_validates_the_skeleton_on_stdout_too() {
   local home out rc
   home=$(make_compose_home compose-stdout-validate)
@@ -1537,6 +1603,9 @@ test_compose_seeds_a_packet_card_without_a_recorded_project
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
+test_compose_consolidates_a_task_held_more_than_once
+test_compose_refuses_to_card_a_merge_two_prs_claim
+test_compose_drops_a_link_the_payload_contract_refuses
 test_compose_warns_instead_of_carding_a_hold_it_cannot_key
 test_compose_degrades_a_packet_copy_object_with_a_blank_member
 test_compose_never_dispatches_a_charted_row_under_a_rewritten_id

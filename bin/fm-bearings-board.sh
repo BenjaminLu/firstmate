@@ -57,9 +57,10 @@
 #            on the board under a display slug but is never offered for
 #            dispatch, because the `dispatch.charted` intake resolves the id
 #            against the backlog and could not resolve a rewritten one; every
-#            unavailable or externally held secondmate home and every secondmate inventory-mismatch notice
-#            becomes a non-dispatchable `warning` Charted Next row, so a
-#            repair notice can never go missing from the board; every live
+#            unavailable or externally held secondmate home and every
+#            secondmate inventory-mismatch notice becomes a non-dispatchable
+#            `warning` Charted Next row, so a repair notice can never go
+#            missing from the board; every live
 #            captain hold THIS HOME OWNS whose task id is already a routable
 #            key becomes exactly one decision card keyed by that id, while one
 #            whose id is not becomes a non-dispatchable `warning` Charted Next
@@ -68,7 +69,13 @@
 #            passing, mergeable, review not CHANGES_REQUESTED, present only
 #            under the snapshot's --include-prs) that a task in THIS home's
 #            backlog claims becomes a merge card keyed merge.<task-id> with
-#            pr_url set and risk left for the composer. Nothing this home
+#            pr_url set and risk left for the composer. A card key is ONE
+#            intake address, so the skeleton never carries two cards under it:
+#            a task held more than once consolidates into one card whose
+#            decide slot says how many questions it must answer, and two
+#            merge-ready PRs claiming one task get no card at all plus a
+#            non-dispatchable `warning` Charted Next row naming both, because
+#            either click would act on whichever PR the task record names. Nothing this home
 #            cannot route back to one of its own tasks is dispatched or keyed:
 #            a PR gets a card only when this home's backlog record for its
 #            task can be read and the resulting key satisfies the payload
@@ -92,8 +99,10 @@
 #            including a packet copy object whose own en or hant is blank - so
 #            a blank title degrades that row instead of refusing the whole
 #            skeleton, and a gate's `filed` is normalized to null unless it
-#            matches the accepted date shapes, so one hand-written `since`
-#            word cannot refuse the board either. A held task's title,
+#            matches the accepted date shapes, and a pr_url or packet_url is
+#            emitted only when it satisfies the same link rule the validator
+#            applies, so one hand-written `since` word or one malformed link
+#            cannot refuse the board either. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
@@ -210,11 +219,18 @@ PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
 BOARD_SCHEMA=fm-bearings-board.v1
 PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
-# The one definition of a routable key and of an acceptable Charted Next
-# `filed` date, shared by the payload validator and the compose projection so
-# the projection can never emit a value the validator then refuses.
+# The one definition of a routable key, an acceptable captain-facing link, and
+# an acceptable Charted Next `filed` date, shared by the payload validator and
+# the compose projection so the projection can never emit a value the validator
+# then refuses.
 BOARD_JQ_DEFS='
 def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
+def https_url:
+  type == "string"
+  and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$");
+def link_url:
+  https_url
+  or (type == "string" and test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
 def valid_filed:
   . as $filed
   | type == "string"
@@ -260,13 +276,6 @@ validate_payload() {  # <data.json>
     def optional_filed:
       (has("filed") | not) or (.filed == null) or (.filed | valid_filed);
     def optional_string($name): (has($name) | not) or (.[$name] | type == "string");
-    def https_url:
-      type == "string"
-      and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$");
-    # A served page (packet_url, evidence) may also live on the local Lavish server.
-    def link_url:
-      https_url
-      or (type == "string" and test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
     def optional_https_url($name): (has($name) | not) or (.[$name] | https_url);
     def optional_link_url($name): (has($name) | not) or (.[$name] | link_url);
     def version: type == "string" and test("^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$");
@@ -340,6 +349,9 @@ validate_payload() {  # <data.json>
     and (.prs_live | type == "boolean")
     and ((has("lang") | not) or (.lang == "en" or .lang == "hant" or .lang == "hans"))
     and (.captains_call | type == "array")
+    # One card per keyed-intake address: two cards under one key are two
+    # answers `bin/fm-captain-hold.sh` would resolve to the same single task.
+    and ([.captains_call[].key] | length == (unique | length))
     and (.underway | type == "array")
     and (.landed | type == "array")
     and (.charted | type == "array")
@@ -665,7 +677,6 @@ EOF
       | if length == 0 then "row" else . end;
     def record($id): $records[$id] // null;
     def repo_of($id): record($id) | if . == null then null else .repo end;
-    def https: type == "string" and test("^https://");
     def owned: .owner == "(main)";
     # The Charted Next id IS the dispatch.charted routing channel, so a row
     # keeps its real backlog id whenever that id is already a routable key; a
@@ -705,7 +716,8 @@ EOF
       + ({recommend_value: recommend_slot([$card.options[].value]),
           reversible: reversible_slot, risk: risk_slot}
          | with_entries(select($card[.key] == null)))
-      + (if $card.close != null then {close: $card.close} else hold_close end);
+      + (if $card.close != null then {close: $card.close} else hold_close end)
+      | if (.packet_url | link_url) then . else del(.packet_url) end;
     def decision_card: . as $row | ($cards[$row.id] // null) as $card
       | if $card == null then placeholder_card else packet_seeded($card) end;
     def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
@@ -716,11 +728,27 @@ EOF
          repo: (.repo | split("/") | last),
          title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo)); $task),
          detail: t("checks " + .checks + ", review " + .review; $task),
-         pr_url: .url, risk: risk_slot,
+         risk: risk_slot,
          options: [
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
            {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
-         allow_freeform: true};
+         allow_freeform: true}
+      + (if (.url | https_url) then {pr_url: .url} else {} end);
+    def merge_ready_prs:
+      [ .candidate_prs[]?
+        | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready) ];
+    # A card key IS one intake address, so the board may never carry two cards
+    # under it. A task held more than once consolidates into one card whose
+    # decide slot names how many questions it must answer; two merge-ready PRs
+    # claiming one task get no card at all, because either click would act on
+    # whichever PR the task record names, and a wrong merge is worse than an
+    # absent card.
+    def held_rows: [ .decisions_open[]? | select(held_here and (.key | slug(128))) ];
+    def consolidated($n):
+      if $n > 1 then {decide: fill("decide: this task is held " + ($n | tostring)
+        + " times; consolidate every one of its questions into this card")} else {} end;
+    def first_per_key: reduce .[] as $card
+      ([]; if ([.[].key] | index($card.key)) == null then . + [$card] else . end);
     # The snapshot reports ONE omitted-gates total and never splits it into
     # queued and warning rows, so each slot names that one total as a shared
     # figure to divide, and points at the sibling count that takes the rest.
@@ -735,17 +763,19 @@ EOF
       schema: $schema, home: .home, generated: .generated, lang: $lang,
       prs_live: (.prs | startswith("checked")),
       captains_call: (
-        [ .decisions_open[]? | select(held_here and (.key | slug(128))) | decision_card ]
-        + [ .candidate_prs[]?
-          | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready)
-          | merge_card ]),
+        [ held_rows as $rows | $rows[] | . as $row
+          | decision_card + consolidated([$rows[] | select(.key == $row.key)] | length) ]
+        + [ merge_ready_prs as $prs | $prs[] | . as $pr
+          | select([$prs[] | select(.task == $pr.task)] | length == 1)
+          | merge_card ]
+        | first_per_key),
       underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
         doing: t(.doing; .state)} ],
       landed: [ .landed[]?
         | {id: (if owned then .id else (.owner + "/" + .id) end),
            repo: (if owned then repo_of(.id) else null end),
            what: t(.what; .id), owner}
-        + (if (.artifact | https) then {pr_url: .artifact} else {} end) ],
+        + (if (.artifact | https_url) then {pr_url: .artifact} else {} end) ],
       charted: (
         [ .gates[]?
           | {id: (charted_id | if slug(128) then . else slugify end),
@@ -779,6 +809,12 @@ EOF
              title: t("The captain hold on " + .id + " cannot be answered from the board"; "unkeyable-hold"),
              reason: t("its task id is not a routable key, so no card can carry an answer back to it";
                "unkeyable-hold"),
+             dispatchable: false, kind: "warning", filed: null} ]
+        + [ merge_ready_prs | group_by(.task)[] | select(length > 1)
+          | {id: (("merge-collision/" + .[0].task) | slugify), repo: null,
+             title: t("Two open pull requests claim the task " + .[0].task; "merge-collision"),
+             reason: t("no merge card is offered, because a merge answer keyed to that task names only "
+               + "one pull request: " + ([.[] | .url] | join(", ")); "merge-collision"),
              dispatchable: false, kind: "warning", filed: null} ]
         + (if $readable then [] else
           [{id: "backlog-unreadable", repo: null,
