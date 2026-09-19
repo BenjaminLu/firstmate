@@ -328,6 +328,29 @@ packet_figure() {  # <slug> <node...> -> one contract-shaped drawing
     nodes: $nodes, edges: []}'
 }
 
+# A drawing that names the option it illustrates. The packet declares this;
+# the board never infers it from the identities a drawing happens to carry.
+packet_option_figure() {  # <slug> <option> <node...>
+  local slug=$1 option=$2; shift 2
+  packet_figure "$slug" "$@" | jq --arg o "$option" '. + {option: $o}'
+}
+
+# The same payload, with the recommended option carrying what the approved panel
+# shows beyond a drawing: what it adds, removes and leaves alone, the files it
+# touches, and what it buys.
+packet_payload_full_option() {  # <lang> <figures-json>
+  packet_payload "$1" "$2" | jq '
+    .captains_call[0].options[0] += {
+      buys: {en:"One behaviour to reason about.", hant:"只剩一種行為要想。"},
+      files: ["bin/fm-contributions.sh", "tests/fm-contributions.test.sh"],
+      changes: {
+        added: [{en:"a merged-record rule", hant:"一條合併記錄規則"}],
+        removed: [{en:"the stdout probe", hant:"stdout 判斷"}],
+        unchanged: [{en:"the answer channel", hant:"回answer 通道"}]
+      }
+    }'
+}
+
 packet_payload() {  # <lang> <figures-json>
   jq -n --arg lang "$1" --argjson figures "$2" '{
     schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
@@ -356,7 +379,7 @@ test_a_packet_with_figures_opens_its_tabs_inside_the_card() {
   local home out figures
   home=$(make_home packet-tabs)
   figures=$(jq -n --argjson c "$(packet_figure cmp quiet loud)" \
-                  --argjson q "$(packet_figure quiet-only quiet)" '[$c, $q]')
+                  --argjson q "$(packet_option_figure quiet-only quiet quiet)" '[$c, $q]')
   out=$(render_payload "$home" "$(packet_payload en "$figures")")
   printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
     || fail "the board rendered its fail-closed error instead of the card: $out"
@@ -370,11 +393,14 @@ test_a_packet_with_figures_opens_its_tabs_inside_the_card() {
           # the drawing that names every option leads, in its own panel
           and ((.panels[0].figures | length) == 1)
           and (.panels[0].figures[0] | test("data-node=\"quiet\"") and test("data-node=\"loud\""))
-          # an option that has its own drawing shows it; one that does not says so
+          # an option that declares its own drawing shows it
           and ((.panels[1].figures | length) == 1)
           and (.panels[1].figures[0] | test("data-node=\"quiet\"") and (test("data-node=\"loud\"") | not))
+          # one that declares none simply has none: the comparison tab already
+          # carries the drawing, so an empty-state scold there would be the
+          # board inventing a defect out of a packet that met its contract
           and (.panels[2].figures == [])
-          and (.panels[2].notes | map(test("no drawing")) | any)
+          and (.panels[2].notes == [])
           # each option answers from inside its own tab, and what its button
           # sends down the answer channel is the value that option carries
           and (.panels[1] | .label == "Error stream only" and .cost == "Two lines of code leave."
@@ -453,6 +479,44 @@ test_a_card_with_no_packet_renders_exactly_as_it_did() {
   pass "a card whose task has no packet renders exactly as it does today"
 }
 
+# The captain approved a panel that says what the option changes, not only what
+# it costs. Every one of these is optional, so the test also pins that a packet
+# carrying none of them still renders the panel it always did.
+test_an_option_panel_carries_what_it_changes_touches_and_buys() {
+  local home out figures
+  home=$(make_home packet-option-detail)
+  figures=$(jq -n --argjson c "$(packet_figure cmp quiet loud)" '[$c]')
+  out=$(render_payload "$home" "$(packet_payload_full_option en "$figures")")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its error instead of the card: $out"
+  printf '%s' "$out" | jq -e '
+    (.cards[0].panels[1].rows
+      | (map(select(.k == "Adds") | .v) == [["a merged-record rule"]])
+        and (map(select(.k == "Removes") | .v) == [["the stdout probe"]])
+        and (map(select(.k == "Leaves alone") | .v) == [["the answer channel"]])
+        and (map(select(.k == "Files it touches") | .v)
+             == [["bin/fm-contributions.sh", "tests/fm-contributions.test.sh"]])
+        and (map(select(.k == "What it buys") | .v) == [["One behaviour to reason about."]]))
+    # the option that carries none of them renders exactly as it always did
+    and (.cards[0].panels[2].rows == [])
+    and (.cards[0].panels[2].cost == "The probe stays load-bearing.")
+  ' >/dev/null || fail "an option panel did not carry what it changes: $out"
+  pass "an option panel carries what it adds, removes, leaves alone, touches and buys"
+}
+
+test_the_fuller_option_panel_follows_the_captains_language() {
+  local home out figures
+  home=$(make_home packet-option-detail-hant)
+  figures=$(jq -n --argjson c "$(packet_figure cmp quiet loud)" '[$c]')
+  out=$(render_payload "$home" "$(packet_payload_full_option hant "$figures")")
+  printf '%s' "$out" | jq -e '
+    (.cards[0].panels[1].rows
+      | (map(select(.k == "新增") | .v) == [["一條合併記錄規則"]])
+        and (map(select(.k == "換到什麼") | .v) == [["只剩一種行為要想。"]]))
+  ' >/dev/null || fail "the fuller panel did not switch language: $out"
+  pass "what an option changes and buys switches with the captain, like the rest of the card"
+}
+
 test_a_free_form_answer_never_counts_as_choosing_an_option() {
   local home out figures
   home=$(make_home packet-freeform)
@@ -462,7 +526,12 @@ test_a_free_form_answer_never_counts_as_choosing_an_option() {
   # by pressing the form's first submit button, so no option's button may be
   # one: what goes down the channel is the note, chosen by nobody.
   printf '%s' "$out" | jq -e '
-    (.cards[0].on_enter
+    # exactly one answer leaves the page. Asserting only the LAST one is what
+    # made an earlier version of this test vacuous: with the option buttons
+    # wired as submit buttons, the browser pressed one first, a vote went down
+    # the channel, and the note that followed it hid the vote from the check.
+    ((.cards[0].on_enter_all | length) == 1)
+    and (.cards[0].on_enter_all[0]
       | .schema == "fm-bearings-answer.v1" and .question == "stream-choice"
         and .selection == "" and .note == "in my own words")
   ' >/dev/null || fail "a free-form answer was recorded as choosing an option: $out"
@@ -485,4 +554,6 @@ test_a_packet_without_figures_still_renders_its_card
 test_the_packet_body_stays_in_the_language_it_was_written_in
 test_an_inline_packet_never_offers_a_second_address
 test_a_card_with_no_packet_renders_exactly_as_it_did
+test_an_option_panel_carries_what_it_changes_touches_and_buys
+test_the_fuller_option_panel_follows_the_captains_language
 test_a_free_form_answer_never_counts_as_choosing_an_option

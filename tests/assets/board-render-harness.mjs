@@ -8,9 +8,9 @@
 //     charted:[{title,sub,badges,pickable}], empty, more,
 //     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips,
 //             tabs:[{label,selected}],
-//             panels:[{hidden,figures,notes,label,cost,
+//             panels:[{hidden,figures,notes,rows,label,cost,
 //                      buttons:[{text,queues}]}],
-//             on_enter, packet:{said,lang,body}|null}],
+//             on_enter, on_enter_all, packet:{said,lang,body}|null}],
 //     headings:[call,charted,underway,landed], error }
 import { readFileSync } from "node:fs";
 
@@ -162,14 +162,26 @@ const answerCard = (card) => {
     act();
     return queued.length ? queued[queued.length - 1].data : null;
   };
+  /* Every answer the act queued, not just the last one. Pressing Enter must
+     send ONE answer; a spurious extra vote queued before it is invisible to a
+     reader that only keeps the last, which is exactly how a live
+     implicit-submit bug once sat under a green test. */
+  const recordAll = (act) => {
+    queued.length = 0;
+    act();
+    return queued.map((q) => q.data);
+  };
   const note = nodes.find((n) => n.name === "note");
   if (note) {
     note.value = "in my own words";
     const dflt = nodes.find((n) => n.tagName === "button" && n.type === "submit");
-    card._onEnter = record(() => {
+    card._onEnterAll = recordAll(() => {
       if (dflt) dflt.dispatch("click");
       form.dispatch("submit");
     });
+    card._onEnter = card._onEnterAll.length
+      ? card._onEnterAll[card._onEnterAll.length - 1]
+      : null;
     note.value = "";
   }
   nodes
@@ -204,6 +216,16 @@ const cards = deck.children
       hidden: pnl.hidden === true,
       figures: findAll(pnl, "bb-fig").map((f) => f.innerHTML),
       notes: findAll(pnl, "bb-panel__note").map((n) => n.textContent),
+      /* what the option changes: one row per key, each carrying its list */
+      rows: findAll(pnl, "bb-panel__row").map((r) => ({
+        k: findAll(r, "bb-panel__k")[0]?.textContent ?? "",
+        v: (() => {
+          const v = findAll(r, "bb-panel__v")[0];
+          if (!v) return [];
+          const items = descendants(v).filter((n) => n.tagName === "li");
+          return items.length ? items.map((li) => li.textContent) : [v.textContent];
+        })(),
+      })),
       label: findAll(pnl, "bb-panel__label")[0]?.textContent ?? "",
       cost: findAll(pnl, "bb-panel__cost")[0]?.textContent ?? "",
       buttons: findAll(pnl, "fm-btn").map((b) => ({
@@ -211,6 +233,7 @@ const cards = deck.children
       })),
     })),
     on_enter: card._onEnter ?? null,
+    on_enter_all: card._onEnterAll ?? [],
     packet: (() => {
       const box = findAll(card, "bb-packet__body")[0];
       if (!box) return null;

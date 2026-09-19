@@ -34,7 +34,11 @@
 #            decision block is a fenced ```json fm-packet-decision.v1 object:
 #              key (the task id), title, decide, if_nothing, reversible
 #              (yes|no|partly), optional risk (low|medium|high), options[]
-#              (each value + label + consequence, at least two),
+#              (each value + label + consequence, at least two, and each
+#              optionally what it buys, the files it touches, and a changes
+#              object of added/removed/unchanged lists - the panel the captain
+#              approved says what an option CHANGES, not only what it costs, so
+#              every one of those is a field rather than prose he cannot see),
 #              recommend_value (one of the option values), optional
 #              recommend_why, optional close (done|release).
 #            Copy fields are a plain string or an {en, hant?, hans?} object.
@@ -52,6 +56,7 @@
 #
 #   ### <heading>
 #   figure: <slug>                 # lowercase id prefix for every id in the svg
+#   option: <option value>         # optional - the option this drawing is of
 #   caption: <one sentence - what to look at, and what the drawing proves>
 #
 #   <svg ...> ... </svg>
@@ -163,11 +168,24 @@
 # drawing reads.
 #
 # For kind=needs-decision, verify additionally requires ONE figure carrying a
-# data-node for EVERY option value in the decision block. One drawing per
-# option buries the only question the reader has - where the options differ,
-# and where they become the same thing - so a drawing that names all but one
-# option is refused, naming the one it left out. Nothing labels that figure as
-# the comparison: naming every option is what makes it one.
+# data-node for EVERY option value in the decision block: the comparison, which
+# answers where the options differ and where they become the same thing. A
+# drawing that names all but one option is refused, naming the one it left out.
+# Nothing labels that figure as the comparison: naming every option is what
+# makes it one.
+#
+# A figure may also carry `option: <value>`, which says it draws what that one
+# option changes. That is a DECLARATION rather than an inference: a drawing's
+# shapes are named after the things in the source, so which option a drawing is
+# of cannot be read off its identities - the drawings the captain approved name
+# their shapes a0-fn and a1-fn, after the functions they draw, and match no
+# option value at all. A declared option must be one the decision offers, and
+# two drawings may not claim the same one. Such a figure is never a candidate
+# comparison, and a packet whose every drawing claims an option still owes the
+# comparison: one drawing per option, and only that, buries the question. The
+# board opens each declared drawing in that option's own tab; an option that
+# declares none simply shows no drawing of its own, which is the ordinary shape
+# of a packet that met this contract with a comparison alone.
 # card       Verify, then print the fm-bearings-board.v1 Captain's Call card
 #            composed from the decision block, ready to drop into a board
 #            payload. A copy object without `hant` is flattened to its `en`
@@ -182,11 +200,11 @@
 #            bearings board can open the whole thing inside the card instead
 #            of sending the captain to a second page he can lose by closing a
 #            tab:
-#              {lang, figures: [{slug, svg, nodes}], body}
+#              {lang, figures: [{slug, svg, nodes, option}], body}
 #            `figures` is the "Figures" section's drawings, each with the
-#            `data-node` identities it draws, so the board can tell the
-#            comparison drawing (the one naming every option) from an option's
-#            own drawing without a second declaration; `body` is the rest of
+#            `data-node` identities it draws and the option it declares itself
+#            a drawing of, so the board can tell the comparison from an
+#            option's own drawing; `body` is the rest of
 #            the packet - every section except the decision block, already
 #            converted to HTML by the same converter the page uses. Nothing a
 #            figure SAYS is repeated in `figures`: its heading and its caption
@@ -199,14 +217,19 @@
 #            `fm-packet.sh serve` stays the one explicit way to put a packet
 #            on its own address.
 #            A drawing is inlined into the BOARD, which is not the packet's own
-#            page, so what may be inlined is decided when the card is built
-#            rather than inherited from a check that runs elsewhere: a drawing
-#            carrying a script, an event handler, foreign markup, an animation
-#            that can retarget a link, or a link to anything but http, https,
-#            mailto or a place inside the same drawing is dropped whole, and a
-#            closed <style> block is removed from the one that is kept, because
-#            inside an inlined svg it is page-wide CSS that would restyle the
-#            board around it.
+#            page, so what may be inlined matters more here than anywhere else.
+#            It is the figure contract above, enforced by verify, which `card`
+#            runs before it builds anything: no script, no <style>, no foreign
+#            markup, no on* handler, no animation that can retarget a link, and
+#            every href, xlink:href and src pointing at a same-document
+#            #fragment or an <a> going to http, https or mailto. There is no
+#            path to a card around those clauses, and deliberately no second
+#            copy of them here. An earlier version of this file carried one,
+#            written while the figure contract had not yet landed and verify
+#            had nothing to say about drawings; it is gone, because a second
+#            copy of a security boundary is one that can disagree with the
+#            first, and this one did - three times, over which spellings of an
+#            attribute separator it recognised.
 #
 # ONE LANGUAGE RULE, FOR THE WHOLE PACKET. The captain reads EN / 繁體 / 简体
 # and every captain-facing surface owes him all three. A packet cannot give
@@ -406,7 +429,7 @@ command_scaffold() {
       printf '%s\n' '### {FILL: the heading - what this drawing shows}'
       printf '%s\n' 'figure: {FILL: slug, lowercase, used to prefix every id inside the svg}'
       printf '%s\n\n' 'caption: {FILL: one sentence - what to look at, and what the drawing proves}'
-      printf '%s\n\n' '{FILL: the <svg> lifted out of the file the diagram-design skill wrote, never hand-written, and edited to the contract fm-packet.sh --help states - colours only var(--...), data-en/data-hant/data-hans on every <text>, data-node on every shape, and one shape carrying data-node="<option value>" for EVERY option in the decision above}'
+      printf '%s\n\n' '{FILL: the <svg> lifted out of the file the diagram-design skill wrote, never hand-written, and edited to the contract fm-packet.sh --help states - colours only var(--...), data-en/data-hant/data-hans on every <text>, data-node on every shape, and one shape carrying data-node="<option value>" for EVERY option in the decision above. To draw what ONE option changes, add a second "### " figure below this one with an "option: <that option value>" line under its "figure:" line; this comparison is still owed either way}'
       printf '%s\n' '- edge {FILL: the data-edge id}: {FILL: what proves this connector}'
     fi
     printf '\n## Evidence\n\n'
@@ -457,6 +480,9 @@ decision_jq='
     problem((has("risk") | not) or (.risk == "low" or .risk == "medium" or .risk == "high"); "risk must be low, medium, or high"),
     problem((.options | type == "array") and (.options | length >= 2); "options must list at least two choices"),
     problem((.options | type == "array") and ([.options[]? | type == "object" and (.value | slug) and (.label | copy) and (.consequence | copy)] | all); "every option needs value, label, and consequence"),
+    problem((.options | type == "array") and ([.options[]? | (has("buys") | not) or (.buys | copy)] | all); "an option'"'"'s buys must be copy"),
+    problem((.options | type == "array") and ([.options[]? | (has("files") | not) or ((.files | type == "array") and ([.files[]? | type == "string" and length > 0] | all))] | all); "an option'"'"'s files must be a list of paths"),
+    problem((.options | type == "array") and ([.options[]? | (has("changes") | not) or ((.changes | type == "object") and ([.changes | to_entries[] | .key == "added" or .key == "removed" or .key == "unchanged"] | all) and ([.changes[]? | (type == "array") and ([.[]? | copy] | all)] | all))] | all); "an option'"'"'s changes must be added, removed and unchanged lists"),
     problem((.options | type == "array") and ([.options[]?.value] | index("reconcile") == null); "reconcile is reserved for the board"),
     problem(.recommend_value as $r | (.options | type == "array") and ([.options[]?.value] | index($r) != null); "recommend_value must name one of the options"),
     problem((has("recommend_why") | not) or (.recommend_why | copy); "recommend_why must be copy"),
@@ -562,7 +588,7 @@ ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>
 TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
 LATIN_ID = re.compile(os.environ["FM_NAME_RE"])
-FIG_FIELD = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
+FIG_FIELD = re.compile(r"^(figure|caption|option):\s*(\S.*?)\s*$")
 FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 TEXT_ELEMENT = re.compile(r"""<\s*text\b(?:[^<>"']|"[^"]*"|'[^']*')*>(.*?)<\s*/\s*text\s*>""", re.S)
 REF_ATTRS = ("href", "xlink:href", "src")
@@ -632,7 +658,7 @@ def top_level_svgs(text):
             depth += 1
     return out
 
-figure_nodes, slugs_seen = [], {}
+figure_nodes, slugs_seen, figure_options = [], {}, {}
 for n, fig in enumerate(figures, 1):
     chunk = "\n".join(fig["lines"])
     name = fig["heading"] or "(no heading)"
@@ -682,7 +708,8 @@ for n, fig in enumerate(figures, 1):
     for line in stray_problems(
             rest,
             "is not part of the figure, and nothing renders it",
-            "a figure body carries figure:, caption:, one drawing and its '- edge' lines: a "
+            "a figure body carries figure:, caption:, an optional option:, one drawing and "
+            "its '- edge' lines: a "
             "sentence about the drawing goes in the caption, and anything longer goes in the "
             "packet section it belongs to"):
         bad(line)
@@ -769,6 +796,26 @@ for n, fig in enumerate(figures, 1):
     for e in sorted(edges_declared - edges_drawn):
         bad("evidence names edge \"%s\", which the svg does not draw" % e)
 
+    declared_option = ""
+    for l in fig["lines"]:
+        m = FIG_FIELD.match(l)
+        if m and m.group(1) == "option":
+            declared_option = m.group(2)
+    if declared_option:
+        if not LATIN_ID.match(declared_option):
+            bad("option=\"%s\" is not a latin identity; a figure names the option the "
+                "decision block names, in the decision block's own terms" % declared_option)
+        elif options and declared_option not in options:
+            bad("option=\"%s\" is not one of the decision's options (%s); a drawing cannot "
+                "illustrate a choice the reader is never offered"
+                % (declared_option, ", ".join(options)))
+        elif declared_option in figure_options:
+            bad("option=\"%s\" is already illustrated by figure \"%s\"; one drawing per "
+                "option, or the card cannot tell which to open"
+                % (declared_option, figure_options[declared_option]))
+        else:
+            figure_options[declared_option] = name
+
     figure_nodes.append((name, nodes))
 
 # ---- the comparison rule ----------------------------------------------------
@@ -776,8 +823,17 @@ for n, fig in enumerate(figures, 1):
 # label says so, because a label would be a second declaration of something the
 # drawing already proves - and one a worker could type onto a drawing that
 # compares nothing.
-if kind == "needs-decision" and figure_nodes and options:
-    best = max(figure_nodes, key=lambda c: len(set(options) & c[1]))
+# A figure that names the option it illustrates is that option's own drawing,
+# never a candidate comparison: it draws one side of the choice on purpose, and
+# letting it compete here would let a packet answer the comparison rule with a
+# drawing that compares nothing.
+comparison_candidates = [c for c in figure_nodes if c[0] not in figure_options.values()]
+if kind == "needs-decision" and figure_nodes and options and not comparison_candidates:
+    problems.append('every figure names the option it illustrates, so none of them compares: '
+                    'a needs-decision packet still owes one drawing that puts the options '
+                    'together, carrying data-node="%s"' % '" and data-node="'.join(options))
+elif kind == "needs-decision" and comparison_candidates and options:
+    best = max(comparison_candidates, key=lambda c: len(set(options) & c[1]))
     missing = [o for o in options if o not in best[1]]
     if len(missing) == len(options):
         problems.append('no figure puts the options together: none draws a shape with '
@@ -916,7 +972,10 @@ command_card() {
       key: .key, type: "decision", repo: $repo,
       title: (.title | flat), decide: (.decide | flat), if_nothing: (.if_nothing | flat),
       reversible: .reversible,
-      options: [.options[] | {value, label: (.label | flat), consequence: (.consequence | flat)}],
+      options: [.options[] | {value, label: (.label | flat), consequence: (.consequence | flat)}
+                + (if has("buys") then {buys: (.buys | flat)} else {} end)
+                + (if has("files") then {files} else {} end)
+                + (if has("changes") then {changes: (.changes | with_entries(.value |= map(flat)))} else {} end)],
       recommend_value: .recommend_value,
       allow_freeform: true
     }
@@ -1143,7 +1202,7 @@ def md(body):
 # its colours are the page's own CSS variables. The `- edge ...` lines are an
 # integrity check verify owns and never page content, as baton has it, so they
 # do not render.
-FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
+FIG_ATTR = re.compile(r"^(figure|caption|option):\s*(\S.*?)\s*$")
 # The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
 # elements inside the drawing, and a non-greedy match would stop at the first
 # </svg> and leave the rest of the figure unread. figures_problems states this
@@ -1258,78 +1317,31 @@ def decision_card(d):
 # the drawings, whose <text> nodes carry all three by the figure contract. The
 # as-written part gets everything else, in one language, headings included, so
 # the block never moves by halves.
-FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
 FIG_NODE = re.compile(r"""data-node\s*=\s*(?:"([^"]*)"|'([^']*)')""")
-FIG_TAG = re.compile(r"""<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
-# An attribute name begins after whitespace OR after a solidus: the HTML
-# tokenizer reconsumes `/` in the before-attribute-name state, so `<a/href=...>`
-# carries an href the browser reads and a whitespace-only anchor would miss.
-FIG_ON = re.compile(r"(?:^|[\s/])on[a-z]+\s*=", re.I)
-FIG_STYLE = re.compile(r"<\s*style\b.*?</\s*style\s*>", re.S | re.I)
-FIG_URL = re.compile(r"""(?:^|[\s/])(?:xlink:)?(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))""", re.I)
-FIG_URL_OK = re.compile(r"\A(?:#|https?://|mailto:)", re.I)
-FIG_BLANK = re.compile(r"[\s\x00-\x20]")
-
-# The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
-# elements inside the drawing, and a non-greedy match would stop at the first
-# </svg> and leave the rest of the figure unread. verify states this same
-# function, character for character - the two must agree on which bytes are the
-# drawing, or verify checks one thing and the card shows another.
-SVG_TAG = re.compile(r"""<\s*(/?)svg\b((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
-
-def top_level_svgs(text):
-    out, depth, start = [], 0, None
-    for m in SVG_TAG.finditer(text):
-        if m.group(1):
-            if depth > 0:
-                depth -= 1
-                if depth == 0:
-                    out.append(text[start:m.end()]); start = None
-        elif m.group(2).rstrip().endswith("/"):
-            if depth == 0:
-                out.append(m.group(0))
-        else:
-            if depth == 0:
-                start = m.start()
-            depth += 1
-    return out
-
-# The card inlines a drawing into the BOARD, a page the packet knows nothing
-# about, so what is safe to inline is decided here and never assumed from a
-# check that runs somewhere else. A drawing that can run code, navigate the
-# board, restyle it or draw foreign markup is dropped whole - the tab then says
-# the packet carries no drawing for that option, which is true. A <style> block
-# is removed rather than dropping the drawing: inside an inlined svg it is
-# page-wide CSS and would restyle the board around it, and the figure contract
-# already keeps colour out of it, so what is lost is presentation and what is
-# kept is the board. That removal only knows where a block ENDS when it is
-# closed, so this runs on what the removal left: a <style> still standing here
-# is one with no end, and the drawing goes rather than the block.
-def figure_unsafe(svg):
-    for m in FIG_TAG.finditer(svg):
-        if m.group(1).lower() in ("script", "foreignobject", "style", "animate", "set"):
-            return True
-        if FIG_ON.search(m.group(2)):
-            return True
-        for u in FIG_URL.finditer(m.group(2)):
-            raw = next(g for g in u.groups() if g is not None)
-            if not FIG_URL_OK.match(FIG_BLANK.sub("", html.unescape(raw))):
-                return True
-    return False
-
+# The card inlines a drawing into the BOARD rather than the packet's own page,
+# and what may be inlined is the figure contract verify enforces: no <script>,
+# no <style>, no <foreignObject>, no on* handler, and every href, xlink:href and
+# src pointing at a same-document #fragment. command_card runs command_verify
+# before it builds anything, so a drawing that reaches this function is one that
+# already passed those clauses - there is no path to a card around them. An
+# earlier version of this file carried its own second check here, written when
+# the figure contract had not landed and verify had nothing to say about
+# drawings. It is gone: a second copy of a security boundary is one that can
+# disagree with the first, and this one already did, three times, over which
+# spellings of an attribute separator it recognised.
 def figures_of(body):
-    """-> (the lines before the first drawing, the drawings in packet order)"""
-    # A figure starts where a line starts with "### ", which is how verify
-    # reads the same section: a packet that verify accepts parses the same way
-    # here, whether or not a blank line follows the section heading.
-    head, chunks = [], []
+    """the drawings in packet order"""
+    # figure_heading is the reader verify and the page already share, so a
+    # packet all three accept is split the same way by all three. Content above
+    # the first heading is not collected: verify refuses it outright, so the
+    # card can only ever have seen a section that has none.
+    chunks = []
     for line in body:
-        if line.startswith("### "):
-            chunks.append([line[4:].strip(), []])
+        h = figure_heading(line)
+        if h is not None:
+            chunks.append([h, []])
         elif chunks:
             chunks[-1][1].append(line)
-        else:
-            head.append(line)
     out_figs = []
     for heading, chunk_lines in chunks:
         fields = {}
@@ -1340,20 +1352,17 @@ def figures_of(body):
         svgs = top_level_svgs("\n".join(chunk_lines))
         if not svgs:
             continue
-        # An unsafe drawing loses its drawing, not its place: what it SAYS is
-        # still true and still reaches the card, so the reader keeps the figure
-        # and drops only the markup the board cannot take.
-        drawing = FIG_STYLE.sub("", svgs[0])
-        drawing = None if figure_unsafe(drawing) else drawing
-        nodes = sorted({(a or b) for a, b in FIG_NODE.findall(drawing) if (a or b)}) if drawing else []
+        drawing = svgs[0]
+        nodes = sorted({(a or b) for a, b in FIG_NODE.findall(drawing) if (a or b)})
         out_figs.append({"slug": fields.get("figure", ""), "heading": inline(heading),
                          "caption": inline(fields.get("caption", "")),
+                         "option": fields.get("option", ""),
                          "svg": drawing, "nodes": nodes})
-    return head, out_figs
+    return out_figs
 
-def figures_words(lead, figs):
+def figures_words(figs):
     """what a figure says in words: its heading and its caption"""
-    parts = [md(lead)] if "".join(lead).strip() else []
+    parts = []
     for fig in figs:
         parts.append("<h5>%s</h5>" % fig["heading"])
         if fig["caption"]:
@@ -1364,17 +1373,17 @@ if mode == "card":
     packet_lang = meta.get("lang", "en")
     if packet_lang not in LANGS:
         packet_lang = "en"
-    figures, lead, parts = [], [], []
+    figures, parts = [], []
     for heading, body in sections:
         body, _decision = split_decision(body)
         if heading == "Figures":
-            lead, figures = figures_of(body)
+            figures = figures_of(body)
         key = SECTION_KEYS.get(heading)
         h = T[packet_lang][key] if key else heading
         # The drawings move up into the switching part of the card; their
         # headings and captions stay down here, where one language is the
         # rule rather than a leak.
-        inner = figures_words(lead, figures) if heading == "Figures" else md(body)
+        inner = figures_words(figures) if heading == "Figures" else md(body)
         # "The decision" is the card itself; a section left with nothing but
         # the block that moved into the card is not worth a heading.
         if inner.strip():
@@ -1384,7 +1393,8 @@ if mode == "card":
     # what a figure SAYS - its heading and its caption - is already in the
     # body, which is where the language rule puts it. One copy of every
     # string, and every field the card carries is a field the board renders.
-    drawings = [{"slug": f["slug"], "svg": f["svg"], "nodes": f["nodes"]}
+    drawings = [{"slug": f["slug"], "svg": f["svg"], "nodes": f["nodes"],
+                 "option": f["option"]}
                 for f in figures if f["svg"]]
     print(json.dumps({"lang": packet_lang, "figures": drawings, "body": "".join(parts)},
                      ensure_ascii=False))

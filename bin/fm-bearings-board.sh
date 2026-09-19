@@ -183,7 +183,7 @@
 #
 # THE PACKET RIDES THE CARD. A decision card MAY also carry `packet`, the whole
 # decision packet as `bin/fm-packet.sh card` reads it:
-#   {lang, figures: [{slug, svg, nodes}], body}
+#   {lang, figures: [{slug, svg, nodes, option}], body}
 # The template opens it in place - a tab strip whose first tab is the drawing
 # that names every option, one tab per option after it, and the rest of the
 # packet behind one collapsed line - so the captain decides on the board's own
@@ -310,7 +310,8 @@ validate_payload() {  # <data.json>
       type == "object"
       and (.slug | type == "string")
       and (.svg | type == "string" and test("^[[:space:]]*<svg\\b"))
-      and (.nodes | type == "array") and ([.nodes[] | type == "string"] | all);
+      and (.nodes | type == "array") and ([.nodes[] | type == "string"] | all)
+      and ((has("option") | not) or (.option | type == "string"));
     def optional_packet:
       (has("packet") | not)
       or (.packet
@@ -332,7 +333,16 @@ validate_payload() {  # <data.json>
           and (.value | slug(128))
           and (.label | copy)
           and optional_copy("hint")
-          and optional_copy("consequence")] | all)
+          and optional_copy("consequence")
+          and optional_copy("buys")
+          and ((has("files") | not)
+               or ((.files | type == "array") and ([.files[] | type == "string"] | all)))
+          and ((has("changes") | not)
+               or ((.changes | type == "object")
+                   and ([.changes | to_entries[]
+                         | (.key == "added" or .key == "removed" or .key == "unchanged")
+                           and (.value | type == "array")
+                           and ([.value[] | copy] | all)] | all)))] | all)
       and (optional_copy("about"))
       and (optional_copy("decide"))
       and (optional_copy("detail"))

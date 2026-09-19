@@ -325,6 +325,12 @@ a { color: inherit; text-decoration: none; }
 .bb-fig svg { display: block; width: 100%; height: auto; max-width: 100%; }
 .bb-panel__note { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
 .bb-panel__cost { margin: 0; font-size: var(--fs-sm); color: var(--text-body); }
+.bb-panel__rows { display: grid; gap: 4px; margin: 0; }
+.bb-panel__row { display: grid; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); gap: 8px; font-size: var(--fs-xs); }
+.bb-panel__k { color: var(--text-muted); }
+.bb-panel__v { color: var(--text-body); min-width: 0; }
+.bb-panel__v ul { margin: 0; padding-left: 1.1em; }
+.bb-panel__files { font-family: var(--mono, ui-monospace, monospace); word-break: break-all; }
 .bb-panel__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .bb-panel__label { font-size: var(--fs-sm); font-weight: 800; color: var(--text-strong); min-width: 0; }
 /* The drawings bind the figure palette the packet draws against to the board's
@@ -490,7 +496,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet: "open the packet", rec: "rec",
       tab_diff: "Difference", choose: "Choose {x}",
       tab_note: "Open a tab above to see exactly what that option changes.",
-      no_fig: "This packet carries no drawing for this option.",
+      k_adds: "Adds", k_removes: "Removes", k_same: "Leaves alone", k_files: "Files it touches", k_buys: "What it buys",
       packet_all: "The full packet", packet_said: "The worker's own words, in the language they wrote them - this block does not switch.",
       freeform: "or answer in your own words…", queue_answer: "Queue answer", queued: "queued",
       too_long: "Answer is too long to queue (512 bytes maximum).",
@@ -518,7 +524,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet: "打開 packet", rec: "建議",
       tab_diff: "差在哪", choose: "選 {x}",
       tab_note: "點上面的分頁，看那個選項到底改了什麼。",
-      no_fig: "這份說明沒有為這個選項畫圖。",
+      k_adds: "新增", k_removes: "移除", k_same: "不動", k_files: "動到的檔案", k_buys: "換到什麼",
       packet_all: "完整的決策說明", packet_said: "工作者自己的話，用他寫下的語言；這一段不會跟著切換。",
       freeform: "或用你自己的話回答…", queue_answer: "送出回答", queued: "已排入",
       too_long: "回答太長，無法排入（上限 512 bytes）。",
@@ -546,7 +552,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet: "打开 packet", rec: "建议",
       tab_diff: "差在哪", choose: "选 {x}",
       tab_note: "点上面的分页，看那个选项到底改了什么。",
-      no_fig: "这份说明没有为这个选项画图。",
+      k_adds: "新增", k_removes: "移除", k_same: "不动", k_files: "动到的文件", k_buys: "换到什么",
       packet_all: "完整的决策说明", packet_said: "工作者自己的话，用他写下的语言；这一段不会跟着切换。",
       freeform: "或用你自己的话回答…", queue_answer: "提交回答", queued: "已排入",
       too_long: "回答太长，无法排入（上限 512 bytes）。",
@@ -786,6 +792,10 @@ __FM_BEARINGS_BOARD_DATA__
     function comparisonFigure(pk, options) {
       var values = packetOptions(options).map(function (o) { return o.value; });
       for (var i = 0; i < pk.figures.length; i++) {
+        /* a drawing that names the option it illustrates is that option's own,
+           never the comparison - the packet says which it is rather than the
+           board inferring it from the identities the drawing happens to carry */
+        if (pk.figures[i].option) continue;
         var nodes = pk.figures[i].nodes || [];
         var covers = values.every(function (v) { return nodes.indexOf(v) >= 0; });
         if (covers && values.length) return pk.figures[i];
@@ -879,8 +889,8 @@ __FM_BEARINGS_BOARD_DATA__
         var diff = el("div", "bb-panel");
         if (compare) { diff.appendChild(figureNode(compare)); claimed.push(compare); }
         packet.figures.forEach(function (fig) {
-          var forOption = item.options.some(function (o) { return (fig.nodes || []).indexOf(o.value) >= 0; });
-          if (!forOption && claimed.indexOf(fig) < 0) { diff.appendChild(figureNode(fig)); claimed.push(fig); }
+          if (fig.option) return;
+          if (claimed.indexOf(fig) < 0) { diff.appendChild(figureNode(fig)); claimed.push(fig); }
         });
         diff.appendChild(el("p", "bb-panel__note", t("tab_note")));
         addTab(t("tab_diff"), null, diff);
@@ -890,12 +900,9 @@ __FM_BEARINGS_BOARD_DATA__
           var drawn = 0;
           packet.figures.forEach(function (fig) {
             if (fig === compare || claimed.indexOf(fig) >= 0) return;
-            if ((fig.nodes || []).indexOf(o.value) < 0) return;
+            if (fig.option !== o.value) return;
             panel.appendChild(figureNode(fig)); claimed.push(fig); drawn += 1;
           });
-          if (!drawn && drawable && o.value !== "reconcile") {
-            panel.appendChild(el("p", "bb-panel__note", t("no_fig")));
-          }
           var head = el("div", "bb-panel__head");
           head.appendChild(el("span", "bb-panel__label", pick(o.label)));
           if (item.recommend_value && o.value === item.recommend_value) {
@@ -903,6 +910,31 @@ __FM_BEARINGS_BOARD_DATA__
           }
           panel.appendChild(head);
           if (o.hint) panel.appendChild(el("p", "bb-panel__note", pick(o.hint)));
+          /* what this option actually changes: the three-way list, the files it
+             touches, and what it buys. Every one is optional, and a packet that
+             carries none of them renders the panel exactly as it did before. */
+          var rows = el("div", "bb-panel__rows");
+          function listRow(label, items, cls) {
+            if (!items || !items.length) return;
+            var r = el("div", "bb-panel__row");
+            r.appendChild(el("span", "bb-panel__k", label));
+            var v = el("span", "bb-panel__v" + (cls ? " " + cls : ""));
+            var ul = el("ul", "");
+            items.forEach(function (it) { ul.appendChild(el("li", "", pick(it))); });
+            v.appendChild(ul); r.appendChild(v); rows.appendChild(r);
+          }
+          var ch = o.changes || {};
+          listRow(t("k_adds"), ch.added);
+          listRow(t("k_removes"), ch.removed);
+          listRow(t("k_same"), ch.unchanged);
+          listRow(t("k_files"), o.files, "bb-panel__files");
+          if (o.buys) {
+            var br = el("div", "bb-panel__row");
+            br.appendChild(el("span", "bb-panel__k", t("k_buys")));
+            br.appendChild(el("span", "bb-panel__v", pick(o.buys)));
+            rows.appendChild(br);
+          }
+          if (rows.children.length) panel.appendChild(rows);
           if (o.consequence) panel.appendChild(el("p", "bb-panel__cost", pick(o.consequence)));
           if (item.recommend_why && o.value === item.recommend_value) {
             var why2 = el("div", "bb-ctx");

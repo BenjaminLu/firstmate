@@ -152,19 +152,31 @@ good_figures() {  # -> the whole Figures body, with $1 substituted for the svg w
     '- edge quiet-to-end: the merged-record rule at bin/fm-contributions.sh:190'
 }
 
-fill_figures() {  # <packet> [figures-body]: replace the scaffolded Figures section
+fill_figures() {  # <packet> [figures-body] [gap]: replace the scaffolded Figures section
   local body=${2-}
   [ -n "$body" ] || body=$(good_figures)
-  FIG_BODY="$body" python3 - "$1" <<'PY'
+  FIG_BODY="$body" FIG_GAP="${3-}" python3 - "$1" <<'PY'
 import os, re, sys, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 body = os.environ["FIG_BODY"]
+gap = "\n" if os.environ.get("FIG_GAP") == "tight" else "\n\n"
 if "## Figures" in s:
-    s = re.sub(r"## Figures\n.*?\n## Evidence", lambda m: "## Figures\n\n" + body + "\n\n## Evidence", s, flags=re.S)
+    s = re.sub(r"## Figures\n.*?\n## Evidence", lambda m: "## Figures" + gap + body + "\n\n## Evidence", s, flags=re.S)
 else:
-    s = s.replace("\n## Evidence", "\n## Figures\n\n" + body + "\n\n## Evidence", 1)
+    s = s.replace("\n## Evidence", "\n## Figures" + gap + body + "\n\n## Evidence", 1)
 p.write_text(s)
 PY
+}
+
+set_figures_from_stdin() {  # <packet> <<'MD' ... MD : replace the section from stdin
+  fill_figures "$1" "$(cat)"
+}
+
+# The same, with the body pressed straight against the section heading: a packet
+# with no blank line there is one verify accepts, so the card must read it the
+# same way rather than losing the first drawing.
+set_figures_tight_from_stdin() {  # <packet> <<'MD' ... MD
+  fill_figures "$1" "$(cat)" tight
 }
 
 # Refuse the good figure with one clause broken; every case must name its reason.
@@ -770,10 +782,7 @@ test_the_card_carries_the_packet_itself() {
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
   # A Figures section, in the shape the packet's own figure contract defines.
-  cat >> "$packet" <<'MD'
-
-## Figures
-
+  set_figures_from_stdin "$packet" <<'MD'
 ### Where the options part
 
 figure: cmp
@@ -809,19 +818,29 @@ MD
   pass "the card carries the packet itself: its drawings, and the rest as markup"
 }
 
-test_a_packet_with_no_figures_still_cards() {
-  local home out packet
+# The board still renders a card whose packet carries no drawings - that path is
+# covered where it lives, in the render suite - but the packet can no longer
+# REACH it by simply having none: since the figure contract landed, a
+# needs-decision packet owes a drawing, and card verifies before it builds. So
+# what is worth proving here is the refusal, and that it names what is missing
+# rather than handing the board an empty card.
+test_a_needs_decision_packet_with_no_figures_is_refused() {
+  local home out rc packet
   home=$(make_home card-packet-plain)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
-  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
-  printf '%s' "$out" | jq -e '
-    (.packet.figures == []) and (.packet.body | test("tried a retry loop first"))
-    and (.options | length) == 2
-  ' >/dev/null || fail "a packet with no drawings did not card: $out"
-  pass "a packet with no figures still carries its body onto the card"
+  python3 - "$packet" <<'STRIP'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(re.sub(r"## Figures\n.*?\n## Evidence", "## Evidence", s, flags=re.S))
+STRIP
+  set +e; out=$(run_packet "$home" card pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "card built a decision card with no drawing: $out"
+  printf '%s' "$out" | grep -q "Figures" \
+    || fail "the refusal does not name the missing Figures section: $out"
+  pass "a needs-decision packet with no drawing is refused, naming what is missing"
 }
 
 test_the_packet_body_declares_the_one_language_it_is_in() {
@@ -831,6 +850,7 @@ test_the_packet_body_declares_the_one_language_it_is_in() {
   packet="$home/data/pk-1/packet.md"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
   out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
   printf '%s' "$out" | jq -e '.packet.lang == "en"' >/dev/null \
     || fail "an undeclared packet did not default to en: $out"
@@ -848,77 +868,95 @@ PY
   pass "the packet body declares the one language it is in, and its headings follow it"
 }
 
-test_a_drawing_the_board_cannot_safely_inline_never_reaches_the_card() {
+# The clause-by-clause refusals live in the verify test above; what matters here
+# is that card is on the far side of them. A drawing that could run code on the
+# captain's board must not merely be dropped from the card - the packet carrying
+# it must not produce a card at all, because a dropped drawing is a silent
+# result and a refusal is not.
+# The figure contract names the option a drawing illustrates, rather than the
+# board inferring it from the identities the drawing happens to carry. The
+# inference was this branch's own invention and it was wrong for exactly the
+# drawings the approved prototype uses, whose shapes are named a0-fn and a1-fn,
+# not after the options at all.
+test_a_figure_names_the_option_it_illustrates() {
   local home out packet
+  home=$(make_home fig-option)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  set_figures_from_stdin "$packet" <<'MD'
+### Where the two options differ
+
+figure: cmp
+caption: Both options end at the same place; only the left column differs.
+
+<svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="both" data-hant="兩個" data-hans="两个">both</text></svg>
+
+### What raising the bound changes
+
+figure: raise
+option: bound
+caption: the wait grows and the failures stop.
+
+<svg viewBox="0 0 20 20"><rect data-node="a0-fn" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="before" data-hant="之前" data-hans="之前">before</text></svg>
+MD
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    ((.packet.figures | length) == 2)
+    # the comparison names no option of its own
+    and (.packet.figures[0] | .slug == "cmp" and (.option == "" or (has("option") | not)))
+    # the option drawing says which option it is for, and is believed even
+    # though not one of the identities it draws is an option value
+    and (.packet.figures[1] | .slug == "raise" and .option == "bound"
+         and (.nodes == ["a0-fn"]))
+  ' >/dev/null || fail "a figure did not carry the option it illustrates: $out"
+  pass "a figure names the option it illustrates, whatever its shapes are called"
+}
+
+test_a_figure_cannot_name_an_option_the_decision_never_offers() {
+  local home packet
+  home=$(make_home fig-option-bad)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  assert_figure_refused "$home" "$packet" \
+    "$(good_figures | sed 's/^figure: opt$/figure: opt\noption: nonesuch/')" \
+    "not one of the decision's options" \
+    "a drawing that illustrates a choice the reader is never offered"
+
+  # and a packet whose every drawing claims an option still owes a comparison
+  assert_figure_refused "$home" "$packet" \
+    "$(good_figures | sed 's/^figure: opt$/figure: opt\noption: bound/')" \
+    "none of them compares" \
+    "a packet whose only drawing illustrates one side of the choice"
+  pass "a figure's option must name a real option, and one drawing per option is still not a comparison"
+}
+
+test_a_drawing_that_could_run_code_never_produces_a_card() {
+  local home out rc packet
   home=$(make_home card-packet-unsafe)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
-  # The card inlines a drawing into the board, so it decides for itself what is
-  # safe to put there rather than trusting a check that runs somewhere else.
-  cat >> "$packet" <<'MD'
-
-## Figures
-
-### A drawing that runs code
-
-figure: bad
-caption: this one must not reach the board.
-
-<svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><script>window.top.location = "https://example.test"</script></svg>
-
+  set_figures_from_stdin "$packet" <<'MD'
 ### A drawing that runs code when the reader clicks it
 
-figure: linked
-caption: an inline link runs its href in the page that inlined it.
+figure: hostile
+caption: an inline link runs its href on the board that inlined it.
 
-<svg viewBox="0 0 20 20"><a xlink:href="javascript:alert(1)"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></a></svg>
-
-### A drawing that hides its handler behind a solidus
-
-figure: solidus-on
-caption: the browser starts an attribute after a slash, with or without a space.
-
-<svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/onclick="alert(1)"></rect></svg>
-
-### A drawing that hides its link behind a solidus
-
-figure: solidus-href
-caption: the same slash hides an href the board would still follow.
-
-<svg viewBox="0 0 20 20"><a/xlink:href="javascript:alert(1)"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></a></svg>
-
-### A drawing whose style block is never closed
-
-figure: unclosed
-caption: nothing pairs this one, so removing the block cannot find its end.
-
-<svg viewBox="0 0 20 20"><style>.bb-decision__foot { display: none }<rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></svg>
-
-### A drawing that restyles the page around it
-
-figure: styled
-caption: its style block is page-wide CSS once inlined.
-
-<svg viewBox="0 0 20 20"><style>.bb-decision__foot { display: none }</style><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="kept" data-hant="留著" data-hans="留着">kept</text></svg>
+<svg viewBox="0 0 20 20"><a xlink:href="javascript:alert(1)"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></a><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="run" data-hant="跑" data-hans="跑">run</text></svg>
 MD
-  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
-  printf '%s' "$out" | jq -e '
-    # the ones that can run code, navigate the board, or restyle it with a
-    # block nothing closes are dropped whole
-    ([.packet.figures[] | .slug] == ["styled"])
-    # the one whose style block is closed keeps its drawing and loses the block
-    and (.packet.figures[0].svg | test("<style") | not)
-    and (.packet.figures[0].svg | test("data-node=\"quiet\""))
-    and (.packet.figures[0].svg | test("data-hant=\"留著\""))
-    # and every one of them still says in words what it was for
-    and (.packet.body | test("an inline link runs its href"))
-    and (.packet.body | test("removing the block cannot find its end"))
-    and (.packet.body | test("with or without a space"))
-    and (.packet.body | test("hides an href the board would still follow"))
-  ' >/dev/null || fail "an unsafe drawing reached the card: $out"
-  pass "a drawing that can run code, navigate or restyle the board never reaches the card as it was written"
+  set +e; out=$(run_packet "$home" card pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "card was built from a drawing that can run code: $out"
+  printf '%s' "$out" | grep -q "javascript:alert(1)" \
+    || fail "the refusal does not name the href it refused: $out"
+  # and nothing was printed for the board to consume
+  printf '%s' "$out" | grep -q '"figures"' \
+    && fail "the refusal still emitted a card payload: $out"
+  pass "a drawing that could run code on the board is refused rather than quietly dropped"
 }
 
 test_a_figures_section_parses_the_same_without_a_blank_line_after_it() {
@@ -931,9 +969,7 @@ test_a_figures_section_parses_the_same_without_a_blank_line_after_it() {
   # verify reads this section per line, so a figure that opens on the line
   # straight after the section heading is a packet verify accepts - and the
   # card has to read it the same way rather than losing the first drawing.
-  cat >> "$packet" <<'MD'
-
-## Figures
+  set_figures_tight_from_stdin "$packet" <<'MD'
 ### Where the options part
 figure: cmp
 caption: Both reach the gate; only one writes onto the data stream.
@@ -963,10 +999,7 @@ test_a_drawing_that_nests_an_icon_is_read_whole() {
   # depth to decide which bytes are the drawing. Stopping at the first </svg>
   # would hand the board half a figure and a node set short of one option, so
   # the comparison drawing would no longer name every option.
-  cat >> "$packet" <<'MD'
-
-## Figures
-
+  set_figures_from_stdin "$packet" <<'MD'
 ### Where the options part
 
 figure: cmp
@@ -1201,8 +1234,10 @@ test_render_decision_card_answers_the_five_questions
 test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it
 test_name_support_probe_never_lists_before_the_session_is_opened
 test_the_card_carries_the_packet_itself
-test_a_packet_with_no_figures_still_cards
+test_a_needs_decision_packet_with_no_figures_is_refused
 test_the_packet_body_declares_the_one_language_it_is_in
-test_a_drawing_the_board_cannot_safely_inline_never_reaches_the_card
+test_a_figure_names_the_option_it_illustrates
+test_a_figure_cannot_name_an_option_the_decision_never_offers
+test_a_drawing_that_could_run_code_never_produces_a_card
 test_a_figures_section_parses_the_same_without_a_blank_line_after_it
 test_a_drawing_that_nests_an_icon_is_read_whole
