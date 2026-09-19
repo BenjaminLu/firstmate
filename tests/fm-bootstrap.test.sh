@@ -49,7 +49,27 @@ make_fake_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
   fm_fake_exit0 "$fakebin" tmux node chrome-devtools-axi
-  fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.46
+  # Answers --help as well as --version: bootstrap probes the board's --name
+  # capability separately from the version floor, so a stub that answered only
+  # --version would make every unrelated case report an unverifiable probe.
+  # FM_FAKE_LAVISH_AXI_NAME_HELP=0 drops the flag for cases that pin that probe.
+  cat > "$fakebin/lavish-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' "${FM_FAKE_LAVISH_AXI_VERSION:-0.1.46}"
+  exit 0
+fi
+if [ "${1:-}" = --help ]; then
+  if [ "${FM_FAKE_LAVISH_AXI_NAME_HELP:-1}" = 1 ]; then
+    printf '%s\n' "usage: lavish-axi <file> [--name <slug>] [--reopen]"
+  else
+    printf '%s\n' "usage: lavish-axi <file> [--reopen]"
+  fi
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$fakebin/lavish-axi"
   cat > "$fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
@@ -1248,6 +1268,428 @@ ROWS
   pass "bootstrap gates resolver fields and additive harnesses on the typed key"
 }
 
+# ---------------------------------------------------------------------------
+# What a fresh clone is told about what it does not have.
+#
+# Each case below pins one thing bootstrap now states that it used to leave a
+# clone to discover by failing later. They share a helper rather than the
+# table above because they vary the HOME and harness environment, not the
+# toolchain versions the table is parameterised over.
+# ---------------------------------------------------------------------------
+
+# A home plus a fake toolchain, with the ambient Claude config pointed at an
+# empty directory so a case is never answered by the developer's own settings.
+clone_truth_case() {  # <name>
+  local case_dir
+  case_dir="$TMP_ROOT/clone-$1"
+  mkdir -p "$case_dir/home/config" "$case_dir/claude" "$case_dir/root"
+  printf '%s\n' tmux > "$case_dir/home/config/backend"
+  make_fake_toolchain "$case_dir" >/dev/null
+  printf '%s\n' "$case_dir"
+}
+
+# The allow-list probe runs a node program, and make_fake_toolchain's node is a
+# bare exit-0 stub. A case that exercises the probe needs the real interpreter,
+# exactly as the dispatch-profile cases need the real jq.
+add_real_node() {
+  local fakebin=$1 real_node
+  real_node=$(command -v node 2>/dev/null) || fail "node is required for the permission allow-list tests"
+  printf '#!/usr/bin/env bash\nexec %s "$@"\n' "$real_node" > "$fakebin/node"
+  chmod +x "$fakebin/node"
+}
+
+run_clone_bootstrap() {  # <case-dir> [env assignments...]
+  local case_dir=$1
+  shift
+  env "$@" PATH="$case_dir/fakebin:$BASE_PATH" \
+    FM_HOME="$case_dir/home" \
+    CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_BOOTSTRAP_NETWORK=skip \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null
+}
+
+# The backlog refuses without a data directory, and nothing used to create one.
+test_bootstrap_creates_the_home_data_directory() {
+  local case_dir out
+  case_dir=$(clone_truth_case data-dir)
+  [ ! -d "$case_dir/home/data" ] || fail "fixture should start without a data directory"
+  # Creating it is benign setup, so an ordinary run does it silently; the fact
+  # is available behind the verbose flag like the other routine confirmations.
+  out=$(run_clone_bootstrap "$case_dir" FM_BOOTSTRAP_VERBOSE_FACTS=1)
+  [ -d "$case_dir/home/data" ] || fail "bootstrap should create the home data directory, got: $out"
+  case "$out" in
+    *"created this home's data directory"*) ;;
+    *) fail "the verbose fact should report creating the data directory, got: $out" ;;
+  esac
+  # Idempotent: it is created once, not re-reported on every later session.
+  out=$(run_clone_bootstrap "$case_dir" FM_BOOTSTRAP_VERBOSE_FACTS=1)
+  case "$out" in
+    *"created this home's data directory"*) fail "second run should not re-report creating the data directory" ;;
+  esac
+  # And the backlog, which refuses without it, now resolves its data directory.
+  rm -rf "$case_dir/home/data"
+  out=$(run_clone_bootstrap "$case_dir")
+  [ -d "$case_dir/home/data" ] || fail "a silent run should still create the data directory"
+  case "$out" in
+    *"created this home's data directory"*) fail "an ordinary run should create it silently, got: $out" ;;
+  esac
+  pass "bootstrap creates the home data directory the backlog needs, once and silently"
+}
+
+# A data path that is not a directory is reported, never replaced: it may be a
+# deliberate link to a home elsewhere.
+test_bootstrap_refuses_a_data_path_that_is_not_a_directory() {
+  local case_dir out
+  case_dir=$(clone_truth_case data-file)
+  printf 'not a directory\n' > "$case_dir/home/data"
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *"is not a directory"*) ;;
+    *) fail "bootstrap should report a non-directory data path, got: $out" ;;
+  esac
+  [ -f "$case_dir/home/data" ] || fail "bootstrap must not replace an existing data path"
+  grep -q 'not a directory' "$case_dir/home/data" || fail "existing data path contents must survive"
+  pass "bootstrap reports a non-directory data path instead of clobbering it"
+}
+
+# The skill a decision packet is drawn through: absent it blocks every
+# escalation that owes figures, and bootstrap can neither find it on PATH nor
+# install it. Both shipped layouts must count as installed - a flat skill
+# directory, and the upstream repository checkout that nests SKILL.md files
+# under skills/ - or the check reports a working install missing.
+test_diagram_design_skill_is_reported_as_a_manual_install() {
+  local case_dir out
+  case_dir=$(clone_truth_case diagram)
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *"MISSING_MANUAL: diagram-design"*) ;;
+    *) fail "an absent diagram-design skill should be reported, got: $out" ;;
+  esac
+
+  mkdir -p "$case_dir/claude/skills/diagram-design"
+  : > "$case_dir/claude/skills/diagram-design/SKILL.md"
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *diagram-design*) fail "a flat diagram-design install should be silent, got: $out" ;;
+  esac
+
+  rm -rf "$case_dir/claude/skills/diagram-design"
+  mkdir -p "$case_dir/claude/skills/diagram-design/skills/diagram-design"
+  : > "$case_dir/claude/skills/diagram-design/skills/diagram-design/SKILL.md"
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *diagram-design*) fail "a nested diagram-design checkout should be silent, got: $out" ;;
+  esac
+  pass "diagram-design is reported as a manual install, and both shipped layouts count as installed"
+}
+
+# The board only has one stable address because lavish-axi accepts --name. The
+# published package does NOT carry that flag and reports a HIGHER version than
+# the fork build that does, so a version floor cannot answer the question: a
+# feature-less newer release clears the floor and the board quietly comes up at
+# a URL that changes.
+lavish_help_stub() {  # <fakebin> <version> <mode: named|plain|broken>
+  cat > "$1/lavish-axi" <<SH
+#!/usr/bin/env bash
+if [ "\$1" = --version ]; then printf '%s\n' '$2'; exit 0; fi
+if [ "\$1" = --help ]; then
+  case '$3' in
+    named) printf '%s\n' 'usage: lavish-axi <file> [--name <slug>] [--reopen]'; exit 0 ;;
+    plain) printf '%s\n' 'usage: lavish-axi <file> [--reopen]'; exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
+exit 0
+SH
+  chmod +x "$1/lavish-axi"
+}
+
+test_lavish_named_session_is_a_capability_probe_not_a_version_floor() {
+  local case_dir out
+  case_dir=$(clone_truth_case lavish)
+
+  # The fork build: LOWER version, has the flag. Must be silent.
+  lavish_help_stub "$case_dir/fakebin" 0.1.71 named
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *PRESENTATION_UNSTABLE_URL*) fail "a build accepting --name should be silent, got: $out" ;;
+    *PRESENTATION_UNAVAILABLE*) fail "a build over the floor should not be reported unavailable, got: $out" ;;
+  esac
+
+  # The published build: HIGHER version, no flag. This is the case a floor misses.
+  lavish_help_stub "$case_dir/fakebin" 0.1.73 plain
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *"PRESENTATION_UNSTABLE_URL: lavish-axi 0.1.73 does not accept --name"*) ;;
+    *) fail "a newer build without --name should be reported, got: $out" ;;
+  esac
+  case "$out" in
+    *PRESENTATION_UNAVAILABLE*) fail "a build over the floor must not also report unavailable, got: $out" ;;
+  esac
+
+  # Unreadable help is NOT a pass: it is reported as unverified.
+  lavish_help_stub "$case_dir/fakebin" 0.1.73 broken
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *"PRESENTATION_UNSTABLE_URL: could not read lavish-axi --help"*) ;;
+    *) fail "an unreadable --help should be reported unverified, got: $out" ;;
+  esac
+
+  # Below the floor, only the pre-existing unavailable line fires.
+  lavish_help_stub "$case_dir/fakebin" 0.1.40 plain
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *PRESENTATION_UNAVAILABLE*) ;;
+    *) fail "a build below the floor should still report unavailable, got: $out" ;;
+  esac
+  case "$out" in
+    *PRESENTATION_UNSTABLE_URL*) fail "below the floor must not report both lines, got: $out" ;;
+  esac
+  pass "the board --name capability is probed directly, and an unreadable probe reports unverified rather than passing"
+}
+
+# An experimental backend must never be silent, however it was selected. The
+# pre-existing auto-detect notice covers only herdr and cmux, which left an
+# explicitly configured zellij or orca - neither with a dedicated CI lane -
+# running with nothing said at all.
+test_experimental_backend_is_always_stated() {
+  local case_dir out backend
+  case_dir=$(clone_truth_case backend)
+  mkdir -p "$case_dir/home/config"
+  for backend in herdr zellij orca cmux; do
+    printf '%s\n' "$backend" > "$case_dir/home/config/backend"
+    out=$(run_clone_bootstrap "$case_dir")
+    case "$out" in
+      *"BACKEND_EXPERIMENTAL: $backend (config: config/backend)"*) ;;
+      *) fail "an explicitly configured $backend should be reported experimental, got: $out" ;;
+    esac
+    # The remedy has to fit the case: this home already recorded the choice.
+    case "$out" in
+      *"records this deliberately"*) ;;
+      *) fail "a configured $backend should be told the opt-out, not told to record it again, got: $out" ;;
+    esac
+  done
+
+  printf '%s\n' tmux > "$case_dir/home/config/backend"
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *BACKEND_EXPERIMENTAL*) fail "the verified reference backend should not be reported experimental, got: $out" ;;
+  esac
+  out=$(run_clone_bootstrap "$case_dir" FM_BOOTSTRAP_VERBOSE_FACTS=1)
+  case "$out" in
+    *"BOOTSTRAP_INFO: runtime backend tmux (config: config/backend)"*) ;;
+    *) fail "the reference backend should be a verbose fact, got: $out" ;;
+  esac
+
+  rm -f "$case_dir/home/config/backend"
+  out=$(run_clone_bootstrap "$case_dir" FM_BACKEND=orca)
+  case "$out" in
+    *"BACKEND_EXPERIMENTAL: orca (environment: FM_BACKEND)"*) ;;
+    *) fail "an environment-selected experimental backend should name that source, got: $out" ;;
+  esac
+  pass "an experimental backend is stated whichever rung of the precedence chose it, with a remedy that fits"
+}
+
+# The tracked allow-list is an OFFER at detect time and a merge only on consent,
+# the same rule bootstrap uses for tool installs.
+test_claude_permission_starter_is_offered_then_merged_on_consent() {
+  local case_dir out settings before
+  case_dir=$(clone_truth_case perms)
+  cat > "$case_dir/fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/claude"
+  add_real_node "$case_dir/fakebin"
+  settings="$case_dir/claude/settings.json"
+
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *"CLAUDE_PERMISSIONS: "*"not pre-approved"*"install-permissions"*) ;;
+    *) fail "a home with no pre-approved commands should be offered the list, got: $out" ;;
+  esac
+  [ ! -e "$settings" ] || fail "detection must not write the settings file"
+
+  # An operator's own file: other keys, a deny list, and a rule of their own.
+  mkdir -p "$case_dir/claude"
+  printf '%s\n' '{"model":"opus","permissions":{"allow":["Bash(mytool:*)"],"deny":["Bash(rm:*)"]}}' > "$settings"
+  before=$(cat "$settings")
+  env PATH="$case_dir/fakebin:$BASE_PATH" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_HOME="$case_dir/home" "$ROOT/bin/fm-bootstrap.sh" install-permissions >/dev/null 2>&1 \
+    || fail "install-permissions should succeed on a valid settings file"
+
+  node -e '
+const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const a = j.permissions.allow;
+if (j.model !== "opus") { console.error("lost an unrelated top-level key"); process.exit(1); }
+if (JSON.stringify(j.permissions.deny) !== JSON.stringify(["Bash(rm:*)"])) { console.error("lost the deny list"); process.exit(1); }
+if (!a.includes("Bash(mytool:*)")) { console.error("removed a rule the operator already had"); process.exit(1); }
+if (!a.includes("Bash(no-mistakes:*)")) { console.error("did not add the shipped rules"); process.exit(1); }
+if (new Set(a).size !== a.length) { console.error("duplicated a rule"); process.exit(1); }
+if (a.some((r) => r.includes("{{FM_ROOT}}"))) { console.error("left the placeholder unresolved"); process.exit(1); }
+' "$settings" || fail "merged settings failed its invariants"
+
+  # Idempotent.
+  env PATH="$case_dir/fakebin:$BASE_PATH" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_HOME="$case_dir/home" "$ROOT/bin/fm-bootstrap.sh" install-permissions >/dev/null 2>&1 \
+    || fail "a second install-permissions should still succeed"
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *CLAUDE_PERMISSIONS*) fail "a merged home should no longer be offered the list, got: $out" ;;
+  esac
+
+  # A settings file that cannot be parsed is refused, not rewritten.
+  printf '%s\n' '{not json' > "$settings"
+  before=$(cat "$settings")
+  if env PATH="$case_dir/fakebin:$BASE_PATH" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_HOME="$case_dir/home" "$ROOT/bin/fm-bootstrap.sh" install-permissions >/dev/null 2>&1; then
+    fail "install-permissions should refuse an unparseable settings file"
+  fi
+  [ "$(cat "$settings")" = "$before" ] || fail "a refused merge must leave the settings file untouched"
+  pass "the tracked allow-list is offered at detect time, merged only on consent, additive, idempotent, and refuses rather than rewriting what it cannot parse"
+}
+
+# A probe that never ran is not a clean result. With no usable interpreter the
+# comparison cannot happen at all, and the session start has to say so rather
+# than report a home as fully pre-approved while every command still prompts.
+test_claude_permission_probe_reports_when_it_cannot_compare() {
+  local case_dir out
+  case_dir=$(clone_truth_case perms-unverifiable)
+  cat > "$case_dir/fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/claude"
+  # node present but unusable: the probe exits non-zero without listing anything.
+  cat > "$case_dir/fakebin/node" <<'SH'
+#!/usr/bin/env bash
+exit 9
+SH
+  chmod +x "$case_dir/fakebin/node"
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *"CLAUDE_PERMISSIONS: could not compare"*) ;;
+    *) fail "an unrunnable comparison should be reported, not passed silently, got: $out" ;;
+  esac
+  pass "a permission comparison that could not run reports that, instead of passing by silence"
+}
+
+# A fork whose workflows are dormant makes every validation run wait out the
+# full CI timeout for checks that never report. The two signals are independent
+# on purpose: repository-level Actions can be off, or the workflows themselves
+# can be dormant, and a token that cannot read the admin-scoped permissions
+# endpoint must not produce a nag while workflows are visibly running.
+gh_actions_stub() {  # <fakebin> <workflow states or -> <permissions enabled or ->
+  cat > "$1/gh" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = auth ]; then exit 0; fi
+if [ "\${1:-}" = api ]; then
+  case "\${2:-}" in
+    *actions/workflows) [ '$2' = '-' ] && exit 1; printf '%s\n' '$2'; exit 0 ;;
+    *actions/permissions) [ '$3' = '-' ] && exit 1; printf '%s\n' '$3'; exit 0 ;;
+  esac
+fi
+exit 0
+SH
+  chmod +x "$1/gh"
+}
+
+run_clone_network() {  # <case-dir>
+  env PATH="$1/fakebin:$BASE_PATH" FM_HOME="$1/home" \
+    CLAUDE_CONFIG_DIR="$1/claude" FM_BOOTSTRAP_NETWORK=only \
+    FM_BOOTSTRAP_DETECT_ONLY=1 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null
+}
+
+test_dormant_fork_checks_are_reported() {
+  local case_dir out
+  case_dir=$(clone_truth_case actions)
+
+  gh_actions_stub "$case_dir/fakebin" "disabled_fork disabled_fork" -
+  out=$(run_clone_network "$case_dir")
+  case "$out" in
+    *"ACTIONS_DORMANT: no workflow is active"*) ;;
+    *) fail "dormant fork workflows should be reported, got: $out" ;;
+  esac
+
+  gh_actions_stub "$case_dir/fakebin" - false
+  out=$(run_clone_network "$case_dir")
+  case "$out" in
+    *"ACTIONS_DORMANT: GitHub Actions is disabled"*) ;;
+    *) fail "repository-level disabled Actions should be reported, got: $out" ;;
+  esac
+
+  # Either positive signal on its own is enough to stay quiet.
+  gh_actions_stub "$case_dir/fakebin" "disabled_fork active" -
+  out=$(run_clone_network "$case_dir")
+  case "$out" in
+    *ACTIONS_*) fail "an active workflow should keep the check quiet, got: $out" ;;
+  esac
+  gh_actions_stub "$case_dir/fakebin" - true
+  out=$(run_clone_network "$case_dir")
+  case "$out" in
+    *ACTIONS_*) fail "enabled Actions should keep the check quiet, got: $out" ;;
+  esac
+
+  # Neither readable is reported as unverified, never as a pass.
+  gh_actions_stub "$case_dir/fakebin" - -
+  out=$(run_clone_network "$case_dir")
+  case "$out" in
+    *"ACTIONS_UNVERIFIED"*) ;;
+    *) fail "an unreadable checks state should be reported unverified, got: $out" ;;
+  esac
+  pass "dormant repository checks are reported, either positive signal silences the check, and an unreadable state reports unverified"
+}
+
+# Inside a fork, gh resolves the UPSTREAM slug, so the repository has to come
+# from this checkout's own origin remote or the check would confidently report
+# the parent's healthy Actions while this fork's sat dormant.
+test_actions_check_uses_this_repositorys_own_origin() {
+  local case_dir out fake_root
+  case_dir=$(clone_truth_case actions-origin)
+  fake_root="$case_dir/origin-root"
+  # The check only asks about a repository that actually ships workflows.
+  mkdir -p "$fake_root/.github/workflows"
+  git init -q "$fake_root"
+  git -C "$fake_root" remote add origin "git@github.com:someone-else/their-fork.git"
+  gh_actions_stub "$case_dir/fakebin" "disabled_fork" -
+  out=$(env PATH="$case_dir/fakebin:$BASE_PATH" FM_HOME="$case_dir/home" \
+    FM_ROOT_OVERRIDE="$fake_root" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  case "$out" in
+    *"someone-else/their-fork"*) ;;
+    *) fail "the check should name the repository this checkout pushes to, got: $out" ;;
+  esac
+  pass "the checks state is read for this checkout's own origin, not whatever gh resolves to"
+}
+
+# A home whose crewmates run another harness never reads Claude settings, so it
+# is not told about a file it does not use.
+test_claude_permission_offer_is_scoped_to_claude_homes() {
+  local case_dir out
+  case_dir=$(clone_truth_case perms-harness)
+  cat > "$case_dir/fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/claude"
+  add_real_node "$case_dir/fakebin"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' codex > "$case_dir/home/config/crew-harness"
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *CLAUDE_PERMISSIONS*) fail "a codex crew home should not be offered Claude permission rules, got: $out" ;;
+  esac
+  printf '%s\n' claude > "$case_dir/home/config/crew-harness"
+  out=$(run_clone_bootstrap "$case_dir")
+  case "$out" in
+    *CLAUDE_PERMISSIONS*) ;;
+    *) fail "a claude crew home should be offered the list, got: $out" ;;
+  esac
+  pass "the allow-list offer is scoped to homes whose workers actually read Claude settings"
+}
+
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_gh_axi_min_version
@@ -1276,3 +1718,13 @@ test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_bootstrap_creates_the_home_data_directory
+test_bootstrap_refuses_a_data_path_that_is_not_a_directory
+test_diagram_design_skill_is_reported_as_a_manual_install
+test_lavish_named_session_is_a_capability_probe_not_a_version_floor
+test_experimental_backend_is_always_stated
+test_claude_permission_starter_is_offered_then_merged_on_consent
+test_claude_permission_probe_reports_when_it_cannot_compare
+test_dormant_fork_checks_are_reported
+test_actions_check_uses_this_repositorys_own_origin
+test_claude_permission_offer_is_scoped_to_claude_homes
