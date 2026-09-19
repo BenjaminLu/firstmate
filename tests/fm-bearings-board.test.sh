@@ -343,47 +343,43 @@ test_compose_survives_a_record_that_breaks_the_acknowledgement_merge() {
   pass "one unmergeable record is skipped and every other acknowledgement survives"
 }
 
-# A record retires when its key leaves the board: no row can render it again,
-# so compose drops it. This is the only reason a record is dropped there - the
-# companion test below holds the deliberate half, that age is never a reason.
-test_compose_drops_a_record_whose_row_has_left_the_board() {
+# Retirement is the handler's alone. A publication enumerates what the
+# snapshot's options and caps gave it - merge cards need --include-prs, gates
+# and decisions are capped - so a key missing from one skeleton says nothing
+# about whether its row still exists, and a refusal the captain has not seen
+# yet must outlive a board that did not happen to carry its row.
+test_compose_keeps_a_record_whose_key_is_absent_from_the_skeleton() {
   local home skeleton
-  home=$(make_compose_home compose-ack-unreachable)
-  run_board "$home" ack plain-queued --acting >/dev/null || fail "recording the live acknowledgement failed"
-  run_board "$home" ack answered-and-gone --acting >/dev/null \
-    || fail "recording the unreachable acknowledgement failed"
+  home=$(make_compose_home compose-ack-absent-key)
+  run_board "$home" ack merge.absent-pr --acting >/dev/null || fail "recording the acknowledgement failed"
   skeleton="$home/skeleton.json"
   run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
-    || fail "compose refused a snapshot with recorded acknowledgements"
-  [ ! -e "$home/state/board-acks/answered-and-gone.json" ] \
-    || fail "a record no row can render survived the publication that proved it unreachable"
-  [ -e "$home/state/board-acks/plain-queued.json" ] \
-    || fail "a record whose row is still on the board was dropped with it"
-  pass "compose drops the record of a key that has left the board, and only that one"
-}
-
-# The waiting report is the whole point of the record, so a record whose row is
-# still there survives however long it has been waiting. Nothing retires on a
-# clock.
-test_compose_keeps_a_long_unanswered_record_whose_row_is_still_there() {
-  local home skeleton
-  home=$(make_compose_home compose-ack-old)
-  run_board "$home" ack plain-queued --acting >/dev/null || fail "recording the acknowledgement failed"
-  jq '.at = (.at - 864000)' "$home/state/board-acks/plain-queued.json" > "$home/aged" \
-    && mv "$home/aged" "$home/state/board-acks/plain-queued.json"
-  skeleton="$home/skeleton.json"
-  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
-    || fail "compose refused a snapshot with an aged acknowledgement"
-  [ -e "$home/state/board-acks/plain-queued.json" ] \
-    || fail "an acknowledgement was retired by age alone"
-  jq -e '.charted[] | select(.id == "plain-queued") | .ack.kind == "acting"' "$skeleton" >/dev/null \
-    || fail "the aged acknowledgement stopped reaching its row: $(cat "$skeleton")"
-  pass "a record whose row is still on the board survives compose however long it has waited"
+    || fail "compose refused a snapshot with a recorded acknowledgement"
+  jq -e '[.captains_call[].key, .charted[].id] | index("merge.absent-pr") == null' "$skeleton" >/dev/null \
+    || fail "the fixture key turned out to be on this board after all: $(cat "$skeleton")"
+  [ -e "$home/state/board-acks/merge.absent-pr.json" ] \
+    || fail "a publication that never enumerated the key deleted its record"
+  pass "a record whose key is absent from the composed skeleton survives the compose"
 }
 
 # Every malformed call on this path explains itself. A flag whose value is
 # missing used to abort on the failed shift before the guard that would have
 # said so, which left the first mate a bare exit 1 and no refusal recorded.
+# "A refusal the captain cannot read is not a refusal" - and a reason file of
+# nothing but whitespace is one, because the record strips it away and leaves
+# the pill with nothing beneath it.
+test_a_whitespace_only_refusal_reason_is_refused() {
+  local home out rc
+  home=$(make_home ack-blank-why)
+  printf ' \n\t\n' > "$home/blank-why"
+  set +e; out=$(run_board "$home" ack plain-queued --refused --why-file "$home/blank-why" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a reason that is only whitespace was accepted: $out"
+  printf '%s' "$out" | grep -q "empty" || fail "the refusal did not say the reason was empty: $out"
+  [ ! -e "$home/state/board-acks/plain-queued.json" ] \
+    || fail "a refusal with no readable reason was recorded anyway"
+  pass "a reason file that is only whitespace is refused and records nothing"
+}
+
 test_a_flag_with_no_value_explains_itself() {
   local home out rc
   home=$(make_home ack-flag-no-value)
@@ -1982,8 +1978,8 @@ test_compose_acknowledges_a_card_and_a_charted_row_by_their_own_keys
 test_compose_carries_the_click_stamp_the_page_ages_from
 test_compose_ignores_a_malformed_acknowledgement_instead_of_losing_the_board
 test_compose_survives_a_record_that_breaks_the_acknowledgement_merge
-test_compose_drops_a_record_whose_row_has_left_the_board
-test_compose_keeps_a_long_unanswered_record_whose_row_is_still_there
+test_compose_keeps_a_record_whose_key_is_absent_from_the_skeleton
+test_a_whitespace_only_refusal_reason_is_refused
 test_a_flag_with_no_value_explains_itself
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind
 test_a_captured_board_answer_acknowledges_every_key_it_named

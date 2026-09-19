@@ -154,7 +154,7 @@ Every key that answer named is already acknowledged on its own row, recorded at 
 Your part is settling, and it is part of handling the wake rather than an optional courtesy: EVERY key the answer named is settled before you finish, whatever kind of key it was - a decision card key, a `merge.<task-id>`, or each id inside a `dispatch.charted` - and there are exactly two outcomes that settle one.
 Clear it (`ack <key> --clear`) when you acted on that key: dispatched it, merged it, closed or released the call it answered, or recorded the deferral the captain asked for.
 Record a refusal with its reason (`ack <key> --refused --why-file <file>`) when you verified that key and did NOT set it in motion, so an id that no longer qualifies says so where the captain clicked instead of only in chat.
-A key you leave unsettled keeps reporting itself as still waiting for as long as its row is on the board, which on work you already acted on is a false alarm on the one signal the captain asked for; leaving a record behind is a defect, not untidiness.
+A key you leave unsettled keeps reporting itself as still waiting, which on work you already acted on is a false alarm on the one signal the captain asked for; leaving a record behind is a defect, not untidiness.
 After handling, rebuild the board from a fresh snapshot so acted-on items leave Captain's Call, and echo every action taken in chat so the board and chat never diverge silently.
 
 ### The merge-click ruling (captain-decided)
