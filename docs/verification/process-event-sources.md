@@ -81,8 +81,10 @@ state.json: status= open pending= 0 prompts= []  chat entries= []
 Nothing remains on the source side to re-read, and there is no acknowledgement, cursor, or replay surface to reserve against.
 A result lost after that clearing and before the runner reads the child's output is therefore unrecoverable.
 
-**Consequence for wording:** the runner may describe only its own durability boundary.
-Never at-least-once, no-loss, or lossless.
+The window belongs to the published poll, not to the runner, so a source whose store keeps a document until the captain changes it does not have it: `bin/fm-procevent-board-remote.sh` reads without consuming, so an answer it fails to capture is still there on the next read, and its header owns that claim and its scope.
+
+**Consequence for wording:** the runner may describe only its own durability boundary, and an adapter only its own source's.
+Never at-least-once, no-loss, or lossless for the runner itself.
 
 ## What the runner does prove
 

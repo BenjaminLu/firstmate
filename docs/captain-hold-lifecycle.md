@@ -55,11 +55,12 @@ A key that names no task, names a task that is not captain-held, or names a task
 
 `bind`, `unbind`, and `binding` record that a captured-answer source feeds this intake, as a private record under `state/decision-bindings/`; an unbound source feeds nothing, so the path is opt-in per source, and `bind` deliberately does not require the source to exist yet.
 
-Two channels feed that one intake today, and both are ordinary callers rather than special cases.
+Three channels feed that one intake today, and all three are ordinary callers rather than special cases.
 `bin/fm-send.sh --resolve-key` is the chat channel: its status-log close for a key the status log still owns is owned by that script's header, and a key the status log no longer owns is resolved to a still-open captain-held task - the key as a task id, then the legacy derived identity - and fed as one keyed line.
 `bin/fm-procevent.sh` is the captured-result channel: after capture, a bound built-in source has its result passed to `bin/fm-procevent-<adapter>.sh answers <result-file>` and whatever that prints is piped into the intake, so any built-in adapter with an `answers` command works and the runner names no adapter, parses no result, and carries no decision rule.
 Trusted external process-event adapters intentionally expose no answer operation and cannot feed this authority-bearing intake; [`extension-bindings.md`](extension-bindings.md#trust-boundary) owns that boundary.
 `bin/fm-procevent-lavish.sh answers` is one such adapter command; it reads only rows tagged `choice`, relays a card's declared close mode, and can never let freeform captain prose forge a task id or a mode.
+`bin/fm-procevent-board-remote.sh ingest` is the remote board's channel, and the one that does not arrive through a captured result: that board's answers can only be read by firstmate's own session, so its source stays unbound and the adapter pipes the same keyed lines in after that read, deduplicated against its own durable cursor. [`configuration.md`](configuration.md#process-to-event-sources-stateprocevent) owns why the source is unbound and the adapter's header owns the cursor and the card-declared close mode it emits.
 
 ## Reconcile: re-check reality, never a blind close
 
