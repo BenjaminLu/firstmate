@@ -16,11 +16,25 @@
 # PR instead of shipping a new one).
 # Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
 #        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+#        fm-brief.sh <task-id> <repo-name> --review <github-pr-url> [--herdr-lab]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   It offers the Lavish review loop only when `fm-bootstrap.sh lavish-compatible`
 #   confirms the supported lavish-axi floor; otherwise it asks for a text report.
+#   --review writes the reviewer contract: the deliverable is one review POSTED on
+#   the named pull request, and this file is the single owner of what that review
+#   owes (the four review disciplines, the finding format, and the local record).
+#   It is scout-shaped in every mechanical respect - scratch worktree, no branch,
+#   no commit, no push, no PR of its own - so it is spawned and torn down as a
+#   scout, and it writes data/<task-id>/report.md as the local pointer to the
+#   posted review that bin/fm-teardown.sh's scout gate requires. Only a GitHub PR
+#   URL is accepted, because gh-axi is the forge client this repo ships and it
+#   speaks GitHub alone; a GitLab merge request is refused at scaffold time rather
+#   than producing a brief whose deliverable could not be posted. --review and
+#   --mode are exclusive: a review delivers no change of its own.
+#   AGENTS.md section 7 owns when a review is dispatched, and the `pr-review`
+#   skill owns what firstmate does with the findings.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -94,6 +108,8 @@ esac
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 CREWMATE_PAUSE_WAIT_EXAMPLES='an upstream release, a rate-limit reset, a scheduled window, or your own validation round'
 
@@ -126,6 +142,8 @@ HERDR_LAB=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
+REVIEW_PR=
+REVIEW_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -135,6 +153,7 @@ for a in "$@"; do
     esac
     case "$want_value" in
       mode) MODE=$a; MODE_SET=1 ;;
+      review) REVIEW_PR=$a; REVIEW_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -142,6 +161,8 @@ for a in "$@"; do
   fi
   case "$a" in
     --scout) KIND=scout ;;
+    --review) want_value=review ;;
+    --review=*) REVIEW_PR=${a#--review=}; REVIEW_SET=1 ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
@@ -155,6 +176,31 @@ for a in "$@"; do
   esac
 done
 [ -z "$want_value" ] || { echo "error: --$want_value requires a value" >&2; exit 1; }
+
+# --review selects the review kind, a scout-shaped brief whose deliverable is a
+# review posted on one existing pull request. It is resolved before the ship
+# checks below so --review --mode reports the review/ship conflict rather than
+# an invalid ship mode. --scout alongside it is redundant, not a conflict: both
+# spellings name the same scratch-worktree, no-branch, no-push contract.
+if [ "$REVIEW_SET" -eq 1 ]; then
+  if [ "$KIND" = secondmate ]; then
+    echo "error: --review applies only to a crewmate review brief; a secondmate charter is not a review" >&2
+    exit 1
+  fi
+  if [ "$MODE_SET" -eq 1 ]; then
+    echo "error: --review and --mode are exclusive; a review posts findings on an existing PR and delivers no change of its own" >&2
+    exit 1
+  fi
+  # gh-axi is the only forge client this repo ships a review through, and it
+  # speaks GitHub only. A GitLab merge request parses here but could not be
+  # reviewed, so refuse it at the moment it matters instead of scaffolding a
+  # brief whose deliverable cannot be posted.
+  if ! fm_pr_url_parse "$REVIEW_PR" || [ "$FM_PR_PROVIDER" != github ]; then
+    echo "error: --review requires a GitHub pull request URL of the form https://github.com/<owner>/<repo>/pull/<number> (got '$REVIEW_PR')" >&2
+    exit 1
+  fi
+  KIND=review
+fi
 
 # Ship delivery mode is an explicit per-task decision (AGENTS.md section 7). A
 # missing or invalid value stops the scaffold rather than silently defaulting.
@@ -357,6 +403,123 @@ IFS= read -r -d '' TASK_SECTION <<'EOF' || true
 {FIRSTMATE_SPEC}
 EOF
 TASK_SECTION=${TASK_SECTION%$'\n'}
+
+if [ "$KIND" = review ]; then
+# The reviewer is scout-shaped machinery with a different deliverable: its
+# findings go on the pull request, where the captain can read them, and never
+# only into a session. Every heredoc here stays outside a command substitution
+# (tests/fm-brief.test.sh guards the class).
+PR_NUMBER=$FM_PR_NUMBER
+PR_URL=$FM_PR_URL
+# Every gh-axi call carries -R explicitly. A project clone can hold more than
+# one GitHub remote (an `upstream` fork parent beside `origin` is ordinary), and
+# gh-axi then resolves a repository that is not the one this pull request lives
+# in, so a bare `gh-axi pr view <n>` reads the wrong repository or fails. The
+# repository is taken from the reviewed URL itself, which is the only authority
+# on where this pull request is.
+PR_REPO_FLAG="-R $FM_PR_OWNER/$FM_PR_REPO"
+cat > "$BRIEF" <<EOF
+You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
+
+$TASK_SECTION
+
+$HERDR_SECTION
+
+# Setup
+You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
+This is a REVIEW task. You review one pull request that already exists: $PR_URL
+Your deliverable is a review POSTED on that pull request. A review that exists only in this session is a failed review.
+You deliver no change of your own: never commit, never push, never open a PR, never merge, never edit a file in this worktree except to read it.
+
+Every \`gh-axi\` command below names the repository with \`$PR_REPO_FLAG\`. Keep it on every call you make, including any you invent.
+This is not a formality. A project clone commonly has an \`upstream\` remote beside \`origin\`, and gh-axi may resolve that one. A read that omits the repository then returns a DIFFERENT repository's pull request of the same number, with no error and entirely plausible output, and you would review the wrong change and post findings on the wrong repository.
+
+1. Read the pull request and its conversation: \`gh-axi pr view $PR_NUMBER $PR_REPO_FLAG --full --comments\`.
+2. Read the diff: \`gh-axi pr diff $PR_NUMBER $PR_REPO_FLAG --full\`.
+3. Check the head out so you can read primary sources at the exact revision under review: \`gh-axi pr checkout $PR_NUMBER $PR_REPO_FLAG\`.
+   The diff alone is not enough for either of the first two disciplines below: judging a class needs the code around the change, and reading a primary source means opening the file.
+4. Read the checks: \`gh-axi pr checks $PR_NUMBER $PR_REPO_FLAG\`. Report a red check as a finding; do not fix it.
+
+# What a review owes
+These four are the contract. A review that skips one is incomplete, and saying so is better than implying you did it.
+
+1. **A finding is one instance of a class.** When you find a defect, look for the same mistake everywhere else it could be - the rest of the diff first, then the code the diff touches. Report the class and every place it occurs, not only the line that made you notice it. A finding naming one line while the same mistake sits in four is an incomplete finding, not a small one.
+2. **Read the primary source.** The actual script, the actual contract, the actual \`--help\` output, the actual test - never a paraphrase, never a summary in a comment or a document, never your recollection of how something works. Where you could not read the primary source, say so in the review under **Not verified** instead of writing a finding whose wording implies you checked.
+3. **State severity honestly and separate a defect from a preference.** A defect is behavior that is wrong, unsafe, or contradicts a contract the project states. A preference is what you would have written differently. Label every finding one or the other and never dress a preference as a defect to get it acted on. An honest "this is a preference, and here is why I would still do it" is worth more than an inflated defect.
+4. **Scope is not yours.** You never decide a finding whose fix would widen what the captain asked for. Report it, set the finding's \`Widens scope:\` field to yes, and say there what acting on it would commit the project to deliver or maintain. Firstmate rules on it. This is unchanged from the pipeline you replace: the reviewer changing does not change who owns scope.
+
+Read \`## Captain's intent\` above before you judge scope: that subsection is what the captain actually asked for, and it is the line a fix would widen.
+
+# The review you post
+Write the review to a file in the worktree, then post it. Number findings \`R1\`, \`R2\`, ... so firstmate's ruling can name one exactly.
+
+\`\`\`
+## Review of PR $PR_NUMBER
+
+Verdict: <blocking | non-blocking | clean>
+
+### R1 - <defect|preference> - <high|medium|low> - <one-line title>
+Where: <file:line, and every other place this class occurs>
+Class: <the general mistake, stated so it can be searched for>
+Evidence: <the command you ran and what it printed, or the exact lines you read>
+Widens scope: <no | yes - what acting on it would commit the project to>
+<what is wrong and why it matters>
+
+### Not verified
+- <what you could not check, and why>
+\`\`\`
+
+Post it with \`gh-axi pr review $PR_NUMBER $PR_REPO_FLAG --comment --body-file <your file>\`.
+Use \`--comment\`. Do not use \`--approve\` or \`--request-changes\`: GitHub refuses both on a pull request opened by the same account (\`Review Can not approve your own pull request\`), and one fleet account opens and reviews these, so the verdict lives in the body text instead.
+Then read it back with \`gh-axi pr view $PR_NUMBER $PR_REPO_FLAG --reviews\` and confirm your review is there. An unverified post is not a posted review.
+If the post fails, append \`blocked: {the exact forge error}\` and stop. Never fall back to leaving the review only in your terminal or only in the local record below.
+
+# Rules
+1. Never push to any remote, never commit, never open a PR, never merge. The review you post on this pull request is your only write to the forge.
+2. Stay inside this worktree; the only files you may write outside it are the local record and the status file below.
+3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+4. Report status by appending one line:
+   \`echo "{state}: {one short line}" >> $STATUS_FILE\`
+   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
+   Each append wakes firstmate, so report sparingly: only phase changes a supervisor
+   would act on and the needs-decision/blocked/paused/done/failed states. No step-by-step
+   FYI progress lines; firstmate reads your pane for that.
+   Whenever you mention a PR anywhere - a status line, your terminal, a summary - write its full
+   https:// URL exactly as the forge printed it, never a bare number such as "PR 108"; firstmate
+   copies that URL from your line rather than assembling one.
+   Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
+   known external wait you expect to clear on its own ($CREWMATE_PAUSE_WAIT_EXAMPLES):
+   firstmate then leaves your idle pane alone and rechecks it on a long cadence instead of
+   treating it as a possible wedge. When you know when the wait clears, say so in the line with
+   \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) and firstmate rechecks at that time instead.
+   Use \`blocked:\` when you are stuck and need help.
+5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+6. You review; you never rule. A finding that widens scope, a product choice, or a destructive
+   action is firstmate's, and you report it as a finding rather than stopping the review for it.
+   Append \`needs-decision: {summary of options}\` and stop only when you cannot finish the review
+   at all without an answer.
+   A decision or blocker you opened stays open until a \`resolved\` line carrying its exact key lands; a later \`done:\` or \`working:\` line never closes it, even when the answer is what started that work.
+   Firstmate's reply normally writes that closing line at answer time; when a blocker or wait clears WITHOUT a firstmate reply, append \`resolved: {how it cleared}\` yourself (same \`[key=<slug>]\` if you opened it with one) as you resume.
+7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
+   every lane/home, so restarting it kills other lanes' in-flight pipeline runs; only firstmate
+   manages the daemon.
+
+$INBOX_SECTION
+
+# Definition of done
+The posted review is the deliverable. Everything below exists so firstmate and the captain can find it.
+
+1. Post the review on $PR_URL and read it back, as **The review you post** above requires.
+2. Write the local record at \`$DATA/$ID/report.md\`: the pull request URL, the URL or identifier of the review you posted, your verdict, one line per finding (\`R<n>\`, defect or preference, severity, whether it widens scope), and the **Not verified** list. This record is a pointer to the posted review, not a second copy of it - the pull request is where the review lives.
+3. Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate: a finding you marked as widening scope is a captain call this review exposed.
+4. Append \`done: review posted on $PR_URL - <verdict>, <n> findings\` to the status file and stop.
+
+When you must stop for a decision instead, leave a decision packet first: run \`$FM_ROOT/bin/fm-packet.sh scaffold $ID --kind needs-decision\`, fill every \`{FILL}\` placeholder, and run \`$FM_ROOT/bin/fm-packet.sh verify $ID\` until it prints \`packet: ok\`; only then append the \`needs-decision:\` line. Your local record is the packet for \`done:\`.
+That packet's figures are drawn through the diagram-design skill at \`~/.claude/skills/diagram-design\`, never hand-written SVG, against the contract \`$FM_ROOT/bin/fm-packet.sh --help\` states and verify enforces; it owes one drawing that puts every option together, and if that skill is not installed where you are running, that is a blocker you escalate to firstmate rather than a packet you write without figures.
+EOF
+echo "scaffolded: $BRIEF (review of $PR_URL; replace {TASK} and {FIRSTMATE_SPEC}; spawn with --scout)"
+exit 0
+fi
 
 if [ "$KIND" = scout ]; then
 if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
