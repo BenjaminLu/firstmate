@@ -472,9 +472,12 @@ command_ack() {
 # template - not this script - is what ages an unanswered acknowledgement into
 # "still waiting". A record that is unreadable or not this schema is skipped
 # rather than refusing the board: a malformed side-band file must never cost
-# the captain every other row.
+# the captain every other row. The merge lands in a scratch variable first,
+# because a failed command substitution assigns its empty output BEFORE the
+# `||` runs - accumulating in place would let one unmergeable record wipe the
+# map it had already built and fail the whole publication.
 board_acks_map() {
-  local dir f key acc='{}' resolved
+  local dir f key acc='{}' resolved merged
   dir=$(acks_dir)
   [ -d "$dir" ] || { printf '%s\n' "$acc"; return 0; }
   for f in "$dir"/*.json; do
@@ -488,8 +491,10 @@ board_acks_map() {
         + (if (.why | type == "string") and (.why | length) > 0 then {why: .why} else {} end)
       ' "$f" 2>/dev/null) || continue
     [ -n "$resolved" ] || continue
-    acc=$(jq -n --argjson acc "$acc" --arg key "$key" --argjson ack "$resolved" \
+    merged=$(jq -n --argjson acc "$acc" --arg key "$key" --argjson ack "$resolved" \
       '$acc + {($key): $ack}' 2>/dev/null) || continue
+    [ -n "$merged" ] || continue
+    acc=$merged
   done
   printf '%s\n' "$acc"
 }
