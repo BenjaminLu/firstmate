@@ -97,7 +97,10 @@ Committing an outside import into that same demo project's `CLAUDE.md` then turn
 | `unknown` | 4 | The chain could not be read to the end (an unreadable memory file, a `~` with no `HOME`, an outside-looking import that is not on disk, a spec that names a file only once its trailing punctuation is stripped, a memory path resolving out of the tree), or the project entry Claude Code reads its decision from could not be identified at all. |
 
 The five-file depth is not an `unknown`: it is the measurement above, so an edge past it cannot raise the dialog, and the clear line names the depth it followed rather than implying it followed the chain forever.
-Nothing in the unmeasured list above can produce `blocks`: each is either ignored or reported, because a dispatch refused on a guess is the failure this gate was built to remove, not one to add.
+The unmeasured TARGET SHAPES cannot produce `blocks`: a target that is not a regular file, a spec that only names a file once its trailing punctuation is stripped, an outside-looking import that is not on disk, and a path that only leaves the tree once its symlink is resolved are each ignored or reported instead, because a dispatch refused on a guess is the failure this gate was built to remove, not one to add.
+The unmeasured MARKDOWN FORMS are the exception, and it is deliberate: fenced blocks, inline code spans and HTML comments are skipped, while a block quote, YAML front matter and a link reference definition are still read as content, so an `@path` written in one of those and naming an existing regular file outside the tree does produce `blocks`.
+Reproduced 2026-09-19 against this script: a `CLAUDE.md` containing `> quoted example: @<path outside the tree>` exits 3.
+The reasoning for reading them is in `bin/fm-claude-trust.sh`'s own header - a quote does not mark its text as an example the way a code span or a comment does - but the sentence a maintainer relies on when judging whether a refusal is even possible has to say that, rather than imply nothing unmeasured can refuse.
 
 ## Refreshing this record
 
