@@ -290,8 +290,9 @@ publish_pending() { # task canonical-url record-file
 settle_final() { # canonical-url task... : copy the URL's final observation to every owner
   local url=$1 task
   shift
-  jq_lib -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '
-    [$saved[0][] | .records[] | select(.url == $url and observation_terminal(.))] as $final
+  jq -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '
+    [$saved[0][] | .records[] | select(.url == $url
+      and (.observation.state | IN("merged","closed")))] as $final
     | ([$final[] | select(.error == null)] | first) // ($final | first)' > "$TMP/final.json"
   for task in "$@"; do
     fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
@@ -327,10 +328,9 @@ poll() {
     [ "$(date +%s)" -lt "$DEADLINE" ] || break
     url=${row[0]}
     # A contribution with a final observation is not re-read for any owner.
-    if jq -L "$SCRIPT_DIR" -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
-      'include "fm-contributions";
-       any($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
-        . != null and observation_terminal(.))' "${row[@]:1}" >/dev/null; then
+    if jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
+      'any($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
+        . != null and (.observation.state | IN("merged","closed")))' "${row[@]:1}" >/dev/null; then
       settle_final "$url" "${row[@]:1}"
       continue
     fi
