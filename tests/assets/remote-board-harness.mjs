@@ -8,7 +8,10 @@
 //
 // Usage: node remote-board-harness.mjs <derived-page.html> <scenario>
 //   live        a readable live payload arrives with no answer in progress
-//   unreadable  a snapshot arrives that this page cannot render
+//   unreadable  a snapshot arrives that this page cannot render, first thing
+//   went-quiet  a readable payload lands and then the page stops receiving
+//   held-quiet  a payload is held mid-answer, the page stops receiving, the
+//               answer is sent and the held payload is released
 //   hold        a live payload arrives while an answer is being written
 //   hold-send   the same, and then the answer is sent
 //   hold-stale  a selection is left behind on a card the deck has moved past
@@ -274,6 +277,18 @@ if (scenario === "live") {
   push(LIVE);
 } else if (scenario === "unreadable") {
   push(null);
+} else if (scenario === "went-quiet") {
+  push(LIVE);
+  await tick();
+  push(null);
+} else if (scenario === "held-quiet") {
+  document.getElementById("bb-stack-next").onclick();
+  typeNote("wait for me");
+  push(LIVE);
+  await tick();
+  push(null);
+  await tick();
+  submitAnswer();
 } else if (scenario === "hold" || scenario === "hold-send") {
   document.getElementById("bb-stack-next").onclick();
   typeNote("wait for me");

@@ -482,7 +482,45 @@ test_a_snapshot_the_page_cannot_render_is_not_called_live() {
   assert_contains "$badge" "not updating" \
     "a snapshot this page cannot render must read as not updating"
   assert_not_contains "$badge" "live" "the page must not claim a live link it does not have"
+  # Nothing has ever arrived here, so the built-in copy is exactly what is on
+  # screen and the page may say so.
+  assert_contains "$badge" "built into this page" \
+    "a page that has heard nothing must name the copy built into it"
   pass "a snapshot the page cannot render is not called live"
+}
+
+test_a_board_that_went_quiet_says_how_long_ago() {
+  local d=$TMP_ROOT/drive-quiet out badge
+  transport_page "$d"
+  # A payload has arrived and painted, then the board stopped sending readable
+  # ones. What is on screen is that payload, not the copy built into the page,
+  # and the age is what separates a quiet fleet from a broken link.
+  out=$(drive "$d" went-quiet)
+  badge=$(jq -r .badge <<<"$out")
+  assert_contains "$badge" "not updating" "a board that stopped receiving must say so"
+  assert_contains "$badge" "last update" "it must say when the last update arrived"
+  assert_not_contains "$badge" "built into this page" \
+    "it must not claim the built-in copy after a payload has painted"
+  assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
+    "the payload that did arrive must still be what the page shows"
+  pass "a board that went quiet says how long ago"
+}
+
+test_releasing_a_hold_does_not_claim_a_link_it_lost() {
+  local d=$TMP_ROOT/drive-held-quiet out badge
+  transport_page "$d"
+  # Held mid-answer, then the board stops sending anything this page can read.
+  # Sending the answer releases the held payload - it is still the newest thing
+  # this page ever received - but it does not make the link live again.
+  out=$(drive "$d" held-quiet)
+  badge=$(jq -r .badge <<<"$out")
+  assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
+    "the held payload must still be painted once the answer is sent"
+  assert_not_contains "$badge" "live" "releasing a hold must not claim a live link"
+  assert_contains "$badge" "not updating" \
+    "the page must keep saying it stopped receiving"
+  assert_equals "1" "$(jq '.writes | length' <<<"$out")" "the answer must still have been sent"
+  pass "releasing a hold does not claim a link it lost"
 }
 
 test_an_answer_that_cannot_be_sent_is_named_on_the_page() {
@@ -591,6 +629,8 @@ if command -v node >/dev/null 2>&1; then
   test_a_live_payload_repaints_through_the_shipped_board
   test_an_update_waits_while_an_answer_is_in_progress
   test_a_snapshot_the_page_cannot_render_is_not_called_live
+  test_a_board_that_went_quiet_says_how_long_ago
+  test_releasing_a_hold_does_not_claim_a_link_it_lost
   test_an_answer_that_cannot_be_sent_is_named_on_the_page
   test_sending_and_updating_are_reported_apart
   test_an_unsent_dispatch_selection_survives_an_arriving_update

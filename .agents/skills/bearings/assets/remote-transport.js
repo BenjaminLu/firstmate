@@ -39,6 +39,8 @@
   var ANSWER_ID = "bb-remote-answers";
   var linkState = "connecting";
   var sendState = null;
+  var receiving = false;
+  var arrivedAt = null;
 
   /* The only copy this file owns: it describes the connection and the answer
      route, the two things the shipped board has no concept of. It follows the
@@ -52,9 +54,14 @@
       hans: "有更新在等这个回答送出后才套用"
     },
     offline: {
-      en: "not updating — showing the copy built into this page",
-      hant: "沒在更新 — 顯示頁面內建的舊資料",
-      hans: "没在更新 — 显示页面内建的旧资料"
+      en: "not updating — nothing has arrived, showing the copy built into this page",
+      hant: "沒在更新 — 還沒收到任何更新，顯示頁面內建的舊資料",
+      hans: "没在更新 — 还没收到任何更新，显示页面内建的旧资料"
+    },
+    stopped: {
+      en: "not updating — last update {age} ago",
+      hant: "沒在更新 — 上次更新是 {age} 前",
+      hans: "没在更新 — 上次更新是 {age} 前"
     },
     unsendable: {
       en: "answers cannot be sent from here",
@@ -64,7 +71,15 @@
   };
   var TONE = {
     connecting: "neutral", live: "online", holding: "warn",
-    offline: "warn", unsendable: "danger"
+    offline: "warn", stopped: "warn", unsendable: "danger"
+  };
+
+  /* A quiet board is two different things - one that has never heard anything
+     and one that heard and then stopped - and only the age tells them apart,
+     so the line says which it is rather than always naming the built-in copy. */
+  var AGE = {
+    min: { en: "{n} min", hant: "{n} 分鐘", hans: "{n} 分钟" },
+    hour: { en: "{n} h", hant: "{n} 小時", hans: "{n} 小时" }
   };
 
   /* The answer route back to firstmate is not landed yet, so the page says so.
@@ -85,6 +100,18 @@
   }
 
   function say(copy) { return copy[lang()] || copy.en; }
+
+  function age() {
+    var mins = Math.max(1, Math.round((new Date().getTime() - arrivedAt) / 60000));
+    return mins < 60
+      ? say(AGE.min).replace("{n}", String(mins))
+      : say(AGE.hour).replace("{n}", String(Math.round(mins / 60)));
+  }
+
+  function linkCopy() {
+    if (linkState !== "offline" || arrivedAt === null) return say(SAY[linkState] || SAY.connecting);
+    return say(SAY.stopped).replace("{age}", age());
+  }
 
   function pin(id, tone) {
     var host = document.querySelector(".bb-nav__inner");
@@ -109,7 +136,7 @@
   function paintStatus() {
     var node = pin(STATUS_ID, TONE[linkState] || "neutral");
     if (!node) return;
-    node.textContent = say(SAY[linkState] || SAY.connecting);
+    node.textContent = linkCopy();
     var answers = pin(ANSWER_ID, sendState ? TONE[sendState] : "warn");
     answers.textContent = sendState ? say(SAY[sendState]) : say(ANSWER_GAP);
   }
@@ -134,11 +161,7 @@
 
   function paint(payload) {
     document.body.innerHTML = PRISTINE;
-    if (payload !== undefined) {
-      var slot = document.getElementById(SLOT_ID);
-      if (!slot) return;
-      slot.textContent = JSON.stringify(payload);
-    }
+    document.getElementById(SLOT_ID).textContent = JSON.stringify(payload);
     runBoard();
     paintStatus();
   }
@@ -179,7 +202,7 @@
       return;
     }
     held = null;
-    setLink("live");
+    setLink(receiving ? "live" : "offline");
     paint(payload);
   }
 
@@ -269,11 +292,14 @@
            anything else leaves the page showing what it was published with,
            and saying so - a snapshot this page cannot render is not an update. */
         if (next && next.schema === "fm-bearings-board.v1") {
+          receiving = true;
+          arrivedAt = new Date().getTime();
           accept(next);
         } else {
+          receiving = false;
           setLink("offline");
         }
-      }, function () { setLink("offline"); });
+      }, function () { receiving = false; setLink("offline"); });
     }).catch(function () { cannotSend(); });
   } else {
     cannotSend();
