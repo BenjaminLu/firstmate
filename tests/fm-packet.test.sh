@@ -122,7 +122,8 @@ PY
 
 # One drawing that puts both options together, meeting every clause of the SVG
 # contract fm-packet.sh's header states: three languages on every text node,
-# colours only as the page's variables, data-node on every shape, ids prefixed
+# colours only as the page's variables, a latin data-node on each shape that
+# stands for an option, ids prefixed
 # per figure, no external font, and one evidence line per drawn connector.
 read -r -d '' GOOD_SVG <<'SVG' || true
 <svg role="img" viewBox="0 0 640 260" xmlns="http://www.w3.org/2000/svg" aria-labelledby="opt-title">
@@ -266,7 +267,7 @@ test_verify_checks_the_decision_block_field_by_field() {
 }
 
 test_verify_holds_a_figure_to_the_svg_contract() {
-  local home packet out svg body styled foreign wrapped plain
+  local home packet out svg body styled foreign wrapped plain masked
   home=$(make_home figures)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -275,9 +276,15 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
 
-  # An unfilled Figures section is refused even once the prose is written.
+  # An unfilled Figures section is refused even once the prose is written -
+  # by the placeholder check that owns it, and by nothing else: the drawing's
+  # own {FILL} slot must not be reported as a stray line to move elsewhere.
   set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
   assert_contains "$out" "placeholders remain" "the figure skeleton was not caught: $out"
+  case "$out" in
+    *"is not part of the figure"*)
+      fail "verify told the worker to move the drawing's own placeholder: $out" ;;
+  esac
 
   fill_figures "$packet"
   out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a good trilingual figure: $out"
@@ -312,10 +319,17 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "inline onload handler" "an unquoted event handler"
 
-  # 3. every selectable shape carries its identity attribute
-  svg=${GOOD_SVG/ data-node=\"wake\"/}
+  # 3. an identity that is claimed is the source's latin name. A shape that
+  # claims none stands for nothing a reader selects - a label mask, a panel -
+  # and the comparison rule, not a per-tag demand, is what makes the options
+  # appear.
+  svg=${GOOD_SVG/data-node=\"wake\"/data-node=\"喚醒停止\"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "a <rect> carries no data-node" "a shape with no identity"
+    'has data-node="喚醒停止"' "an identity written in the reader's wording"
+  masked='<rect id="opt-label-mask" x="250" y="100" width="120" height="20" fill="var(--card)"/>'
+  svg=${GOOD_SVG/<path data-edge=\"bound-to-quiet\"/$masked<path data-edge="bound-to-quiet"}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify demanded an identity from a label mask: $out"
 
   # 4. ids are prefixed per figure, so two figures on one page cannot collide
   svg=${GOOD_SVG/id=\"opt-arrow\"/id=\"arrow\"}
@@ -458,8 +472,8 @@ test_a_done_packet_is_not_refused_for_having_no_figures() {
   # A done packet may carry figures, and they are held to the same contract.
   fill_figures "$packet"
   out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a good figure on a done packet: $out"
-  assert_figure_refused "$home" "$packet" "$(good_figures "${GOOD_SVG/ data-node=\"wake\"/}")" \
-    "carries no data-node" "a broken figure on a done packet"
+  assert_figure_refused "$home" "$packet" "$(good_figures "${GOOD_SVG/fill=\"var(--card)\"/fill=\"#ffffff\"}")" \
+    "colours come from the page" "a broken figure on a done packet"
 
   # render routes a '## Figures ' heading through figures_html and inlines its
   # svg unescaped, so verify must hold that same heading to the contract; a
@@ -470,7 +484,7 @@ p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("\n## Figures\
 PY
   set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "a whitespace-padded Figures heading skipped the contract: $out"
-  assert_contains "$out" "carries no data-node" "the padded heading was not checked: $out"
+  assert_contains "$out" "colours come from the page" "the padded heading was not checked: $out"
 
   # python splits lines on more than \n, so a heading behind a form feed is a
   # Figures section to the checker and to render. The shell gate in front of
@@ -482,7 +496,7 @@ p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("\n##  Figures
 PY
   set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "a Figures heading behind a form feed skipped the contract: $out"
-  assert_contains "$out" "carries no data-node" "the form-feed heading was not checked: $out"
+  assert_contains "$out" "colours come from the page" "the form-feed heading was not checked: $out"
   pass "a done packet needs no figures and is held to the contract for the ones it has"
 }
 

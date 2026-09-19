@@ -91,10 +91,15 @@
 #     --accent-tint --amber --seal --ok --link, plus --sans and --mono for
 #     font-family. Figures sit on --card, so paper and label masks are
 #     fill="var(--card)"
-#   - every selectable shape (`<rect>`, `<polygon>`) carries data-node, the
-#     latin identity from the source, never the reader's wording. Any other
-#     tag may carry one too, and a data-node anywhere names its option for
-#     the comparison rule below
+#   - every shape that stands for something the reader might select carries
+#     data-node, the latin identity from the source, never the reader's
+#     wording. Which shapes those are is a question about meaning, and a
+#     script cannot read meaning: a label mask and a panel background are
+#     rects that stand for nothing, and demanding an invented identity from
+#     them would only feed the comparison rule below a name no option has.
+#     So verify checks the identities that ARE there - each must be a latin
+#     id - and leaves the requirement itself to the comparison rule, which a
+#     worker cannot satisfy by decorating
 #   - every id inside the svg is prefixed `<slug>-`, and no two figures in one
 #     packet share a slug, so two figures inlined on one page cannot collide
 #     over a marker id and break each other's arrows
@@ -446,6 +451,7 @@ COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)
 ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
 TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
+LATIN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 FIG_FIELD = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
 FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 TEXT_ELEMENT = re.compile(r"""<\s*text\b(?:[^<>"']|"[^"]*"|'[^']*')*>(.*?)<\s*/\s*text\s*>""", re.S)
@@ -534,6 +540,8 @@ for n, fig in enumerate(figures, 1):
     for i, l in enumerate(fig["lines"]):
         if i in drawn or not l.strip() or FIG_FIELD.match(l) or FIG_EDGE.match(l):
             continue
+        if "{FILL" in l:
+            continue
         bad("the line \"%s\" is not part of the figure, and nothing renders it; a figure body "
             "carries figure:, caption:, one drawing and its '- edge' lines. A sentence about "
             "the drawing goes in the caption; anything longer goes in the packet section it "
@@ -599,10 +607,12 @@ for n, fig in enumerate(figures, 1):
                 bad("a <text> is missing %s; one missing attribute leaks English onto the "
                     "Chinese page" % ", ".join(missing))
         if at.get("data-node"):
-            nodes.add(at["data-node"])
-        elif tag in ("rect", "polygon"):
-            bad("a <%s> carries no data-node; every selectable shape needs its latin "
-                "identity" % tag)
+            if LATIN_ID.match(at["data-node"]):
+                nodes.add(at["data-node"])
+            else:
+                bad("<%s> has data-node=\"%s\"; an identity is the latin name the source "
+                    "gives the thing, never the reader's wording, because the decision block "
+                    "names its options in those terms" % (tag, at["data-node"]))
         if at.get("data-edge"):
             edges_drawn.add(at["data-edge"])
         elif tag in ("path", "line", "polyline"):
@@ -1228,7 +1238,7 @@ a { color: var(--ocean-600); }
 .pk-fig:last-child { margin-bottom: 0; }
 .pk-fig__h { margin: 0; font-size: var(--fs-base); color: var(--text-strong); }
 .pk-fig__svg { overflow-x: auto; padding: 12px; background: var(--card); border: 1px solid var(--border-default); border-radius: var(--radius-sm); }
-.pk-fig__svg svg { display: block; max-width: 100%; height: auto; font-family: var(--font-sans); }
+.pk-fig__svg > svg { display: block; max-width: 100%; height: auto; font-family: var(--font-sans); }
 .pk-fig__cap { font-size: var(--fs-sm); color: var(--text-body); }
 .pk-decision { margin-bottom: 14px; }
 .bb-decision__pad { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; }
