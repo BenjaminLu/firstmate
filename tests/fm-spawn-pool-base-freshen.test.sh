@@ -253,13 +253,19 @@ test_originless_pool_launches_without_a_freshness_fetch() {
     || fail "fixture unexpectedly configured an origin remote"
   before=$(git -C "$POOL_DIR" rev-parse HEAD)
 
-  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "spawn should launch a local-only pooled worktree with no origin"$'\n'"$out"
   assert_contains "$out" "spawned $id" "spawn did not report success for the origin-less pool"
   assert_not_contains "$out" "could not fetch origin" \
     "spawn attempted a freshness fetch against a nonexistent origin"
   [ ! -e "$POOL_DIR/.git/FETCH_HEAD" ] || fail "spawn fetched against a pooled worktree with no origin"
+  # Without this the zero counts below would also pass if nothing was logged.
+  [ -s "$CASE_DIR/git.log" ] || fail "the logging git recorded no call at all, so the counts below prove nothing"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 0 ] \
+    || fail "spawn fetched for an origin-less pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$(set_head_count "$CASE_DIR/git.log")" = 0 ] \
+    || fail "spawn queried a remote HEAD for an origin-less pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
   [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
     || fail "spawn moved HEAD on an origin-less pooled worktree that had nothing to refresh against"
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
@@ -423,7 +429,7 @@ test_dirty_pool_refuses_without_discarding_work() {
   before=$(git -C "$POOL_DIR" rev-parse HEAD)
   printf 'keep this local work\n' > "$POOL_DIR/uncommitted.txt"
 
-  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "spawn succeeded despite a dirty pooled worktree"
   assert_contains "$out" "is not clean" "spawn did not clearly refuse a dirty pooled worktree"
@@ -431,6 +437,12 @@ test_dirty_pool_refuses_without_discarding_work() {
     || fail "spawn moved HEAD while refusing a dirty pooled worktree"
   assert_grep 'keep this local work' "$POOL_DIR/uncommitted.txt" \
     "spawn discarded uncommitted work while refusing the pool"
+  # Without this the zero counts below would also pass if nothing was logged.
+  [ -s "$CASE_DIR/git.log" ] || fail "the logging git recorded no call at all, so the counts below prove nothing"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 0 ] \
+    || fail "spawn fetched before refusing a dirty pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$(set_head_count "$CASE_DIR/git.log")" = 0 ] \
+    || fail "spawn queried a remote HEAD before refusing a dirty pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
     printf '# observed dirty refusal: %s; preserved=%s\n' \
       "$(printf '%s\n' "$out" | tail -n 1)" "$(cat "$POOL_DIR/uncommitted.txt")"
@@ -853,36 +865,6 @@ test_dangling_origin_head_is_repaired_before_launch() {
   pass "a dangling origin/HEAD is repaired before launch, still with one fetch"
 }
 
-test_originless_pool_still_launches_with_no_fetch_at_all() {
-  local rec id out status
-  id='pool-one-fetch-originless-r1'
-  rec=$(make_originless_case one-fetch-originless "$id")
-  read_case_record "$rec"
-
-  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
-  status=$?
-  expect_code 0 "$status" "an origin-less pool should still launch"$'\n'"$out"
-  [ "$(fetch_count "$CASE_DIR/git.log")" = 0 ] || fail "spawn fetched for an origin-less pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
-  [ "$(set_head_count "$CASE_DIR/git.log")" = 0 ] || fail "spawn queried a remote HEAD for an origin-less pool"
-  pass "an origin-less pool launches with no fetch and no remote-HEAD query"
-}
-
-test_dirty_pool_still_refuses_before_any_fetch() {
-  local rec id out status
-  id='pool-one-fetch-dirty-r1'
-  rec=$(make_case one-fetch-dirty "$id")
-  read_case_record "$rec"
-  printf 'keep this local work\n' > "$POOL_DIR/uncommitted.txt"
-
-  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
-  status=$?
-  [ "$status" -ne 0 ] || fail "spawn succeeded despite a dirty pooled worktree"
-  assert_contains "$out" "is not clean" "spawn did not refuse the dirty pooled worktree"
-  [ "$(fetch_count "$CASE_DIR/git.log")" = 0 ] || fail "spawn fetched before refusing a dirty pool"
-  assert_grep 'keep this local work' "$POOL_DIR/uncommitted.txt" "spawn discarded local work"
-  pass "a dirty pooled worktree still refuses, before any fetch"
-}
-
 test_treehouse_get_always_skips_its_own_fetch() {
   local rec id out status sent
   id='pool-treehouse-nofetch-r1'
@@ -909,8 +891,6 @@ test_pool_slot_claim_follows_the_spawn_outcome
 test_refresh_fetches_origin_exactly_once_and_skips_set_head_when_origin_head_resolves
 test_refresh_queries_remote_head_only_when_origin_head_is_missing
 test_dangling_origin_head_is_repaired_before_launch
-test_originless_pool_still_launches_with_no_fetch_at_all
-test_dirty_pool_still_refuses_before_any_fetch
 test_treehouse_get_always_skips_its_own_fetch
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
