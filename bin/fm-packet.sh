@@ -686,11 +686,15 @@ def colour_advice(value):
     return ("the page binds no %s for a figure to draw against; the palette is %s"
             % (m.group(1), ", ".join("--" + name for name in PALETTE)))
 
+# FIRST occurrence wins, exactly as the HTML tokenizer does with a duplicate
+# attribute: it takes the first and drops the rest. Every clause below reads a
+# value through this map, so a map that kept the last one would let a drawing
+# show the checker a harmless value and the browser the real one.
 def attrs_of(text):
     out = {}
     for m in ATTR.finditer(text):
         value = next(g for g in m.groups()[1:] if g is not None)
-        out[m.group(1).lower()] = value
+        out.setdefault(m.group(1).lower(), value)
     return out
 
 def style_decls(value):
@@ -1599,6 +1603,11 @@ FIG_NODE = re.compile(r"""data-node\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 LINK_MD = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 EMPHASIS = re.compile(r"\*\*(.+?)\*\*")
 CODE_SPAN = re.compile(r"`([^`]*)`")
+# The one shape the language rule exempts from translation, read here the same
+# way prose_problems reads it: a line that is one backticked span and nothing
+# else is command, path or identifier material, so it renders as code and needs
+# no three languages.
+ONLY_CODE = re.compile(r"^`[^`]+`$")
 
 # The board is the far end of a link the captain can click, and it accepts only
 # the two shapes its own validator does. A url outside them is not silently
@@ -1635,6 +1644,9 @@ def copy_of(value):
              for i, ln in enumerate(base)]
     return {l: texts[l] for l in LANGS}, links
 
+def is_code_line(value):
+    return not isinstance(value, dict) and bool(ONLY_CODE.match(value.strip()))
+
 def item_of(value, code=False):
     t, links = copy_of(value)
     # A line that IS a link reads once, as the link: leaving its label in the
@@ -1665,12 +1677,12 @@ def packet_items(body):
             # written, marked so the board sets it in the mono face
             items.extend({"text": l, "code": True} for l in b["lines"] if l.strip())
         elif b["kind"] == "list":
-            items.extend(item_of(x) for x in fold_langs(b["items"])
+            items.extend(item_of(x, code=is_code_line(x)) for x in fold_langs(b["items"])
                          if isinstance(x, dict) or x.strip())
         elif b["kind"] == "h":
             items.append(item_of(b["text"]))
         else:
-            items.extend(item_of(x) for x in fold_langs(b["lines"])
+            items.extend(item_of(x, code=is_code_line(x)) for x in fold_langs(b["lines"])
                          if isinstance(x, dict) or x.strip())
     return items
 

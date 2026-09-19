@@ -399,6 +399,17 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/<rect id=\"opt-box-end\"/<rect onload=alert(1) id=\"opt-box-end\"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "inline onload handler" "an unquoted event handler"
+  # Every clause reads a value through one attribute map, and the browser takes
+  # the FIRST of a duplicated attribute. A map that took the last would let a
+  # drawing show the checker a harmless value and the reader the live one.
+  dup='<a href="javascript:alert(1)" href="#opt-box-end"><rect id="opt-box-end"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$dup}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'href="javascript:alert(1)"' "a javascript: href hidden behind a duplicate attribute"
+  dup='<rect fill="red" fill="var(--card)" id="opt-box-end"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$dup}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'has fill="red"' "a baked colour hidden behind a duplicate attribute"
 
   # 3. an identity that is claimed is the source's latin name. A shape that
   # claims none stands for nothing a reader selects - a label mask, a panel -
@@ -945,6 +956,34 @@ MARKER
 # The collapse that lets a line which IS a link read once has to be true in
 # every language, or the words a worker wrote around the link in 繁體 and 简体
 # vanish while the English reads correctly.
+# The rule that says a line needs no translation and the rule that says how it
+# renders have to read that line the same way: a backticked path is exempt
+# BECAUSE it is command material, so it has to reach the captain looking like
+# command material, on the card and on the page alike.
+test_a_backticked_line_is_code_on_both_surfaces() {
+  local home packet out page
+  home=$(make_home card-code-line)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    (.packet.sections[] | select(.heading.en == "Evidence") | .items) as $ev
+    # the path the scaffold asks a worker to write in backticks rides the card
+    # as code, like a line out of a fenced block
+    | ([$ev[] | select(.code == true) | .text] | index("bin/fm-contributions.sh:190")) != null
+    # and the prose beside it is not code
+    and ([$ev[] | select(.text | type == "object") | .code] | unique) == [null]
+  ' >/dev/null || fail "a backticked path did not ride the card as code: $out"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed"
+  assert_grep '<code>bin/fm-contributions.sh:190</code>' "$page" \
+    "the page did not render a backticked path as code"
+  pass "a line that is one backticked span reaches the captain as code on both surfaces"
+}
+
 test_a_line_that_is_a_link_only_collapses_when_every_language_is() {
   local home packet out
   home=$(make_home card-link-collapse)
@@ -1596,6 +1635,7 @@ test_a_needs_decision_packet_with_no_figures_is_refused
 test_an_empty_language_line_is_that_language_missing
 test_verify_refuses_a_group_the_renderer_would_read_differently
 test_a_line_that_is_a_link_only_collapses_when_every_language_is
+test_a_backticked_line_is_code_on_both_surfaces
 test_the_packet_block_switches_every_heading_it_owns
 test_the_packet_block_reaches_the_card_in_all_three_languages
 test_verify_refuses_prose_the_captain_could_not_read
