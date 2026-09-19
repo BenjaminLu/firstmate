@@ -928,7 +928,7 @@ LAVISH_AXI_MIN=0.1.46
 
 treehouse_supports_required_flags() {
   local help
-  help=$(treehouse get --help 2>&1) || return 1
+  help=$(treehouse get --help 2>&1)
   printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)' || return 1
   printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--no-fetch([^[:alnum:]_-]|$)'
 }

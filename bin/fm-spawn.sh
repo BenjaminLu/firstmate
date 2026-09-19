@@ -213,10 +213,18 @@
 #   fetch just left it rather than fetched a second time. The fetch carries
 #   `-c remote.origin.followRemoteHEAD=always` so that a default-branch rename
 #   on origin repoints refs/remotes/origin/HEAD from that same round trip.
-#   RESIDUAL: that config is git >= 2.48 only and this machine runs git 2.45.1,
-#   which silently ignores it; on a git without followRemoteHEAD support, a
-#   default-branch rename on origin that keeps the old branch needs one
-#   `git remote set-head origin --auto` in the primary clone. When no origin
+#   RESIDUAL: `remote.origin.followRemoteHEAD` is git >= 2.48; below that floor
+#   git silently ignores it and a default-branch rename on origin goes
+#   unnoticed. This fetch does not pass --prune and nothing here sets
+#   fetch.prune, so refs/remotes/origin/<old> survives locally either way:
+#   whether origin keeps or deletes the old branch, origin/HEAD still resolves,
+#   the set-head above stays skipped, and the slot is reset to the old default
+#   branch - to a tip that no longer exists on origin at all in the delete
+#   variant - and launched with no error. Both rename variants therefore need
+#   one `git remote set-head origin --auto` in the primary clone (whose refs
+#   the slots share) on a git below that floor. Closing this in code by adding
+#   --prune would delete remote-tracking refs, a behavior change wider than
+#   this change's stated intent, so it is left to the captain. When no origin
 #   configuration is detected, spawn skips that remote freshness check and
 #   launches from the clean worktree's current HEAD. Relaunch reuses the
 #   recorded worktree without fetching or resetting its base. An unreachable

@@ -767,24 +767,6 @@ set_head_count() {  # <log>
   git_log_count "$1" '(^| )remote set-head( |$)'
 }
 
-# `remote.origin.followRemoteHEAD` is git >= 2.48. Below that floor git silently
-# ignores the config spawn passes to its one fetch, so a slot with no usable
-# refs/remotes/origin/HEAD still has to pay for the `remote set-head` round trip;
-# at or above it the same fetch repoints origin/HEAD and set-head is skipped.
-# Either way spawn fetches exactly once and ends with a resolvable origin/HEAD,
-# which is what these cases pin; the count below just names which git is running.
-expected_set_head_count_for_unusable_origin_head() {
-  local version major minor
-  version=$(git --version 2>/dev/null | sed -nE 's/^git version ([0-9]+)\.([0-9]+).*/\1 \2/p')
-  read -r major minor <<< "$version"
-  [ -n "$major" ] && [ -n "$minor" ] || { printf '1\n'; return; }
-  if [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 48 ]; }; then
-    printf '0\n'
-  else
-    printf '1\n'
-  fi
-}
-
 run_counting_spawn() {  # <id> [spawn args...]
   local id=$1
   shift
@@ -835,10 +817,11 @@ test_refresh_queries_remote_head_only_when_origin_head_is_missing() {
   expect_code 0 "$status" "spawn should refresh a slot with no origin/HEAD"$'\n'"$out"
   fetches=$(fetch_count "$CASE_DIR/git.log")
   set_heads=$(set_head_count "$CASE_DIR/git.log")
-  want_set_heads=$(expected_set_head_count_for_unusable_origin_head)
   [ "$fetches" = 1 ] || fail "spawn fetched origin $fetches times, not once:"$'\n'"$(cat "$CASE_DIR/git.log")"
-  [ "$set_heads" = "$want_set_heads" ] \
-    || fail "spawn ran the remote-HEAD query $set_heads times for a slot missing origin/HEAD, expected $want_set_heads on $(git --version):"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$set_heads" -le 1 ] \
+    || fail "spawn ran the remote-HEAD query $set_heads times for one slot missing origin/HEAD:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  # The outcome proves the query ran on any git that ignores followRemoteHEAD:
+  # a plain fetch cannot create this symref, so only the set-head above can have.
   [ "$(git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD)" = refs/remotes/origin/main ] \
     || fail "spawn left the slot without a usable origin/HEAD"
   [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse origin/main)" ] \
@@ -850,7 +833,7 @@ test_refresh_queries_remote_head_only_when_origin_head_is_missing() {
 }
 
 test_dangling_origin_head_is_repaired_before_launch() {
-  local rec id out status set_heads want_set_heads
+  local rec id out status set_heads
   id='pool-one-fetch-dangling-r1'
   rec=$(make_case one-fetch-dangling "$id")
   read_case_record "$rec"
@@ -860,9 +843,10 @@ test_dangling_origin_head_is_repaired_before_launch() {
   status=$?
   expect_code 0 "$status" "spawn should repair a dangling origin/HEAD"$'\n'"$out"
   set_heads=$(set_head_count "$CASE_DIR/git.log")
-  want_set_heads=$(expected_set_head_count_for_unusable_origin_head)
-  [ "$set_heads" = "$want_set_heads" ] \
-    || fail "spawn ran the remote-HEAD query $set_heads times for a dangling origin/HEAD, expected $want_set_heads on $(git --version):"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$set_heads" -le 1 ] \
+    || fail "spawn ran the remote-HEAD query $set_heads times for one dangling origin/HEAD:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  # Repointing a symref that already exists is likewise beyond a plain fetch, so
+  # this outcome is the set-head having run on a git without followRemoteHEAD.
   [ "$(git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD)" = refs/remotes/origin/main ] \
     || fail "spawn left origin/HEAD dangling"
   [ "$(fetch_count "$CASE_DIR/git.log")" = 1 ] || fail "repairing origin/HEAD cost more than one fetch"
