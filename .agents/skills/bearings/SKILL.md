@@ -154,8 +154,13 @@ A remote-secondmate card whose task is absent from the main backlog remains on t
 Route the non-decision keys yourself:
 
 - `merge.<task-id>` is the captain's explicit merge order; follow the merge ruling below.
-- `dispatch.charted` carries comma-separated task ids the captain picked to start now; the skeleton offers a row for dispatch only when its real backlog id is already a routable key, so an id the intake could not resolve arrives non-dispatchable rather than rewritten; verify each id against the current backlog - still queued, blocker and time gate actually clear - then dispatch through the normal lifecycle, and report any id that no longer qualifies instead of forcing it.
+- `dispatch.charted` carries comma-separated task ids the captain picked to start now; the skeleton offers a row for dispatch only when its real backlog id is already a routable key, so an id the intake could not resolve arrives non-dispatchable rather than rewritten; verify each id against the current backlog - still queued, blocker and time gate actually clear - then dispatch through the normal lifecycle, and report any id that no longer qualifies - on its own row as a refusal, and in chat - instead of forcing it.
 
+Every key that answer named is already acknowledged on its own row, recorded at capture, so the board says the answer was heard before you have acted on it. The whole acknowledgement lifecycle - when a record is born, which of two acknowledgements wins, what ages one and what retires one - is stated once in `bin/fm-bearings-board.sh`'s header, which owns it; this paragraph is only your part in it.
+Your part is settling, and it is part of handling the wake rather than an optional courtesy: EVERY key the answer named is settled before you finish, whatever kind of key it was - a decision card key, a `merge.<task-id>`, or each id inside a `dispatch.charted` - and there are exactly two outcomes that settle one.
+Clear it (`ack <key> --clear`) when you acted on that key: dispatched it, merged it, closed or released the call it answered, or recorded the deferral the captain asked for.
+Record a refusal with its reason (`ack <key> --refused --why-file <file>`) when you verified that key and did NOT set it in motion, so an id that no longer qualifies says so where the captain clicked instead of only in chat.
+A key you leave unsettled keeps reporting itself as still waiting, which on work you already acted on is a false alarm on the one signal the captain asked for; leaving a record behind is a defect, not untidiness.
 After handling, rebuild the board from a fresh snapshot so acted-on items leave Captain's Call, and echo every action taken in chat so the board and chat never diverge silently.
 
 ### The merge-click ruling (captain-decided)

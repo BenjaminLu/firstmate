@@ -3574,6 +3574,14 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
   "$STATE/$ID.reconcile-nudged" "$STATE/$ID.gemini-settings.json" \
   "$STATE/.$ID.branch-outcome-index"
+# A board acknowledgement is settled by the handler, and one left behind is a
+# defect rather than untidiness (.agents/skills/bearings/SKILL.md). This is the
+# backstop for the case that contract already calls a defect: without it an
+# unsettled record outlives the task that earned it and reports "still waiting"
+# for days on work that shipped, any time that id reaches a board again. Both
+# shapes a task's key can take are named here - the bare id a decision card and
+# a Charted Next row use, and the merge card's prefixed form.
+rm -f "$STATE/board-acks/$ID.json" "$STATE/board-acks/merge.$ID.json"
 # The steering inbox (bin/fm-task-inbox-lib.sh) is runtime state for the
 # retired endpoint; teardown only runs after landing is confirmed, so any
 # leftover unhandled steer here is moot rather than unlanded work.

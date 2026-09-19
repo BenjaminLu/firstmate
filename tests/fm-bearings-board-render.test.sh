@@ -78,6 +78,26 @@ render() {  # <home> <charted-json> [charted_more] [charted_warning_more]
   render_board "$1" '[]' "$2" "${3:-0}" "${4:-0}"
 }
 
+# Two builds of the SAME board (same `home`, different `generated`), so a
+# rebuild can be replayed into one page. Neither carries an ack: the point is
+# that the pill comes from what the page remembered, not from the payload.
+rebuild_payload() {  # <generated>
+  jq -n --arg gen "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:$gen,
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true}]}'
+}
+
+build_board_to() {  # <home> <destination> <payload-json>
+  local home=$1 dest=$2 data="$1/payload.json"
+  printf '%s\n' "$3" > "$data"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+  cp "$home/.lavish/bearings-board.html" "$dest"
+}
+
 charted_next_count() {  # <render-json>
   printf '%s' "$1" | jq -r '.stats[] | select(.label == "charted next") | .n'
 }
@@ -968,6 +988,302 @@ test_a_free_form_answer_never_counts_as_choosing_an_option() {
   pass "a free-form answer with no option chosen is queued as a note, not a vote"
 }
 
+# ---- the captain's click, acknowledged --------------------------------------
+
+# Render a payload that carries acknowledgements, optionally replaying one
+# captain click through the real handler first.
+render_click() {  # <home> <payload-json> [click] [relang]
+  local home=$1 data="$1/payload.json"
+  printf '%s\n' "$2" > "$data"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+  node "$HARNESS" "$home/.lavish/bearings-board.html" ${3:+"$3"} ${4:+"$4"} \
+    || fail "the built board could not be rendered"
+}
+
+# An acknowledgement carries the second the captain clicked, because that stamp
+# is what the page ages into a waiting time; `clicked_at` puts the click that
+# many seconds in the past.
+clicked_at() {  # <seconds-ago>
+  printf '%s\n' "$(( $(date -u +%s) - $1 ))"
+}
+
+# The acknowledgement rides the two surfaces the captain clicks. This fixture
+# is a Charted Next row - one of them - and beside it an Underway row that
+# carries an acknowledgement of its own, so the renderer can be seen to ignore
+# a surface with no control on it rather than merely never being handed one.
+ack_payload() {  # <charted-ack-json>
+  jq -n --argjson ack "$1" --argjson uwack "$(acting_ack 2)" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, captains_call:[], landed:[],
+    underway:[{id:"running", repo:"sample", name:"Work already under way",
+               state:"working", kind:"ship", doing:"under way", ack:$uwack}],
+    charted:[{id:"acked", repo:"sample", title:"Acknowledged work", reason:"",
+              dispatchable:true} + (if $ack == null then {} else {ack:$ack} end)]}'
+}
+
+# The same acknowledgement on the other surface he clicks: a decision card.
+card_ack_payload() {  # <card-ack-json>
+  five_question_payload en | jq -c --argjson ack "$1" '.captains_call[0].ack = $ack'
+}
+
+# A deck deep enough that the card the captain pages to and the card the deal
+# would have shown him are different cards.
+four_card_payload() {
+  five_question_payload en | jq -c '
+    .captains_call[0] as $c
+    | .captains_call = (["card-one", "card-two", "card-three", "card-four"]
+        | map($c + {key: .}))'
+}
+
+acting_ack() {  # <seconds-ago>
+  jq -nc --argjson at "$(clicked_at "$1")" '{kind:"acting", at:$at}'
+}
+
+test_an_acknowledged_row_says_it_is_being_acted_on() {
+  local home out
+  home=$(make_home ack-acting)
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 2)")")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "acting" and .label == "acting on it" and .why == null)
+  ' >/dev/null || fail "an acting acknowledgement did not reach the row: $out"
+  pass "an acknowledged row says the answer is being acted on"
+}
+
+test_a_refused_acknowledgement_says_so_with_its_reason() {
+  local home out
+  home=$(make_home ack-refused)
+  out=$(render_click "$home" "$(card_ack_payload "$(jq -nc --argjson at "$(clicked_at 5)" \
+    '{kind:"refused", at:$at, why:"it is waiting on the board refresh, which is still in review"}')")")
+  printf '%s' "$out" | jq -e '
+    .error == ""
+      and (.cards[0].ack
+        | .kind == "refused" and .label == "not started"
+          and .why == "it is waiting on the board refresh, which is still in review")
+  ' >/dev/null || fail "the refusal did not reach the card with its reason: $out"
+  pass "a refused acknowledgement says so where he clicked, with the reason"
+}
+
+# The page ages the pill itself, from the stamp the click left on the record.
+# The board is republished only when the first mate acts, so a row that could
+# age only on a republication would report a slow answer and stay silent about
+# a missed one - and a missed answer is the case the captain asked for this
+# for. Nothing here republishes: one build, one read, an older stamp.
+test_a_late_acknowledgement_says_how_long_it_has_waited() {
+  local home out
+  home=$(make_home ack-late)
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 185)")")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "late" and .label == "still waiting · 3m")
+  ' >/dev/null || fail "an unanswered acknowledgement did not age into a waiting time: $out"
+  pass "a late acknowledgement says it is still waiting and for how long"
+}
+
+# Under the minute the captain settled, the same record still reads as being
+# acted on: the waiting report is the exception, not the resting state.
+test_a_fresh_acknowledgement_has_not_aged_into_waiting() {
+  local home out
+  home=$(make_home ack-fresh)
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 45)")")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "acting" and .label == "acting on it")
+  ' >/dev/null || fail "an acknowledgement inside the minute already reported itself late: $out"
+  pass "an acknowledgement inside the captain's minute still reads as being acted on"
+}
+
+test_a_row_with_no_acknowledgement_is_unchanged() {
+  local home with without
+  home=$(make_home ack-absent)
+  without=$(render_click "$home" "$(ack_payload null)")
+  printf '%s' "$without" | jq -e '.error == "" and .charted[0].ack == null' >/dev/null \
+    || fail "a row with no acknowledgement grew one: $without"
+  # Everything else about that row reads exactly as it does with the field
+  # absent, so the feature costs an unacknowledged board nothing.
+  with=$(render_click "$home" "$(ack_payload "$(acting_ack 2)")")
+  printf '%s' "$with" | jq --argjson bare "$(printf '%s' "$without" | jq -c '.charted[0]')" -e '
+    (.charted[0] | del(.ack)) == ($bare | del(.ack))
+  ' >/dev/null || fail "an acknowledgement changed the rest of the row: $with"
+  pass "a row with no acknowledgement renders exactly as it does today"
+}
+
+test_an_unknown_acknowledgement_kind_renders_nothing() {
+  local home board out
+  home=$(make_home ack-unknown)
+  render_click "$home" "$(ack_payload "$(acting_ack 2)")" >/dev/null
+  board="$home/.lavish/bearings-board.html"
+  # The payload contract refuses an unknown kind, so the only way to reach the
+  # renderer with one is to rewrite what was already published. The renderer's
+  # own guard is the second, independent detection of the same class, and this
+  # is what proves it is not decoration.
+  perl -pi -e 's/"kind":"acting"/"kind":"sudo-merge"/g' "$board" \
+    || fail "could not rewrite the published payload"
+  out=$(node "$HARNESS" "$board") || fail "the rewritten board could not be rendered"
+  printf '%s' "$out" | jq -e '.error == "" and .charted[0].ack == null' >/dev/null \
+    || fail "an unknown acknowledgement kind rendered a pill: $out"
+  pass "an unknown acknowledgement kind renders nothing at all"
+}
+
+test_the_dispatch_send_acknowledges_every_row_it_picked() {
+  local home out
+  home=$(make_home ack-dispatch)
+  out=$(render_click "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true},
+             {id:"held", repo:"sample", title:"Blocked work", reason:"waits on the cutover",
+              dispatchable:false}]}')" dispatch)
+  printf '%s' "$out" | jq -e '
+    .error == ""
+      and (.charted[0] | .title == "Queued work" and .ack.kind == "acting"
+        and .ack.label == "acting on it")
+      and (.charted[1] | .title == "Blocked work" and .ack == null)
+  ' >/dev/null || fail "the dispatch send did not acknowledge the rows it picked: $out"
+  pass "sending a dispatch order acknowledges every row it picked, and only those"
+}
+
+test_answering_a_decision_card_acknowledges_it_on_the_card() {
+  local home out
+  home=$(make_home ack-answer)
+  out=$(render_click "$home" "$(five_question_payload en)" answer)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.cards[0].ack | .kind == "acting" and .label == "acting on it")
+  ' >/dev/null || fail "answering a decision card left the card silent: $out"
+  pass "answering a decision card acknowledges it on the card"
+}
+
+# The captain was promised the language switch stays available, and he settled
+# that a click shows immediately it was received. A switch re-renders every
+# row from the payload, which carries no acknowledgement for a click made
+# seconds ago - so the page has to remember the keys it was clicked on, or the
+# switch takes the acknowledgement away again.
+test_a_dispatch_acknowledgement_survives_the_language_switch() {
+  local home out
+  home=$(make_home ack-dispatch-lang)
+  out=$(render_click "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true}]}')" \
+    dispatch hant)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "acting" and .label == "處理中")
+  ' >/dev/null || fail "the language switch took the dispatch acknowledgement away: $out"
+  pass "a dispatch acknowledgement survives the language switch, in the new language"
+}
+
+# The window the whole behaviour turns on: a click is not captured when it is
+# made - it reaches firstmate only when the captain presses Lavish's send - so
+# between the two the pill exists ONLY in this page's memory. If anything
+# rebuilds the board in that window, the republication carries no
+# acknowledgement for that key, and the row must still say the click was
+# heard. Every other survival test re-renders through the language switch,
+# which keeps the same build; this one replaces the build.
+test_a_queued_click_survives_a_rebuild_of_the_board() {
+  local home out
+  home=$(make_home ack-rebuild)
+  build_board_to "$home" "$home/a.html" "$(rebuild_payload "2026-09-19T00:00Z")"
+  build_board_to "$home" "$home/b.html" "$(rebuild_payload "2026-09-19T00:05Z")"
+  out=$(BOARD_REBUILD="$home/b.html" node "$HARNESS" "$home/a.html" dispatch) \
+    || fail "the rebuilt board could not be rendered"
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "acting")
+  ' >/dev/null || fail "a rebuild between the click and the send took the pill away: $out"
+  pass "a queued-but-unsent acknowledgement survives a rebuild of the board"
+}
+
+test_a_card_acknowledgement_survives_the_language_switch() {
+  local home out
+  home=$(make_home ack-answer-lang)
+  out=$(render_click "$home" "$(five_question_payload en)" answer hant)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.cards[0].ack | .kind == "acting" and .label == "處理中")
+  ' >/dev/null || fail "the language switch took the card acknowledgement away: $out"
+  pass "an answered card keeps its acknowledgement across the language switch"
+}
+
+# The captain named three controls, and all three sit on a Captain's Call card
+# or a Charted Next row. An Underway row has nothing on it he clicks, so it
+# shows no pill even when the published payload puts one there.
+test_an_underway_row_never_carries_an_acknowledgement() {
+  local home out
+  home=$(make_home ack-underway)
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 2)")")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack.kind == "acting") and (.underway[0].ack == null)
+  ' >/dev/null || fail "an acknowledgement reached a row the captain cannot click: $out"
+  pass "an underway row shows no acknowledgement, even when the payload carries one"
+}
+
+# A publication can still be carrying an unsettled record when the captain
+# answers that row again. The board may tell him anything except that the
+# click he just made did not happen, so the newer of the two wins - here a
+# click made now against a published record ten minutes old, read back after
+# the language switch that re-renders every row from the payload.
+test_a_fresher_click_outranks_a_stale_published_acknowledgement() {
+  local home out
+  home=$(make_home ack-newer-click)
+  out=$(render_click "$home" "$(jq -n --argjson ack "$(acting_ack 600)" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"",
+              dispatchable:true, ack:$ack}]}')" dispatch hant)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "acting" and .label == "處理中")
+  ' >/dev/null || fail "a stale published acknowledgement buried a fresher click: $out"
+  pass "a click newer than the publication is what the row keeps showing"
+}
+
+# The answered card holds long enough to read its acknowledgement, and the
+# deck deals the next one after it. If the captain paged the deck himself
+# while that hold ran, the card he chose outranks the one the deal was going
+# to show him and nothing is dealt at all.
+test_the_deck_does_not_deal_over_a_card_the_captain_paged_to() {
+  local home out
+  home=$(make_home ack-deck-paging)
+  out=$(render_click "$home" "$(four_card_payload)" answer-then-paging)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.cards | length) == 4
+      and ([.cards[] | .hidden] == [true, true, false, true])
+  ' >/dev/null || fail "the deal moved the captain off the card he paged to: $out"
+  pass "the deal never moves the deck off a card the captain paged to himself"
+}
+
+test_the_acknowledgement_speaks_the_captains_language() {
+  local home out
+  home=$(make_home ack-lang)
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 185)" | jq -c '.lang = "hant"')")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack.label == "還在等處理 · 3m")
+  ' >/dev/null || fail "the acknowledgement did not follow the board language: $out"
+  pass "an acknowledgement is worded in the language the board is showing"
+}
+
+# A repaint re-runs the shipped script on the same page. The pill ticker is the
+# one thing this board registers outside the DOM, so it is the one thing that
+# could survive a repaint uncleared - and an uncleared ticker holds a whole
+# detached copy of the page with it. Counted rather than eyeballed, because a
+# board that costs more on its tenth repaint than its first looks identical.
+test_repainting_the_board_never_accumulates_tickers() {
+  local home data once many
+  home=$(make_home ack-repaint)
+  data="$home/payload.json"
+  printf '%s\n' "$(ack_payload "$(acting_ack 2)")" > "$data"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+  once=$(node "$HARNESS" "$home/.lavish/bearings-board.html") \
+    || fail "the built board could not be rendered"
+  printf '%s' "$once" | jq -e '.error == "" and .intervals == 1' >/dev/null \
+    || fail "one run of the board did not leave exactly one ticker: $once"
+  many=$(BOARD_REPAINTS=8 node "$HARNESS" "$home/.lavish/bearings-board.html") \
+    || fail "the repainted board could not be rendered"
+  printf '%s' "$many" | jq -e '.error == "" and .intervals == 1' >/dev/null \
+    || fail "repainting the board accumulated tickers: $many"
+  pass "repainting the board leaves one ticker however often it repaints"
+}
+
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first
@@ -996,3 +1312,19 @@ test_an_option_panel_carries_what_it_changes_touches_and_buys
 test_the_fuller_option_panel_follows_the_captains_language
 test_a_free_form_answer_never_counts_as_choosing_an_option
 test_hans_absent_falls_back_to_hant_not_empty
+test_an_acknowledged_row_says_it_is_being_acted_on
+test_a_refused_acknowledgement_says_so_with_its_reason
+test_a_late_acknowledgement_says_how_long_it_has_waited
+test_a_fresh_acknowledgement_has_not_aged_into_waiting
+test_a_row_with_no_acknowledgement_is_unchanged
+test_an_unknown_acknowledgement_kind_renders_nothing
+test_the_dispatch_send_acknowledges_every_row_it_picked
+test_answering_a_decision_card_acknowledges_it_on_the_card
+test_a_dispatch_acknowledgement_survives_the_language_switch
+test_a_card_acknowledgement_survives_the_language_switch
+test_an_underway_row_never_carries_an_acknowledgement
+test_a_fresher_click_outranks_a_stale_published_acknowledgement
+test_the_deck_does_not_deal_over_a_card_the_captain_paged_to
+test_the_acknowledgement_speaks_the_captains_language
+test_repainting_the_board_never_accumulates_tickers
+test_a_queued_click_survives_a_rebuild_of_the_board
