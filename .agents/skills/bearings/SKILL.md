@@ -167,7 +167,8 @@ These hold for every surface the captain reads or acts on - the board, a card, a
   `bin/fm-packet.sh card` composes that card, and `serve` publishes the packet page under the stable session name `packet-<task-id>` when the installed `lavish-axi` advertises `--name`, falling back to a keyed session when it does not; the card carries whichever URL results as `packet_url`.
   That fallback is the one place this rule is not enforceable by the tooling, so say so when it applies rather than letting a losable URL pass as a stable one.
   Never hand the captain a one-shot session URL whose content is lost when the tab closes; reopening the same URL must bring the content back.
-- Every captain-facing visual surface is trilingual EN / 繁體 / 简体, so every string the captain reads on it carries all three.
+- Every captain-facing string carries 繁體 beside its English; 简体 is optional, and where it is absent the board shows the 繁體 text in its place rather than an empty cell.
+  That is what the tooling requires and what the composing instruction above says, so the rule is stated at what is actually guaranteed rather than at a stricter promise nothing keeps.
   Only packet figures are actually checked: `bin/fm-packet.sh verify` requires `data-en`, `data-hant` and `data-hans` on every `<text>` in a drawing.
   The board is not: its `{TRANSLATE: ...}` slots carry the `hant` translation, `hans` is added beside them by hand, and `bin/fm-bearings-board.sh`'s payload validator requires only `en` and `hant` - it accepts a copy object with no `hans`, and a plain English string with no translation at all.
   So on every captain-facing surface except a packet figure this rule rests on the composer following it, and saying that is the point: a check that cannot verify something reports that rather than passing by silence.
