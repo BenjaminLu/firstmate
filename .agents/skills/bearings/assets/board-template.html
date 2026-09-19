@@ -790,14 +790,46 @@ __FM_BEARINGS_BOARD_DATA__
       }
       return null;
     }
+    /* The figure contract makes a drawing's ids unique inside ONE packet, which
+       is all a packet needs while it owns its own page. This board puts many
+       packets in one document, so that is a namespace this surface created and
+       this surface owes: two packets that both called a slug `cmp` would each
+       declare `cmp-arrow`, and the second card's arrows would resolve to the
+       first card's marker. Every id a drawing declares is therefore prefixed
+       per card as it is inlined, and every reference that points at one is
+       rewritten in the same pass - url(#...) in any attribute value, and an
+       href or xlink:href fragment. Only markup inside a tag is touched, so a
+       label that happens to read "id=" stays the words the worker wrote, and
+       nothing about the packet on disk or the figure contract changes. */
+    var SVG_TAG_RE = /<\s*\/?\s*[A-Za-z][\w:-]*(?:[^<>"']|"[^"]*"|'[^']*')*>/g;
+    /* Attribute by attribute, left to right, so a value is consumed whole: a
+       label that reads "set id=7" is a value, not an attribute named id. */
+    var SVG_ATTR_RE = /([A-Za-z_:][-\w:.]*)(\s*=\s*)("[^"]*"|'[^']*'|[^\s"'>=`]+)/g;
+    function namespaceIds(svg, ns) {
+      return String(svg).replace(SVG_TAG_RE, function (tag) {
+        return tag.replace(SVG_ATTR_RE, function (whole, name, eq, raw) {
+          var q = raw.charAt(0) === '"' || raw.charAt(0) === "'" ? raw.charAt(0) : "";
+          var v = q ? raw.slice(1, -1) : raw;
+          var key = name.toLowerCase();
+          if (key === "id") v = ns + v;
+          else if ((key === "href" || key === "xlink:href") && v.charAt(0) === "#") {
+            v = "#" + ns + v.slice(1);
+          }
+          v = v.replace(/url\(\s*(['"]?)#([^)'"\s]*)\1\s*\)/gi, function (m, uq, target) {
+            return "url(" + uq + "#" + ns + target + uq + ")";
+          });
+          return name + eq + q + v + q;
+        });
+      });
+    }
     /* A drawing is in the switching part of the card, so its own labels follow
        the captain through the same three-language lookup every other string
        here goes through - the figure contract puts all three on every <text>,
        which is exactly what earns the drawing its place up here. */
-    function figureNode(fig) {
+    function figureNode(fig, ns) {
       var f = el("figure", "bb-fig");
       if (fig.slug) f.setAttribute("data-figure", fig.slug);
-      f.innerHTML = fig.svg;
+      f.innerHTML = namespaceIds(fig.svg, ns);
       var labelled = f.querySelectorAll ? f.querySelectorAll("[data-en]") : [];
       for (var i = 0; i < labelled.length; i++) {
         var n = labelled[i];
@@ -811,7 +843,9 @@ __FM_BEARINGS_BOARD_DATA__
     }
     var DOTS = ["var(--sea-500)", "var(--gold-500)", "var(--ocean-500)", "var(--rust-500)", "var(--navy-300)"];
 
-    data.captains_call.forEach(function (item) {
+    data.captains_call.forEach(function (item, cardIndex) {
+      /* unique to this card, and short enough to stay readable in the markup */
+      var figNs = "bb" + cardIndex + "-";
       var card = el("div", "fm-card fm-card--poster bb-decision");
       var pad = el("div", "bb-decision__pad");
 
@@ -874,10 +908,10 @@ __FM_BEARINGS_BOARD_DATA__
         }
         /* first tab: where the options differ */
         var diff = el("div", "bb-panel");
-        if (compare) { diff.appendChild(figureNode(compare)); claimed.push(compare); }
+        if (compare) { diff.appendChild(figureNode(compare, figNs)); claimed.push(compare); }
         packet.figures.forEach(function (fig) {
           if (fig.option) return;
-          if (claimed.indexOf(fig) < 0) { diff.appendChild(figureNode(fig)); claimed.push(fig); }
+          if (claimed.indexOf(fig) < 0) { diff.appendChild(figureNode(fig, figNs)); claimed.push(fig); }
         });
         diff.appendChild(el("p", "bb-panel__note", t("tab_note")));
         addTab(t("tab_diff"), null, diff);
@@ -887,7 +921,7 @@ __FM_BEARINGS_BOARD_DATA__
           packet.figures.forEach(function (fig) {
             if (fig === compare || claimed.indexOf(fig) >= 0) return;
             if (fig.option !== o.value) return;
-            panel.appendChild(figureNode(fig)); claimed.push(fig);
+            panel.appendChild(figureNode(fig, figNs)); claimed.push(fig);
           });
           var head = el("div", "bb-panel__head");
           head.appendChild(el("span", "bb-panel__label", pick(o.label)));

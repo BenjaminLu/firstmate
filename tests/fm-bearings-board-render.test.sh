@@ -383,6 +383,60 @@ packet_payload() {  # <lang> <figures-json>
     }]}'
 }
 
+# A drawing that declares an id and points at it - a marker, a gradient, a
+# clip, a <use> - is unique only within its own packet; the figure contract
+# says so and owns that rule. This board puts many packets in ONE document, so
+# two packets that both called a slug `cmp` would collide and the second card
+# would draw with the first card's marker. The board namespaces what it inlines.
+drawing_with_marker() {  # <slug> <node...> -> a drawing that references its own id
+  local slug=$1; shift
+  local rects='' n
+  for n in "$@"; do
+    rects="$rects<rect data-node=\"$n\" x=\"1\" y=\"1\" width=\"9\" height=\"9\" fill=\"var(--card)\" stroke=\"var(--rule)\"/>"
+  done
+  jq -n --arg slug "$slug" --arg rects "$rects" \
+    --argjson nodes "$(printf '%s\n' "$@" | jq -R . | jq -s .)" '{
+    slug: $slug, heading: ("Figure " + $slug), caption: ("what " + $slug + " proves"),
+    svg: ("<svg viewBox=\"0 0 20 20\"><defs><marker id=\"" + $slug + "-arrow\">"
+      + "<path d=\"M0 0 L8 4 L0 8 z\" fill=\"var(--muted)\"/></marker></defs>"
+      + $rects
+      + "<path data-edge=\"a-b\" d=\"M1 1 L9 9\" stroke=\"var(--muted)\" fill=\"none\" "
+      + "marker-end=\"url(#" + $slug + "-arrow)\"/>"
+      + "<text data-en=\"one path\" data-hant=\"一條路\" data-hans=\"一条路\">one path</text></svg>"),
+    nodes: $nodes, edges: []}'
+}
+
+test_two_cards_drawing_with_the_same_slug_do_not_share_ids() {
+  local home out payload figure
+  home=$(make_home packet-id-namespace)
+  # Both packets were written independently and both called their comparison
+  # `cmp`, which the figure contract allows: it guarantees uniqueness inside one
+  # packet, not across a board.
+  figure=$(drawing_with_marker cmp quiet loud)
+  payload=$(packet_payload en "[$figure]" | jq --argjson fig "$figure" '
+    .captains_call += [(.captains_call[0]
+      | .key = "second-choice"
+      | .title = {en: "A second decision", hant: "第二個決定"}
+      | .packet.figures = [$fig])]')
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the cards: $out"
+  printf '%s' "$out" | jq -e '
+    (.cards | length) == 2
+    and ((.cards | map(.panels[0].figures[0])) as $svgs
+      # what each card POINTS AT, and what each card DECLARES
+      | ($svgs | map(capture("url\\(#(?<r>[^)]+)\\)").r)) as $refs
+      | ($svgs | map(capture("id=\"(?<i>[^\"]+)\"").i)) as $ids
+      # each card resolves inside its own drawing
+      | ($refs == $ids)
+      # and the two cards are not in one namespace
+      and (($refs | unique | length) == 2)
+      # the slug the packet actually wrote is still what the figure is tagged
+      and ($refs | all(. | test("cmp-arrow$"))))
+  ' >/dev/null || fail "two cards sharing a slug shared one id namespace: $out"
+  pass "two cards drawing with the same slug each resolve their own ids"
+}
+
 test_a_packet_with_figures_opens_its_tabs_inside_the_card() {
   local home out figures
   home=$(make_home packet-tabs)
@@ -676,6 +730,7 @@ test_an_omitted_kind_keeps_the_existing_queued_rendering
 test_a_decision_card_answers_the_five_questions_in_english_by_default
 test_the_payload_language_switches_every_visible_string
 test_a_packet_with_figures_opens_its_tabs_inside_the_card
+test_two_cards_drawing_with_the_same_slug_do_not_share_ids
 test_a_packet_without_figures_still_renders_its_card
 test_the_packet_body_stays_in_the_language_it_was_written_in
 test_the_packet_block_renders_its_words_as_words

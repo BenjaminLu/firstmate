@@ -287,6 +287,16 @@ board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 # THIS script was handed - `fm-packet.sh card` wrote those drawings, but the
 # composing agent edits that file afterwards, so verify's word about the packet
 # on disk is not a word about the drawing in this payload.
+# The decode flag is spelled --decode on GNU and -D on BSD, so both are tried -
+# the same two-spelling fallback bin/fm-remote-home-provision.sh already needs.
+# Without it a board carrying any drawing refuses to build on half the
+# platforms, blaming the drawing for a flag.
+decode_drawing() {  # <base64> <destination>
+  printf '%s' "$1" | base64 --decode > "$2" 2>/dev/null && return 0
+  printf '%s' "$1" | base64 -D > "$2" 2>/dev/null && return 0
+  return 1
+}
+
 validate_packet_drawings() {  # <data.json> ; names every refusal on stderr
   local rows key encoded slug tmp problems status=0
   # Every field but the LAST must be one that cannot be empty: tab is an IFS
@@ -304,7 +314,7 @@ validate_packet_drawings() {  # <data.json> ; names every refusal on stderr
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-figure.XXXXXX") || return 1
   while IFS=$'\t' read -r key encoded slug; do
     [ -n "$key" ] || continue
-    if ! printf '%s' "$encoded" | base64 -d > "$tmp" 2>/dev/null; then
+    if ! decode_drawing "$encoded" "$tmp"; then
       printf 'fm-bearings-board: card %s: a packet drawing could not be read\n' "$key" >&2
       status=1; continue
     fi
