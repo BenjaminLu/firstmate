@@ -6,7 +6,12 @@
 // Prints one JSON document:
 //   { stats:[{n,label}], underway:[{title,sub,badges}],
 //     charted:[{title,sub,badges,pickable}], empty, more,
-//     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips}],
+//     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips,
+//             tabs:[{label,selected}],
+//             panels:[{hidden,figures,notes,rows,label,cost,
+//                      buttons:[{text,queues}]}],
+//             on_enter, on_enter_all,
+//             packet:{lang,headings,items,links}|null}],
 //     headings:[call,charted,underway,landed], error }
 import { readFileSync } from "node:fs";
 
@@ -24,8 +29,10 @@ class Node {
     this.innerHTML = "";
     this.parentNode = null;
     this.type = "";
+    this.name = "";
     this.value = "";
     this.checked = false;
+    this._on = {};
     this.classList = {
       add: (c) => { this.className = (this.className + " " + c).trim(); },
       contains: (c) => this.className.split(/\s+/).includes(c),
@@ -39,7 +46,10 @@ class Node {
   set textContent(v) { this._text = String(v); this.children = []; }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
   setAttribute(k, v) { this.attributes[k] = v; }
-  addEventListener() {}
+  addEventListener(type, fn) { (this._on[type] = this._on[type] || []).push(fn); }
+  dispatch(type) {
+    (this._on[type] || []).slice().forEach((fn) => fn({ preventDefault() {} }));
+  }
   querySelectorAll(sel) {
     const want = sel.replace(/^\./, "").replace(/:checked$/, "");
     const checkedOnly = sel.endsWith(":checked");
@@ -80,7 +90,25 @@ globalThis.document = {
     return byId.get(id);
   },
 };
-globalThis.window = {};
+// What the page handed to Lavish, in order: this is the answer channel, and
+// the only place the value a card actually sends can be observed.
+const queued = [];
+globalThis.window = {
+  lavish: { queuePrompt: (text, opts) => queued.push({ text, data: opts && opts.data }) },
+};
+globalThis.FormData = class {
+  constructor(form) {
+    this._v = new Map();
+    const walk = (n) => n.children.forEach((c) => {
+      if (c.name && !(c.type === "radio" && !c.checked) && !this._v.has(c.name)) {
+        this._v.set(c.name, c.value);
+      }
+      walk(c);
+    });
+    walk(form);
+  }
+  get(k) { return this._v.has(k) ? this._v.get(k) : null; }
+};
 globalThis.TextEncoder = TextEncoder;
 
 const script = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
@@ -115,6 +143,55 @@ const rowsOf = (container) =>
    renderer chose (the html lang the renderer sets, when the shim has one). */
 const deck = byId.get("bb-call") || new Node("div");
 const findAll = (n, cls) => n.querySelectorAll("." + cls);
+
+/* Answering a card, through the page's own listeners, so what a card sends is
+   read off the answer channel rather than off an attribute nobody submits.
+   A browser presses a form's FIRST submit button when the reader hits Enter in
+   a text field, so that is what `on_enter` does: type a note, press Enter, and
+   report what the page queued. */
+const descendants = (n, out = []) => {
+  out.push(n);
+  n.children.forEach((c) => descendants(c, out));
+  return out;
+};
+const answerCard = (card) => {
+  const form = descendants(card).find((n) => n.tagName === "form");
+  if (!form) return;
+  const nodes = descendants(form);
+  const record = (act) => {
+    queued.length = 0;
+    act();
+    return queued.length ? queued[queued.length - 1].data : null;
+  };
+  /* Every answer the act queued, not just the last one. Pressing Enter must
+     send ONE answer; a spurious extra vote queued before it is invisible to a
+     reader that only keeps the last, which is exactly how a live
+     implicit-submit bug once sat under a green test. */
+  const recordAll = (act) => {
+    queued.length = 0;
+    act();
+    return queued.map((q) => q.data);
+  };
+  const note = nodes.find((n) => n.name === "note");
+  if (note) {
+    note.value = "in my own words";
+    const dflt = nodes.find((n) => n.tagName === "button" && n.type === "submit");
+    card._onEnterAll = recordAll(() => {
+      if (dflt) dflt.dispatch("click");
+      form.dispatch("submit");
+    });
+    card._onEnter = card._onEnterAll.length
+      ? card._onEnterAll[card._onEnterAll.length - 1]
+      : null;
+    note.value = "";
+  }
+  nodes
+    .filter((n) => n.tagName === "button" && n.parentNode
+      && n.parentNode.className.split(/\s+/).includes("bb-panel"))
+    .forEach((b) => { b._queued = record(() => b.dispatch("click")); });
+};
+deck.children.forEach(answerCard);
+
 const cards = deck.children
   .filter((c) => c.className.split(/\s+/).includes("bb-decision"))
   .map((card) => ({
@@ -130,6 +207,47 @@ const cards = deck.children
       rec: findAll(o, "bb-opt__rec").length > 0,
     })),
     chips: findAll(card, "bb-chip").map((a) => a.textContent),
+    /* the packet opened inside the card: its tab strip, one panel per tab, and
+       the as-written block behind the collapsed line */
+    tabs: findAll(card, "bb-tab").map((b) => ({
+      label: b.textContent,
+      selected: b.attributes["aria-selected"] === "true",
+    })),
+    panels: findAll(card, "bb-panel").map((pnl) => ({
+      hidden: pnl.hidden === true,
+      figures: findAll(pnl, "bb-fig").map((f) => f.innerHTML),
+      notes: findAll(pnl, "bb-panel__note").map((n) => n.textContent),
+      /* what the option changes: one row per key, each carrying its list */
+      rows: findAll(pnl, "bb-panel__row").map((r) => ({
+        k: findAll(r, "bb-panel__k")[0]?.textContent ?? "",
+        v: (() => {
+          const v = findAll(r, "bb-panel__v")[0];
+          if (!v) return [];
+          const items = descendants(v).filter((n) => n.tagName === "li");
+          return items.length ? items.map((li) => li.textContent) : [v.textContent];
+        })(),
+      })),
+      label: findAll(pnl, "bb-panel__label")[0]?.textContent ?? "",
+      cost: findAll(pnl, "bb-panel__cost")[0]?.textContent ?? "",
+      buttons: findAll(pnl, "fm-btn").map((b) => ({
+        text: b.textContent, queues: b._queued ?? null,
+      })),
+    })),
+    on_enter: card._onEnter ?? null,
+    on_enter_all: card._onEnterAll ?? [],
+    packet: (() => {
+      const box = findAll(card, "bb-packet__body")[0];
+      if (!box) return null;
+      return {
+        lang: box.attributes.lang ?? "",
+        /* the as-written block as the page actually built it: a heading per
+           section, the items under it, and the links they named */
+        headings: findAll(box, "pk-part__h").map((h) => h.textContent),
+        items: findAll(box, "bb-packet__list").map((ul) =>
+          ul.children.map((li) => li.textContent)),
+        links: findAll(box, "bb-packet__link").map((a) => ({ text: a.textContent, url: a.href })),
+      };
+    })(),
   }));
 const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
   .map((id) => byId.get(id)?.textContent ?? "");
