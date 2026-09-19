@@ -466,16 +466,32 @@ fm_touch_epoch() {
     || fail "fm_touch_epoch: touch -t $stamp failed for $*"
 }
 
-# fm_install_wake_lib <bin-dir>: copy bin/fm-wake-lib.sh and everything it
-# sources unconditionally into a fixture's minimal bin/. Several fixtures build
-# a deliberately small bin/ by hand; without one owner for this set, splitting a
-# library off fm-wake-lib.sh breaks each of them separately and only at run
-# time, with a "No such file or directory" from inside the sourced file.
+# The wake library and everything it sources unconditionally. Many fixtures
+# build a deliberately small bin/ by hand, some by copying and some by linking;
+# without one owner for this set, splitting a library off fm-wake-lib.sh breaks
+# each of them separately and only at RUN time, with a "No such file or
+# directory" printed from inside the sourced file. Extend this list when you
+# split another library off fm-wake-lib.sh.
+fm_wake_lib_files() {
+  printf '%s\n' fm-wake-lib.sh fm-clock-lib.sh
+}
+
+# fm_install_wake_lib <bin-dir>: copy that set into a fixture's bin/.
 fm_install_wake_lib() {  # <bin-dir>
   local bindir=$1 f
-  for f in fm-wake-lib.sh fm-clock-lib.sh; do
+  while IFS= read -r f; do
     cp "$ROOT/bin/$f" "$bindir/$f" || fail "fm_install_wake_lib: could not install $f"
-  done
+  done < <(fm_wake_lib_files)
+}
+
+# fm_link_wake_lib <bin-dir>: symlink that set into a fixture's bin/, for
+# fixtures that deliberately track the repo copy rather than snapshot it.
+# Idempotent, so a fixture may call it again without guarding.
+fm_link_wake_lib() {  # <bin-dir>
+  local bindir=$1 f
+  while IFS= read -r f; do
+    ln -sf "$ROOT/bin/$f" "$bindir/$f" || fail "fm_link_wake_lib: could not link $f"
+  done < <(fm_wake_lib_files)
 }
 
 # --- deterministic git identity and fixtures --------------------------------

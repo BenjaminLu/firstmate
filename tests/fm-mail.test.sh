@@ -130,7 +130,7 @@ test_poll_error_propagates() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   # Fake python3 that exits with an error (simulating IMAP failure).
   cat > "$fakebin/python3" <<'SH'
@@ -167,7 +167,7 @@ SH
   # into the temp home's state (never the repo's).
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   local out rc=0
   out=$(FM_MAIL_USER=test FM_MAIL_PASS=pass FM_IMAP_HOST=imap.test FM_SMTP_HOST=smtp.test \
@@ -195,7 +195,7 @@ test_poll_resurfaces_uid_after_generation_change() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   # First mailbox generation surfaces uid 77 under uidvalidity 30003.
   cat > "$fakebin/python3" <<'SH'
@@ -233,7 +233,7 @@ test_poll_heals_wake_without_cursor_record() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -271,7 +271,7 @@ local fakebin homedir_bin
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   # Fresh-generation fake python3 that pauses so two concurrently started
   # polls genuinely overlap and contend on the cursor.
@@ -306,7 +306,7 @@ test_poll_recovers_journaled_wake_after_ack() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -352,7 +352,7 @@ test_poll_duplicate_wakes_on_interrupted_poll() {
   interrupted_home="$TMP_ROOT/interrupted-home"
   homedir_bin="$interrupted_home/bin"
   mkdir -p "$homedir_bin" "$interrupted_home/state"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -402,7 +402,7 @@ test_poll_acknowledged_wake_evading_recovery() {
   acked_home="$TMP_ROOT/acked-home"
   homedir_bin="$acked_home/bin"
   mkdir -p "$homedir_bin" "$acked_home/state"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -443,7 +443,7 @@ test_poll_legacy_wake_does_not_leak_into_generation() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   # Fresh mailbox generation (uidvalidity 90009) whose uid 42 is currently
   # unseen. A legacy generation-less wake `mail:42` from an earlier era is
@@ -504,7 +504,7 @@ test_poll_rolls_back_wake_without_durable_record() {
   mkdir -p "$roll_home"
   homedir_bin="$roll_home/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -552,7 +552,7 @@ test_poll_rollback_failure_never_leaves_unrecorded_ackable_wake() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   roll_home="$TMP_ROOT/rollback-failure-home"
   mkdir -p "$roll_home/bin" "$roll_home/state"
-  [ -e "$roll_home/bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$roll_home/bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$roll_home/bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -839,7 +839,7 @@ test_poll_restores_retry_when_recovered_wake_cannot_append() {
   local fakebin homedir_bin out rc=0
   fakebin=$(fm_fakebin "$TMP_ROOT")
   mkdir -p "$HOME_DIR/bin"
-  [ -e "$HOME_DIR/bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$HOME_DIR/bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$HOME_DIR/bin"
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
 printf 'uidvalidity\t90009\n'
@@ -873,7 +873,7 @@ test_poll_death_between_retry_remove_and_publish_does_not_strand() {
   test_home="$TMP_ROOT/retry-survives-failed-publish-home"
   homedir_bin="$test_home/bin"
   mkdir -p "$homedir_bin" "$test_home/state"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -919,7 +919,7 @@ test_poll_fails_closed_when_poll_list_fails() {
   local fakebin out rc=0
   fakebin=$(fm_fakebin "$TMP_ROOT")
   mkdir -p "$HOME_DIR/bin"
-  [ -e "$HOME_DIR/bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$HOME_DIR/bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$HOME_DIR/bin"
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
 if [ -f "$FM_POLL_FAIL_MARKER" ]; then
@@ -961,7 +961,7 @@ test_poll_fails_closed_when_retry_clear_fails() {
   test_home="$TMP_ROOT/retry-clear-fail-home"
   homedir_bin="$test_home/bin"
   mkdir -p "$homedir_bin" "$test_home/state"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
 printf 'uidvalidity\t90009\n'
@@ -1014,7 +1014,7 @@ test_poll_fails_closed_when_stale_retry_clear_fails() {
   test_home="$TMP_ROOT/stale-retry-clear-fail-home"
   homedir_bin="$test_home/bin"
   mkdir -p "$homedir_bin" "$test_home/state"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
 printf 'uidvalidity\t90009\n'
@@ -1051,7 +1051,7 @@ test_poll_fails_closed_when_retry_unwritable() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -1082,7 +1082,7 @@ test_poll_journal_failure_never_cursor_records() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   cat > "$fakebin/python3" <<'SH'
 #!/usr/bin/env bash
@@ -2121,7 +2121,7 @@ test_poll_retries_transient_fetch_and_surfaces_real_metadata() {
   retry_home="$TMP_ROOT/retry-home"
   homedir_bin="$retry_home/bin"
   mkdir -p "$homedir_bin" "$retry_home/state"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
   real_py=$(command -v python3)
   harness="$TMP_ROOT/retry-poll-harness.py"
   control="$TMP_ROOT/retry-fetch-count"
@@ -2227,7 +2227,7 @@ test_poll_keeps_journal_when_heal_cannot_record() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   # No unseen mail; the poll only heals the seeded journal entry.
   cat > "$fakebin/python3" <<'SH'
@@ -2255,7 +2255,7 @@ test_poll_heal_failure_does_not_rewake_unseen_mail() {
   heal_home="$TMP_ROOT/heal-fail-home"
   homedir_bin="$heal_home/bin"
   mkdir -p "$homedir_bin" "$heal_home/state"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   # Journal names uid 55; the cursor cannot be appended to; IMAP still lists
   # 55 as UNSEEN. The poll must fail closed before the wake loop so the uid
@@ -2438,7 +2438,7 @@ test_poll_caps_wakes_per_run() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   # Three unseen messages with a per-poll cap of two: exactly two wakes this
   # poll, and the third stays unseen so the next poll surfaces it.
@@ -2480,7 +2480,7 @@ test_poll_sanitizes_header_fields() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
   real_py=$(command -v python3)
   harness="$TMP_ROOT/sanitize-poll-harness.py"
 
@@ -2549,7 +2549,7 @@ test_poll_bounded_fetch_progresses_large_backlog() {
   fakebin=$(fm_fakebin "$TMP_ROOT")
   homedir_bin="$HOME_DIR/bin"
   mkdir -p "$homedir_bin"
-  [ -e "$homedir_bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$homedir_bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$homedir_bin"
 
   # Fake python3 emulating the bounded poll_list: read FM_MAIL_CURSOR, return
   # only uids not already recorded in the cursor, capped at the poll cap. Five
