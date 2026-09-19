@@ -1912,9 +1912,22 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
   exit 2
 }
 
+# A hold and its answer are both FOR the captain's board, so both are
+# published where they are recorded rather than at the next rebuild. A hold
+# publishes only the fact that a question exists - the question's words are
+# composed, never mapped - and an answer publishes the key, which is the one
+# thing the board needs to stop asking. Neither can fail this script
+# (bin/fm-board-event.sh).
+publish_board_event() {  # <kind> <task-id> [args...]
+  local kind=$1 id=$2
+  shift 2
+  [ -n "$id" ] || return 0
+  "$SCRIPT_DIR/fm-board-event.sh" event "$kind" "$id" "$@" >/dev/null 2>&1 || true
+}
+
 case "${1:-}" in
-  hold) shift; command_hold "$@" ;;
-  answer) shift; command_answer "$@" ;;
+  hold) shift; command_hold "$@"; publish_board_event call "${1-}" ;;
+  answer) shift; command_answer "$@"; publish_board_event answered "${1-}" --key "${1-}" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;

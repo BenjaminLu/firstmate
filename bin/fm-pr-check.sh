@@ -175,4 +175,9 @@ case "$READY_RC" in
   0|1) ;;
   *) printf 'actionable: PR %s is registered but its ready line did not reach the parent channel (rc=%s)\n' "$URL" "$READY_RC" >&2 ;;
 esac
+# Registering the pull request is the moment this home knows there is one, so
+# the captain's board is told now rather than at the next rebuild
+# (bin/fm-board-event.sh).
+"$SCRIPT_DIR/fm-board-event.sh" event pr "$ID" --pr-url "$URL" >/dev/null 2>&1 || true
+
 printf 'armed: state/%s.check.sh\n' "$ID"

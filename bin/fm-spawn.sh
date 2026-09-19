@@ -4772,6 +4772,12 @@ fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
 
+# The captain's board learns a task went underway from the dispatch that put
+# it there, not from the next time anyone rebuilds the board. bin/fm-board-event.sh
+# is the one door every board transport hangs off, and it cannot fail this script.
+"$SCRIPT_DIR/fm-board-event.sh" event dispatched "$ID" \
+  --name "$ID" --repo "$PROJ" --state working --detail launching --kind-of-task "$KIND" || true
+
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
 echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
