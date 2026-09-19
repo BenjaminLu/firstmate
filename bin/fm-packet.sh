@@ -885,7 +885,10 @@ command_render() {  # <task-id> ; prints `page: <path>`
 # server's own listing (`<file>,<status>,"<url>",...`), exactly as
 # bin/fm-bearings-board.sh does. The installed lavish-axi advertises `--name
 # <slug>` in its help text; an older release gets the plain open and its keyed
-# URL.
+# URL. The probe reads `--help` rather than the bare session listing, because it
+# runs before the page's session is opened and a listing is not inert: it is the
+# same read the open/reopen decision below depends on, so probing with one lets
+# the probe answer a question serve has not asked yet.
 
 page_realpath() {  # <page>
   perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$1" 2>/dev/null
@@ -895,7 +898,7 @@ page_session_name() {  # <task-id> -> the stable lavish session slug
   printf 'packet-%s\n' "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
 }
 
-lavish_names_supported() { lavish-axi 2>/dev/null | grep -q -- '--name <slug>'; }
+lavish_names_supported() { lavish-axi --help 2>/dev/null | grep -q -- '--name <slug>'; }
 
 lavish_open_url() {  # <canonical-page-path> -> the open session's url, or nothing
   local listing
