@@ -11,7 +11,7 @@
 //             panels:[{hidden,figures,notes,rows,label,cost,
 //                      buttons:[{text,queues}]}],
 //             on_enter, on_enter_all,
-//             packet:{said,lang,headings,items,links,text}|null}],
+//             packet:{lang,headings,items,links,text}|null}],
 //     headings:[call,charted,underway,landed], error }
 import { readFileSync } from "node:fs";
 
@@ -239,7 +239,6 @@ const cards = deck.children
       const box = findAll(card, "bb-packet__body")[0];
       if (!box) return null;
       return {
-        said: findAll(card, "bb-packet__said")[0]?.textContent ?? "",
         lang: box.attributes.lang ?? "",
         /* the as-written block as the page actually built it: a heading per
            section, the items under it, and the links they named */

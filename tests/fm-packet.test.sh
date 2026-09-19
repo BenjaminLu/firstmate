@@ -104,7 +104,19 @@ fill_prose() {  # <packet>: replace the two prose placeholders with real content
   python3 - "$1" <<'PY'
 import sys, re, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
-s = re.sub(r"\{FILL: every path you tried.*?\}", "- tried a retry loop first; dropped it because the bound, not the forge, was failing\n- the 15 s bound is unverified against the slowest repo\n- the merged-record rule assumes settle_final runs before publish", s, flags=re.S)
+SAID = [
+    ("tried a retry loop first; dropped it because the bound, not the forge, was failing",
+     "先試過重試迴圈，後來放棄，因為壞的是上限不是 forge",
+     "先试过重试循环，后来放弃，因为坏的是上限不是 forge"),
+    ("the 15 s bound is unverified against the slowest repo",
+     "15 秒的上限沒有對最慢的 repo 驗證過",
+     "15 秒的上限没有对最慢的 repo 验证过"),
+    ("the merged-record rule assumes settle_final runs before publish",
+     "合併記錄規則假設 settle_final 在 publish 之前跑",
+     "合并记录规则假设 settle_final 在 publish 之前跑"),
+]
+said = "\n".join("- en: %s\n- hant: %s\n- hans: %s" % t for t in SAID)
+s = re.sub(r"- en: \{FILL: every path you tried.*?- hans: \{FILL[^}]*\}", lambda m: said, s, flags=re.S)
 s = re.sub(r"\{FILL: file:line.*?\}", "- bin/fm-contributions.sh:190 forge() bound\n- tests/fm-contributions.test.sh: test_bound_hit_is_not_unavailable", s, flags=re.S)
 s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
 p.write_text(s)
@@ -143,8 +155,12 @@ SVG
 good_figures() {  # -> the whole Figures body, with $1 substituted for the svg when given
   printf '%s\n' \
     '### Where the two options differ' \
+    'heading.hant: 兩個選項差在哪' \
+    'heading.hans: 两个选项差在哪' \
     'figure: opt' \
     'caption: Both options end at the same place; only the left column differs.' \
+    'caption.hant: 兩個選項最後都到同一處，只有左邊那欄不同。' \
+    'caption.hans: 两个选项最后都到同一处，只有左边那栏不同。' \
     '' \
     "${1-$GOOD_SVG}" \
     '' \
@@ -621,8 +637,12 @@ second = """
 ## Figures
 
 ### A second drawing nobody checked
+heading.hant: 沒人檢查過的第二張圖
+heading.hans: 没人检查过的第二张图
 figure: two
 caption: The section a worker adds when the first one filled up.
+caption.hant: 工作者在第一段填滿後補的一節。
+caption.hans: 工作者在第一段填满后补的一节。
 
 <svg role="img" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg"><script>alert(document.title);</script><rect id="nope" fill="#ff0000" x="0" y="0" width="4" height="4"/><a href="javascript:alert(1)"><text x="1" y="8">English only</text></a></svg>
 """
@@ -784,9 +804,13 @@ test_the_card_carries_the_packet_itself() {
   # A Figures section, in the shape the packet's own figure contract defines.
   set_figures_from_stdin "$packet" <<'MD'
 ### Where the options part
+heading.hant: 選項在哪裡分岔
+heading.hans: 选项在哪里分岔
 
 figure: cmp
 caption: Both reach the gate; only one writes onto the data stream.
+caption.hant: 兩邊都會到 gate，只有一邊寫到資料輸出。
+caption.hans: 两边都会到 gate，只有一边写到数据输出。
 
 <svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><path data-edge="a-b" d="M1 1 L9 9" stroke="var(--muted)" marker-end="url(#cmp-arw)"/><text data-en="one path" data-hant="一條路" data-hans="一条路">one path</text></svg>
 
@@ -810,17 +834,17 @@ MD
              "Evidence", "How to pull more"])
     and (.packet.sections[1].heading
          | .en == "What only this session knows" and .hant == "只有這個 session 知道的事")
-    and ([.packet.sections[].items[].text] | any(test("tried a retry loop first")))
-    and ([.packet.sections[].items[].text] | any(test("only one writes")))
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("tried a retry loop first")))
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("only one writes")))
     # no markup anywhere in it: the board builds the tags, the packet supplies
     # only words, so nothing a worker writes can restyle the captain surface
-    and ([.packet.sections[].items[].text] | any(test("<svg")) | not)
-    and ([.packet.sections[].items[].text] | any(test("fm-packet-decision")) | not)
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("<svg")) | not)
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("fm-packet-decision")) | not)
     # a figure still says in words what it is, while its per-connector check
     # on the drawing renders nowhere - it was never page content
-    and ([.packet.sections[].items[].text] | any(test("Where the options part")))
-    and ([.packet.sections[].items[].text] | any(test("the gate reads the error stream")) | not)
-    and ([.packet.sections[].items[].text] | any(test("edge a-b")) | not)
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("Where the options part")))
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("the gate reads the error stream")) | not)
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("edge a-b")) | not)
   ' >/dev/null || fail "the card did not carry the packet: $out"
   pass "the card carries the packet itself: its drawings, and the rest as words"
 }
@@ -914,6 +938,89 @@ test_the_packet_block_switches_every_heading_it_owns() {
 # inference was this branch's own invention and it was wrong for exactly the
 # drawings the approved prototype uses, whose shapes are named a0-fn and a1-fn,
 # not after the options at all.
+# The captain reads one page in his own language, end to end. Everything the
+# card carries - the decision copy, the drawings, the headings of the collapsed
+# block AND the worker's own lines inside it - is written in all three, so no
+# part of that page stands still while the rest of it moves.
+test_the_packet_block_reaches_the_card_in_all_three_languages() {
+  local home out packet
+  home=$(make_home card-packet-trilingual)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    (.packet.sections[] | select(.heading.en == "What only this session knows") | .items) as $said
+    | ([$said[].text | type] | unique == ["object"])
+    and ([$said[].text | keys_unsorted | sort] | unique == [["en", "hans", "hant"]])
+    and ($said[0].text.hant | test("先試過重試迴圈"))
+    and ($said[0].text.hans | test("先试过重试循环"))
+  ' >/dev/null || fail "the worker prose did not reach the card in three languages: $out"
+  # and so do the words a figure says, which sit in that same block
+  printf '%s' "$out" | jq -e '
+    (.packet.sections[] | select(.heading.en == "Figures") | .items) as $fig
+    | ([$fig[].text | type] | unique == ["object"])
+    and ($fig[0].text.hant == "兩個選項差在哪")
+    and ($fig[1].text.hans | test("两个选项最后都到同一处"))
+  ' >/dev/null || fail "a figure heading or caption did not reach the card in three languages: $out"
+  pass "the packet block reaches the card in all three languages, prose and figure words alike"
+}
+
+# The worker writes the three languages, so verify is what makes them write
+# them: the section that is nothing but the worker explaining something owes
+# all three, and a line written by halves is refused wherever it is.
+test_verify_refuses_prose_the_captain_could_not_read() {
+  local home packet out rc
+  home=$(make_home prose-langs)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  run_packet "$home" verify pk-1 >/dev/null || fail "verify refused a trilingual packet"
+
+  python3 - "$packet" <<'ONELANG'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("- en: the 15 s bound is unverified against the slowest repo",
+                       "- the 15 s bound is unverified against the slowest repo", 1)
+              .replace("- hant: 15 秒的上限沒有對最慢的 repo 驗證過\n", "", 1)
+              .replace("- hans: 15 秒的上限没有对最慢的 repo 验证过\n", "", 1))
+ONELANG
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a session line the captain could only read in one language"
+  assert_contains "$out" "is written in one language" "the refusal does not name the one-language line: $out"
+
+  fill_prose "$packet"
+  python3 - "$packet" <<'HALF'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("- hans: 先试过重试循环，后来放弃，因为坏的是上限不是 forge\n", "", 1))
+HALF
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a line written in en and hant but not hans"
+  assert_contains "$out" "written in en but not hans" "the refusal does not name the missing language: $out"
+  pass "verify refuses prose the captain could not read in his own language"
+}
+
+test_a_figure_says_its_words_in_all_three_languages() {
+  local home packet
+  home=$(make_home fig-langs)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  assert_figure_refused "$home" "$packet" \
+    "$(good_figures | grep -v '^caption.hans:')" \
+    "the caption is written in en but not hans" \
+    "a figure whose caption stops short of the captain's third language"
+  assert_figure_refused "$home" "$packet" \
+    "$(good_figures | grep -v '^heading.hant:')" \
+    "the heading is written in en but not hant" \
+    "a figure whose heading stops short of the captain's second language"
+  pass "a figure says its heading and its caption in all three languages"
+}
+
 test_a_figure_names_the_option_it_illustrates() {
   local home out packet
   home=$(make_home fig-option)
@@ -923,17 +1030,25 @@ test_a_figure_names_the_option_it_illustrates() {
   fill_decision "$packet" "$GOOD_DECISION"
   set_figures_from_stdin "$packet" <<'MD'
 ### Where the two options differ
+heading.hant: 兩個選項差在哪
+heading.hans: 两个选项差在哪
 
 figure: cmp
 caption: Both options end at the same place; only the left column differs.
+caption.hant: 兩個選項最後都到同一處，只有左邊那欄不同。
+caption.hans: 两个选项最后都到同一处，只有左边那栏不同。
 
 <svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="both" data-hant="兩個" data-hans="两个">both</text></svg>
 
 ### What raising the bound changes
+heading.hant: 拉高上限會改什麼
+heading.hans: 拉高上限会改什么
 
 figure: raise
 option: bound
 caption: the wait grows and the failures stop.
+caption.hant: 等待變長，失敗停止。
+caption.hans: 等待变长，失败停止。
 
 <svg viewBox="0 0 20 20"><rect data-node="a0-fn" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="before" data-hant="之前" data-hans="之前">before</text></svg>
 MD
@@ -963,17 +1078,25 @@ test_two_figures_may_share_a_heading() {
   fill_decision "$packet" "$GOOD_DECISION"
   set_figures_from_stdin "$packet" <<'MD'
 ### What changes
+heading.hant: 改了什麼
+heading.hans: 改了什么
 
 figure: cmp
 caption: Both options end at the same place; only the left column differs.
+caption.hant: 兩個選項最後都到同一處，只有左邊那欄不同。
+caption.hans: 两个选项最后都到同一处，只有左边那栏不同。
 
 <svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="both" data-hant="兩個" data-hans="两个">both</text></svg>
 
 ### What changes
+heading.hant: 改了什麼
+heading.hans: 改了什么
 
 figure: raise
 option: bound
 caption: the wait grows and the failures stop.
+caption.hant: 等待變長，失敗停止。
+caption.hans: 等待变长，失败停止。
 
 <svg viewBox="0 0 20 20"><rect data-node="a0-fn" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="before" data-hant="之前" data-hans="之前">before</text></svg>
 MD
@@ -1017,9 +1140,13 @@ test_a_drawing_that_could_run_code_never_produces_a_card() {
   fill_decision "$packet" "$GOOD_DECISION"
   set_figures_from_stdin "$packet" <<'MD'
 ### A drawing that runs code when the reader clicks it
+heading.hant: 讀者一點就會執行程式的圖
+heading.hans: 读者一点就会执行程序的图
 
 figure: hostile
 caption: an inline link runs its href on the board that inlined it.
+caption.hant: 內嵌連結會在把它畫進來的看板上執行 href。
+caption.hans: 内嵌链接会在把它画进来的看板上执行 href。
 
 <svg viewBox="0 0 20 20"><a xlink:href="javascript:alert(1)"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></a><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="run" data-hant="跑" data-hans="跑">run</text></svg>
 MD
@@ -1045,8 +1172,12 @@ test_a_figures_section_parses_the_same_without_a_blank_line_after_it() {
   # card has to read it the same way rather than losing the first drawing.
   set_figures_tight_from_stdin "$packet" <<'MD'
 ### Where the options part
+heading.hant: 選項在哪裡分岔
+heading.hans: 选项在哪里分岔
 figure: cmp
 caption: Both reach the gate; only one writes onto the data stream.
+caption.hant: 兩邊都會到 gate，只有一邊寫到資料輸出。
+caption.hans: 两边都会到 gate，只有一边写到数据输出。
 <svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="one path" data-hant="一條路" data-hans="一条路">one path</text></svg>
 MD
   out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
@@ -1054,10 +1185,10 @@ MD
     ([.packet.figures[] | .slug] == ["cmp"])
     and (.packet.figures[0].nodes == ["bound", "quiet"])
     # and the drawing left the block rather than being dumped into it as text
-    and ([.packet.sections[].items[].text] | any(test("<svg")) | not)
-    and ([.packet.sections[].items[].text] | any(test("figure: cmp")) | not)
-    and ([.packet.sections[].items[].text] | any(test("Where the options part")))
-    and ([.packet.sections[].items[].text] | any(test("only one writes")))
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("<svg")) | not)
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("figure: cmp")) | not)
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("Where the options part")))
+    and ([.packet.sections[].items[].text | if type == "object" then .en else . end] | any(test("only one writes")))
   ' >/dev/null || fail "a Figures section with no blank line after it did not parse: $out"
   pass "a figure opening on the line after the section heading parses like any other"
 }
@@ -1075,9 +1206,13 @@ test_a_drawing_that_nests_an_icon_is_read_whole() {
   # the comparison drawing would no longer name every option.
   set_figures_from_stdin "$packet" <<'MD'
 ### Where the options part
+heading.hant: 選項在哪裡分岔
+heading.hans: 选项在哪里分岔
 
 figure: cmp
 caption: Both reach the gate; only one writes onto the data stream.
+caption.hant: 兩邊都會到 gate，只有一邊寫到資料輸出。
+caption.hans: 两边都会到 gate，只有一边写到数据输出。
 
 <svg viewBox="0 0 40 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><svg x="12" y="1" width="6" height="6"><path d="M0 0 L6 6" stroke="var(--muted)"/></svg><rect data-node="quiet" x="20" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="one path" data-hant="一條路" data-hans="一条路">one path</text></svg>
 MD
@@ -1091,6 +1226,62 @@ MD
     and (.packet.figures[0].svg | test("one path"))
   ' >/dev/null || fail "a drawing with a nested icon was cut short: $out"
   pass "a drawing that nests an icon svg is read whole, with every identity it names"
+}
+
+# The page and the card read ONE decision block, so they may not show different
+# halves of it: what an option changes, touches and buys is on both or neither.
+test_the_page_shows_what_an_option_changes_touches_and_buys() {
+  local home packet page rich
+  home=$(make_home page-option-detail)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+  fill_prose "$packet"
+  rich=$(printf '%s' "$GOOD_DECISION" | jq -c '
+    .options[0] += {
+      buys: {en: "One behaviour to reason about.", hant: "只剩一種行為要想。"},
+      files: ["bin/fm-contributions.sh"],
+      changes: {added: [{en: "a merged-record rule", hant: "一條合併記錄規則"}],
+                removed: [{en: "the stdout probe", hant: "stdout 判斷"}],
+                unchanged: [{en: "the answer channel", hant: "answer 通道"}]}}')
+  fill_decision "$packet" "$rich"
+  fill_figures "$packet"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed"
+  assert_grep 'a merged-record rule' "$page" "the page dropped what the option adds"
+  assert_grep 'the stdout probe' "$page" "the page dropped what the option removes"
+  assert_grep 'the answer channel' "$page" "the page dropped what the option leaves alone"
+  assert_grep 'bin/fm-contributions.sh' "$page" "the page dropped the files the option touches"
+  assert_grep 'One behaviour to reason about.' "$page" "the page dropped what the option buys"
+  # and each of them switches with the rest of the page
+  assert_grep 'data-hant="一條合併記錄規則"' "$page" "what the option adds does not switch"
+  assert_grep 'data-hant="只剩一種行為要想。"' "$page" "what the option buys does not switch"
+  pass "the page shows what an option changes, touches and buys, in every language"
+}
+
+# The board accepts one shape of link, and a packet that names any other must
+# not take the whole board build down with it: the words stay, the link does
+# not, which is what an unsafe scheme already gets.
+test_a_link_the_board_would_refuse_rides_the_card_as_text() {
+  local home packet out
+  home=$(make_home card-links)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
+  python3 - "$packet" <<'LINKS'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("- bin/fm-contributions.sh:190 forge() bound",
+  "- see [the brief](data/pk-1/brief.md) and [the run](https://ci.example.test/run/7)", 1))
+LINKS
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    (.packet.sections[] | select(.heading.en == "Evidence") | .items[0]) as $it
+    | ($it.text | test("the brief"))
+    and ([$it.links[].url] == ["https://ci.example.test/run/7"])
+  ' >/dev/null || fail "the card did not keep the words and drop the unreachable link: $out"
+  pass "a link the board would refuse rides the card as text, and the reachable one as a link"
 }
 
 test_path_and_bad_ids_are_refused() {
@@ -1135,9 +1326,9 @@ test_render_writes_a_self_contained_page_for_a_done_packet() {
   python3 - "$packet" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
-s = s.replace("- the 15 s bound is unverified against the slowest repo",
+s = s.replace("- bin/fm-contributions.sh:190 forge() bound",
   "- the **15 s** bound is `unverified` against [the slowest repo](https://example.test/slow); see <b>escaped</b>")
-s = s.replace("- the merged-record rule assumes settle_final runs before publish",
+s = s.replace("- tests/fm-contributions.test.sh: test_bound_hit_is_not_unavailable",
   "- the RAW_JS and TASK_ID slots are named here on purpose\n- [a data link](data:text/html,x) and [a vb link](VBScript:x) stay text")
 p.write_text(s)
 PY
@@ -1155,7 +1346,11 @@ PY
   assert_grep '<li>the RAW_JS and TASK_ID slots are named here on purpose</li>' "$page" "prose naming a template slot was rewritten"
   assert_grep '&lt;b&gt;escaped&lt;/b&gt;' "$page" "raw HTML in the packet was not escaped"
   assert_grep '<code>git -C' "$page" "the fenced pull-more block did not convert"
-  assert_grep '<li>tried a retry loop first' "$page" "the session list did not convert"
+  # A line the worker wrote in three languages rides the page as one switchable
+  # string, so the captain reads the session's own words in his language too.
+  assert_grep 'tried a retry loop first' "$page" "the session list did not convert"
+  assert_grep 'data-hant="先試過重試迴圈' "$page" "a trilingual prose line lost its 繁體"
+  assert_grep 'data-hans="先试过重试循环' "$page" "a trilingual prose line lost its 简体"
   assert_no_grep 'id="pk-decision"' "$page" "a done packet rendered a decision card"
   [ "$(section_order "$page")" = 'id="s_changed" id="s_session" id="s_evidence" id="s_more" ' ] \
     || fail "sections are missing or out of packet order: $(section_order "$page")"
@@ -1302,6 +1497,8 @@ test_a_packet_carries_one_figures_section_and_render_publishes_nothing_else
 test_the_captains_page_carries_only_what_the_worker_wrote
 test_a_drawing_that_nests_icon_svgs_is_one_figure_checked_end_to_end
 test_card_emits_a_board_ready_decision_item
+test_the_page_shows_what_an_option_changes_touches_and_buys
+test_a_link_the_board_would_refuse_rides_the_card_as_text
 test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet
 test_render_decision_card_answers_the_five_questions
@@ -1311,6 +1508,9 @@ test_the_card_carries_the_packet_itself
 test_a_needs_decision_packet_with_no_figures_is_refused
 test_the_packet_body_declares_the_one_language_it_is_in
 test_the_packet_block_switches_every_heading_it_owns
+test_the_packet_block_reaches_the_card_in_all_three_languages
+test_verify_refuses_prose_the_captain_could_not_read
+test_a_figure_says_its_words_in_all_three_languages
 test_a_figure_names_the_option_it_illustrates
 test_two_figures_may_share_a_heading
 test_a_figure_cannot_name_an_option_the_decision_never_offers

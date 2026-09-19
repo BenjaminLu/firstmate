@@ -349,7 +349,6 @@ a { color: inherit; text-decoration: none; }
 .bb-packet > summary::-webkit-details-marker { display: none; }
 .bb-packet > summary::before { content: "\25B8 "; color: var(--rust-500); }
 .bb-packet[open] > summary::before { content: "\25BE "; }
-.bb-packet__said { margin: 8px 0 0; font-size: var(--fs-2xs); color: var(--text-faint); }
 .bb-packet__body { font-size: var(--fs-sm); color: var(--text-body); min-width: 0; }
 .bb-packet__body .pk-part__h { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--text-muted); margin: 14px 0 5px; font-weight: 600; }
@@ -494,7 +493,7 @@ __FM_BEARINGS_BOARD_DATA__
       tab_diff: "Difference", choose: "Choose {x}",
       tab_note: "Open a tab above to see exactly what that option changes.",
       k_adds: "Adds", k_removes: "Removes", k_same: "Leaves alone", k_files: "Files it touches", k_buys: "What it buys",
-      packet_all: "The full packet", packet_said: "The worker's own words, in the language they wrote them - this block does not switch.",
+      packet_all: "The full packet",
       freeform: "or answer in your own words…", queue_answer: "Queue answer", queued: "queued",
       too_long: "Answer is too long to queue (512 bytes maximum).",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
@@ -522,7 +521,7 @@ __FM_BEARINGS_BOARD_DATA__
       tab_diff: "差在哪", choose: "選 {x}",
       tab_note: "點上面的分頁，看那個選項到底改了什麼。",
       k_adds: "新增", k_removes: "移除", k_same: "不動", k_files: "動到的檔案", k_buys: "換到什麼",
-      packet_all: "完整的決策說明", packet_said: "工作者自己的話，用他寫下的語言；這一段不會跟著切換。",
+      packet_all: "完整的決策說明",
       freeform: "或用你自己的話回答…", queue_answer: "送出回答", queued: "已排入",
       too_long: "回答太長，無法排入（上限 512 bytes）。",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
@@ -550,7 +549,7 @@ __FM_BEARINGS_BOARD_DATA__
       tab_diff: "差在哪", choose: "选 {x}",
       tab_note: "点上面的分页，看那个选项到底改了什么。",
       k_adds: "新增", k_removes: "移除", k_same: "不动", k_files: "动到的文件", k_buys: "换到什么",
-      packet_all: "完整的决策说明", packet_said: "工作者自己的话，用他写下的语言；这一段不会跟着切换。",
+      packet_all: "完整的决策说明",
       freeform: "或用你自己的话回答…", queue_answer: "提交回答", queued: "已排入",
       too_long: "回答太长，无法排入（上限 512 bytes）。",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
@@ -1008,13 +1007,12 @@ __FM_BEARINGS_BOARD_DATA__
          never as markup: a heading and its items, built here with the same
          el()/textContent path every other payload string takes, so nothing a
          worker writes into a packet can restyle or re-script the surface the
-         captain answers on. The headings are copy, so they follow him; the
-         items are the worker's own words in the one language they wrote them,
-         which the line above the block says. */
+         captain answers on. Every string in it is copy, so the whole block
+         follows the captain like the rest of the card - the packet carries the
+         three languages because the worker who wrote the words wrote them. */
       if (packet && packet.sections.length) {
         var more = el("details", "bb-packet");
         more.appendChild(el("summary", "", t("packet_all")));
-        more.appendChild(el("p", "bb-packet__said", t("packet_said")));
         var bodyBox = el("div", "bb-packet__body");
         bodyBox.setAttribute("lang", packet.lang === "en" ? "en" : (packet.lang === "hans" ? "zh-Hans" : "zh-Hant"));
         packet.sections.forEach(function (s) {

@@ -939,15 +939,23 @@ make_compose_home() {  # <name> [decision-json] -> a board home whose backlog an
   python3 - "$packet" "$decision" <<'PY2'
 import sys, re, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
-s = re.sub(r"\{FILL: every path you tried.*?\}", "- tried a flag; dropped it\n- the bound is unverified\n- the order assumes one region", s, flags=re.S)
+said = "\n".join("- en: %s\n- hant: %s\n- hans: %s" % t for t in (
+    ("tried a flag; dropped it", "試過一個旗標，後來放棄", "试过一个旗标，后来放弃"),
+    ("the bound is unverified", "上限沒有驗證過", "上限没有验证过"),
+    ("the order assumes one region", "這個順序假設只有一個區域", "这个顺序假设只有一个区域")))
+s = re.sub(r"- en: \{FILL: every path you tried.*?- hans: \{FILL[^}]*\}", lambda m: said, s, flags=re.S)
 s = re.sub(r"\{FILL: file:line.*?\}", "- bin/example.sh:1 the change", s, flags=re.S)
 s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
 s = re.sub(r"```json fm-packet-decision.v1\n.*?\n```", "```json fm-packet-decision.v1\n" + sys.argv[2] + "\n```", s, flags=re.S)
 # A needs-decision packet owes one figure putting both options in one drawing;
 # the board only carries the packet's link, but the packet must still verify.
 figure = """### Where the two rollout orders differ
+heading.hant: 兩種上線順序差在哪
+heading.hans: 两种上线顺序差在哪
 figure: roll
 caption: Both orders reach the same release; only the first hour differs.
+caption.hant: 兩種順序最後都上線，只有第一個小時不同。
+caption.hans: 两种顺序最后都上线，只有第一个小时不同。
 
 <svg role="img" viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
   <defs><marker id="roll-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="var(--muted)"/></marker></defs>

@@ -374,8 +374,10 @@ packet_payload() {  # <lang> <figures-json>
         sections:[
           {heading:{en:"What only this session knows", hant:"只有這個 session 知道的事",
                     hans:"只有这个 session 知道的事"},
-           items:[{text:"the probe never ran on Linux"},
-                  {text:"", links:[{label:"PR #10", url:"https://example.test/pr/10"}]}]},
+           items:[{text:{en:"the probe never ran on Linux", hant:"那段判斷沒在 Linux 上跑過",
+                         hans:"那段判断没在 Linux 上跑过"}},
+                  {links:[{label:{en:"PR #10", hant:"PR #10", hans:"PR #10"},
+                           url:"https://example.test/pr/10"}]}]},
           {heading:{en:"How to pull more", hant:"怎麼再往下挖", hans:"怎么再往下挖"},
            items:[{text:"gh pr diff 10", code:true}]}]}
     }]}'
@@ -450,11 +452,9 @@ test_the_packet_body_stays_in_the_language_it_was_written_in() {
         # follow him too - the prototype the captain approved carries all
         # three on every heading in that block
         and (.packet.headings == ["只有這個 session 知道的事", "怎麼再往下挖"])
-        # and what only the worker could write stays as written, labelled with
-        # the language it is in rather than half-switched
-        and (.packet.lang == "en")
-        and (.packet.said | test("工作者自己的話"))
-        and (.packet.items == [["the probe never ran on Linux", "PR #10"], ["gh pr diff 10"]]))
+        # and so do the lines the worker wrote: the packet carries all three,
+        # so no part of the block stands still while the rest of it moves
+        and (.packet.items == [["那段判斷沒在 Linux 上跑過", "PR #10"], ["gh pr diff 10"]]))
   ' >/dev/null || fail "the language rule did not hold across the card: $out"
   pass "the switching part follows the captain while the as-written block says which language it is"
 }
@@ -467,7 +467,8 @@ test_the_packet_block_renders_its_words_as_words() {
   home=$(make_home packet-not-markup)
   payload=$(packet_payload en '[]' | jq '
     .captains_call[0].packet.sections[0].items[0].text
-      = "<img src=x onerror=\"window.lavish.queuePrompt(\u0027pwned\u0027)\"> and <b>bold</b>"')
+      = {en: "<img src=x onerror=\"window.lavish.queuePrompt(\u0027pwned\u0027)\"> and <b>bold</b>",
+         hant: "\u4e00", hans: "\u4e00"}')
   out=$(render_payload "$home" "$payload")
   printf '%s' "$out" | jq -e '
     (.cards[0].packet.items[0][0]
@@ -508,6 +509,53 @@ test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board() {
 # tab whose value matches exactly and in NO tab otherwise, so a payload edited
 # to name an option the card does not offer is refused rather than losing the
 # drawing off the surface the captain decides on.
+# A figure need not be named for the board to inline it, and an unnamed one is
+# exactly the drawing a check must not skip: it is still markup going onto the
+# page that hosts the answer channel.
+test_a_drawing_with_no_slug_is_still_checked() {
+  local home payload rc out
+  home=$(make_home packet-unnamed-figure)
+  payload=$(packet_payload en "[$(packet_figure cmp quiet loud)]" | jq '
+    .captains_call[0].packet.figures[0].slug = ""
+    | .captains_call[0].packet.figures[0].svg
+      |= sub("<text"; "<a xlink:href=\"javascript:alert(1)\"></a><text")')
+  printf '%s\n' "$payload" > "$home/payload.json"
+  set +e
+  out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$home/payload.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unnamed drawing that can run code was inlined unchecked: $out"
+  printf '%s' "$out" | grep -q "javascript:alert(1)" \
+    || fail "the refusal does not name the href it refused: $out"
+  pass "a drawing with no slug is held to the figure contract like any other"
+}
+
+# This is a jq script. A board whose cards carry no drawings has nothing for the
+# figure checker to read, so it must build on a host that has no python3 at all.
+test_a_board_with_no_drawings_builds_without_python3() {
+  local home out fakebin
+  home=$(make_home packet-no-python3)
+  fakebin="$home/fakebin"
+  # A PATH whose python3 is absent, with everything else the build needs still
+  # reachable: the stub shadows the real interpreter for this build only.
+  cat > "$fakebin/python3" <<'SH'
+#!/usr/bin/env bash
+echo "python3 must not be needed to build a board with no drawings" >&2
+exit 127
+SH
+  chmod +x "$fakebin/python3"
+  printf '%s\n' "$(packet_payload en '[]')" > "$home/payload.json"
+  out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$home/payload.json" 2>&1) \
+    || fail "a board with no drawings did not build without python3: $out"
+  pass "a board whose cards carry no drawings builds without python3"
+}
+
 test_a_figure_cannot_name_an_option_the_card_does_not_offer() {
   local home payload rc out
   home=$(make_home packet-figure-option)
@@ -629,6 +677,8 @@ test_a_packet_without_figures_still_renders_its_card
 test_the_packet_body_stays_in_the_language_it_was_written_in
 test_the_packet_block_renders_its_words_as_words
 test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board
+test_a_drawing_with_no_slug_is_still_checked
+test_a_board_with_no_drawings_builds_without_python3
 test_a_figure_cannot_name_an_option_the_card_does_not_offer
 test_an_inline_packet_never_offers_a_second_address
 test_a_card_with_no_packet_renders_exactly_as_it_did

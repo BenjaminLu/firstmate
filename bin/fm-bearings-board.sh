@@ -289,12 +289,22 @@ board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 # composing agent edits that file afterwards, so verify's word about the packet
 # on disk is not a word about the drawing in this payload.
 validate_packet_drawings() {  # <data.json> ; names every refusal on stderr
-  local key slug encoded tmp problems status=0
+  local rows key encoded slug tmp problems status=0
+  # Every field but the LAST must be one that cannot be empty: tab is an IFS
+  # whitespace character, so bash collapses a run of tabs and drops the empty
+  # field between them - a figure with no slug would otherwise shift its own
+  # drawing out of the variable the loop checks and be inlined unread.
+  rows=$(jq -r '.captains_call[]? | select(has("packet"))
+    | .key as $k | .packet.figures[]? | [$k, (.svg | @base64), (.slug // "")] | @tsv' "$1") \
+    || return 1
+  # A board with no drawing on it needs nothing to check it: this script is a
+  # jq script, and a home whose cards carry no figures must not need python3.
+  [ -n "$rows" ] || return 0
   command -v python3 >/dev/null 2>&1 \
     || { printf 'fm-bearings-board: python3 is required to check a packet drawing\n' >&2; return 1; }
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-figure.XXXXXX") || return 1
-  while IFS=$'\t' read -r key slug encoded; do
-    [ -n "$encoded" ] || continue
+  while IFS=$'\t' read -r key encoded slug; do
+    [ -n "$key" ] || continue
     if ! printf '%s' "$encoded" | base64 -d > "$tmp" 2>/dev/null; then
       printf 'fm-bearings-board: card %s: a packet drawing could not be read\n' "$key" >&2
       status=1; continue
@@ -304,8 +314,9 @@ validate_packet_drawings() {  # <data.json> ; names every refusal on stderr
         | sed "s|^|fm-bearings-board: card $key: drawing ${slug:-(unnamed)}: |" >&2
       status=1
     fi
-  done < <(jq -r '.captains_call[]? | select(has("packet"))
-    | .key as $k | .packet.figures[]? | [$k, (.slug // ""), (.svg | @base64)] | @tsv' "$1")
+  done <<EOF
+$rows
+EOF
   rm -f -- "$tmp"
   return "$status"
 }
@@ -366,10 +377,11 @@ validate_payload() {  # <data.json>
     def packet_link: type == "object" and (.label | copy) and (.url | link_url);
     def packet_item:
       type == "object"
-      and (.text | copy_or_empty)
+      and ((has("text") | not) or (.text | copy))
       and ((has("code") | not) or (.code | type == "boolean"))
       and ((has("links") | not)
-           or ((.links | type == "array") and ([.links[] | packet_link] | all)));
+           or ((.links | type == "array") and ([.links[] | packet_link] | all)))
+      and (has("text") or has("links"));
     def packet_section:
       type == "object"
       and (.heading | copy)
