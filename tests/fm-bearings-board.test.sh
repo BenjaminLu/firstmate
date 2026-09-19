@@ -1224,6 +1224,28 @@ test_compose_badges_a_warning_only_for_a_synthesized_gate() {
   pass "compose badges a warning from the synthesized gate id alone"
 }
 
+test_compose_drops_a_filed_date_the_payload_contract_refuses() {
+  local home skeleton
+  home=$(make_compose_home compose-filed)
+  # `since` is a hand-written backlog word, so it reaches the snapshot as
+  # whatever was typed; the payload contract takes YYYY-MM-DD or that date with
+  # a UTC timestamp, and anything else must drop to null rather than refuse the
+  # whole board.
+  jq '.gates[0].filed = "last week"
+      | .gates[1].filed = "2026-02-30"
+      | .gates[2].filed = "2026-09-13T04:05:06Z"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying an unusable filed word"
+  jq -e '
+    (.charted[0] | .id == "plain-queued" and .filed == null)
+    and (.charted[1] | .id == "live-gate" and .filed == null)
+    and (.charted[2] | .id == "later-call" and .filed == "2026-09-13T04:05:06Z")
+  ' "$skeleton" >/dev/null || fail "an unusable filed date was not dropped: $(cat "$skeleton")"
+  pass "compose drops a filed date the payload contract refuses"
+}
+
 test_compose_degrades_every_blank_snapshot_string_to_its_row_identity() {
   local home skeleton
   home=$(make_compose_home compose-blank-strings)
@@ -1278,7 +1300,7 @@ test_compose_keeps_a_secondmate_landed_row_off_this_homes_books() {
 test_compose_validates_the_skeleton_on_stdout_too() {
   local home out rc
   home=$(make_compose_home compose-stdout-validate)
-  jq '.gates[0].filed = "last week"' "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  jq '.home = ""' "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
   set +e; out=$(run_board "$home" compose --snapshot "$home/snapshot.json" 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "compose emitted an unvalidated skeleton on stdout"
   assert_contains "$out" "does not satisfy fm-bearings-board.v1" "compose did not name the validator as the reason: $out"
@@ -1382,6 +1404,7 @@ test_compose_seeds_a_packet_card_without_a_recorded_project
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
+test_compose_drops_a_filed_date_the_payload_contract_refuses
 test_compose_degrades_every_blank_snapshot_string_to_its_row_identity
 test_compose_keeps_a_secondmate_landed_row_off_this_homes_books
 test_compose_cards_only_the_holds_this_home_owns

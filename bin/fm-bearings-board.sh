@@ -74,7 +74,9 @@
 #            string passes through one guard that substitutes the row's own
 #            durable identity when the snapshot value is empty or absent, so a
 #            blank title degrades that row instead of refusing the whole
-#            skeleton. A held task's title,
+#            skeleton, and a gate's `filed` is normalized to null unless it
+#            matches the accepted date shapes, so one hand-written `since`
+#            word cannot refuse the board either. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
@@ -191,6 +193,19 @@ PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
 BOARD_SCHEMA=fm-bearings-board.v1
 PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
+# The one definition of an acceptable Charted Next `filed` date, shared by the
+# payload validator and the compose projection so the projection can never emit
+# a date the validator then refuses.
+FILED_JQ_DEF='
+def valid_filed:
+  . as $filed
+  | type == "string"
+  and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?$")
+  and (if test("T")
+    then try ((fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")) == $filed) catch false
+    else try (((. + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) == $filed) catch false
+    end);
+'
 
 usage() {
   awk '
@@ -208,7 +223,7 @@ fail() {
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
 validate_payload() {  # <data.json>
-  jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" '
+  jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" "$FILED_JQ_DEF"'
     def nonempty_string: type == "string" and length > 0;
     # A compose placeholder stands in for a value the composer still owes. The
     # enum and count slots accept one so the skeleton validates as a skeleton;
@@ -225,14 +240,6 @@ validate_payload() {  # <data.json>
     def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
     def repo_marker: has("repo") and (.repo == null or (.repo | type == "string"));
     def name_marker: has("name") and (.name | copy);
-    def valid_filed:
-      . as $filed
-      | type == "string"
-      and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?$")
-      and (if test("T")
-        then try ((fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")) == $filed) catch false
-        else try (((. + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) == $filed) catch false
-        end);
     def optional_filed:
       (has("filed") | not) or (.filed == null) or (.filed | valid_filed);
     def optional_string($name): (has($name) | not) or (.[$name] | type == "string");
@@ -608,7 +615,7 @@ $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "capta
 EOF
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
-    --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" '
+    --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" "$FILED_JQ_DEF"'
     # Every captain-facing string goes through this one guard: the validator
     # refuses an empty en, and an ordinary metadata-only backlog row parses to
     # an empty title, so each projection names the durable value that stands in
@@ -703,7 +710,7 @@ EOF
                else "" end),
              dispatchable: (owned and (warning_gate | not) and .blocked_by == "-" and .reason == "-"),
              kind: (if warning_gate then "warning" else "queued" end),
-             filed: .filed} ]
+             filed: (.filed | if valid_filed then . else null end)} ]
         + [ .secondmates[]?
           | select(.state == "unknown" or .state == "externally_held")
           | {id: (("secondmate/" + .id) | slugify), repo: null,
