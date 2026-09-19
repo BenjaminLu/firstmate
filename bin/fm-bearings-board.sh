@@ -108,22 +108,22 @@
 #            cannot refuse the board either. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
-#            than captain) gets `close: release`, a question omits close. When
-#            `bin/fm-captain-hold.sh card <id>` returns a STORED card, that
-#            card supplies the copy: `build` stores what it publishes on each
-#            held task, and every later compose and refresh reuses it rather
-#            than asking the first mate for prose again. Only the fields that
-#            card actually carries are published - an optional field it left
-#            out stays out rather than being filled with the task id or an
-#            option slug. A call whose stored card a
-#            re-hold retired, and one that never had one, still needs copy
-#            written once. Failing that,
-#            when `bin/fm-packet.sh verify` accepts the held task's packet, the
-#            card is seeded from `bin/fm-packet.sh card <id>` instead of
-#            placeholders. Every captain-facing copy field is emitted as
-#            {"en": <english>, "hant": "{TRANSLATE: <english>}"} so hant (and
-#            optionally hans) is filled without re-typing the English; the
-#            fixed merge choices carry their known translations. A card's
+#            than captain) gets `close: release`, a question omits close.
+#            Copy for a held task comes from the first source that has it.
+#            First, the STORED card `bin/fm-captain-hold.sh card <id>` returns:
+#            `build` stores what it publishes on each held task, so every later
+#            compose and refresh reuses that copy rather than asking the first
+#            mate for prose again, and only the fields the card actually
+#            carries are published - an optional field it left out stays out
+#            rather than being filled with the task id or an option slug.
+#            Second, when `bin/fm-packet.sh verify` accepts the held task's
+#            packet, the card is seeded from `bin/fm-packet.sh card <id>`.
+#            A call with neither - one whose stored card a re-hold retired, one
+#            that never had one - still needs copy written once, and gets
+#            placeholders for it. Every captain-facing copy field is emitted
+#            as {"en": <english>, "hant": "{TRANSLATE: <english>}"} so hant
+#            (and optionally hans) is filled without re-typing the English;
+#            the fixed merge choices carry their known translations. A card's
 #            decide, about, if_nothing, options[].consequence, recommend_why,
 #            risk, reversible, and recommend_value are {FILL: ...}
 #            placeholders; a packet-seeded card keeps the worker's risk,
@@ -712,13 +712,19 @@ packet_card() {  # <task-id>
 # that survives is one written for the hold still open.
 # A stored card is durable state an earlier session wrote, and anything may
 # have written it - `bin/fm-captain-hold.sh card --store` is a public entry
-# point that only checks the key. It is therefore held to the SAME call_item
-# rule the payload validator applies, from the one shared definition: a guard
-# narrower than the validator accepts a card that then refuses the whole
-# board, and under --best-effort that stops every later refresh in silence. A
-# card that fails degrades this row to the packet or placeholder path instead.
-# The reconcile choice is stripped first, because it is injected per
-# publication and the validator refuses a card that arrives carrying it.
+# point that only checks the key. A card this guard accepts and the pipeline
+# then refuses costs the WHOLE board, and under --best-effort that stops every
+# later refresh in silence, so the guard admits only a card that is
+# publishable EXACTLY AS STORED. That means both gates a publication passes,
+# in the order it passes them: no compose placeholder anywhere (build and
+# refresh both refuse a payload carrying one, before validating it), and then
+# the shared call_item rule from its one definition. call_item alone is not
+# enough - it deliberately ACCEPTS placeholders, because a composer's skeleton
+# is validated while it still carries them, and a stored card is finished copy
+# rather than a skeleton. A card that fails either gate degrades this row to
+# the packet or placeholder path instead. The reconcile choice is stripped
+# first, because it is injected per publication and the validator refuses a
+# card that arrives carrying it.
 stored_card() {  # <task-id>
   local card
   card=$("$SCRIPT_DIR/fm-captain-hold.sh" card "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
@@ -726,7 +732,9 @@ stored_card() {  # <task-id>
     | jq -c --arg id "$1" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
       if type == "object" and .key == $id then
         (.options = [((.options // [])[]) | select(.value != "reconcile")])
-        | if call_item then . else null end
+        | if (tojson | test($ph)) then null
+          elif call_item then .
+          else null end
       else null end' 2>/dev/null \
     || printf 'null\n'
 }

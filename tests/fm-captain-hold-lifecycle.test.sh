@@ -639,10 +639,9 @@ test_a_stored_board_card_round_trips_and_survives_restating_the_same_hold() {
     || fail "could not create the held task"
   run_captain "$home" hold "$id" --reason "captain must pick the route" >/dev/null \
     || fail "holding the task failed"
-  # No packet, so nothing is seeded: this is the one case whose copy is still
-  # written once, by the board build.
+  # `hold` never writes a card; the board's build is what stores one.
   run_captain "$home" card "$id" >/dev/null 2>&1 \
-    && fail "a hold with no packet stored a card anyway"
+    && fail "holding a task stored a board card"
 
   first="$home/composed.json"
   jq -n --arg id "$id" '{key:$id, type:"decision", repo:"sample",

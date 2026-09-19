@@ -443,11 +443,10 @@ test_every_pipeline_step_status_renders_as_a_label_in_every_language() {
 
   home=$(make_home statuses-en)
   out=$(render_payload "$home" "$payload")
-  printf '%s' "$out" | jq -e --argjson statuses "$PIPELINE_STATUSES" '
+  printf '%s' "$out" | jq -e '
     [.underway[0].progress.steps[] | .title | split(" · ") | .[1]]
       == ["passed", "running", "fixing", "failed", "not started", "skipped",
           "waiting on you", "passed", "passed"]
-    and ([.underway[0].progress.steps[] | .title] | map(select(. == null)) | length) == 0
   ' >/dev/null || fail "an English status chip fell back to a raw status word: $out"
 
   home=$(make_home statuses-hant)

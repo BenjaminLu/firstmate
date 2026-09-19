@@ -356,6 +356,37 @@ test_a_stored_card_publishes_only_the_copy_it_carries() {
   pass "a stored card publishes the copy it carries and invents none it omits"
 }
 
+test_a_stored_card_carrying_a_placeholder_costs_only_its_own_row() {
+  local home id=gated-work card
+  home=$(make_home stored-card-placeholder)
+  seed_board "$home"
+  # A publication passes TWO gates and the placeholder one runs first, so a
+  # card that satisfies the payload validator can still refuse the whole
+  # board. `call_item` accepts a placeholder on purpose - a composer skeleton
+  # is validated while it still carries them - but a stored card is finished
+  # copy, and one carrying an unfilled slot would stop every fleet-triggered
+  # refresh in silence until someone deleted the file by hand.
+  mkdir -p "$home/data/$id"
+  jq -n --arg id "$id" '{key:$id, type:"decision", repo:"firstmate",
+    title:"Rollout order", decide:"{FILL: decide}",
+    risk:"{FILL: low | medium | high}",
+    options:[{value:"canary", label:"Canary"}], allow_freeform:true}' \
+    > "$home/data/$id/board-card.json"
+
+  refresh "$home" --best-effort >/dev/null \
+    || fail "a stored card carrying a placeholder stopped the refresh"
+  injected_payload "$home" | jq -e '.schema == "fm-bearings-board.v1"' >/dev/null \
+    || fail "a stored card carrying a placeholder cost the whole board"
+  card=$(injected_payload "$home" | jq -c --arg id "$id" '.captains_call[] | select(.key == $id)')
+  [ -n "$card" ] || fail "the degraded row lost its captain call entirely"
+  printf '%s' "$card" | jq -e '
+    ([.. | strings | select(test("\\{(FILL|TRANSLATE)"))] | length) == 0
+    and ([.options[].value] | index("reconcile")) != null
+    and .allow_freeform == true
+  ' >/dev/null || fail "the placeholder reached the captain: $card"
+  pass "a stored card carrying a placeholder costs its own row, not the board"
+}
+
 test_a_stored_card_the_validator_would_refuse_costs_only_its_own_row() {
   local home id=gated-work card
   home=$(make_home stored-card-unpublishable)
@@ -865,6 +896,7 @@ test_refresh_carries_no_placeholder_to_the_captain
 test_refresh_reuses_the_stored_card_verbatim
 test_a_stored_card_publishes_only_the_copy_it_carries
 test_a_stored_card_the_validator_would_refuse_costs_only_its_own_row
+test_a_stored_card_carrying_a_placeholder_costs_only_its_own_row
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run
