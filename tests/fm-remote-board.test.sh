@@ -220,21 +220,6 @@ test_check_refuses_untracked_content_around_the_board() {
   pass "check refuses untracked content around the board"
 }
 
-test_the_answer_keys_are_the_shipped_boards_own() {
-  local d=$TMP_ROOT/keys
-  mkdir -p "$d"
-  valid_payload "$d/p.json"
-  "$REMOTE" render "$d/p.json" --out "$d/page.html" >/dev/null
-  # The transport must not name any key itself: every key reaches it from the
-  # template, which is what keeps a remote answer addressable by the same
-  # intake as a local one.
-  assert_no_grep 'dispatch.charted' "$ROOT/.agents/skills/bearings/assets/remote-transport.js" \
-    "the transport must take its keys from the board, not restate them"
-  assert_grep 'queueKey' "$ROOT/.agents/skills/bearings/assets/remote-transport.js" \
-    "the transport must read the key the board supplies"
-  pass "the answer keys are the shipped board's own"
-}
-
 test_the_derived_board_is_renderable_from_the_shipped_assets() {
   local d=$TMP_ROOT/shipped rc=0
   mkdir -p "$d"
@@ -269,15 +254,10 @@ PY
   pass "the embedded board source cannot close its own script"
 }
 
-test_url_and_doctor_report_a_home_with_no_board() {
+test_doctor_reports_a_home_with_no_board() {
   local home out rc=0
   home=$TMP_ROOT/bare
   mkdir -p "$home"
-
-  rc=0; out=$(FM_HOME="$home" "$REMOTE" url 2>&1) || rc=$?
-  expect_code 1 "$rc" "url must refuse when the home has no board configured"
-  assert_contains "$out" "no remote board configured" "url must say what is missing"
-  assert_contains "$out" "config/remote-board" "url must name the file to write"
 
   # A clone with nothing set up is a supported state, not a failure.
   rc=0; out=$(FM_HOME="$home" "$REMOTE" doctor 2>&1) || rc=$?
@@ -287,7 +267,8 @@ test_url_and_doctor_report_a_home_with_no_board() {
   assert_contains "$out" "derives: yes" "doctor must prove the shipped assets still derive"
   assert_contains "$out" "a shell cannot reach the board store" \
     "doctor must name what performs the publish"
-  pass "url and doctor report a home with no board"
+  assert_contains "$out" "config/remote-board" "doctor must name the file that holds the address"
+  pass "doctor reports a home with no board"
 }
 
 test_doctor_fails_when_the_shipped_assets_stopped_deriving() {
@@ -323,6 +304,179 @@ test_publish_prepares_and_refuses_to_claim_it_published() {
   pass "publish prepares and refuses to claim it published"
 }
 
+# A published wrapper whose head carries more than document metadata.
+publish_with_head() {  # <derived.html> <head-extra> <out.html>
+  {
+    printf '<!doctype html><html><head><meta charset=utf8>%s</head><body>\n' "$2"
+    cat "$1"
+    printf '\n</body></html>'
+  } > "$3"
+}
+
+test_check_refuses_untracked_content_in_the_wrapper_head() {
+  local d=$TMP_ROOT/head out rc=0
+  mkdir -p "$d"
+  valid_payload "$d/p.json"
+  "$REMOTE" render "$d/p.json" --out "$d/page.html" >/dev/null
+
+  # The head is not a free space: a script or a stylesheet smuggled into it
+  # runs on the captain's phone exactly as one placed beside the board would.
+  publish_with_head "$d/page.html" '<script src="https://example.invalid/x.js"></script>' "$d/script-head.html"
+  rc=0; out=$("$REMOTE" check "$d/script-head.html" 2>&1) || rc=$?
+  expect_code 1 "$rc" "check must refuse a wrapper head carrying a script"
+  assert_contains "$out" "untracked content" "the refusal must name the untracked content"
+
+  publish_with_head "$d/page.html" '<style>.bb-decision{display:none}</style>' "$d/style-head.html"
+  rc=0; out=$("$REMOTE" check "$d/style-head.html" 2>&1) || rc=$?
+  expect_code 1 "$rc" "check must refuse a wrapper head carrying a stylesheet"
+
+  # The host's own metadata skeleton still passes, or the check would refuse
+  # every real publish.
+  publish_with_head "$d/page.html" '<title>bearings</title><meta name="viewport" content="width=device-width">' "$d/ok-head.html"
+  rc=0; out=$("$REMOTE" check "$d/ok-head.html" 2>&1) || rc=$?
+  expect_code 0 "$rc" "check must still accept the host's metadata-only head: $out"
+  pass "check refuses untracked content in the wrapper head"
+}
+
+# ---- the transport's own behavior, executed ------------------------------
+# The cases below run the DERIVED page under tests/assets/remote-board-harness.mjs
+# and assert what the captain would see, so the transport is judged by what it
+# does rather than by what its source says.
+HARNESS="$ROOT/tests/assets/remote-board-harness.mjs"
+
+# A payload with answerable cards: an answer in progress only exists once the
+# shipped board has rendered its own forms.
+answerable_payload() {  # <file>
+  cat > "$1" <<'JSON'
+{
+  "schema": "fm-bearings-board.v1",
+  "home": "test-home",
+  "generated": "2026-09-19T06:53Z",
+  "lang": "en",
+  "prs_live": false,
+  "captains_call": [
+    {
+      "key": "sample-perishable-first-admission-choice",
+      "type": "decision",
+      "repo": "sample",
+      "title": "Perishable-first admission",
+      "decide": "Adopt it?",
+      "options": [
+        { "value": "yes", "label": "Adopt", "hint": "recommended" },
+        { "value": "no", "label": "Keep current" }
+      ],
+      "allow_freeform": true
+    },
+    {
+      "key": "merge.sample-task",
+      "type": "merge",
+      "repo": "sample",
+      "title": "Merge: sample change",
+      "detail": "validation green",
+      "task_id": "sample-task",
+      "pr_url": "https://github.com/example/sample/pull/1",
+      "checks": "green",
+      "risk": "low",
+      "options": [
+        { "value": "merge", "label": "Merge now" },
+        { "value": "hold", "label": "Not yet" }
+      ],
+      "allow_freeform": true
+    }
+  ],
+  "underway": [],
+  "landed": [],
+  "charted": [
+    { "id": "sample-queued", "repo": "sample", "title": "Queued work", "reason": "", "dispatchable": true }
+  ],
+  "charted_more": 0
+}
+JSON
+}
+
+transport_page() {  # <dir>
+  mkdir -p "$1"
+  answerable_payload "$1/p.json"
+  "$REMOTE" render "$1/p.json" --out "$1/page.html" >/dev/null \
+    || fail "the derived page did not render"
+}
+
+drive() {  # <dir> <scenario>
+  node "$HARNESS" "$1/page.html" "$2" || fail "the derived board could not be driven: $2"
+}
+
+test_a_live_payload_repaints_through_the_shipped_board() {
+  local d=$TMP_ROOT/drive-live out
+  transport_page "$d"
+  out=$(drive "$d" live)
+  assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
+    "a live payload must reach the page through the shipped board's own renderer"
+  assert_contains "$(jq -r .badge <<<"$out")" "live" "the page must say the link is live"
+  pass "a live payload repaints through the shipped board"
+}
+
+test_an_update_waits_while_an_answer_is_in_progress() {
+  local d=$TMP_ROOT/drive-hold out
+  transport_page "$d"
+
+  # The complaint this branch answers: an update arriving mid-answer must not
+  # wipe the note being typed, the card being answered, or the captain's place
+  # in the stack.
+  out=$(drive "$d" hold)
+  assert_equals "wait for me" "$(jq -r .note <<<"$out")" \
+    "a live update must not discard the note the captain is writing"
+  assert_contains "$(jq -r .stack <<<"$out")" "card 2 of 2" \
+    "a live update must not lose the captain's place in the card stack"
+  assert_not_contains "$(jq -r .provenance <<<"$out")" "2099" \
+    "the held update must not have painted while the answer was in progress"
+  assert_contains "$(jq -r .badge <<<"$out")" "waiting" \
+    "the page must say an update is waiting rather than claim it is live"
+
+  # Held, not dropped: it lands the moment the answer is sent.
+  out=$(drive "$d" hold-send)
+  assert_equals "1" "$(jq '.writes | length' <<<"$out")" \
+    "the answer must be written to the board's own store"
+  assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
+    "the held update must land once the answer is sent"
+  pass "an update waits while an answer is in progress"
+}
+
+test_a_snapshot_the_page_cannot_render_is_not_called_live() {
+  local d=$TMP_ROOT/drive-unreadable out badge
+  transport_page "$d"
+  out=$(drive "$d" unreadable)
+  badge=$(jq -r .badge <<<"$out")
+  assert_contains "$badge" "not updating" \
+    "a snapshot this page cannot render must read as not updating"
+  assert_not_contains "$badge" "live" "the page must not claim a live link it does not have"
+  pass "a snapshot the page cannot render is not called live"
+}
+
+test_an_answer_that_cannot_be_sent_is_named_on_the_page() {
+  local d=$TMP_ROOT/drive-nodb out
+  transport_page "$d"
+  # With no store to write to, an answer goes nowhere; the page must say so
+  # rather than let the card tick as though it had been sent.
+  out=$(drive "$d" no-db)
+  assert_equals "0" "$(jq '.writes | length' <<<"$out")" "there is nothing to write the answer to"
+  assert_contains "$(jq -r .badge <<<"$out")" "answers cannot be sent" \
+    "the page must say answers cannot be sent from here"
+  pass "an answer that cannot be sent is named on the page"
+}
+
+test_the_page_names_the_answer_route_that_is_not_landed() {
+  local d=$TMP_ROOT/drive-gap out
+  transport_page "$d"
+  # Carrying answers back to firstmate is not landed, and a ticked card would
+  # otherwise read as an answer that arrived.
+  out=$(drive "$d" live)
+  assert_equals "true" "$(jq -r .gapShown <<<"$out")" \
+    "the answer-return gap must be visible wherever an answer can be given"
+  assert_contains "$(jq -r .gap <<<"$out")" "firstmate" \
+    "the page must name what does not yet reach firstmate"
+  pass "the page names the answer route that is not landed"
+}
+
 test_the_derived_board_runs_the_shipped_board_verbatim
 test_the_derived_board_has_one_copy_of_the_board_code
 test_the_contract_owner_gates_what_can_be_rendered
@@ -331,9 +485,21 @@ test_a_script_close_in_the_payload_cannot_end_the_data_block
 test_check_accepts_the_board_this_template_derives
 test_check_catches_a_shipped_feature_the_remote_board_never_got
 test_check_refuses_untracked_content_around_the_board
-test_the_answer_keys_are_the_shipped_boards_own
+test_check_refuses_untracked_content_in_the_wrapper_head
 test_the_derived_board_is_renderable_from_the_shipped_assets
 test_the_embedded_board_source_cannot_close_its_own_script
-test_url_and_doctor_report_a_home_with_no_board
+test_doctor_reports_a_home_with_no_board
 test_doctor_fails_when_the_shipped_assets_stopped_deriving
 test_publish_prepares_and_refuses_to_claim_it_published
+
+# The transport is JavaScript; without a runtime its behavior cannot be
+# executed, and asserting it from its source text would prove nothing.
+if command -v node >/dev/null 2>&1; then
+  test_a_live_payload_repaints_through_the_shipped_board
+  test_an_update_waits_while_an_answer_is_in_progress
+  test_a_snapshot_the_page_cannot_render_is_not_called_live
+  test_an_answer_that_cannot_be_sent_is_named_on_the_page
+  test_the_page_names_the_answer_route_that_is_not_landed
+else
+  echo "skip: node not found - the remote transport's behavior cases need a JS runtime"
+fi

@@ -125,6 +125,11 @@ Afterwards, read the published page back and run `bin/fm-remote-board.sh check <
 That is the parity proof: it fails when the published board is not what today's template derives, which is how a feature the shipped board grew reaches the captain's phone instead of going missing unmeasured.
 If a feature genuinely cannot cross to this transport, say so in the change that introduces it rather than dropping it quietly.
 
+One feature does not cross yet, and it is the answer route.
+An answer given on the remote board is written to that board's own store and goes no further: nothing carries it back to firstmate, so a card ticking "queued" there means stored, not delivered.
+The page says that on its own face, and so does this procedure: until the answer wake lands, read remote answers off the board and act on them here.
+That is also why `/bearings lavish` and its answer route stay exactly as they are - retiring the local serving path before the remote answer wake has landed and been used would leave the captain with no board he can answer on, so that retirement is its own later change rather than part of this one.
+
 Never hand-write the payload from the snapshot.
 Start from `bin/fm-bearings-board.sh compose --lang <captain's language> --out <file>`, which reads the same snapshot command and maps every structured row deterministically: Underway, Recently Landed, and Charted Next rows (including an unavailable or externally held secondmate home and every inventory-mismatch notice, as non-dispatchable warning rows), one decision card per live captain hold THIS home owns whose task id is a routable key, and a merge card per merge-ready PR that a task in THIS home's backlog claims (the script header owns the exact mapping and the placeholder shapes).
 The skeleton keys and dispatches only what this home can route back to its own task, so a secondmate-owned hold gets no card, a secondmate-owned gate arrives owner-qualified and never dispatchable, and a PR whose task this home's backlog does not claim gets no merge card; carding or dispatching one of those is your explicit judgment, and you own routing the answer to that home yourself.

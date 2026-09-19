@@ -26,14 +26,11 @@
 #              firstmate belongs to another owner and is not done here.
 #
 # Usage:
-#   fm-remote-board.sh path
 #   fm-remote-board.sh render <data.json> [--out <file>]
 #   fm-remote-board.sh check <published.html> [--out <file>]
 #   fm-remote-board.sh publish <data.json>
-#   fm-remote-board.sh url
 #   fm-remote-board.sh doctor
 #
-# path       Print the shipped template this board is derived from.
 # render     Validate <data.json> through `bin/fm-bearings-board.sh validate`,
 #            then write the derived remote page: the template verbatim, that
 #            payload in the template's own data slot, and the transport in
@@ -63,8 +60,6 @@
 #            exact operation to perform and EXITS 69. It never reports a
 #            publish it did not make. 69 is this repository's "cannot run
 #            here" status, the same one a missing linter uses.
-# url        Print this home's configured remote board address; exit 1 with a
-#            reason when the home has none.
 # doctor     Report what is and is not set up here - the address, the shipped
 #            assets, whether a derived page is waiting, and what performs the
 #            publish - so a fresh clone learns its state instead of finding out
@@ -255,15 +250,35 @@ if at < 0:
              "may be missing from it (re-render and re-publish, or diff --out against it)")
 
 prefix, suffix = published[:at], published[at + len(expected):]
-# The artifact host wraps a published page in its own document skeleton. That
-# wrapper is the only thing allowed around the derived board; anything else is
-# content this repository does not track.
-WRAP_OPEN = re.compile(r'\A\s*<!doctype html><html><head>.*?</head><body>\s*\Z', re.S | re.I)
-WRAP_CLOSE = re.compile(r'\A\s*</body></html>\s*\Z', re.S | re.I)
-for part, pattern, where in ((prefix, WRAP_OPEN, "before"), (suffix, WRAP_CLOSE, "after")):
-    if part and not pattern.match(part):
+# The artifact host wraps a published page in its own document skeleton: a
+# doctype, a head carrying nothing but document metadata, and the body tags.
+# That wrapper is the only thing allowed around the derived board. A head is
+# not a free space: a script, a stylesheet, a link or a frame smuggled into it
+# runs on the surface the captain reads and is content this repository does not
+# track, so it is refused exactly like content beside the board.
+WRAP_OPEN = re.compile(
+    r'\A\s*<!doctype html>\s*<html[^<>]*>\s*<head>(?P<head>.*?)</head>\s*<body[^<>]*>\s*\Z',
+    re.S | re.I)
+HEAD_METADATA = re.compile(
+    r'\A(?:\s*<meta\b[^<>]*>|\s*<title\b[^<>]*>[^<>]*</title>)*\s*\Z', re.I)
+WRAP_CLOSE = re.compile(r'\A\s*</body>\s*</html>\s*\Z', re.S | re.I)
+
+
+def wrapped(part, where):
+    if not part:
+        return
+    if where == "after":
+        ok = WRAP_CLOSE.match(part)
+    else:
+        opened = WRAP_OPEN.match(part)
+        ok = opened and HEAD_METADATA.match(opened.group("head"))
+    if not ok:
         sys.exit("the published page carries untracked content %s the derived board "
                  "(%d bytes): %r" % (where, len(part), part[:200]))
+
+
+wrapped(prefix, "before")
+wrapped(suffix, "after")
 
 print("board: the published page is what this template derives")
 print("parity: every feature the shipped board renders is present, because the "
@@ -285,13 +300,6 @@ PY
 board_address() {
   [ -f "$ADDRESS_FILE" ] || return 1
   sed -n '1{s/[[:space:]]*$//;s/^[[:space:]]*//;p;}' "$ADDRESS_FILE"
-}
-
-command_url() {
-  local url
-  url=$(board_address) && [ -n "$url" ] \
-    || fail "this home has no remote board configured; write its address to $ADDRESS_FILE (docs/configuration.md \"Remote bearings board\")"
-  printf '%s\n' "$url"
 }
 
 command_publish() {  # <data.json>
@@ -351,11 +359,9 @@ command_doctor() {
 }
 
 case "${1-}" in
-  path) printf '%s\n' "$TEMPLATE" ;;
   render) shift; command_render "$@" ;;
   check) shift; command_check "$@" ;;
   publish) shift; command_publish "$@" ;;
-  url) command_url ;;
   doctor) command_doctor ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;

@@ -29,18 +29,29 @@
   var PRISTINE = document.body.innerHTML;
 
   var STATUS_ID = "bb-remote-link";
+  var GAP_ID = "bb-remote-answer-gap";
   var linkState = "connecting";
 
-  /* The only copy this file owns: it describes the connection, which is the one
-     thing the shipped board has no concept of. It follows the board's own
-     language choice through the key the template already stores. */
+  /* The only copy this file owns: it describes the connection and the answer
+     route, the two things the shipped board has no concept of. It follows the
+     board's own language choice through the key the template already stores. */
   var SAY = {
     connecting: { en: "connecting…", hant: "連線中…", hans: "连线中…" },
     live: { en: "live", hant: "即時更新", hans: "即时更新" },
+    holding: {
+      en: "an update is waiting until this answer is sent",
+      hant: "有更新在等這個回答送出後才套用",
+      hans: "有更新在等这个回答送出后才套用"
+    },
     offline: {
       en: "not updating — showing the copy built into this page",
       hant: "沒在更新 — 顯示頁面內建的舊資料",
       hans: "没在更新 — 显示页面内建的旧资料"
+    },
+    detached: {
+      en: "no connection — showing the copy built into this page, and answers cannot be sent",
+      hant: "沒有連線 — 顯示頁面內建的舊資料，也無法送出回答",
+      hans: "没有连线 — 显示页面内建的旧资料，也无法送出回答"
     },
     readonly: {
       en: "read-only — answers cannot be sent from here",
@@ -48,7 +59,18 @@
       hans: "只读 — 这里无法送出回答"
     }
   };
-  var TONE = { connecting: "neutral", live: "online", offline: "warn", readonly: "danger" };
+  var TONE = {
+    connecting: "neutral", live: "online", holding: "warn",
+    offline: "warn", detached: "danger", readonly: "danger"
+  };
+
+  /* The answer route back to firstmate is not landed yet, so the page says so.
+     Without it a card ticking "queued" reads as an answer that arrived. */
+  var ANSWER_GAP = {
+    en: "answers stay on this board — carrying them back to firstmate is not landed yet",
+    hant: "回答只留在這塊板上 — 送回 firstmate 的路還沒完成",
+    hans: "回答只留在这块板上 — 送回 firstmate 的路还没完成"
+  };
 
   function lang() {
     try {
@@ -59,20 +81,33 @@
       : (document.documentElement.lang === "zh-Hans" ? "hans" : "hant");
   }
 
-  /* A board that quietly shows stale data is the complaint this answers, so the
-     connection state is on the page rather than in the console. */
-  function paintStatus() {
+  function say(copy) { return copy[lang()] || copy.en; }
+
+  function pin(id, tone) {
     var host = document.querySelector(".bb-nav__inner");
-    if (!host) return;
-    var node = document.getElementById(STATUS_ID);
+    if (!host) return null;
+    var node = document.getElementById(id);
     if (!node) {
       node = document.createElement("span");
-      node.id = STATUS_ID;
+      node.id = id;
       node.setAttribute("role", "status");
       host.appendChild(node);
     }
-    node.className = "fm-badge fm-badge--" + (TONE[linkState] || "neutral");
-    node.textContent = (SAY[linkState] || SAY.connecting)[lang()] || SAY[linkState].en;
+    node.className = "fm-badge fm-badge--" + tone;
+    return node;
+  }
+
+  /* A board that quietly shows stale data is the complaint this answers, so the
+     connection state is on the page rather than in the console. */
+  function paintStatus() {
+    var node = pin(STATUS_ID, TONE[linkState] || "neutral");
+    if (!node) return;
+    node.textContent = say(SAY[linkState] || SAY.connecting);
+    var gap = pin(GAP_ID, "warn");
+    gap.textContent = say(ANSWER_GAP);
+    /* In the two states where no answer can leave this page at all, the link
+       badge already says so and this one would only repeat it. */
+    gap.style.display = (linkState === "detached" || linkState === "readonly") ? "none" : "";
   }
 
   function setLink(state) {
@@ -99,13 +134,70 @@
     paintStatus();
   }
 
+  /* ---- an answer in progress outranks a fresh payload -------------------
+   * Painting replaces the whole body, so it takes a typed note, a selected
+   * option and the captain's place in the card stack with it. The shipped
+   * board owns the rendering and cannot be repainted piecewise from here, so
+   * the update is held instead: the page says an update is waiting, and it
+   * lands the moment the answer is sent or the card is left clean again.
+   * The signals are the template's own - a form it tagged with
+   * data-lavish-question, and the dispatch picker - never a shape this file
+   * invents. */
+  var held = null;
+
+  function answerInProgress() {
+    var forms = document.querySelectorAll("form[data-lavish-question]");
+    for (var i = 0; i < forms.length; i++) {
+      var form = forms[i];
+      var card = form.closest ? form.closest(".bb-decision") : null;
+      /* An answered card keeps its selection, so it must stop counting as in
+         progress or the first answer would hold every later update forever. */
+      if (card && card.className.indexOf("is-queued") >= 0) continue;
+      if (form.querySelector("input[type=radio]:checked")) return true;
+      var note = form.querySelector(".bb-freeform");
+      if (note && note.value && note.value.trim()) return true;
+      if (document.activeElement && form.contains(document.activeElement)) return true;
+    }
+    var bar = document.getElementById("bb-dispatch");
+    if (bar && bar.className.indexOf("is-queued") < 0 && document.querySelector(".bb-pick:checked")) {
+      return true;
+    }
+    return false;
+  }
+
+  function accept(payload) {
+    if (answerInProgress()) {
+      held = payload;
+      setLink("holding");
+      return;
+    }
+    held = null;
+    setLink("live");
+    paint(payload);
+  }
+
+  /* Any touch of the page can be the moment an answer stops being in progress,
+     and a submit marks its card answered only after its own handler runs, so
+     the recheck is deferred to the next turn. */
+  function recheckHeld() {
+    if (held === null) return;
+    var payload = held;
+    setTimeout(function () {
+      if (held === payload && !answerInProgress()) accept(payload);
+    }, 0);
+  }
+  ["input", "change", "submit", "click", "focusout"].forEach(function (type) {
+    document.addEventListener(type, recheckHeld, true);
+  });
+
   /* ---- answers out -------------------------------------------------------
    * The shipped board sends every answer - decision, merge, credential, and
    * the dispatch order - through window.lavish.queuePrompt, under keys the
    * template itself supplies. Implementing that one interface on this
    * transport keeps the keys, the card types, and the payload shape identical
    * to the local board's; nothing here knows what a card is.
-   * A separate branch owns carrying these answers back to firstmate. */
+   * A separate branch owns carrying these answers back to firstmate, which is
+   * why the page names that gap rather than letting a ticked card imply it. */
   var db = null;
   var writable = true;
   var pending = [];
@@ -115,12 +207,20 @@
   }
 
   function send(key, body) {
-    if (!db) { pending.push([key, body]); return; }
+    /* Dropped answers must be dropped loudly: once the page knows nothing can
+       be written, the badge says so rather than a queue filling silently. */
     if (!writable) return;
+    if (!db) { pending.push([key, body]); return; }
     db.doc(answerSlot(key)).set(body).catch(function () {
       writable = false;
       setLink("readonly");
     });
+  }
+
+  function cannotSend() {
+    writable = false;
+    pending.length = 0;
+    setLink("detached");
   }
 
   window.lavish = window.lavish || {};
@@ -147,22 +247,22 @@
 
   if (window.claude && typeof window.claude.use === "function") {
     window.claude.use("db").then(function (handle) {
-      if (!handle) { setLink("offline"); return; }
+      if (!handle) { cannotSend(); return; }
       db = handle;
       while (pending.length) { var q = pending.shift(); send(q[0], q[1]); }
       handle.doc("board/current").onSnapshot(function (snap) {
         var next = snap && snap.exists ? snap.data() : null;
         /* Only a payload the shipped board can read replaces the embedded one;
-           anything else leaves the page showing what it was published with. */
+           anything else leaves the page showing what it was published with,
+           and saying so - a snapshot this page cannot render is not an update. */
         if (next && next.schema === "fm-bearings-board.v1") {
-          setLink("live");
-          paint(next);
+          accept(next);
         } else {
-          setLink("live");
+          setLink("offline");
         }
       }, function () { setLink("offline"); });
-    }).catch(function () { setLink("offline"); });
+    }).catch(function () { cannotSend(); });
   } else {
-    setLink("offline");
+    cannotSend();
   }
 })();

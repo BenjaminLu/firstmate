@@ -275,6 +275,10 @@ Creating the artifact and writing its payload are the two steps a shell cannot p
 `bin/fm-remote-board.sh publish` therefore prepares everything it can - validating the payload, deriving the page, and naming the exact operation and address - and then exits 69 rather than reporting a publish it did not perform.
 A home with no such harness keeps the desk board and loses only the remote one; nothing else in firstmate depends on it.
 
+One feature does not cross to this transport yet: the answer route.
+An answer given on the remote board is written to that board's own store, and nothing carries it back to firstmate, so a queued card there means stored rather than delivered; the board names that gap on its own face.
+Until that lands, the `/bearings lavish` desk board remains the answer route and stays in place.
+
 ## Secondmate routes (data/secondmates.md)
 
 Persistent secondmate routes live locally in `data/secondmates.md`.
