@@ -433,17 +433,28 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   # matters, so the round threshold has to reach the worker holding the round
   # number: without these the instruction arrives and nothing in the contract
   # lets the worker refuse it.
-  assert_grep "From the fourth fix round on one step" "$brief" \
+  assert_grep "From the third fix round on one step, " "$brief" \
     "no-mistakes DOD lost the round threshold the worker enforces"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep '`ask-user-authority` requires firstmate to stop naming a narrow remedy' "$brief" \
     "no-mistakes DOD must cross-reference the owner of the firstmate-side rule, not restate it"
   assert_grep "Refuse an instruction that still names a narrow remedy: say which round this step is on" "$brief" \
-    "no-mistakes DOD lost the fourth-round refusal clause"
-  assert_grep "Ask the reviewer for the pass conditions in the same response" "$brief" \
+    "no-mistakes DOD lost the third-round refusal clause"
+  # The pass-conditions ask has one owner, so the brief points at it rather than
+  # restating what that instruction must contain.
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'carries everything `ask-user-authority` step 4 requires of it, pass conditions included' "$brief" \
     "no-mistakes DOD lost the pass-conditions clause"
-  assert_grep "stated as conditions to satisfy in one pass rather than as one more repair" "$brief" \
-    "no-mistakes DOD must ask for conditions rather than one more repair"
+  assert_no_grep "stated as conditions to satisfy in one pass rather than as one more repair" "$brief" \
+    "no-mistakes DOD must point at the owner of the round-3 instruction, not carry a second definition of it"
+  assert_grep "nothing carries that ask to the reviewer and returns a reply, so never wait for one" "$brief" \
+    "no-mistakes DOD must tell the worker no reviewer reply ever comes back"
+
+  # The ask-user bullet is read from round 1 and the threshold clause sits
+  # paragraphs below it, so the bullet has to carry its own exception or a
+  # worker feeds a round-3 narrow remedy straight to the gate.
+  assert_grep "From the third fix round on one step the round-threshold clause below narrows this" "$brief" \
+    "no-mistakes DOD must narrow the feed-the-decision bullet where the reader meets it"
 
   # Every practice a worker could read as a worktree edit has to carry its own
   # mid-run half, because the no-hand-edit rule sits paragraphs away from these
@@ -482,8 +493,8 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     assert_present "$other_brief" "$other_mode: brief was not scaffolded"
     assert_no_grep "One site is a class" "$other_brief" \
       "$other_mode brief must not carry the no-mistakes fix-round technique"
-    assert_no_grep "From the fourth fix round on one step" "$other_brief" \
-      "$other_mode brief must not carry the fourth-round refusal, which has no rounds to count"
+    assert_no_grep "From the third fix round on one step" "$other_brief" \
+      "$other_mode brief must not carry the third-round refusal, which has no rounds to count"
   done
   pass "fm-brief.sh: no-mistakes DOD carries the fix-round technique and the faster paths do not"
 }
