@@ -323,9 +323,10 @@ A diagnostic request, report, recommendation, or implementation-ready finding is
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
 
 When an ask has more than one reading and those readings produce different work, reach consensus with the captain before briefing anything rather than filing your own guess, asking the sharp questions that separate the readings.
-Do not dispatch work that changes a captain-facing visual surface - the board, a card, a packet page, a report - until the captain has approved a prototype of it, built from the shipped surface rather than drawn as a fresh mock; hold the task queued until they approve or redirect it, then carry the approved prototype into the brief as the contract the worker builds to.
+Do not dispatch work that changes how a captain-facing surface is rendered - its design, layout, or presentation, such as the board, a card, a packet page, or a rendered report page - until the captain has approved a prototype of it, built from the shipped surface rather than drawn as a fresh mock; hold the task for the captain through `bin/fm-captain-hold.sh` with a reason naming the surface it awaits a prototype for, never merely queued, then carry the approved prototype into the brief as the contract the worker builds to.
 `bearings` owns how to build that prototype from the shipped surface.
-Work with no captain-facing surface is unaffected by that gate.
+Publishing ordinary content through a surface is unaffected: writing a scout's report, filing a backlog note, or relaying an outcome needs no prototype.
+During an away window the gate stalls by design, because nobody may approve a prototype in the captain's place; the recorded hold is what makes that stall a named item in the return brief instead of a silent queue.
 
 Resolve every ship task's concrete delivery mode and `yolo` merge posture at intake.
 Pass the mode explicitly to the brief, and pass both values explicitly to the spawn and any scout promotion; each command refuses to guess the values it consumes.
