@@ -1122,8 +1122,37 @@ test_full_budget_cut_is_read_last_next_poll() {
   pass 'a cut that had the whole budget goes behind the rows read in its own poll'
 }
 
+test_non_string_cut_marker_is_rejected_on_read() {
+  local home out shape
+  # jq orders null < numbers < strings < arrays < objects, so a non-string cut
+  # marker would win the ordering key against every real timestamp and sink its
+  # URL to the end of the queue on every poll. It has to be refused on read.
+  for shape in '{"a":1}' '["x"]'; do
+    home=$(new_home "bad-cut-marker-$(printf '%s' "$shape" | tr -dc 'a-z')")
+    record "$home" invalid 12 open mergeable
+    mutate_record "$home" invalid ".records[0].cut_at = $shape"
+    bearings "$home" | jq -e '.contributions.known == 1 and .contributions.checked == 0
+      and .contributions.complete == false and .contributions.unreadable_records == 1' >/dev/null \
+      || fail "a record whose cut marker is $shape was accepted as readable"
+    if with_home "$home" "$ROOT/bin/fm-contributions.sh" pending > "$home/pending.json" 2> "$home/pending.err"; then
+      fail "a record whose cut marker is $shape was presented as a readable empty inbox"
+    fi
+    grep -F 'unreadable contribution record' "$home/pending.err" >/dev/null \
+      || fail "the refusal for cut marker $shape did not name the unreadable record: $(cat "$home/pending.err")"
+  done
+  # The same field holding a real timestamp stays readable, so the clause
+  # rejects the shape rather than the field.
+  home=$(new_home good-cut-marker)
+  record "$home" valid 12 open mergeable
+  mutate_record "$home" valid '.records[0].cut_at = "2026-09-16T08:00:00Z"'
+  out=$(bearings "$home") || fail 'a well-formed cut marker made the record unreadable'
+  printf '%s' "$out" | jq -e '.contributions.known == 1 and .contributions.unreadable_records == 0' >/dev/null \
+    || fail "a well-formed cut marker was rejected: $out"
+  pass 'a cut marker that is not a timestamp is refused on read, and a real one is not'
+}
+
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_one_read_cannot_spend_the_whole_budget test_observation_call_budget test_paged_check_contexts_keep_every_lane test_expected_context_is_no_lane test_numeric_repository_name_is_observed test_slow_forge_straddles_the_shipped_call_bound test_budget_cut_keeps_the_last_good_observation test_budget_cut_row_ages_out test_never_observed_url_rotates_after_a_cut test_cut_row_is_observed_first_next_poll test_full_budget_cut_is_read_last_next_poll; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_one_read_cannot_spend_the_whole_budget test_observation_call_budget test_paged_check_contexts_keep_every_lane test_expected_context_is_no_lane test_numeric_repository_name_is_observed test_slow_forge_straddles_the_shipped_call_bound test_budget_cut_keeps_the_last_good_observation test_budget_cut_row_ages_out test_never_observed_url_rotates_after_a_cut test_cut_row_is_observed_first_next_poll test_full_budget_cut_is_read_last_next_poll test_non_string_cut_marker_is_rejected_on_read; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"
