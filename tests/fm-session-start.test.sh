@@ -1135,8 +1135,14 @@ SH
         "an explicit Herdr home should not be reported as auto-detected"
     else
       out=$(TMUX='' HERDR_ENV=1 BASH_ENV="$mask" run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
-      assert_contains "$out" "NOTICE: auto-detected herdr runtime (HERDR_ENV=1)" \
-        "session start did not preserve the Herdr runtime auto-detection fallback"
+      # The guarantee is that a session start TELLS the operator it auto-detected
+      # an experimental runtime, not which wording carries it. Bootstrap now
+      # states the resolved backend and the rung of the precedence that chose it,
+      # which also covers the explicitly configured experimental backends the
+      # spawn-time NOTICE never mentioned; fm_backend_name keeps that NOTICE for
+      # its own spawn-time callers.
+      assert_contains "$out" "BACKEND_EXPERIMENTAL: herdr (auto-detect: HERDR_ENV=1)" \
+        "session start did not report the auto-detected Herdr runtime as experimental"
     fi
     assert_contains "$out" "SESSION START - $home" "the real session-start path did not run in the throwaway home"
     assert_not_contains "$out" "MISSING: tmux" "Herdr session start falsely required masked tmux"
