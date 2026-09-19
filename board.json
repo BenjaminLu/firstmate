@@ -1,0 +1,84 @@
+{
+  "schema": "fm-board-store.v1",
+  "published_at": "2026-09-19T15:47:08Z",
+  "read_lag_bound_secs": 300,
+  "published_for": "round two",
+  "read": {
+    "url": "https://raw.githubusercontent.com/BenjaminLu/firstmate/fm-board-selftest/board.json",
+    "api_url": "https://api.github.com/repos/BenjaminLu/firstmate/contents/board.json?ref=fm-board-selftest"
+  },
+  "answer": {
+    "kind": "github-issue",
+    "repo": "BenjaminLu/firstmate",
+    "label": "fm-board-answer"
+  },
+  "board": {
+    "schema": "fm-bearings-board.v1",
+    "home": "selftest-v2",
+    "generated": "2026-09-19T00:00Z",
+    "prs_live": false,
+    "lang": "en",
+    "captains_call": [
+      {
+        "key": "selftest-call",
+        "type": "decision",
+        "repo": "selftest",
+        "title": {
+          "en": "Self test card",
+          "hant": "自我測試卡",
+          "hans": "自我测试卡"
+        },
+        "decide": {
+          "en": "Does the store round-trip?",
+          "hant": "資料能來回嗎？",
+          "hans": "数据能来回吗？"
+        },
+        "options": [
+          {
+            "value": "yes",
+            "label": {
+              "en": "Yes",
+              "hant": "是",
+              "hans": "是"
+            }
+          },
+          {
+            "value": "no",
+            "label": {
+              "en": "No",
+              "hant": "否",
+              "hans": "否"
+            }
+          }
+        ],
+        "close": "release"
+      }
+    ],
+    "underway": [
+      {
+        "id": "selftest-task",
+        "repo": "selftest",
+        "kind": "ship",
+        "state": "working",
+        "name": {
+          "en": "Self test row",
+          "hant": "自我測試列",
+          "hans": "自我测试列"
+        },
+        "doing": {
+          "en": "nothing real",
+          "hant": "沒有真的在做事",
+          "hans": "没有真的在做事"
+        },
+        "steps": [],
+        "step": "",
+        "step_state": "",
+        "step_elapsed": "",
+        "last_activity": ""
+      }
+    ],
+    "landed": [],
+    "charted": [],
+    "charted_more": 0
+  }
+}

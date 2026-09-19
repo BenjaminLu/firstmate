@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bearings - fleet board</title>
+<style>
+/* ============================================================
+   Bearings board - Firstmate Design System, inlined for portability.
+   Tokens copied verbatim from myfirstmate priv/static/assets/app.css
+   (the compiled adoption of .agents/skills/firstmate-design).
+   ============================================================ */
+@import url("https://fonts.googleapis.com/css2?family=Chango&family=Jost:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+
+:root {
+  --rust-700: #8f2f17; --rust-600: #a93a1f; --rust-500: #c0452a;
+  --rust-400: #d35f3f; --rust-300: #e08365; --rust-100: #f4d8c9; --rust-050: #fbece3;
+  --navy-700: #1a2238; --navy-600: #222c49; --navy-500: #2a3656;
+  --navy-300: #6c7796; --navy-100: #d9deea;
+  --gold-600: #b5791c; --gold-500: #e0a52e; --gold-300: #f0d38c; --gold-100: #f8ecc9;
+  --ocean-600: #2f6688; --ocean-500: #3c7ea6; --ocean-200: #b6d4e2; --ocean-050: #e8f1f5;
+  --sea-700: #234e3a; --sea-500: #2f6b4f; --sea-200: #b9d4c5; --sea-050: #e9f2ec;
+  --paper-000: #fbf4e2; --paper-100: #f6ecd3; --paper-200: #f0e3c4; --paper-300: #e7d6ae;
+  --cream-line: #ddc89c;
+  --ink-900: #241c14; --ink-700: #3f3224; --ink-500: #6f5e46; --ink-300: #9c8a6c;
+  --white: #fffdf7;
+  --bg-page: var(--paper-100);
+  --surface-card: var(--white);
+  --surface-card-warm: var(--paper-000);
+  --text-strong: var(--ink-900); --text-body: var(--ink-700);
+  --text-muted: var(--ink-500); --text-faint: var(--ink-300);
+  --border-default: var(--cream-line); --border-soft: var(--paper-300);
+  --status-online: var(--sea-500); --status-online-soft: var(--sea-050);
+  --status-warn: var(--gold-600); --status-warn-soft: var(--gold-100);
+  --status-danger: var(--rust-600); --status-danger-soft: var(--rust-050);
+  --status-info: var(--ocean-500); --status-info-soft: var(--ocean-050);
+  --font-display: "Chango", "Cooper Black", Rockwell, Georgia, serif;
+  --font-sans: "Jost", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-h3: 1.4rem; --fs-h4: 1.15rem; --fs-base: 1rem; --fs-sm: 0.9375rem;
+  --fs-xs: 0.8125rem; --fs-2xs: 0.6875rem;
+  --ls-caps: 0.16em;
+  --radius-xs: 6px; --radius-sm: 9px; --radius-md: 12px; --radius-banner: 7px;
+  --radius-lg: 18px; --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(36, 28, 20, 0.06), 0 4px 10px rgba(36, 28, 20, 0.06);
+  --shadow-hard: 4px 4px 0 var(--ink-900);
+  --shadow-hard-sm: 3px 3px 0 var(--ink-900);
+  --texture-paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.045'/%3E%3C/svg%3E");
+  --focus-ring: 0 0 0 3px var(--gold-300);
+  --container-app: 1180px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans);
+  color: var(--text-body);
+  background: var(--bg-page);
+  background-image: var(--texture-paper);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+/* No rule in this sheet targets `a` document-wide. A board-wide default with
+   an exception carved out for the drawings the board inlines fails twice: the
+   next exception re-opens it, and :not() carries its argument's specificity, so
+   the carve-out silently outranks the class rules that were meant to win. Every
+   link the board builds carries a class (see link()), so those classes own its
+   colour and decoration outright - and a drawing is left alone by there being
+   nothing to leave it alone from. */
+
+/* ---- fm-badge (enamel sign-pin), verbatim contract ---- */
+.fm-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-2xs); font-weight: 800; line-height: 1;
+  padding: 5px 9px 4px; text-transform: uppercase; letter-spacing: 0.07em;
+  border-radius: var(--radius-xs); border: 1.5px solid var(--ink-900);
+  box-shadow: 2px 2px 0 var(--ink-900); white-space: nowrap;
+}
+.fm-badge--online  { background: var(--sea-500);  color: var(--paper-000); }
+.fm-badge--warn    { background: var(--gold-500); color: var(--navy-700); }
+.fm-badge--danger  { background: var(--rust-600); color: var(--paper-000); }
+.fm-badge--info    { background: var(--ocean-500); color: var(--paper-000); }
+.fm-badge--neutral { background: var(--paper-000); color: var(--ink-900); }
+.fm-badge--solid   { background: var(--rust-500); color: var(--paper-000); }
+
+/* ---- fm-btn ---- */
+.fm-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: var(--font-sans); font-weight: 800; line-height: 1; white-space: nowrap;
+  border: 2px solid transparent; border-radius: var(--radius-banner); cursor: pointer;
+  text-decoration: none; transition: background 120ms, border-color 120ms, transform 120ms, box-shadow 120ms;
+}
+.fm-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.fm-btn:active { transform: translateY(1px); }
+.fm-btn--sm { font-size: var(--fs-xs); padding: 8px 16px; }
+.fm-btn--primary { background: var(--rust-500); color: var(--white); border-color: var(--ink-900); box-shadow: var(--shadow-hard-sm); }
+.fm-btn--primary:hover { background: var(--rust-600); }
+.fm-btn--gold { background: var(--gold-500); color: var(--navy-700); border-color: var(--ink-900); box-shadow: var(--shadow-hard-sm); }
+.fm-btn--gold:hover { background: var(--gold-600); color: var(--white); }
+.fm-btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* ---- fm-card ---- */
+.fm-card {
+  background: var(--surface-card); border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); overflow: hidden;
+}
+.fm-card--poster { border: 2px solid var(--ink-900); box-shadow: var(--shadow-hard); border-radius: var(--radius-md); }
+.fm-card--warm { background: var(--surface-card-warm); }
+
+/* ---- fm-sign (eyebrow section label) ---- */
+.fm-sign {
+  display: inline-flex; align-items: center; gap: 8px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: var(--ls-caps); font-size: var(--fs-xs);
+  line-height: 1; white-space: nowrap;
+}
+.fm-sign--eyebrow { color: var(--rust-500); }
+.fm-sign--muted { color: var(--ink-500); }
+.fm-sign svg { width: 14px; height: 14px; }
+.fm-ico { width: 1.15em; height: 1.15em; flex: none; vertical-align: -0.18em; }
+
+/* ============================================================
+   Board chrome (bb-*) - built on the same tokens
+   ============================================================ */
+.bb-nav {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--paper-100) 86%, transparent);
+  backdrop-filter: saturate(150%) blur(10px);
+  border-bottom: 1px solid var(--border-default);
+}
+.bb-nav__inner {
+  max-width: var(--container-app); margin: 0 auto; padding: 0 28px; height: 64px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.bb-brand { display: inline-flex; align-items: center; gap: 12px; }
+.bb-brand__disc {
+  display: grid; place-items: center; width: 34px; height: 34px; flex: none;
+  border-radius: 999px; background: var(--rust-500); color: var(--paper-000);
+  border: 2px solid var(--ink-900); box-shadow: var(--shadow-hard-sm);
+}
+.bb-brand__disc svg { width: 60%; height: 60%; }
+.bb-brand__wm { font-family: var(--font-display); font-size: 23px; color: var(--text-strong); line-height: 1; }
+.bb-meta-mono { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); white-space: nowrap; }
+
+.bb-main {
+  max-width: var(--container-app); margin: 0 auto;
+  padding: 26px 28px 72px; display: flex; flex-direction: column; gap: 22px;
+}
+
+/* stat strip */
+.bb-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.bb-stat {
+  display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; min-width: 0;
+  background: var(--surface-card-warm); border: 1px solid var(--border-soft); border-radius: var(--radius-md);
+}
+.bb-stat--call { background: var(--rust-050); border: 2px solid var(--rust-500); }
+.bb-stat__num { font-family: var(--font-mono); font-size: var(--fs-h3); font-weight: 600; line-height: 1; color: var(--text-strong); }
+.bb-stat--call .bb-stat__num { color: var(--rust-600); }
+.bb-stat__label { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+
+.bb-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.bb-section__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.bb-cols { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 22px; }
+
+/* ---- Captain's Call: one card at a time, dealt off a visible stack ---- */
+.bb-callwrap { display: flex; flex-direction: column; gap: 12px; }
+/* extra top margin clears the pile edges that poke below the active card */
+.bb-stacknav { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.bb-stacknav__count { flex: 1 1 auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+.bb-stacknav__btn {
+  display: inline-grid; place-items: center; width: 34px; height: 34px; cursor: pointer;
+  background: var(--surface-card); color: var(--text-strong);
+  border: 1.5px solid var(--border-default); border-radius: var(--radius-sm);
+  transition: background 120ms, border-color 120ms;
+}
+.bb-stacknav__btn:hover { background: var(--paper-100); border-color: var(--ink-500); }
+.bb-stacknav__btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.bb-stacknav__btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.bb-stacknav__btn svg { width: 16px; height: 16px; }
+/* the stack: a squared-up paper pile - solid card faces at slight opposing
+   rotations, like dealt cards, not translucent offset rectangles. The pile
+   thins as cards are answered: two edges, then one, then none on the last. */
+.bb-call { position: relative; display: grid; }
+.bb-call::before, .bb-call::after {
+  content: ""; position: absolute; inset: 0; z-index: 0;
+  background: var(--surface-card); border: 2px solid var(--ink-900);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-hard-sm);
+}
+.bb-call::before { transform: rotate(1.3deg) translate(4px, 5px); }
+.bb-call::after  { transform: rotate(-1.1deg) translate(-3px, 9px); }
+.bb-call--penult::after { display: none; }
+.bb-call--last::before, .bb-call--last::after,
+.bb-call--empty::before, .bb-call--empty::after { display: none; }
+.bb-call > .bb-decision { grid-area: 1 / 1; z-index: 1; }
+.bb-call > .bb-decision[hidden] { display: none; }
+.bb-decision { display: flex; flex-direction: column; }
+.bb-decision__pad { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
+.bb-decision__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.bb-decision__repo { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-faint); white-space: nowrap; }
+.bb-decision__title { margin: 0; font-size: var(--fs-h4); font-weight: 800; color: var(--text-strong); line-height: 1.25; }
+.bb-decision__detail { margin: 0; font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.45; }
+/* about / decide / recommended - three scannable context rows */
+.bb-ctx { display: flex; flex-direction: column; gap: 6px; }
+.bb-ctx__row { display: grid; grid-template-columns: 78px minmax(0,1fr); gap: 8px; align-items: baseline; }
+.bb-ctx__k { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-faint); white-space: nowrap; }
+.bb-ctx__v { font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.4; min-width: 0; }
+.bb-decision__link { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ocean-600); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.bb-decision__link:hover { text-decoration: underline; }
+/* One rhythm owner: the answer form is a flex column with the same 12px gap as
+   the card pad, and the foot rides margin-top:auto so every Queue answer button
+   sits on the same baseline with identical breathing room. */
+.bb-decision form { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; }
+.bb-opts { display: flex; flex-direction: column; gap: 7px; }
+.bb-opt {
+  display: flex; align-items: flex-start; gap: 10px; padding: 9px 12px; cursor: pointer;
+  background: var(--surface-card-warm); border: 1.5px solid var(--border-default);
+  border-radius: var(--radius-sm); transition: border-color 120ms, background 120ms;
+}
+.bb-opt:hover { border-color: var(--ink-300); }
+.bb-opt input { accent-color: var(--rust-500); margin-top: 3px; flex: none; }
+.bb-opt__body { min-width: 0; flex: 1 1 auto; }
+.bb-opt__label { display: block; font-size: var(--fs-sm); font-weight: 700; color: var(--text-strong); line-height: 1.3; }
+.bb-opt__hint { display: block; font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.35; margin-top: 1px; }
+.bb-opt__rec { flex: none; align-self: center; font-size: var(--fs-2xs); font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--navy-700); background: var(--gold-300);
+  border: 1px solid var(--gold-600); border-radius: var(--radius-xs); padding: 3px 7px 2px; }
+.bb-opt:has(input:checked) { border-color: var(--rust-500); background: var(--rust-050); box-shadow: inset 0 0 0 1px var(--rust-500); }
+.bb-decision__foot { display: flex; align-items: center; gap: 10px; margin-top: auto; }
+.bb-queued {
+  display: none; align-items: center; gap: 6px;
+  font-size: var(--fs-2xs); font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--sea-700); background: var(--sea-050); border: 1.5px solid var(--sea-200);
+  border-radius: var(--radius-xs); padding: 5px 9px 4px;
+}
+.is-queued .bb-queued { display: inline-flex; }
+.bb-limit { display: none; font-size: var(--fs-xs); font-weight: 700; color: var(--status-danger); }
+.bb-limit.is-visible { display: inline; }
+.bb-freeform { width: 100%; font-family: var(--font-sans); font-size: var(--fs-sm); color: var(--text-strong);
+  background: var(--surface-card); border: 1.5px solid var(--border-default); border-radius: var(--radius-sm); padding: 8px 11px; }
+.bb-freeform:focus { outline: none; border-color: var(--rust-400); box-shadow: var(--focus-ring); }
+
+/* ---- compact rows (Underway / Landed / Charted) ---- */
+.bb-rows { display: flex; flex-direction: column; }
+.bb-row {
+  display: flex; align-items: center; gap: 12px; padding: 11px 18px;
+  border-top: 1px solid var(--border-soft); min-width: 0;
+}
+.bb-row:first-child { border-top: none; }
+.bb-row__main { min-width: 0; flex: 1 1 auto; }
+.bb-row__title { font-size: var(--fs-sm); font-weight: 700; color: var(--text-strong); line-height: 1.3;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-row__sub { font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.3; margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-row__id { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-faint); white-space: nowrap; }
+.bb-row__pr { font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 600; color: var(--ocean-600); text-decoration: none; white-space: nowrap; }
+.bb-row__pr:hover { text-decoration: underline; }
+.bb-row__check { width: 26px; height: 26px; border-radius: var(--radius-sm); display: grid; place-items: center; flex: none;
+  background: var(--status-online-soft); color: var(--status-online); border: 1.5px solid var(--sea-200); }
+.bb-row__check svg { width: 15px; height: 15px; }
+.bb-morechip {
+  display: inline-flex; align-items: center; gap: 6px; margin: 10px 18px 12px;
+  font-size: var(--fs-xs); font-weight: 800; color: var(--text-muted);
+  border: 1.5px dashed var(--ink-300); border-radius: var(--radius-pill); padding: 5px 12px; width: fit-content;
+}
+.bb-empty { padding: 18px; font-size: var(--fs-sm); color: var(--text-muted); }
+
+/* ---- Charted Next dispatch picker ---- */
+/* margin:0 kills the UA default checkbox margin so picker rows and spacer rows
+   share one text left edge */
+.bb-pick { accent-color: var(--rust-500); width: 16px; height: 16px; flex: none; cursor: pointer; margin: 0; }
+.bb-pick-spacer { width: 16px; flex: none; }
+.bb-dispatch {
+  display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+  border-top: 1.5px solid var(--border-default); background: var(--paper-100);
+}
+.bb-dispatch__count { flex: 1 1 auto; font-size: var(--fs-xs); font-weight: 800; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.07em; }
+
+.bb-foot { display: flex; justify-content: flex-end; border-top: 1px solid var(--border-default); padding-top: 14px; }
+
+@media (max-width: 900px) {
+  .bb-cols { grid-template-columns: 1fr; }
+}
+
+/* ---- language switch ---- */
+.bb-nav__inner { justify-content: space-between; }
+.bb-lang { display: inline-flex; border: 1.5px solid var(--border-default); border-radius: var(--radius-pill); overflow: hidden; background: var(--surface-card); }
+.bb-lang__btn { font-family: var(--font-sans); font-size: var(--fs-xs); font-weight: 700; color: var(--text-muted);
+  background: transparent; border: none; padding: 5px 12px; cursor: pointer; }
+.bb-lang__btn:hover { color: var(--text-strong); }
+.bb-lang__btn.is-active { background: var(--navy-700); color: var(--paper-000); }
+.bb-lang__btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* ---- five-question decision card ---- */
+.bb-decision__badges { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.bb-ctx__row--decide .bb-ctx__v { color: var(--text-strong); font-weight: 700; }
+.bb-ctx__row--nothing .bb-ctx__k { color: var(--status-warn); }
+.bb-ctx__row--nothing .bb-ctx__v { color: var(--text-body); }
+.bb-ctx__row--rec .bb-ctx__k { color: var(--sea-700); }
+.bb-opt__consequence { display: block; font-size: var(--fs-xs); color: var(--text-body); margin-top: 3px; padding-top: 3px;
+  border-top: 1px dashed var(--border-soft); }
+.bb-evidence { display: grid; grid-template-columns: 78px minmax(0,1fr); gap: 10px; align-items: baseline; }
+.bb-evidence__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bb-chip { display: inline-flex; align-items: center; font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600;
+  color: var(--ocean-600); border: 1.5px solid var(--ocean-200); background: var(--ocean-050); border-radius: var(--radius-pill);
+  padding: 3px 10px; text-decoration: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-chip:hover { border-color: var(--ocean-500); }
+.bb-chip--packet { color: var(--paper-000); background: var(--rust-500); border-color: var(--rust-600); }
+.bb-chip--packet:hover { background: var(--rust-600); }
+
+/* ---- the packet, opened inside the card ----
+   A tab strip whose first tab is the drawing that names every option, then one
+   tab per option carrying that option's own drawing, what it costs, and its
+   own choose button; below them the rest of the packet behind one collapsed
+   line. The captain decides here, on the board's own address, and closing a
+   tab loses nothing because there is no second page to close. */
+.bb-tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1.5px solid var(--border-default); }
+.bb-tab {
+  font-family: var(--font-sans); font-size: var(--fs-xs); font-weight: 800; cursor: pointer;
+  background: transparent; color: var(--text-muted); border: 0; border-bottom: 2.5px solid transparent;
+  padding: 9px 13px; margin-bottom: -1.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bb-tab:hover { color: var(--text-strong); }
+.bb-tab[aria-selected="true"] { color: var(--rust-600); border-bottom-color: var(--rust-500); }
+.bb-tab:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.bb-tab__dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; margin-right: 6px; vertical-align: 1px; }
+.bb-panel { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
+.bb-panel[hidden] { display: none; }
+.bb-fig { margin: 0; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--surface-card-warm); padding: 10px 12px; min-width: 0; overflow-x: auto; }
+/* The board styles the drawing's own box and never reaches inside it. The
+   figure contract puts content in there the board does not own - diagram-design
+   nests icon <svg> elements, and a descendant selector would give a 6x6 icon
+   the outer drawing's width and height and lay it over everything behind it.
+   Every rule that starts at .bb-fig therefore takes the direct child. */
+.bb-fig > svg { display: block; width: 100%; height: auto; max-width: 100%; }
+.bb-panel__note { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+.bb-panel__cost { margin: 0; font-size: var(--fs-sm); color: var(--text-body); }
+.bb-panel__rows { display: grid; gap: 4px; margin: 0; }
+.bb-panel__row { display: grid; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); gap: 8px; font-size: var(--fs-xs); }
+.bb-panel__k { color: var(--text-muted); }
+.bb-panel__v { color: var(--text-body); min-width: 0; }
+.bb-panel__v ul { margin: 0; padding-left: 1.1em; }
+.bb-panel__files { font-family: var(--mono, ui-monospace, monospace); word-break: break-all; }
+.bb-panel__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bb-panel__label { font-size: var(--fs-sm); font-weight: 800; color: var(--text-strong); min-width: 0; }
+/* The drawings bind the figure palette the packet draws against to the board's
+   own tokens, so a figure inherits this page instead of carrying its own. */
+.bb-fig > svg {
+  --fg: var(--text-strong); --muted: var(--text-muted); --soft: var(--text-faint);
+  --card: var(--surface-card); --card-2: var(--surface-card-warm); --bg: var(--bg-page);
+  --rule: var(--border-soft); --rule-strong: var(--border-default);
+  --accent: var(--rust-500); --accent-tint: var(--rust-050); --amber: var(--gold-500);
+  --seal: var(--rust-600); --ok: var(--sea-500); --link: var(--ocean-600);
+  --sans: var(--font-sans); --mono: var(--font-mono);
+}
+.bb-packet { border-top: 1px solid var(--border-soft); padding-top: 10px; }
+.bb-packet > summary { cursor: pointer; list-style: none; font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+.bb-packet > summary::-webkit-details-marker { display: none; }
+.bb-packet > summary::before { content: "\25B8 "; color: var(--rust-500); }
+.bb-packet[open] > summary::before { content: "\25BE "; }
+.bb-packet__body { font-size: var(--fs-sm); color: var(--text-body); min-width: 0; }
+.bb-packet__body .pk-part__h { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-muted); margin: 14px 0 5px; font-weight: 600; }
+.bb-packet__body li { margin-bottom: 4px; }
+.bb-packet__body code { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--paper-100);
+  border-radius: var(--radius-xs); padding: 1px 4px; }
+.bb-packet__body a { color: var(--ocean-600); text-decoration: underline; }
+.bb-packet__list { margin: 0 0 7px; padding-left: 18px; list-style: disc; }
+.bb-packet__link { margin-left: 6px; }
+</style>
+</head>
+<body>
+
+<header class="bb-nav">
+  <div class="bb-nav__inner">
+    <span class="bb-brand">
+      <span class="bb-brand__disc">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 6v16"/><path d="m19 13 2-1a9 9 0 0 1-18 0l2 1"/><path d="M9 11h6"/><circle cx="12" cy="4" r="2"/>
+        </svg>
+      </span>
+      <span class="bb-brand__wm">bearings</span>
+    </span>
+    <span class="bb-lang" role="group" aria-label="Language">
+      <button type="button" class="bb-lang__btn" id="bb-lang-en" lang="en">EN</button>
+      <button type="button" class="bb-lang__btn" id="bb-lang-hant" lang="zh-Hant">繁</button>
+      <button type="button" class="bb-lang__btn" id="bb-lang-hans" lang="zh-Hans">简</button>
+    </span>
+  </div>
+</header>
+
+<!-- The board is an answer surface, not a review surface: marking it as one
+     Lavish control keeps clicks from opening annotation cards, while native
+     inputs, buttons, and marked links keep working. -->
+<main class="bb-main" data-lavish-action="board">
+
+  <div class="bb-stats" id="bb-stats"></div>
+
+  <div class="bb-cols">
+  <section class="bb-section">
+    <div class="bb-section__head">
+      <span class="fm-sign fm-sign--eyebrow">
+        <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>
+        <span id="bb-t-call">Captain's Call</span>
+      </span>
+      <span class="fm-sign fm-sign--muted" id="bb-call-sub"></span>
+    </div>
+    <div class="bb-callwrap">
+      <div class="bb-call" id="bb-call"></div>
+      <!-- nav sits under the stack so the active card's top edge aligns with
+           the Charted Next card across the row -->
+      <div class="bb-stacknav">
+        <span class="bb-stacknav__count" id="bb-stack-count">-</span>
+        <button type="button" class="bb-stacknav__btn" id="bb-stack-prev" aria-label="Previous card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <button type="button" class="bb-stacknav__btn" id="bb-stack-next" aria-label="Next card">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section class="bb-section">
+    <div class="bb-section__head">
+      <span class="fm-sign fm-sign--eyebrow">
+        <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        <span id="bb-t-charted">Charted Next</span>
+      </span>
+      <span class="fm-sign fm-sign--muted" id="bb-charted-sub"></span>
+    </div>
+    <div class="fm-card fm-card--warm">
+      <div class="bb-rows" id="bb-charted"></div>
+      <div class="bb-dispatch" id="bb-dispatch" hidden>
+        <span class="bb-dispatch__count" id="bb-dispatch-count">nothing picked</span>
+        <span class="bb-queued" id="bb-dispatch-queued">
+          <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          queued
+        </span>
+        <button type="button" class="fm-btn fm-btn--sm fm-btn--gold" id="bb-dispatch-btn">Queue dispatch order</button>
+      </div>
+    </div>
+  </section>
+  </div>
+
+  <div class="bb-cols">
+    <section class="bb-section">
+      <div class="bb-section__head">
+        <span class="fm-sign fm-sign--eyebrow">
+          <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10.189V14"/><path d="M12 2v3"/><path d="M19 13V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6"/><path d="M19.38 20A11.6 11.6 0 0 0 21 14l-8.188-3.639a2 2 0 0 0-1.624 0L3 14a11.6 11.6 0 0 0 2.81 7.76"/><path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1s1.2 1 2.5 1c2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/></svg>
+          <span id="bb-t-underway">Underway</span>
+        </span>
+      </div>
+      <div class="fm-card"><div class="bb-rows" id="bb-underway"></div></div>
+    </section>
+
+    <section class="bb-section">
+      <div class="bb-section__head">
+        <span class="fm-sign fm-sign--eyebrow">
+          <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.801 10A10 10 0 1 1 17 3.335"/><path d="m9 11 3 3L22 4"/></svg>
+          <span id="bb-t-landed">Recently Landed</span>
+        </span>
+      </div>
+      <div class="fm-card"><div class="bb-rows" id="bb-landed"></div></div>
+    </section>
+  </div>
+
+  <footer class="bb-foot">
+    <span class="bb-meta-mono" id="bb-provenance">-</span>
+  </footer>
+
+</main>
+
+<!-- ONE SLOT. bin/fm-bearings-board.sh build injects the fresh
+     fm-bearings-board.v1 payload in place of the placeholder below; everything
+     above and below is the shipped template and is never regenerated per run. -->
+<script id="bearings-data" type="application/json">
+{"schema":"fm-board-store.v1","published_at":"2026-09-19T15:47:08Z","read_lag_bound_secs":300,"published_for":"round two","read":{"url":"https://raw.githubusercontent.com/BenjaminLu/firstmate/fm-board-selftest/board.json","api_url":"https://api.github.com/repos/BenjaminLu/firstmate/contents/board.json?ref=fm-board-selftest"},"answer":{"kind":"github-issue","repo":"BenjaminLu/firstmate","label":"fm-board-answer"},"board":{"schema":"fm-bearings-board.v1","home":"selftest-v2","generated":"2026-09-19T00:00Z","prs_live":false,"lang":"en","captains_call":[{"key":"selftest-call","type":"decision","repo":"selftest","title":{"en":"Self test card","hant":"自我測試卡","hans":"自我测试卡"},"decide":{"en":"Does the store round-trip?","hant":"資料能來回嗎？","hans":"数据能来回吗？"},"options":[{"value":"yes","label":{"en":"Yes","hant":"是","hans":"是"}},{"value":"no","label":{"en":"No","hant":"否","hans":"否"}}],"close":"release"}],"underway":[{"id":"selftest-task","repo":"selftest","kind":"ship","state":"working","name":{"en":"Self test row","hant":"自我測試列","hans":"自我测试列"},"doing":{"en":"nothing real","hant":"沒有真的在做事","hans":"没有真的在做事"},"steps":[],"step":"","step_state":"","step_elapsed":"","last_activity":""}],"landed":[],"charted":[],"charted_more":0}}
+</script>
+
+<script>
+/* GitHub transport for the bearings board.
+ *
+ * THE BOARD IS NOT RE-AUTHORED HERE. Everything the captain sees - markup,
+ * stylesheet, copy, card types, badges, packet and its figures, pickers, the
+ * language switch - comes from the shipped template
+ * (.agents/skills/bearings/assets/board-template.html) and runs here as that
+ * template's OWN script, verbatim. This file carries only what a surface fed
+ * by GitHub must do differently, which is two things: how a payload arrives,
+ * and where an answer goes. Anything that rendered board content here would
+ * recreate the hand-written second board this design exists to avoid.
+ *
+ * WHY GITHUB, AND WHAT IT COSTS. The store is a plain file on a public
+ * branch, so this page reads it with no account, no token, and no vendor's
+ * session - from GitHub Pages, from a file:// page opened out of a clone, or
+ * from anywhere else it is served. What that costs is freshness, and the cost
+ * is not negotiable: raw.githubusercontent.com sends cache-control max-age=300
+ * from a CDN that ignores the query string, so a never-before-used cache
+ * buster still returns the cached object. A reader cannot be made to see a
+ * write sooner than five minutes. This page therefore NEVER says live. It
+ * says how old what it is showing is, and it says the bound.
+ *
+ * CHECK NOW IS THE ONE WAY PAST THE FLOOR, AND IT IS RATIONED. GitHub's
+ * contents API caches for 60 seconds instead of 300, and it is also
+ * credential-free - but unauthenticated it allows 60 requests an hour per IP,
+ * and conditional requests that come back 304 still count against that
+ * (measured). It is therefore not a poll. It is wired to an explicit tap, one
+ * request per tap, and when the budget is gone the page says so instead of
+ * quietly showing old data.
+ *
+ * AN ANSWER CANNOT LEAVE THIS PAGE THE WAY THE DATA ARRIVED. There is no
+ * credential-free write to GitHub - not the API, not a push, not a workflow
+ * dispatch. So the read guarantee and the answer guarantee are different
+ * strengths, and this page does not blur them. An answer is composed here and
+ * handed to GitHub as a prefilled issue, which the captain submits as himself
+ * in a browser he is already signed into. No vendor is in that path; his own
+ * GitHub account is, irreducibly. A card is marked answered only after the
+ * page has actually handed the answer over, never on the click.
+ *
+ * A BOARD THAT RENDERS IS NEVER REPLACED BY ONE THAT DOES NOT. Nothing this
+ * page can reach validates what a publisher wrote, so an arriving payload is
+ * judged by the only authority on what this board can render - the shipped
+ * board itself. The payload is drawn and the board's own verdict is read off
+ * the page afterwards. A payload that does not render is undone, the last one
+ * that did is drawn again, and the page says the update was rejected.
+ *
+ * THE CAPTAIN'S UNSENT WORK OUTRANKS A FRESH PAYLOAD. A repaint runs the
+ * shipped renderer, which throws away everything on the page, so an update
+ * that arrives while he is part-way through a card is held, and the page says
+ * it is holding, until that work is sent or left behind.
+ *
+ * A REPAINT COSTS THE SAME EVERY TIME. A page that gets heavier the longer it
+ * is left open is broken even when nothing looks wrong, so each repaint undoes
+ * what the last one registered before registering anything again.
+ *
+ * bin/fm-board-github.sh composes this file with the template; it is not
+ * loaded on its own.
+ */
+(function () {
+  "use strict";
+
+  /* The shipped board script, embedded verbatim by bin/fm-board-github.sh.
+     Running it is what makes this board render exactly what the desk board
+     renders, including anything added to the template after this file was
+     last touched. */
+  var BOARD_SRC = "(function () {\n  \"use strict\";\n\n  /* ---- languages -------------------------------------------------------\n     Every visible string is either chrome (this dictionary) or payload copy\n     (a plain string, or an {en, hant, hans} object; pick() resolves it).\n     The captain's choice persists per browser; the payload's `lang` is the\n     default when nothing is stored. */\n  var LANGS = [\"en\", \"hant\", \"hans\"];\n  var T = {\n    en: {\n      call: \"Captain's Call\", charted: \"Charted Next\", underway: \"Underway\", landed: \"Recently Landed\",\n      stat_need: \"need you\", stat_underway: \"underway\", stat_landed: \"landed recently\", stat_charted: \"charted next\",\n      call_sub_one: \"1 item waits on you, captain\", call_sub_many: \"{n} items wait on you, captain\",\n      call_sub_none: \"nothing needs you, captain\",\n      badge_decision: \"decision\", badge_checks: \"checks green\", badge_credential: \"credential\",\n      risk: \"risk {r}\", risk_low: \"low\", risk_medium: \"medium\", risk_high: \"high\",\n      rev_yes: \"reversible\", rev_no: \"cannot be undone\", rev_partly: \"partly reversible\",\n      k_decide: \"decide\", k_about: \"about\", k_nothing: \"if nothing\", k_why: \"why\", k_evidence: \"evidence\",\n      packet: \"open the packet\", rec: \"rec\",\n      tab_diff: \"Difference\", choose: \"Choose {x}\",\n      tab_note: \"Open a tab above to see exactly what that option changes.\",\n      k_adds: \"Adds\", k_removes: \"Removes\", k_same: \"Leaves alone\", k_files: \"Files it touches\", k_buys: \"What it buys\",\n      packet_all: \"The full packet\",\n      freeform: \"or answer in your own words…\", queue_answer: \"Queue answer\", queued: \"queued\",\n      too_long: \"Answer is too long to queue (512 bytes maximum).\",\n      card_of: \"card {i} of {n}\", answered: \"{n} answered\", prev: \"Previous card\", next: \"Next card\",\n      empty_call: \"Nothing needs your action right now.\", empty_underway: \"Nothing is underway.\",\n      empty_landed: \"No recent completions are in the current baseline.\", empty_charted: \"Nothing is queued.\",\n      showing: \"showing {a} of {b}\", more_queued: \"+{n} more queued - ask firstmate for the full chart\",\n      more_warn_one: \"+1 more repair warning - ask firstmate for the full chart\",\n      more_warn_many: \"+{n} more repair warnings - ask firstmate for the full chart\",\n      needs_repair: \"needs repair\", waiting: \"waiting\", pick_aria: \"Pick {id} for dispatch\",\n      pick_none: \"pick queued work to dispatch\", pick_n: \"{n} picked for dispatch\",\n      pick_limit: \"Selection limit reached (512 bytes maximum). \", pick_too_long: \"Selection is too long to queue (512 bytes maximum). \",\n      dispatch: \"Queue dispatch order\",\n      err_title: \"This board could not load\", err_ask: \" - ask firstmate to rebuild the board.\"\n    },\n    hant: {\n      call: \"船長裁決\", charted: \"排定的下一步\", underway: \"進行中\", landed: \"最近完成\",\n      stat_need: \"等你決定\", stat_underway: \"進行中\", stat_landed: \"最近完成\", stat_charted: \"排定的下一步\",\n      call_sub_one: \"1 件事等你決定，captain\", call_sub_many: \"{n} 件事等你決定，captain\",\n      call_sub_none: \"沒有事需要你，captain\",\n      badge_decision: \"決策\", badge_checks: \"檢查全綠\", badge_credential: \"憑證\",\n      risk: \"風險 {r}\", risk_low: \"低\", risk_medium: \"中\", risk_high: \"高\",\n      rev_yes: \"可回頭\", rev_no: \"回不去\", rev_partly: \"部分可回頭\",\n      k_decide: \"決定什麼\", k_about: \"背景\", k_nothing: \"什麼都不做\", k_why: \"為什麼\", k_evidence: \"證據\",\n      packet: \"打開 packet\", rec: \"建議\",\n      tab_diff: \"差在哪\", choose: \"選 {x}\",\n      tab_note: \"點上面的分頁，看那個選項到底改了什麼。\",\n      k_adds: \"新增\", k_removes: \"移除\", k_same: \"不動\", k_files: \"動到的檔案\", k_buys: \"換到什麼\",\n      packet_all: \"完整的決策說明\",\n      freeform: \"或用你自己的話回答…\", queue_answer: \"送出回答\", queued: \"已排入\",\n      too_long: \"回答太長，無法排入（上限 512 bytes）。\",\n      card_of: \"第 {i} 張，共 {n} 張\", answered: \"已答 {n} 張\", prev: \"上一張\", next: \"下一張\",\n      empty_call: \"現在沒有需要你處理的事。\", empty_underway: \"沒有進行中的工作。\",\n      empty_landed: \"目前基準內沒有最近完成的項目。\", empty_charted: \"沒有排隊中的工作。\",\n      showing: \"顯示 {a} / {b}\", more_queued: \"還有 {n} 項排隊中，向 firstmate 要完整清單\",\n      more_warn_one: \"還有 1 項需修復的警告，向 firstmate 要完整清單\",\n      more_warn_many: \"還有 {n} 項需修復的警告，向 firstmate 要完整清單\",\n      needs_repair: \"需要修復\", waiting: \"等待中\", pick_aria: \"選取 {id} 派工\",\n      pick_none: \"勾選排隊中的工作來派工\", pick_n: \"已選 {n} 項派工\",\n      pick_limit: \"已達選取上限（512 bytes）。\", pick_too_long: \"選取內容太長，無法排入（上限 512 bytes）。\",\n      dispatch: \"送出派工順序\",\n      err_title: \"這個看板無法載入\", err_ask: \"，請 firstmate 重建看板。\"\n    },\n    hans: {\n      call: \"船长裁决\", charted: \"排定的下一步\", underway: \"进行中\", landed: \"最近完成\",\n      stat_need: \"等你决定\", stat_underway: \"进行中\", stat_landed: \"最近完成\", stat_charted: \"排定的下一步\",\n      call_sub_one: \"1 件事等你决定，captain\", call_sub_many: \"{n} 件事等你决定，captain\",\n      call_sub_none: \"没有事需要你，captain\",\n      badge_decision: \"决策\", badge_checks: \"检查全绿\", badge_credential: \"凭证\",\n      risk: \"风险 {r}\", risk_low: \"低\", risk_medium: \"中\", risk_high: \"高\",\n      rev_yes: \"可回头\", rev_no: \"回不去\", rev_partly: \"部分可回头\",\n      k_decide: \"决定什么\", k_about: \"背景\", k_nothing: \"什么都不做\", k_why: \"为什么\", k_evidence: \"证据\",\n      packet: \"打开 packet\", rec: \"建议\",\n      tab_diff: \"差在哪\", choose: \"选 {x}\",\n      tab_note: \"点上面的分页，看那个选项到底改了什么。\",\n      k_adds: \"新增\", k_removes: \"移除\", k_same: \"不动\", k_files: \"动到的文件\", k_buys: \"换到什么\",\n      packet_all: \"完整的决策说明\",\n      freeform: \"或用你自己的话回答…\", queue_answer: \"提交回答\", queued: \"已排入\",\n      too_long: \"回答太长，无法排入（上限 512 bytes）。\",\n      card_of: \"第 {i} 张，共 {n} 张\", answered: \"已答 {n} 张\", prev: \"上一张\", next: \"下一张\",\n      empty_call: \"现在没有需要你处理的事。\", empty_underway: \"没有进行中的工作。\",\n      empty_landed: \"目前基准内没有最近完成的项目。\", empty_charted: \"没有排队中的工作。\",\n      showing: \"显示 {a} / {b}\", more_queued: \"还有 {n} 项排队中，向 firstmate 要完整清单\",\n      more_warn_one: \"还有 1 项需修复的警告，向 firstmate 要完整清单\",\n      more_warn_many: \"还有 {n} 项需修复的警告，向 firstmate 要完整清单\",\n      needs_repair: \"需要修复\", waiting: \"等待中\", pick_aria: \"选取 {id} 派工\",\n      pick_none: \"勾选排队中的工作来派工\", pick_n: \"已选 {n} 项派工\",\n      pick_limit: \"已达选取上限（512 bytes）。\", pick_too_long: \"选取内容太长，无法排入（上限 512 bytes）。\",\n      dispatch: \"提交派工顺序\",\n      err_title: \"这个看板无法加载\", err_ask: \"，请 firstmate 重建看板。\"\n    }\n  };\n  var lang = \"en\";\n  function t(key, vars) {\n    var s = (T[lang] && T[lang][key]) || T.en[key] || key;\n    if (vars) Object.keys(vars).forEach(function (k) { s = s.split(\"{\" + k + \"}\").join(String(vars[k])); });\n    return s;\n  }\n  function pick(v) {\n    if (v == null) return \"\";\n    if (typeof v !== \"object\") return String(v);\n    var s = v[lang];\n    if (!s && lang === \"hans\") s = v.hant;\n    if (!s) s = v.en;\n    return s == null ? \"\" : String(s);\n  }\n  function isCopy(v) {\n    return (typeof v === \"string\" && v.length > 0) ||\n      (v && typeof v === \"object\" && typeof v.en === \"string\" && v.en.length > 0 &&\n        typeof v.hant === \"string\" && v.hant.length > 0);\n  }\n  function storedLang() {\n    try {\n      var s = window.localStorage && window.localStorage.getItem(\"fm-bearings-lang\");\n      return LANGS.indexOf(s) >= 0 ? s : null;\n    } catch (e) { return null; }\n  }\n  function storeLang(l) {\n    try { if (window.localStorage) window.localStorage.setItem(\"fm-bearings-lang\", l); } catch (e) { /* private mode */ }\n  }\n\n  /* Fail closed: a board with unreadable or wrong-schema data says so plainly\n     instead of rendering an empty page that looks like an empty fleet. */\n  function renderBoardError(msg) {\n    var main = document.querySelector(\".bb-main\");\n    main.innerHTML = \"\";\n    var card = document.createElement(\"div\");\n    card.className = \"fm-card fm-card--poster bb-decision\";\n    var pad = document.createElement(\"div\");\n    pad.className = \"bb-decision__pad\";\n    var h = document.createElement(\"h3\");\n    h.className = \"bb-decision__title\";\n    h.textContent = t(\"err_title\");\n    var d = document.createElement(\"p\");\n    d.className = \"bb-decision__detail\";\n    d.textContent = msg + t(\"err_ask\");\n    pad.appendChild(h);\n    pad.appendChild(d);\n    card.appendChild(pad);\n    main.appendChild(card);\n  }\n\n  var data;\n  try {\n    data = JSON.parse(document.getElementById(\"bearings-data\").textContent);\n  } catch (e) {\n    renderBoardError(\"The board data is not valid JSON\");\n    return;\n  }\n  if (!data || data.schema !== \"fm-bearings-board.v1\") {\n    renderBoardError(\"Unsupported board data schema: \" + (data && data.schema ? data.schema : \"(none)\"));\n    return;\n  }\n  var fleetLists = [data.captains_call, data.underway, data.landed, data.charted];\n  var callItemsValid = Array.isArray(data.captains_call) && data.captains_call.every(function (item) {\n    return item && typeof item === \"object\" &&\n      typeof item.key === \"string\" && item.key.length > 0 &&\n      typeof item.type === \"string\" && item.type.length > 0 &&\n      isCopy(item.title) &&\n      Array.isArray(item.options);\n  });\n  if (!fleetLists.every(Array.isArray) || !callItemsValid) {\n    renderBoardError(\"The board data does not have the required structure\");\n    return;\n  }\n  lang = storedLang() || (LANGS.indexOf(data.lang) >= 0 ? data.lang : \"en\");\n\n  function el(tag, cls, text) {\n    var n = document.createElement(tag);\n    if (cls) n.className = cls;\n    if (text != null) n.textContent = text;\n    return n;\n  }\n  function badge(tone, text) { return el(\"span\", \"fm-badge fm-badge--\" + tone, text); }\n  /* Lavish annotates any non-native clickable unless it carries\n     data-lavish-action, so every author link is marked as a control; the\n     sandbox lets marked links open in a top-level tab. */\n  function link(cls, text, url) {\n    var a = el(\"a\", cls, text);\n    a.href = url; a.target = \"_blank\"; a.rel = \"noopener\"; a.title = url;\n    a.setAttribute(\"data-lavish-action\", \"open-link\");\n    return a;\n  }\n  function clear(n) { n.textContent = \"\"; }\n  function setText(id, text) { document.getElementById(id).textContent = text; }\n  /* Warnings ride the charted feed for layout only; they are alarms, not work,\n     so every count of queued work excludes them. */\n  function isWarning(x) { return x && x.kind === \"warning\"; }\n  function chartedQueued(rows) { return (rows || []).filter(function (x) { return !isWarning(x); }); }\n  /* Charted Next reads newest filed first, so the most recently filed upcoming\n     work is at the top. ISO filed dates compare as text; a row with no\n     comparable date keeps its payload order after every dated row. */\n  function chartedOrder(rows) {\n    var dated = [], undated = [];\n    (rows || []).forEach(function (x) {\n      if (x && typeof x.filed === \"string\" && x.filed) dated.push(x); else undated.push(x);\n    });\n    dated.sort(function (a, b) { return a.filed \u003c b.filed ? 1 : (a.filed > b.filed ? -1 : 0); });\n    return dated.concat(undated);\n  }\n  var chartedMoreQueued = data.charted_more || 0;\n  var chartedMoreWarnings = data.charted_warning_more || 0;\n  function utf8ByteLength(text) { return new TextEncoder().encode(text).length; }\n  var CHECK_SVG = '\u003csvg class=\"fm-ico\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\u003cpath d=\"M20 6 9 17l-5-5\"/>\u003c/svg>';\n  var CHECK_ROW_SVG = '\u003csvg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\u003cpath d=\"M20 6 9 17l-5-5\"/>\u003c/svg>';\n\n  /* Answered state survives a language switch and a reload: keyed by decision\n     key and scoped to this build's `generated` stamp, so a rebuilt board (which\n     drops acted-on cards) starts clean while a plain reload of the same board\n     still shows what was already queued. */\n  var answeredStore = \"fm-bearings-answered:\" + String(data.generated || \"\");\n  var queuedKeys = (function () {\n    try {\n      var raw = window.localStorage && window.localStorage.getItem(answeredStore);\n      var parsed = raw ? JSON.parse(raw) : null;\n      return parsed && typeof parsed === \"object\" ? parsed : {};\n    } catch (e) { return {}; }\n  })();\n  function rememberAnswered(key) {\n    queuedKeys[key] = true;\n    try { if (window.localStorage) window.localStorage.setItem(answeredStore, JSON.stringify(queuedKeys)); } catch (e) { /* private mode */ }\n  }\n  var dispatchQueued = false;\n  var active = -1;\n\n  function render() {\n  try {\n    if (document.documentElement) {\n      document.documentElement.lang = lang === \"en\" ? \"en\" : (lang === \"hant\" ? \"zh-Hant\" : \"zh-Hans\");\n    }\n    LANGS.forEach(function (l) {\n      var b = document.getElementById(\"bb-lang-\" + l);\n      b.className = \"bb-lang__btn\" + (l === lang ? \" is-active\" : \"\");\n      b.setAttribute(\"aria-pressed\", l === lang ? \"true\" : \"false\");\n    });\n    setText(\"bb-t-call\", t(\"call\")); setText(\"bb-t-charted\", t(\"charted\"));\n    setText(\"bb-t-underway\", t(\"underway\")); setText(\"bb-t-landed\", t(\"landed\"));\n    document.getElementById(\"bb-stack-prev\").setAttribute(\"aria-label\", t(\"prev\"));\n    document.getElementById(\"bb-stack-next\").setAttribute(\"aria-label\", t(\"next\"));\n    setText(\"bb-dispatch-btn\", t(\"dispatch\"));\n    document.getElementById(\"bb-provenance\").textContent = data.schema + \" · \" + data.generated;\n\n    /* stat strip */\n    var callTotal = data.captains_call.length;\n    var stats = [\n      { n: callTotal, l: t(\"stat_need\"), call: true },\n      { n: data.underway.length, l: t(\"stat_underway\") },\n      { n: data.landed.length, l: t(\"stat_landed\") },\n      { n: chartedQueued(data.charted).length + chartedMoreQueued, l: t(\"stat_charted\") }\n    ];\n    var strip = document.getElementById(\"bb-stats\");\n    clear(strip);\n    stats.forEach(function (s) {\n      var tile = el(\"div\", \"bb-stat\" + (s.call ? \" bb-stat--call\" : \"\"));\n      tile.appendChild(el(\"span\", \"bb-stat__num\", String(s.n)));\n      tile.appendChild(el(\"span\", \"bb-stat__label\", s.l));\n      strip.appendChild(tile);\n    });\n    setText(\"bb-call-sub\", callTotal === 0 ? t(\"call_sub_none\") : (callTotal === 1 ? t(\"call_sub_one\") : t(\"call_sub_many\", { n: callTotal })));\n\n    /* Captain's Call deck: every item renders as the same full card, and a\n       decision card answers the five questions the captain needs before\n       choosing: what to decide, what each option costs, what happens if\n       nothing is decided, whether it can be undone, and why the\n       recommendation - each backed by evidence links. */\n    var deck = document.getElementById(\"bb-call\");\n    clear(deck);\n    function ctxRow(k, v, tone) {\n      var row = el(\"div\", \"bb-ctx__row\" + (tone ? \" bb-ctx__row--\" + tone : \"\"));\n      row.appendChild(el(\"span\", \"bb-ctx__k\", k));\n      row.appendChild(el(\"span\", \"bb-ctx__v\", v));\n      return row;\n    }\n    function riskBadge(r) {\n      var word = t(\"risk_\" + r) === \"risk_\" + r ? r : t(\"risk_\" + r);\n      return badge(r === \"low\" ? \"neutral\" : (r === \"high\" ? \"danger\" : \"warn\"), t(\"risk\", { r: word }));\n    }\n    function reversibleBadge(rv) {\n      if (rv === \"no\") return badge(\"danger\", t(\"rev_no\"));\n      if (rv === \"partly\") return badge(\"warn\", t(\"rev_partly\"));\n      return badge(\"online\", t(\"rev_yes\"));\n    }\n\n    /* ---- the packet, opened inside the card ----------------------------\n       `packet` is what bin/fm-packet.sh card read out of data/\u003cid>/packet.md:\n       the drawings, and the rest of the packet as data this file builds.\n       Nothing here opens a page or a session - the packet is already in the\n       payload, so closing a tab loses nothing. Every string in it is copy, so\n       the whole of it follows the captain's language like the rest of the\n       card; the rule and who writes those languages is bin/fm-packet.sh's. */\n    function packetOf(item) {\n      var pk = item.packet;\n      if (!pk || typeof pk !== \"object\" || !Array.isArray(pk.sections)) return null;\n      if (!Array.isArray(pk.figures)) return null;\n      return pk;\n    }\n    /* `reconcile` is the board's own injected choice - come back to this one -\n       so the packet never knew about it. Every question about what the packet\n       drew is asked of the options the packet actually carried. */\n    function packetOptions(options) {\n      return options.filter(function (o) { return o.value !== \"reconcile\"; });\n    }\n    /* A drawing that carries a data-node for every option IS the comparison;\n       nothing labels it, exactly as the packet's own figure contract has it. */\n    function comparisonFigure(pk, options) {\n      var values = packetOptions(options).map(function (o) { return o.value; });\n      for (var i = 0; i \u003c pk.figures.length; i++) {\n        /* a drawing that names the option it illustrates is that option's own,\n           never the comparison - the packet says which it is rather than the\n           board inferring it from the identities the drawing happens to carry */\n        if (pk.figures[i].option) continue;\n        var nodes = pk.figures[i].nodes || [];\n        var covers = values.every(function (v) { return nodes.indexOf(v) >= 0; });\n        if (covers && values.length) return pk.figures[i];\n      }\n      return null;\n    }\n    /* The figure contract makes a drawing's ids unique inside ONE packet, which\n       is all a packet needs while it owns its own page. This board puts many\n       packets in one document, so that is a namespace this surface created and\n       this surface owes: two packets that both called a slug `cmp` would each\n       declare `cmp-arrow`, and the second card's arrows would resolve to the\n       first card's marker. Every id a drawing declares is therefore prefixed\n       per card as it is inlined, and every reference that points at one is\n       rewritten in the same pass - url(#...) in any attribute value, and an\n       href or xlink:href fragment. Only markup inside a tag is touched, so a\n       label that happens to read \"id=\" stays the words the worker wrote, and\n       nothing about the packet on disk or the figure contract changes. */\n    /* Which bytes are an attribute value is walked the way the HTML tokenizer\n       walks it, not matched as a shape - the same states bin/fm-packet.sh\n       scan_tags walks, for the same reason: a bare \"\u003c\" ends a regex and does\n       not end an unquoted value, so a shape-matcher rewrites the wrong bytes.\n       A drawing only reaches here after `fm-packet.sh svg-check` accepted it,\n       and that check refuses anything it cannot tokenize, so the two readers\n       agree on every drawing that gets this far. */\n    var WHITESPACE = \"\\t\\n\\f\\r \";\n    function isSpace(c) { return WHITESPACE.indexOf(c) >= 0; }\n    function nsValue(name, v, ns) {\n      var key = name.toLowerCase();\n      if (key === \"id\") v = ns + v;\n      else if ((key === \"href\" || key === \"xlink:href\") && v.charAt(0) === \"#\") {\n        v = \"#\" + ns + v.slice(1);\n      } else if (key === \"aria-labelledby\" || key === \"aria-describedby\") {\n        /* an IDREF list names ids with no \"#\", and diagram-design puts one on\n           every drawing over its own \u003ctitle>/\u003cdesc> - miss it and the drawing\n           loses its accessible name the moment it is inlined */\n        v = v.split(/\\s+/).map(function (id) { return id ? ns + id : id; }).join(\" \");\n      }\n      return v.replace(/url\\(\\s*(['\"]?)#([^)'\"\\s]*)\\1\\s*\\)/gi, function (m, uq, target) {\n        return \"url(\" + uq + \"#\" + ns + target + uq + \")\";\n      });\n    }\n    function namespaceIds(svg, ns) {\n      svg = String(svg);\n      var out = \"\", i = 0, n = svg.length;\n      while (i \u003c n) {\n        var lt = svg.indexOf(\"\u003c\", i);\n        if (lt \u003c 0) { out += svg.slice(i); break; }\n        out += svg.slice(i, lt + 1);\n        i = lt + 1;\n        if (svg.slice(i, i + 3) === \"!--\") {\n          var endc = svg.indexOf(\"-->\", i + 3);\n          if (endc \u003c 0) { out += svg.slice(i); break; }\n          out += svg.slice(i, endc + 3); i = endc + 3; continue;\n        }\n        if (svg.charAt(i) === \"!\" || svg.charAt(i) === \"?\") {\n          var endb = svg.indexOf(\">\", i);\n          if (endb \u003c 0) { out += svg.slice(i); break; }\n          out += svg.slice(i, endb + 1); i = endb + 1; continue;\n        }\n        if (svg.charAt(i) === \"/\") { out += \"/\"; i += 1; }\n        if (i >= n || !/[A-Za-z]/.test(svg.charAt(i))) continue;\n        while (i \u003c n && !isSpace(svg.charAt(i)) && svg.charAt(i) !== \"/\" && svg.charAt(i) !== \">\") {\n          out += svg.charAt(i); i += 1;\n        }\n        var closed = false;\n        while (!closed && i \u003c n) {\n          while (i \u003c n && (isSpace(svg.charAt(i)) || svg.charAt(i) === \"/\")) {\n            out += svg.charAt(i); i += 1;\n          }\n          if (i >= n) break;\n          if (svg.charAt(i) === \">\") { out += \">\"; i += 1; closed = true; break; }\n          var astart = i;\n          while (i \u003c n && !isSpace(svg.charAt(i)) && \">/=\".indexOf(svg.charAt(i)) \u003c 0) i += 1;\n          var name = svg.slice(astart, i);\n          out += name;\n          while (i \u003c n && isSpace(svg.charAt(i))) { out += svg.charAt(i); i += 1; }\n          if (i >= n) break;\n          if (svg.charAt(i) !== \"=\") continue;\n          out += \"=\"; i += 1;\n          while (i \u003c n && isSpace(svg.charAt(i))) { out += svg.charAt(i); i += 1; }\n          if (i >= n) break;\n          var q = svg.charAt(i);\n          if (q === '\"' || q === \"'\") {\n            var close = svg.indexOf(q, i + 1);\n            if (close \u003c 0) { out += svg.slice(i); i = n; break; }\n            out += q + nsValue(name, svg.slice(i + 1, close), ns) + q;\n            i = close + 1;\n          } else {\n            var vstart = i;\n            while (i \u003c n && !isSpace(svg.charAt(i)) && svg.charAt(i) !== \">\") i += 1;\n            out += nsValue(name, svg.slice(vstart, i), ns);\n          }\n        }\n        if (!closed && i >= n) { out += svg.slice(Math.min(i, n)); break; }\n      }\n      return out;\n    }\n    /* A drawing is in the switching part of the card, so its own labels follow\n       the captain through the same three-language lookup every other string\n       here goes through - the figure contract puts all three on every \u003ctext>,\n       which is exactly what earns the drawing its place up here. */\n    function figureNode(fig, ns) {\n      var f = el(\"figure\", \"bb-fig\");\n      if (fig.slug) f.setAttribute(\"data-figure\", fig.slug);\n      f.innerHTML = namespaceIds(fig.svg, ns);\n      var labelled = f.querySelectorAll ? f.querySelectorAll(\"[data-en]\") : [];\n      for (var i = 0; i \u003c labelled.length; i++) {\n        var n = labelled[i];\n        if (!n.getAttribute) continue;\n        var v = n.getAttribute(\"data-\" + lang);\n        if (!v && lang === \"hans\") v = n.getAttribute(\"data-hant\");\n        if (!v) v = n.getAttribute(\"data-en\");\n        if (v) n.textContent = v;\n      }\n      return f;\n    }\n    var DOTS = [\"var(--sea-500)\", \"var(--gold-500)\", \"var(--ocean-500)\", \"var(--rust-500)\", \"var(--navy-300)\"];\n\n    data.captains_call.forEach(function (item, cardIndex) {\n      /* unique to this card, and short enough to stay readable in the markup */\n      var figNs = \"bb\" + cardIndex + \"-\";\n      var card = el(\"div\", \"fm-card fm-card--poster bb-decision\");\n      var pad = el(\"div\", \"bb-decision__pad\");\n\n      var top = el(\"div\", \"bb-decision__top\");\n      var badges = el(\"span\", \"bb-decision__badges\");\n      if (item.type === \"merge\") {\n        badges.appendChild(badge(\"online\", t(\"badge_checks\")));\n      } else {\n        badges.appendChild(badge(\"solid\", t(item.type === \"credential\" ? \"badge_credential\" : \"badge_decision\")));\n      }\n      if (item.risk) badges.appendChild(riskBadge(String(item.risk)));\n      if (item.reversible) badges.appendChild(reversibleBadge(item.reversible));\n      top.appendChild(badges);\n      top.appendChild(el(\"span\", \"bb-decision__repo\", item.repo || \"\"));\n      pad.appendChild(top);\n\n      pad.appendChild(el(\"h3\", \"bb-decision__title\", pick(item.title)));\n\n      if (item.type === \"merge\" && item.detail) pad.appendChild(el(\"p\", \"bb-decision__detail\", pick(item.detail)));\n      if (item.type === \"merge\" && item.pr_url) {\n        pad.appendChild(link(\"bb-decision__link\", item.pr_url, item.pr_url));\n      }\n      var ctx = el(\"div\", \"bb-ctx\");\n      if (item.decide) ctx.appendChild(ctxRow(t(\"k_decide\"), pick(item.decide), \"decide\"));\n      if (item.about) ctx.appendChild(ctxRow(t(\"k_about\"), pick(item.about)));\n      if (item.if_nothing) ctx.appendChild(ctxRow(t(\"k_nothing\"), pick(item.if_nothing), \"nothing\"));\n      if (item.reversible_note) ctx.appendChild(ctxRow(reversibleBadge(item.reversible || \"yes\").textContent, pick(item.reversible_note)));\n      if (ctx.children.length) pad.appendChild(ctx);\n\n      var form = document.createElement(\"form\");\n      form.setAttribute(\"data-lavish-question\", item.key);\n      var packet = packetOf(item);\n      /* Every answer goes through queueAnswer with the value it is answering\n         with, passed in. A choose button inside an option's own tab passes\n         that option's value - the same value the decision block defines, down\n         the same channel - and the form passes whatever the form itself holds,\n         so the tabs change where the captain reads, never what he answers, and\n         no answer can pick up a value some earlier click left lying around. */\n      if (packet) {\n        var compare = comparisonFigure(packet, item.options);\n        var claimed = [];\n        var tabs = el(\"div\", \"bb-tabs\");\n        tabs.setAttribute(\"role\", \"tablist\");\n        var panels = [];\n        function addTab(label, dot, panel) {\n          var b = el(\"button\", \"bb-tab\");\n          b.type = \"button\";\n          b.setAttribute(\"role\", \"tab\");\n          if (dot) {\n            var d = el(\"span\", \"bb-tab__dot\");\n            d.setAttribute(\"style\", \"background:\" + dot);\n            b.appendChild(d);\n            b.appendChild(el(\"span\", \"\", label));\n          } else {\n            b.textContent = label;\n          }\n          tabs.appendChild(b);\n          panels.push({ btn: b, panel: panel });\n          return b;\n        }\n        /* first tab: where the options differ */\n        var diff = el(\"div\", \"bb-panel\");\n        if (compare) { diff.appendChild(figureNode(compare, figNs)); claimed.push(compare); }\n        packet.figures.forEach(function (fig) {\n          if (fig.option) return;\n          if (claimed.indexOf(fig) \u003c 0) { diff.appendChild(figureNode(fig, figNs)); claimed.push(fig); }\n        });\n        diff.appendChild(el(\"p\", \"bb-panel__note\", t(\"tab_note\")));\n        addTab(t(\"tab_diff\"), null, diff);\n        /* then one tab per option: what that option changes, and its button */\n        item.options.forEach(function (o, i) {\n          var panel = el(\"div\", \"bb-panel\");\n          packet.figures.forEach(function (fig) {\n            if (fig === compare || claimed.indexOf(fig) >= 0) return;\n            if (fig.option !== o.value) return;\n            panel.appendChild(figureNode(fig, figNs)); claimed.push(fig);\n          });\n          var head = el(\"div\", \"bb-panel__head\");\n          head.appendChild(el(\"span\", \"bb-panel__label\", pick(o.label)));\n          if (item.recommend_value && o.value === item.recommend_value) {\n            head.appendChild(el(\"span\", \"bb-opt__rec\", t(\"rec\")));\n          }\n          panel.appendChild(head);\n          if (o.hint) panel.appendChild(el(\"p\", \"bb-panel__note\", pick(o.hint)));\n          /* what this option actually changes: the three-way list, the files it\n             touches, and what it buys. Every one is optional, and a packet that\n             carries none of them renders the panel exactly as it did before. */\n          var rows = el(\"div\", \"bb-panel__rows\");\n          function listRow(label, items, cls) {\n            if (!items || !items.length) return;\n            var r = el(\"div\", \"bb-panel__row\");\n            r.appendChild(el(\"span\", \"bb-panel__k\", label));\n            var v = el(\"span\", \"bb-panel__v\" + (cls ? \" \" + cls : \"\"));\n            var ul = el(\"ul\", \"\");\n            items.forEach(function (it) { ul.appendChild(el(\"li\", \"\", pick(it))); });\n            v.appendChild(ul); r.appendChild(v); rows.appendChild(r);\n          }\n          var ch = o.changes || {};\n          listRow(t(\"k_adds\"), ch.added);\n          listRow(t(\"k_removes\"), ch.removed);\n          listRow(t(\"k_same\"), ch.unchanged);\n          listRow(t(\"k_files\"), o.files, \"bb-panel__files\");\n          if (o.buys) {\n            var br = el(\"div\", \"bb-panel__row\");\n            br.appendChild(el(\"span\", \"bb-panel__k\", t(\"k_buys\")));\n            br.appendChild(el(\"span\", \"bb-panel__v\", pick(o.buys)));\n            rows.appendChild(br);\n          }\n          if (rows.children.length) panel.appendChild(rows);\n          if (o.consequence) panel.appendChild(el(\"p\", \"bb-panel__cost\", pick(o.consequence)));\n          if (item.recommend_why && o.value === item.recommend_value) {\n            var why2 = el(\"div\", \"bb-ctx\");\n            why2.appendChild(ctxRow(t(\"k_why\"), pick(item.recommend_why), \"rec\"));\n            panel.appendChild(why2);\n          }\n          var choose = el(\"button\", \"fm-btn fm-btn--sm \" +\n            (o.value === item.recommend_value ? \"fm-btn--primary\" : \"fm-btn--gold\"),\n            t(\"choose\", { x: pick(o.label) }));\n          /* never a submit button: the first submit button in a form is the one\n             the browser presses when the captain hits Enter in the free-form\n             field, and that must stay the foot button, which answers in his\n             own words rather than choosing an option for him */\n          choose.type = \"button\";\n          choose.addEventListener(\"click\", function () { queueAnswer(o.value); });\n          panel.appendChild(choose);\n          addTab(pick(o.label), DOTS[i % DOTS.length], panel);\n        });\n        form.appendChild(tabs);\n        panels.forEach(function (x, i) {\n          x.panel.hidden = i !== 0;\n          x.btn.setAttribute(\"aria-selected\", i === 0 ? \"true\" : \"false\");\n          x.btn.addEventListener(\"click\", function () {\n            panels.forEach(function (y, j) {\n              y.panel.hidden = j !== i;\n              y.btn.setAttribute(\"aria-selected\", j === i ? \"true\" : \"false\");\n            });\n          });\n          form.appendChild(x.panel);\n        });\n      } else {\n        var opts = el(\"div\", \"bb-opts\");\n        item.options.forEach(function (o) {\n          var lab = el(\"label\", \"bb-opt\");\n          var input = document.createElement(\"input\");\n          input.type = \"radio\"; input.name = \"answer\"; input.value = o.value;\n          lab.appendChild(input);\n          var body = el(\"span\", \"bb-opt__body\");\n          body.appendChild(el(\"span\", \"bb-opt__label\", pick(o.label)));\n          if (o.hint) body.appendChild(el(\"span\", \"bb-opt__hint\", pick(o.hint)));\n          if (o.consequence) body.appendChild(el(\"span\", \"bb-opt__consequence\", pick(o.consequence)));\n          lab.appendChild(body);\n          if (item.recommend_value && o.value === item.recommend_value) {\n            lab.appendChild(el(\"span\", \"bb-opt__rec\", t(\"rec\")));\n          }\n          opts.appendChild(lab);\n        });\n        form.appendChild(opts);\n        if (item.recommend_value && item.recommend_why) {\n          var why = el(\"div\", \"bb-ctx\");\n          why.appendChild(ctxRow(t(\"k_why\"), pick(item.recommend_why), \"rec\"));\n          form.appendChild(why);\n        }\n      }\n\n      var hasEvidence = Array.isArray(item.evidence) && item.evidence.length;\n      /* The link to a separately served packet page is offered only while the\n         packet is NOT in the card. Once it is here there is no second address\n         worth sending the captain to, and sending him to one is the thing he\n         asked us to stop doing. */\n      var offerPage = item.packet_url && !packet;\n      if (hasEvidence || offerPage) {\n        var ev = el(\"div\", \"bb-evidence\");\n        ev.appendChild(el(\"span\", \"bb-ctx__k\", t(\"k_evidence\")));\n        var chips = el(\"span\", \"bb-evidence__chips\");\n        if (offerPage) {\n          chips.appendChild(link(\"bb-chip bb-chip--packet\", t(\"packet\"), item.packet_url));\n        }\n        (item.evidence || []).forEach(function (e) {\n          chips.appendChild(link(\"bb-chip\", pick(e.label), e.url));\n        });\n        ev.appendChild(chips);\n        form.appendChild(ev);\n      }\n      /* The rest of the packet, behind one collapsed line. It arrives as data,\n         never as markup: a heading and its items, built here with the same\n         el()/textContent path every other payload string takes, so nothing a\n         worker writes into a packet can restyle or re-script the surface the\n         captain answers on. Every string in it is copy, so the whole block\n         follows the captain like the rest of the card - the packet carries the\n         three languages because the worker who wrote the words wrote them. */\n      if (packet && packet.sections.length) {\n        var more = el(\"details\", \"bb-packet\");\n        more.appendChild(el(\"summary\", \"\", t(\"packet_all\")));\n        var bodyBox = el(\"div\", \"bb-packet__body\");\n        bodyBox.setAttribute(\"lang\", lang === \"en\" ? \"en\" : (lang === \"hans\" ? \"zh-Hans\" : \"zh-Hant\"));\n        packet.sections.forEach(function (s) {\n          bodyBox.appendChild(el(\"h4\", \"pk-part__h\", pick(s.heading)));\n          var ul = el(\"ul\", \"bb-packet__list\");\n          (s.items || []).forEach(function (it) {\n            var li = el(\"li\", \"\");\n            var words = pick(it.text);\n            if (it.code) li.appendChild(el(\"code\", \"\", words));\n            else if (words) li.appendChild(el(\"span\", \"\", words));\n            (it.links || []).forEach(function (l) {\n              li.appendChild(link(\"bb-packet__link\", pick(l.label), l.url));\n            });\n            ul.appendChild(li);\n          });\n          bodyBox.appendChild(ul);\n        });\n        more.appendChild(bodyBox);\n        form.appendChild(more);\n      }\n\n      if (item.allow_freeform) {\n        var ff = document.createElement(\"input\");\n        ff.type = \"text\"; ff.name = \"note\"; ff.className = \"bb-freeform\";\n        ff.placeholder = item.freeform_hint ? pick(item.freeform_hint) : t(\"freeform\");\n        form.appendChild(ff);\n      }\n\n      var foot = el(\"div\", \"bb-decision__foot\");\n      var btn = el(\"button\", \"fm-btn fm-btn--sm \" + (item.type === \"merge\" ? \"fm-btn--gold\" : \"fm-btn--primary\"), t(\"queue_answer\"));\n      btn.type = \"submit\";\n      foot.appendChild(btn);\n      var q = el(\"span\", \"bb-queued\");\n      q.innerHTML = CHECK_SVG + \" \" + t(\"queued\");\n      foot.appendChild(q);\n      var answerLimit = el(\"span\", \"bb-limit\");\n      answerLimit.setAttribute(\"role\", \"alert\");\n      foot.appendChild(answerLimit);\n      form.appendChild(foot);\n\n      form.addEventListener(\"submit\", function (ev2) {\n        ev2.preventDefault();\n        queueAnswer(new FormData(form).get(\"answer\"));\n      });\n\n      function queueAnswer(value) {\n        answerLimit.className = \"bb-limit\";\n        var note = (new FormData(form).get(\"note\") || \"\").trim();\n        var displayAnswer = value ? (note ? value + \" - \" + note : value) : note;\n        if (!displayAnswer) return;\n        if (utf8ByteLength(displayAnswer) > 512) {\n          answerLimit.textContent = t(\"too_long\");\n          answerLimit.className = \"bb-limit is-visible\";\n          return;\n        }\n        if (window.lavish && window.lavish.queuePrompt) {\n          /* The versioned context keeps the selected option separate from its\n             note, while close carries the composer-declared completion mode.\n             The prompt text uses the English title so the answer reads the\n             same on firstmate's side whatever language the captain viewed. */\n          var ctxData = {\n            schema: \"fm-bearings-answer.v1\",\n            question: item.key,\n            selection: value || \"\",\n            note: note\n          };\n          if (item.close) ctxData.close = item.close;\n          var enTitle = typeof item.title === \"object\" ? (item.title.en || pick(item.title)) : item.title;\n          window.lavish.queuePrompt(\n            \"Captain's Call answer - \" + enTitle + \": \" + displayAnswer,\n            { tag: \"choice\", text: enTitle + \" -> \" + displayAnswer, element: form,\n              data: ctxData }\n          );\n        }\n        rememberAnswered(item.key);\n        card.classList.add(\"is-queued\");\n        /* deal the next card once this one is answered */\n        setTimeout(function () { showCard(active \u003c cards.length - 1 ? active + 1 : active); }, 450);\n      }\n\n      if (queuedKeys[item.key]) card.classList.add(\"is-queued\");\n      pad.appendChild(form);\n      card.appendChild(pad);\n      deck.appendChild(card);\n    });\n\n    /* stack navigation: one card at a time, dealt off the pile */\n    var cards = Array.prototype.slice.call(deck.children);\n    var stackCount = document.getElementById(\"bb-stack-count\");\n    var stackPrev = document.getElementById(\"bb-stack-prev\");\n    var stackNext = document.getElementById(\"bb-stack-next\");\n    var stackNav = stackCount.parentNode;\n    function showCard(i) {\n      active = Math.max(0, Math.min(cards.length - 1, i));\n      cards.forEach(function (c, j) { c.hidden = j !== active; });\n      var answered = Object.keys(queuedKeys).length;\n      stackCount.textContent = t(\"card_of\", { i: active + 1, n: cards.length }) +\n        (answered ? \" · \" + t(\"answered\", { n: answered }) : \"\");\n      stackPrev.disabled = active === 0;\n      stackNext.disabled = active === cards.length - 1;\n      /* the pile thins as the deal approaches the bottom */\n      deck.className = \"bb-call\" +\n        (active === cards.length - 2 ? \" bb-call--penult\" : \"\") +\n        (active === cards.length - 1 ? \" bb-call--last\" : \"\");\n    }\n    if (cards.length) {\n      stackPrev.onclick = function () { showCard(active - 1); };\n      stackNext.onclick = function () { showCard(active + 1); };\n      if (active \u003c 0) {\n        /* first open: deal the first card that still needs an answer */\n        active = 0;\n        for (var k = 0; k \u003c data.captains_call.length; k++) {\n          if (!queuedKeys[data.captains_call[k].key]) { active = k; break; }\n        }\n      }\n      showCard(active);\n      if (stackNav) stackNav.hidden = false;\n    } else {\n      deck.className = \"bb-call bb-call--empty\";\n      deck.appendChild(el(\"div\", \"bb-empty\", t(\"empty_call\")));\n      if (stackNav) stackNav.hidden = true;\n    }\n\n    /* Underway */\n    var uw = document.getElementById(\"bb-underway\");\n    clear(uw);\n    if (!data.underway.length) uw.appendChild(el(\"div\", \"bb-empty\", t(\"empty_underway\")));\n    data.underway.forEach(function (x) {\n      var row = el(\"div\", \"bb-row\");\n      row.appendChild(badge(x.state === \"working\" ? \"online\" : \"info\", x.state));\n      var main = el(\"div\", \"bb-row__main\");\n      /* the snapshot's durable name-or-id label leads the row so a scan says\n         WHICH task this is; the run status keeps its place on the second line */\n      main.appendChild(el(\"div\", \"bb-row__title\", pick(x.name)));\n      /* captain-facing rows name the repo; the internal task id shows only when\n         no repo is known */\n      main.appendChild(el(\"div\", \"bb-row__sub\", pick(x.doing) + \" · \" + x.kind + \" · \" + (x.repo || x.id)));\n      row.appendChild(main);\n      uw.appendChild(row);\n    });\n\n    /* Landed */\n    var ld = document.getElementById(\"bb-landed\");\n    clear(ld);\n    if (!data.landed.length) ld.appendChild(el(\"div\", \"bb-empty\", t(\"empty_landed\")));\n    data.landed.forEach(function (x) {\n      var row = el(\"div\", \"bb-row\");\n      var chk = el(\"span\", \"bb-row__check\");\n      chk.innerHTML = CHECK_ROW_SVG;\n      row.appendChild(chk);\n      var main = el(\"div\", \"bb-row__main\");\n      main.appendChild(el(\"div\", \"bb-row__title\", pick(x.what)));\n      main.appendChild(el(\"div\", \"bb-row__sub\", (x.repo || x.id) + \" · \" + x.owner));\n      row.appendChild(main);\n      if (x.pr_url) {\n        row.appendChild(link(\"bb-row__pr\", \"#\" + x.pr_url.split(\"/\").pop(), x.pr_url));\n      }\n      ld.appendChild(row);\n    });\n\n    /* Charted Next + dispatch picker */\n    var ch = document.getElementById(\"bb-charted\");\n    var bar = document.getElementById(\"bb-dispatch\");\n    var barCount = document.getElementById(\"bb-dispatch-count\");\n    var barBtn = document.getElementById(\"bb-dispatch-btn\");\n    var anyPickable = false;\n    clear(ch);\n\n    function pickedIds() {\n      return Array.prototype.map.call(ch.querySelectorAll(\".bb-pick:checked\"), function (c) { return c.value; });\n    }\n    function refreshBar(limitMessage) {\n      var n = pickedIds().length;\n      barCount.textContent = limitMessage || (n ? t(\"pick_n\", { n: n }) : t(\"pick_none\"));\n      barBtn.disabled = !n;\n    }\n\n    if (!chartedQueued(data.charted).length && !chartedMoreQueued) {\n      ch.appendChild(el(\"div\", \"bb-empty\", t(\"empty_charted\")));\n    }\n    chartedOrder(data.charted).forEach(function (x) {\n      var row = el(\"div\", \"bb-row\");\n      if (x.dispatchable && !isWarning(x)) {\n        anyPickable = true;\n        var pk = document.createElement(\"input\");\n        pk.type = \"checkbox\"; pk.className = \"bb-pick\"; pk.value = x.id;\n        pk.setAttribute(\"aria-label\", t(\"pick_aria\", { id: x.id }));\n        pk.addEventListener(\"change\", function () {\n          if (pk.checked && utf8ByteLength(pickedIds().join(\",\")) > 512) {\n            pk.checked = false;\n            refreshBar(t(\"pick_limit\"));\n            return;\n          }\n          refreshBar();\n        });\n        row.appendChild(pk);\n      } else {\n        row.appendChild(el(\"span\", \"bb-pick-spacer\"));\n      }\n      var main = el(\"div\", \"bb-row__main\");\n      main.appendChild(el(\"div\", \"bb-row__title\", pick(x.title)));\n      /* second line keeps the title uncrowded in the half-width column */\n      var chSub = x.repo || x.id;\n      var reason = pick(x.reason);\n      main.appendChild(el(\"div\", \"bb-row__sub\", reason ? reason + \" · \" + chSub : chSub));\n      row.appendChild(main);\n      if (isWarning(x)) row.appendChild(badge(\"danger\", t(\"needs_repair\")));\n      else if (reason) row.appendChild(badge(\"warn\", t(\"waiting\")));\n      ch.appendChild(row);\n    });\n    var chartedShown = chartedQueued(data.charted).length;\n    var chartedTotal = chartedShown + chartedMoreQueued;\n    setText(\"bb-charted-sub\", chartedMoreQueued ? t(\"showing\", { a: chartedShown, b: chartedTotal }) : \"\");\n    if (chartedMoreQueued) {\n      ch.appendChild(el(\"span\", \"bb-morechip\", t(\"more_queued\", { n: chartedMoreQueued })));\n    }\n    if (chartedMoreWarnings) {\n      ch.appendChild(el(\"span\", \"bb-morechip\", chartedMoreWarnings === 1 ? t(\"more_warn_one\") : t(\"more_warn_many\", { n: chartedMoreWarnings })));\n    }\n\n    if (anyPickable) {\n      bar.hidden = false;\n      bar.className = \"bb-dispatch\" + (dispatchQueued ? \" is-queued\" : \"\");\n      refreshBar();\n      barBtn.onclick = function () {\n        var ids = pickedIds();\n        var dispatchAnswer = ids.join(\",\");\n        if (!ids.length) return;\n        if (utf8ByteLength(dispatchAnswer) > 512) {\n          refreshBar(t(\"pick_too_long\"));\n          return;\n        }\n        if (window.lavish && window.lavish.queuePrompt) {\n          window.lavish.queuePrompt(\n            \"Dispatch order - start this queued work now: \" + ids.join(\", \"),\n            { tag: \"choice\", text: \"Dispatch: \" + ids.join(\", \"), element: bar,\n              queueKey: \"dispatch.charted\",\n              data: { question: \"dispatch.charted\", answer: dispatchAnswer } }\n          );\n        }\n        dispatchQueued = true;\n        bar.classList.add(\"is-queued\");\n      };\n    } else {\n      bar.hidden = true;\n    }\n  } catch (e) {\n    renderBoardError(\"The board data could not be rendered\");\n  }\n  }\n\n  LANGS.forEach(function (l) {\n    var b = document.getElementById(\"bb-lang-\" + l);\n    b.addEventListener(\"click\", function () {\n      if (l === lang) return;\n      lang = l;\n      storeLang(l);\n      render();\n    });\n  });\n  render();\n})();";
+  var SLOT_ID = "bearings-data";
+  var STRIP_ID = "bb-gh-status";
+  var PRISTINE = document.body.innerHTML;
+
+  var envelope = null;      /* the whole fm-board-store.v1 record on the page */
+  var current = null;       /* the board payload actually drawn */
+  var state = "embedded";   /* embedded | fresh | stale | offline | rejected | holding */
+  var pending = null;       /* a payload held because he is mid-answer */
+  var checking = false;
+  var apiSpent = 0;
+  var timer = null;
+  var cleanup = [];
+
+  /* The only copy this file owns: the freshness of the data and the route an
+     answer takes, the two things the shipped board has no concept of. It
+     follows the board's own language choice through the key the template
+     already stores. */
+  var SAY = {
+    asof: {
+      en: "showing the board as it was {age} ago",
+      hant: "顯示的是 {age} 前的看板",
+      hans: "显示的是 {age} 前的看板"
+    },
+    bound: {
+      en: "GitHub serves this file from a cache, so it can be up to 5 minutes behind. This page is never live.",
+      hant: "GitHub 是從快取送出這份檔案的，所以最多可能落後 5 分鐘。這個頁面不是即時的。",
+      hans: "GitHub 是从缓存送出这份文件的，所以最多可能落后 5 分钟。这个页面不是即时的。"
+    },
+    offline: {
+      en: "could not reach GitHub — this is the copy built into the page, not current data",
+      hant: "連不上 GitHub — 這是頁面內建的舊資料，不是現在的狀況",
+      hans: "连不上 GitHub — 这是页面内建的旧数据，不是现在的状况"
+    },
+    rejected: {
+      en: "the update was rejected — this board cannot read it; showing the last one it could",
+      hant: "更新被拒 — 這塊板讀不了它，顯示上一份讀得到的",
+      hans: "更新被拒 — 这块板读不了它，显示上一份读得到的"
+    },
+    holding: {
+      en: "an update is waiting until this answer is sent",
+      hant: "有更新在等這個回答送出後才套用",
+      hans: "有更新在等这个回答送出后才套用"
+    },
+    checking: { en: "checking…", hant: "檢查中…", hans: "检查中…" },
+    check: { en: "check now", hant: "立即檢查", hans: "立即检查" },
+    spent: {
+      en: "check now is used up for this hour (GitHub allows 60 an hour from one address without an account)",
+      hant: "這個小時的立即檢查用完了（沒有帳號時 GitHub 每個位址每小時只給 60 次）",
+      hans: "这个小时的立即检查用完了（没有账号时 GitHub 每个地址每小时只给 60 次）"
+    },
+    answers_off: {
+      en: "answers cannot be sent from this board — it was published without an answer address",
+      hant: "這塊板無法送出回答 — 發佈時沒有設定回答位址",
+      hans: "这块板无法送出回答 — 发布时没有设定回答地址"
+    },
+    answer_route: {
+      en: "answering opens a prefilled GitHub issue — you submit it as yourself, then it reaches the fleet",
+      hant: "回答會開一張預先填好的 GitHub issue — 由你自己送出，然後才會傳回船隊",
+      hans: "回答会开一张预先填好的 GitHub issue — 由你自己送出，然后才会传回船队"
+    }
+  };
+  var AGE = {
+    now: { en: "less than a minute", hant: "不到一分鐘", hans: "不到一分钟" },
+    min: { en: "{n} min", hant: "{n} 分鐘", hans: "{n} 分钟" },
+    hour: { en: "{n} h", hant: "{n} 小時", hans: "{n} 小时" },
+    day: { en: "{n} days", hant: "{n} 天", hans: "{n} 天" }
+  };
+  var TONE = {
+    embedded: "warn", fresh: "online", stale: "warn",
+    offline: "danger", rejected: "danger", holding: "warn"
+  };
+
+  function lang() {
+    try {
+      var s = window.localStorage && window.localStorage.getItem("fm-bearings-lang");
+      if (s === "en" || s === "hant" || s === "hans") return s;
+    } catch (e) { /* private mode */ }
+    return (envelope && envelope.board && envelope.board.lang) || "hant";
+  }
+
+  function say(entry, vars) {
+    var l = lang();
+    var text = entry[l] || entry.en;
+    if (vars) {
+      Object.keys(vars).forEach(function (k) {
+        text = text.replace("{" + k + "}", vars[k]);
+      });
+    }
+    return text;
+  }
+
+  function ageWords(seconds) {
+    if (seconds < 60) return say(AGE.now);
+    if (seconds < 3600) return say(AGE.min, { n: Math.floor(seconds / 60) });
+    if (seconds < 86400) return say(AGE.hour, { n: Math.floor(seconds / 3600) });
+    return say(AGE.day, { n: Math.floor(seconds / 86400) });
+  }
+
+  function publishedAge() {
+    if (!envelope || !envelope.published_at) return null;
+    var t = Date.parse(envelope.published_at);
+    if (isNaN(t)) return null;
+    return Math.max(0, Math.floor((Date.now() - t) / 1000));
+  }
+
+  /* ---- the status strip ------------------------------------------------
+     One line, always present, always saying which of the several different
+     quiet states this is. A board that is five minutes behind and says so is
+     worth more than one that claims to be current. */
+  function paintStrip() {
+    var strip = document.getElementById(STRIP_ID);
+    if (!strip) {
+      strip = document.createElement("div");
+      strip.id = STRIP_ID;
+      strip.setAttribute("role", "status");
+      strip.style.cssText = "position:sticky;top:0;z-index:40;display:flex;gap:.75rem;" +
+        "align-items:center;flex-wrap:wrap;padding:.45rem .9rem;font:500 12px/1.5 " +
+        "ui-sans-serif,system-ui,sans-serif;border-bottom:1px solid rgba(0,0,0,.12)";
+      document.body.insertBefore(strip, document.body.firstChild);
+    }
+    var tone = TONE[state] || "warn";
+    strip.style.background = tone === "online" ? "#0f2e1c" : tone === "danger" ? "#3a1113" : "#2a2410";
+    strip.style.color = tone === "online" ? "#7fe0a6" : tone === "danger" ? "#ff9d9d" : "#e8cf86";
+    strip.textContent = "";
+
+    var line = document.createElement("span");
+    var age = publishedAge();
+    if (state === "offline") line.textContent = say(SAY.offline);
+    else if (state === "rejected") line.textContent = say(SAY.rejected);
+    else if (state === "holding") line.textContent = say(SAY.holding);
+    else line.textContent = age === null ? say(SAY.offline) : say(SAY.asof, { age: ageWords(age) });
+    strip.appendChild(line);
+
+    var bound = document.createElement("span");
+    bound.style.opacity = ".72";
+    bound.textContent = say(SAY.bound);
+    strip.appendChild(bound);
+
+    if (envelope && envelope.read && envelope.read.api_url) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.style.cssText = "margin-left:auto;font:inherit;cursor:pointer;border-radius:999px;" +
+        "border:1px solid currentColor;background:transparent;color:inherit;padding:.15rem .7rem";
+      btn.textContent = checking ? say(SAY.checking) : say(SAY.check);
+      btn.disabled = checking;
+      btn.addEventListener("click", function () { checkNow(btn); });
+      strip.appendChild(btn);
+    }
+    if (!answerTarget()) {
+      var gap = document.createElement("span");
+      gap.style.cssText = "flex-basis:100%;opacity:.85";
+      gap.textContent = say(SAY.answers_off);
+      strip.appendChild(gap);
+    }
+  }
+
+  /* ---- painting --------------------------------------------------------
+     The shipped renderer is re-run against a restored copy of the page as it
+     was parsed, so a repaint can never drift from first paint. */
+  function runBoard(payload) {
+    document.body.innerHTML = PRISTINE;
+    var slot = document.getElementById(SLOT_ID);
+    slot.textContent = JSON.stringify(payload);
+    try {
+      (new Function(BOARD_SRC))();
+    } catch (e) {
+      return false;
+    }
+    var stats = document.getElementById("bb-stats");
+    return !!(stats && stats.children.length > 0);
+  }
+
+  function undoRegistrations() {
+    cleanup.forEach(function (fn) { try { fn(); } catch (e) { /* gone already */ } });
+    cleanup = [];
+  }
+
+  function paint(payload) {
+    undoRegistrations();
+    if (!runBoard(payload)) return false;
+    current = payload;
+    installAnswerBridge();
+    paintStrip();
+    return true;
+  }
+
+  function repaint(nextEnvelope) {
+    if (touched()) { pending = nextEnvelope; state = "holding"; paintStrip(); return; }
+    var previous = { envelope: envelope, board: current };
+    envelope = nextEnvelope;
+    if (paint(nextEnvelope.board)) { state = "fresh"; paintStrip(); return; }
+    envelope = previous.envelope;
+    paint(previous.board);
+    state = "rejected";
+    paintStrip();
+  }
+
+  /* Anything he has typed or ticked and not yet handed over. The shipped
+     board keeps that in its own form controls, so this asks the page rather
+     than tracking a copy of his work. */
+  function touched() {
+    var inputs = document.querySelectorAll("#bb-call textarea, #bb-call input, #bb-charted input:checked");
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i];
+      if (el.type === "checkbox" || el.type === "radio") { if (el.checked) return true; }
+      else if (el.value && String(el.value).trim()) return true;
+    }
+    return false;
+  }
+
+  /* ---- reading ---------------------------------------------------------- */
+  function accept(text) {
+    var next;
+    try { next = JSON.parse(text); } catch (e) { return false; }
+    if (!next || next.schema !== "fm-board-store.v1" || !next.board) return false;
+    if (envelope && next.published_at === envelope.published_at) {
+      state = "fresh"; paintStrip(); return true;
+    }
+    repaint(next);
+    return true;
+  }
+
+  function readStore() {
+    if (!envelope || !envelope.read || !envelope.read.url) return;
+    fetch(envelope.read.url, { cache: "no-store", credentials: "omit" })
+      .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+      .then(function (text) { if (!accept(text)) { state = "rejected"; paintStrip(); } })
+      .catch(function () { state = "offline"; paintStrip(); });
+  }
+
+  /* One request per tap, never a poll: the unauthenticated budget is 60 an
+     hour for the whole address and a 304 spends one too. */
+  function checkNow(btn) {
+    if (checking) return;
+    checking = true;
+    if (btn) { btn.disabled = true; btn.textContent = say(SAY.checking); }
+    fetch(envelope.read.api_url, {
+      cache: "no-store", credentials: "omit",
+      headers: { Accept: "application/vnd.github.raw" }
+    }).then(function (r) {
+      if (r.status === 403 || r.status === 429) {
+        apiSpent = 1;
+        return Promise.reject("budget");
+      }
+      return r.ok ? r.text() : Promise.reject(r.status);
+    }).then(function (text) {
+      checking = false;
+      if (!accept(text)) { state = "rejected"; paintStrip(); }
+    }).catch(function (why) {
+      checking = false;
+      state = why === "budget" ? "stale" : "offline";
+      paintStrip();
+      if (why === "budget") {
+        var strip = document.getElementById(STRIP_ID);
+        if (strip) {
+          var s = document.createElement("span");
+          s.style.cssText = "flex-basis:100%;opacity:.9";
+          s.textContent = say(SAY.spent);
+          strip.appendChild(s);
+        }
+      }
+    });
+  }
+
+  /* ---- answers ----------------------------------------------------------
+     The shipped board hands every answer to window.lavish.queuePrompt. Here
+     that interface composes a prefilled GitHub issue and hands it to the
+     browser. GitHub authenticates the captain; nothing else is in the path. */
+  function answerTarget() {
+    if (!envelope || !envelope.answer) return null;
+    var a = envelope.answer;
+    if (a.kind !== "github-issue" || !a.repo || !/^[\w.-]+\/[\w.-]+$/.test(a.repo)) return null;
+    return a;
+  }
+
+  function issueUrl(data, text) {
+    var a = answerTarget();
+    var body = [
+      "The board sent this answer. The line under `answer` is what the fleet reads;",
+      "everything else is for you.",
+      "",
+      "```json",
+      JSON.stringify({
+        schema: "fm-board-answer.v1",
+        question: data.question,
+        selection: data.selection || "",
+        note: data.note || "",
+        close: data.close || ""
+      }),
+      "```",
+      "",
+      "> " + text
+    ].join("\n");
+    return "https://github.com/" + a.repo + "/issues/new" +
+      "?labels=" + encodeURIComponent(a.label || "fm-board-answer") +
+      "&title=" + encodeURIComponent("board answer: " + data.question) +
+      "&body=" + encodeURIComponent(body);
+  }
+
+  function installAnswerBridge() {
+    var target = answerTarget();
+    window.lavish = window.lavish || {};
+    window.lavish.queuePrompt = function (text, opts) {
+      var data = opts && opts.data;
+      if (!target || !data || data.schema !== "fm-bearings-answer.v1" || !data.question) return false;
+      var win = window.open(issueUrl(data, text), "_blank", "noopener");
+      /* A card is answered when the answer was actually handed over. A popup
+         blocker that swallowed the window must not leave a card ticked as
+         though the fleet heard it. */
+      if (!win) { window.location.href = issueUrl(data, text); }
+      return true;
+    };
+    var note = document.getElementById("bb-provenance");
+    if (note && target) {
+      var hint = document.createElement("span");
+      hint.style.cssText = "display:block;opacity:.7";
+      hint.textContent = say(SAY.answer_route);
+      note.parentNode.appendChild(hint);
+      cleanup.push(function () { if (hint.parentNode) hint.parentNode.removeChild(hint); });
+    }
+  }
+
+  /* ---- start ------------------------------------------------------------ */
+  try {
+    envelope = JSON.parse(document.getElementById(SLOT_ID).textContent);
+  } catch (e) { envelope = null; }
+
+  if (!envelope || envelope.schema !== "fm-board-store.v1" || !envelope.board) {
+    document.body.innerHTML = PRISTINE;
+    var slot = document.getElementById(SLOT_ID);
+    if (slot) slot.textContent = "{}";
+    try { (new Function(BOARD_SRC))(); } catch (e) { /* the board says so itself */ }
+    return;
+  }
+
+  state = "embedded";
+  paint(envelope.board);
+  readStore();
+  timer = setInterval(function () {
+    paintStrip();
+    readStore();
+  }, (envelope.read_lag_bound_secs || 300) * 1000);
+  window.addEventListener("focus", readStore);
+  window.addEventListener("beforeunload", function () { clearInterval(timer); });
+}());
+
+</script>
+</body>
+</html>
