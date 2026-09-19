@@ -239,11 +239,12 @@
 #   the intent cut, so it is left to the captain; bin/fm-review-diff.sh keeps
 #   its own narrowed fetch for the same reason. The refspec refusal therefore
 #   names that cause apart from an unreachable origin or an unresolvable
-#   default branch, names the clone, and prints the one command that widens the
-#   refspec so the operator fixes the clone once instead of per spawn: `remote
-#   set-branches --add` when no entry names the branch, and a `--replace-all`
-#   back to the standard wildcard when a negative entry excludes it, which no
-#   added positive entry can undo. It still refuses rather than fetching. When no origin
+#   default branch, names the clone, quotes that clone's own remote.origin.fetch
+#   beside the branch it does not cover, and prints one additive `remote
+#   set-branches --add` so the operator fixes the clone once instead of per
+#   spawn, without losing a narrowing they chose. It still refuses rather than
+#   fetching. The branch it names is the default branch this clone records; the
+#   rename caveat above is why it does not claim to be origin's. When no origin
 #   configuration is detected, spawn skips that remote freshness check and
 #   launches from the clean worktree's current HEAD. Relaunch reuses the
 #   recorded worktree without fetching or resetting its base. An unreachable
@@ -2878,25 +2879,13 @@ spawn_refspec_side_match() { # <refspec-side> <ref>
 # refspec matching the branch excludes it however many positives named it, and
 # a refspec landing it anywhere but refs/remotes/origin/<branch> leaves that
 # ref untouched, so neither counts as covered.
-# On a negative verdict this publishes which of those two shapes it saw in
-# SPAWN_REFSPEC_MISS ('excluded' or 'unnamed') and, for an exclusion, the
-# offending entry in SPAWN_REFSPEC_MISS_SPEC, because the two need different
-# remedies: a positive entry can simply be added beside the existing ones,
-# while a negative entry keeps excluding the branch however many positives name
-# it. Both are read only by this function's caller, immediately.
 spawn_worktree_fetch_covers_branch() { # <worktree> <branch>
   local worktree=$1 ref="refs/heads/$2" want="refs/remotes/origin/$2" spec src dst middle covered=
-  SPAWN_REFSPEC_MISS=unnamed
-  SPAWN_REFSPEC_MISS_SPEC=
   while IFS= read -r spec; do
     [ -n "$spec" ] || continue
     case $spec in
       '^'*)
-        if spawn_refspec_side_match "${spec#^}" "$ref" >/dev/null; then
-          SPAWN_REFSPEC_MISS=excluded
-          SPAWN_REFSPEC_MISS_SPEC=$spec
-          return 1
-        fi
+        spawn_refspec_side_match "${spec#^}" "$ref" >/dev/null && return 1
         continue
         ;;
     esac
@@ -2908,27 +2897,25 @@ spawn_worktree_fetch_covers_branch() { # <worktree> <branch>
     case $dst in *'*'*) dst="${dst%%'*'*}$middle${dst#*'*'}" ;; esac
     [ "$dst" = "$want" ] && covered=yes
   done < <(git -C "$worktree" config --get-all remote.origin.fetch 2>/dev/null)
-  if [ -n "$covered" ]; then
-    SPAWN_REFSPEC_MISS=
-    SPAWN_REFSPEC_MISS_SPEC=
-    return 0
-  fi
-  return 1
+  [ -n "$covered" ]
 }
 
 # The refusal for the one cause an operator can fix once and for all: this
-# clone's fetch refspec never names the default branch, so the single fetch
-# spawn makes cannot refresh it. Say that in those words - not as an origin,
-# network, or default-branch-resolution failure - and hand over the exact
-# command that widens the refspec, keyed to which shape the refspec has.
+# clone's fetch refspec never maps the default branch this clone records onto
+# the ref spawn resets from, so the single fetch spawn makes cannot refresh it.
+# Say that in those words - not as an origin, network, or
+# default-branch-resolution failure - and quote the clone's own refspec beside
+# the branch, so an operator whose entries exclude it some other way than by
+# omission reads that off the message instead of off a command that would not
+# help. The remedy only ever adds an entry: a clone narrowed on purpose keeps
+# its narrowing.
 spawn_report_refspec_cannot_refresh() { # <worktree> <branch> <target>
-  local worktree=$1 branch=$2 target=$3
-  if [ "${SPAWN_REFSPEC_MISS:-}" = excluded ]; then
-    echo "error: the clone behind pooled worktree '$worktree' does not fetch its default branch '$branch': remote.origin.fetch excludes it with '$SPAWN_REFSPEC_MISS_SPEC', so spawn's one fetch of origin left '$target' exactly as this slot last saw it. Origin is reachable and '$branch' is its default branch; only the refspec is the problem; refusing to launch from a potentially stale base" >&2
-    echo "fix the clone once by restoring the standard refspec (this drops every narrowing entry, the excluding one included): git -C '$worktree' config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'" >&2
-    return 0
-  fi
-  echo "error: the clone behind pooled worktree '$worktree' does not fetch its default branch '$branch': remote.origin.fetch never maps 'refs/heads/$branch' onto '$target' - the shape of a single-branch clone, or of a refspec narrowed by hand - so spawn's one fetch of origin left that ref exactly as this slot last saw it. Origin is reachable and '$branch' is its default branch; only the refspec is the problem; refusing to launch from a potentially stale base" >&2
+  local worktree=$1 branch=$2 target=$3 spec specs=
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    specs="${specs:+$specs, }'$spec'"
+  done < <(git -C "$worktree" config --get-all remote.origin.fetch 2>/dev/null)
+  echo "error: the clone behind pooled worktree '$worktree' does not fetch '$branch', the default branch this clone records: its remote.origin.fetch is ${specs:-unset}, which never maps 'refs/heads/$branch' onto '$target' - the shape of a single-branch clone, or of a refspec narrowed by hand - so spawn's one fetch of origin left that ref exactly as this slot last saw it. Origin is reachable and that fetch succeeded; only the refspec is the problem; refusing to launch from a potentially stale base" >&2
   echo "fix the clone once by widening the refspec: git -C '$worktree' remote set-branches --add origin '$branch'" >&2
 }
 
