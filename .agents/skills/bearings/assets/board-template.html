@@ -60,7 +60,13 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
-a { color: inherit; text-decoration: none; }
+/* No rule in this sheet targets `a` document-wide. A board-wide default with
+   an exception carved out for the drawings the board inlines fails twice: the
+   next exception re-opens it, and :not() carries its argument's specificity, so
+   the carve-out silently outranks the class rules that were meant to win. Every
+   link the board builds carries a class (see link()), so those classes own its
+   colour and decoration outright - and a drawing is left alone by there being
+   nothing to leave it alone from. */
 
 /* ---- fm-badge (enamel sign-pin), verbatim contract ---- */
 .fm-badge {
@@ -198,7 +204,7 @@ a { color: inherit; text-decoration: none; }
 .bb-ctx__k { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--text-faint); white-space: nowrap; }
 .bb-ctx__v { font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.4; min-width: 0; }
-.bb-decision__link { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ocean-600); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.bb-decision__link { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ocean-600); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .bb-decision__link:hover { text-decoration: underline; }
 /* One rhythm owner: the answer form is a flex column with the same 12px gap as
    the card pad, and the foot rides margin-top:auto so every Queue answer button
@@ -246,7 +252,7 @@ a { color: inherit; text-decoration: none; }
 .bb-row__sub { font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.3; margin-top: 1px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bb-row__id { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-faint); white-space: nowrap; }
-.bb-row__pr { font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 600; color: var(--ocean-600); white-space: nowrap; }
+.bb-row__pr { font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 600; color: var(--ocean-600); text-decoration: none; white-space: nowrap; }
 .bb-row__pr:hover { text-decoration: underline; }
 .bb-row__check { width: 26px; height: 26px; border-radius: var(--radius-sm); display: grid; place-items: center; flex: none;
   background: var(--status-online-soft); color: var(--status-online); border: 1.5px solid var(--sea-200); }
@@ -326,6 +332,68 @@ a { color: inherit; text-decoration: none; }
 .bb-chip:hover { border-color: var(--ocean-500); }
 .bb-chip--packet { color: var(--paper-000); background: var(--rust-500); border-color: var(--rust-600); }
 .bb-chip--packet:hover { background: var(--rust-600); }
+
+/* ---- the packet, opened inside the card ----
+   A tab strip whose first tab is the drawing that names every option, then one
+   tab per option carrying that option's own drawing, what it costs, and its
+   own choose button; below them the rest of the packet behind one collapsed
+   line. The captain decides here, on the board's own address, and closing a
+   tab loses nothing because there is no second page to close. */
+.bb-tabs { display: flex; flex-wrap: wrap; gap: 0; border-bottom: 1.5px solid var(--border-default); }
+.bb-tab {
+  font-family: var(--font-sans); font-size: var(--fs-xs); font-weight: 800; cursor: pointer;
+  background: transparent; color: var(--text-muted); border: 0; border-bottom: 2.5px solid transparent;
+  padding: 9px 13px; margin-bottom: -1.5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bb-tab:hover { color: var(--text-strong); }
+.bb-tab[aria-selected="true"] { color: var(--rust-600); border-bottom-color: var(--rust-500); }
+.bb-tab:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.bb-tab__dot { display: inline-block; width: 7px; height: 7px; border-radius: 999px; margin-right: 6px; vertical-align: 1px; }
+.bb-panel { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
+.bb-panel[hidden] { display: none; }
+.bb-fig { margin: 0; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--surface-card-warm); padding: 10px 12px; min-width: 0; overflow-x: auto; }
+/* The board styles the drawing's own box and never reaches inside it. The
+   figure contract puts content in there the board does not own - diagram-design
+   nests icon <svg> elements, and a descendant selector would give a 6x6 icon
+   the outer drawing's width and height and lay it over everything behind it.
+   Every rule that starts at .bb-fig therefore takes the direct child. */
+.bb-fig > svg { display: block; width: 100%; height: auto; max-width: 100%; }
+.bb-panel__note { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+.bb-panel__cost { margin: 0; font-size: var(--fs-sm); color: var(--text-body); }
+.bb-panel__rows { display: grid; gap: 4px; margin: 0; }
+.bb-panel__row { display: grid; grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr); gap: 8px; font-size: var(--fs-xs); }
+.bb-panel__k { color: var(--text-muted); }
+.bb-panel__v { color: var(--text-body); min-width: 0; }
+.bb-panel__v ul { margin: 0; padding-left: 1.1em; }
+.bb-panel__files { font-family: var(--mono, ui-monospace, monospace); word-break: break-all; }
+.bb-panel__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bb-panel__label { font-size: var(--fs-sm); font-weight: 800; color: var(--text-strong); min-width: 0; }
+/* The drawings bind the figure palette the packet draws against to the board's
+   own tokens, so a figure inherits this page instead of carrying its own. */
+.bb-fig > svg {
+  --fg: var(--text-strong); --muted: var(--text-muted); --soft: var(--text-faint);
+  --card: var(--surface-card); --card-2: var(--surface-card-warm); --bg: var(--bg-page);
+  --rule: var(--border-soft); --rule-strong: var(--border-default);
+  --accent: var(--rust-500); --accent-tint: var(--rust-050); --amber: var(--gold-500);
+  --seal: var(--rust-600); --ok: var(--sea-500); --link: var(--ocean-600);
+  --sans: var(--font-sans); --mono: var(--font-mono);
+}
+.bb-packet { border-top: 1px solid var(--border-soft); padding-top: 10px; }
+.bb-packet > summary { cursor: pointer; list-style: none; font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+.bb-packet > summary::-webkit-details-marker { display: none; }
+.bb-packet > summary::before { content: "\25B8 "; color: var(--rust-500); }
+.bb-packet[open] > summary::before { content: "\25BE "; }
+.bb-packet__body { font-size: var(--fs-sm); color: var(--text-body); min-width: 0; }
+.bb-packet__body .pk-part__h { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-muted); margin: 14px 0 5px; font-weight: 600; }
+.bb-packet__body li { margin-bottom: 4px; }
+.bb-packet__body code { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--paper-100);
+  border-radius: var(--radius-xs); padding: 1px 4px; }
+.bb-packet__body a { color: var(--ocean-600); text-decoration: underline; }
+.bb-packet__list { margin: 0 0 7px; padding-left: 18px; list-style: disc; }
+.bb-packet__link { margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -458,6 +526,10 @@ __FM_BEARINGS_BOARD_DATA__
       rev_yes: "reversible", rev_no: "cannot be undone", rev_partly: "partly reversible",
       k_decide: "decide", k_about: "about", k_nothing: "if nothing", k_why: "why", k_evidence: "evidence",
       packet: "open the packet", rec: "rec",
+      tab_diff: "Difference", choose: "Choose {x}",
+      tab_note: "Open a tab above to see exactly what that option changes.",
+      k_adds: "Adds", k_removes: "Removes", k_same: "Leaves alone", k_files: "Files it touches", k_buys: "What it buys",
+      packet_all: "The full packet",
       freeform: "or answer in your own words…", queue_answer: "Queue answer", queued: "queued",
       too_long: "Answer is too long to queue (512 bytes maximum).",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
@@ -491,6 +563,10 @@ __FM_BEARINGS_BOARD_DATA__
       rev_yes: "可回頭", rev_no: "回不去", rev_partly: "部分可回頭",
       k_decide: "決定什麼", k_about: "背景", k_nothing: "什麼都不做", k_why: "為什麼", k_evidence: "證據",
       packet: "打開 packet", rec: "建議",
+      tab_diff: "差在哪", choose: "選 {x}",
+      tab_note: "點上面的分頁，看那個選項到底改了什麼。",
+      k_adds: "新增", k_removes: "移除", k_same: "不動", k_files: "動到的檔案", k_buys: "換到什麼",
+      packet_all: "完整的決策說明",
       freeform: "或用你自己的話回答…", queue_answer: "送出回答", queued: "已排入",
       too_long: "回答太長，無法排入（上限 512 bytes）。",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
@@ -524,6 +600,10 @@ __FM_BEARINGS_BOARD_DATA__
       rev_yes: "可回头", rev_no: "回不去", rev_partly: "部分可回头",
       k_decide: "决定什么", k_about: "背景", k_nothing: "什么都不做", k_why: "为什么", k_evidence: "证据",
       packet: "打开 packet", rec: "建议",
+      tab_diff: "差在哪", choose: "选 {x}",
+      tab_note: "点上面的分页，看那个选项到底改了什么。",
+      k_adds: "新增", k_removes: "移除", k_same: "不动", k_files: "动到的文件", k_buys: "换到什么",
+      packet_all: "完整的决策说明",
       freeform: "或用你自己的话回答…", queue_answer: "提交回答", queued: "已排入",
       too_long: "回答太长，无法排入（上限 512 bytes）。",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
@@ -790,7 +870,155 @@ __FM_BEARINGS_BOARD_DATA__
       return badge("online", t("rev_yes"));
     }
 
-    data.captains_call.forEach(function (item) {
+    /* ---- the packet, opened inside the card ----------------------------
+       `packet` is what bin/fm-packet.sh card read out of data/<id>/packet.md:
+       the drawings, and the rest of the packet as data this file builds.
+       Nothing here opens a page or a session - the packet is already in the
+       payload, so closing a tab loses nothing. Every string in it is copy, so
+       the whole of it follows the captain's language like the rest of the
+       card; the rule and who writes those languages is bin/fm-packet.sh's. */
+    function packetOf(item) {
+      var pk = item.packet;
+      if (!pk || typeof pk !== "object" || !Array.isArray(pk.sections)) return null;
+      if (!Array.isArray(pk.figures)) return null;
+      return pk;
+    }
+    /* `reconcile` is the board's own injected choice - come back to this one -
+       so the packet never knew about it. Every question about what the packet
+       drew is asked of the options the packet actually carried. */
+    function packetOptions(options) {
+      return options.filter(function (o) { return o.value !== "reconcile"; });
+    }
+    /* A drawing that carries a data-node for every option IS the comparison;
+       nothing labels it, exactly as the packet's own figure contract has it. */
+    function comparisonFigure(pk, options) {
+      var values = packetOptions(options).map(function (o) { return o.value; });
+      for (var i = 0; i < pk.figures.length; i++) {
+        /* a drawing that names the option it illustrates is that option's own,
+           never the comparison - the packet says which it is rather than the
+           board inferring it from the identities the drawing happens to carry */
+        if (pk.figures[i].option) continue;
+        var nodes = pk.figures[i].nodes || [];
+        var covers = values.every(function (v) { return nodes.indexOf(v) >= 0; });
+        if (covers && values.length) return pk.figures[i];
+      }
+      return null;
+    }
+    /* The figure contract makes a drawing's ids unique inside ONE packet, which
+       is all a packet needs while it owns its own page. This board puts many
+       packets in one document, so that is a namespace this surface created and
+       this surface owes: two packets that both called a slug `cmp` would each
+       declare `cmp-arrow`, and the second card's arrows would resolve to the
+       first card's marker. Every id a drawing declares is therefore prefixed
+       per card as it is inlined, and every reference that points at one is
+       rewritten in the same pass - url(#...) in any attribute value, and an
+       href or xlink:href fragment. Only markup inside a tag is touched, so a
+       label that happens to read "id=" stays the words the worker wrote, and
+       nothing about the packet on disk or the figure contract changes. */
+    /* Which bytes are an attribute value is walked the way the HTML tokenizer
+       walks it, not matched as a shape - the same states bin/fm-packet.sh
+       scan_tags walks, for the same reason: a bare "<" ends a regex and does
+       not end an unquoted value, so a shape-matcher rewrites the wrong bytes.
+       A drawing only reaches here after `fm-packet.sh svg-check` accepted it,
+       and that check refuses anything it cannot tokenize, so the two readers
+       agree on every drawing that gets this far. */
+    var WHITESPACE = "\t\n\f\r ";
+    function isSpace(c) { return WHITESPACE.indexOf(c) >= 0; }
+    function nsValue(name, v, ns) {
+      var key = name.toLowerCase();
+      if (key === "id") v = ns + v;
+      else if ((key === "href" || key === "xlink:href") && v.charAt(0) === "#") {
+        v = "#" + ns + v.slice(1);
+      } else if (key === "aria-labelledby" || key === "aria-describedby") {
+        /* an IDREF list names ids with no "#", and diagram-design puts one on
+           every drawing over its own <title>/<desc> - miss it and the drawing
+           loses its accessible name the moment it is inlined */
+        v = v.split(/\s+/).map(function (id) { return id ? ns + id : id; }).join(" ");
+      }
+      return v.replace(/url\(\s*(['"]?)#([^)'"\s]*)\1\s*\)/gi, function (m, uq, target) {
+        return "url(" + uq + "#" + ns + target + uq + ")";
+      });
+    }
+    function namespaceIds(svg, ns) {
+      svg = String(svg);
+      var out = "", i = 0, n = svg.length;
+      while (i < n) {
+        var lt = svg.indexOf("<", i);
+        if (lt < 0) { out += svg.slice(i); break; }
+        out += svg.slice(i, lt + 1);
+        i = lt + 1;
+        if (svg.slice(i, i + 3) === "!--") {
+          var endc = svg.indexOf("-->", i + 3);
+          if (endc < 0) { out += svg.slice(i); break; }
+          out += svg.slice(i, endc + 3); i = endc + 3; continue;
+        }
+        if (svg.charAt(i) === "!" || svg.charAt(i) === "?") {
+          var endb = svg.indexOf(">", i);
+          if (endb < 0) { out += svg.slice(i); break; }
+          out += svg.slice(i, endb + 1); i = endb + 1; continue;
+        }
+        if (svg.charAt(i) === "/") { out += "/"; i += 1; }
+        if (i >= n || !/[A-Za-z]/.test(svg.charAt(i))) continue;
+        while (i < n && !isSpace(svg.charAt(i)) && svg.charAt(i) !== "/" && svg.charAt(i) !== ">") {
+          out += svg.charAt(i); i += 1;
+        }
+        var closed = false;
+        while (!closed && i < n) {
+          while (i < n && (isSpace(svg.charAt(i)) || svg.charAt(i) === "/")) {
+            out += svg.charAt(i); i += 1;
+          }
+          if (i >= n) break;
+          if (svg.charAt(i) === ">") { out += ">"; i += 1; closed = true; break; }
+          var astart = i;
+          while (i < n && !isSpace(svg.charAt(i)) && ">/=".indexOf(svg.charAt(i)) < 0) i += 1;
+          var name = svg.slice(astart, i);
+          out += name;
+          while (i < n && isSpace(svg.charAt(i))) { out += svg.charAt(i); i += 1; }
+          if (i >= n) break;
+          if (svg.charAt(i) !== "=") continue;
+          out += "="; i += 1;
+          while (i < n && isSpace(svg.charAt(i))) { out += svg.charAt(i); i += 1; }
+          if (i >= n) break;
+          var q = svg.charAt(i);
+          if (q === '"' || q === "'") {
+            var close = svg.indexOf(q, i + 1);
+            if (close < 0) { out += svg.slice(i); i = n; break; }
+            out += q + nsValue(name, svg.slice(i + 1, close), ns) + q;
+            i = close + 1;
+          } else {
+            var vstart = i;
+            while (i < n && !isSpace(svg.charAt(i)) && svg.charAt(i) !== ">") i += 1;
+            out += nsValue(name, svg.slice(vstart, i), ns);
+          }
+        }
+        if (!closed && i >= n) { out += svg.slice(Math.min(i, n)); break; }
+      }
+      return out;
+    }
+    /* A drawing is in the switching part of the card, so its own labels follow
+       the captain through the same three-language lookup every other string
+       here goes through - the figure contract puts all three on every <text>,
+       which is exactly what earns the drawing its place up here. */
+    function figureNode(fig, ns) {
+      var f = el("figure", "bb-fig");
+      if (fig.slug) f.setAttribute("data-figure", fig.slug);
+      f.innerHTML = namespaceIds(fig.svg, ns);
+      var labelled = f.querySelectorAll ? f.querySelectorAll("[data-en]") : [];
+      for (var i = 0; i < labelled.length; i++) {
+        var n = labelled[i];
+        if (!n.getAttribute) continue;
+        var v = n.getAttribute("data-" + lang);
+        if (!v && lang === "hans") v = n.getAttribute("data-hant");
+        if (!v) v = n.getAttribute("data-en");
+        if (v) n.textContent = v;
+      }
+      return f;
+    }
+    var DOTS = ["var(--sea-500)", "var(--gold-500)", "var(--ocean-500)", "var(--rust-500)", "var(--navy-300)"];
+
+    data.captains_call.forEach(function (item, cardIndex) {
+      /* unique to this card, and short enough to stay readable in the markup */
+      var figNs = "bb" + cardIndex + "-";
       var card = el("div", "fm-card fm-card--poster bb-decision");
       var pad = el("div", "bb-decision__pad");
 
@@ -822,35 +1050,150 @@ __FM_BEARINGS_BOARD_DATA__
 
       var form = document.createElement("form");
       form.setAttribute("data-lavish-question", item.key);
-      var opts = el("div", "bb-opts");
-      item.options.forEach(function (o) {
-        var lab = el("label", "bb-opt");
-        var input = document.createElement("input");
-        input.type = "radio"; input.name = "answer"; input.value = o.value;
-        lab.appendChild(input);
-        var body = el("span", "bb-opt__body");
-        body.appendChild(el("span", "bb-opt__label", pick(o.label)));
-        if (o.hint) body.appendChild(el("span", "bb-opt__hint", pick(o.hint)));
-        if (o.consequence) body.appendChild(el("span", "bb-opt__consequence", pick(o.consequence)));
-        lab.appendChild(body);
-        if (item.recommend_value && o.value === item.recommend_value) {
-          lab.appendChild(el("span", "bb-opt__rec", t("rec")));
+      var packet = packetOf(item);
+      /* Every answer goes through queueAnswer with the value it is answering
+         with, passed in. A choose button inside an option's own tab passes
+         that option's value - the same value the decision block defines, down
+         the same channel - and the form passes whatever the form itself holds,
+         so the tabs change where the captain reads, never what he answers, and
+         no answer can pick up a value some earlier click left lying around. */
+      if (packet) {
+        var compare = comparisonFigure(packet, item.options);
+        var claimed = [];
+        var tabs = el("div", "bb-tabs");
+        tabs.setAttribute("role", "tablist");
+        var panels = [];
+        function addTab(label, dot, panel) {
+          var b = el("button", "bb-tab");
+          b.type = "button";
+          b.setAttribute("role", "tab");
+          if (dot) {
+            var d = el("span", "bb-tab__dot");
+            d.setAttribute("style", "background:" + dot);
+            b.appendChild(d);
+            b.appendChild(el("span", "", label));
+          } else {
+            b.textContent = label;
+          }
+          tabs.appendChild(b);
+          panels.push({ btn: b, panel: panel });
+          return b;
         }
-        opts.appendChild(lab);
-      });
-      form.appendChild(opts);
-      if (item.recommend_value && item.recommend_why) {
-        var why = el("div", "bb-ctx");
-        why.appendChild(ctxRow(t("k_why"), pick(item.recommend_why), "rec"));
-        form.appendChild(why);
+        /* first tab: where the options differ */
+        var diff = el("div", "bb-panel");
+        if (compare) { diff.appendChild(figureNode(compare, figNs)); claimed.push(compare); }
+        packet.figures.forEach(function (fig) {
+          if (fig.option) return;
+          if (claimed.indexOf(fig) < 0) { diff.appendChild(figureNode(fig, figNs)); claimed.push(fig); }
+        });
+        diff.appendChild(el("p", "bb-panel__note", t("tab_note")));
+        addTab(t("tab_diff"), null, diff);
+        /* then one tab per option: what that option changes, and its button */
+        item.options.forEach(function (o, i) {
+          var panel = el("div", "bb-panel");
+          packet.figures.forEach(function (fig) {
+            if (fig === compare || claimed.indexOf(fig) >= 0) return;
+            if (fig.option !== o.value) return;
+            panel.appendChild(figureNode(fig, figNs)); claimed.push(fig);
+          });
+          var head = el("div", "bb-panel__head");
+          head.appendChild(el("span", "bb-panel__label", pick(o.label)));
+          if (item.recommend_value && o.value === item.recommend_value) {
+            head.appendChild(el("span", "bb-opt__rec", t("rec")));
+          }
+          panel.appendChild(head);
+          if (o.hint) panel.appendChild(el("p", "bb-panel__note", pick(o.hint)));
+          /* what this option actually changes: the three-way list, the files it
+             touches, and what it buys. Every one is optional, and a packet that
+             carries none of them renders the panel exactly as it did before. */
+          var rows = el("div", "bb-panel__rows");
+          function listRow(label, items, cls) {
+            if (!items || !items.length) return;
+            var r = el("div", "bb-panel__row");
+            r.appendChild(el("span", "bb-panel__k", label));
+            var v = el("span", "bb-panel__v" + (cls ? " " + cls : ""));
+            var ul = el("ul", "");
+            items.forEach(function (it) { ul.appendChild(el("li", "", pick(it))); });
+            v.appendChild(ul); r.appendChild(v); rows.appendChild(r);
+          }
+          var ch = o.changes || {};
+          listRow(t("k_adds"), ch.added);
+          listRow(t("k_removes"), ch.removed);
+          listRow(t("k_same"), ch.unchanged);
+          listRow(t("k_files"), o.files, "bb-panel__files");
+          if (o.buys) {
+            var br = el("div", "bb-panel__row");
+            br.appendChild(el("span", "bb-panel__k", t("k_buys")));
+            br.appendChild(el("span", "bb-panel__v", pick(o.buys)));
+            rows.appendChild(br);
+          }
+          if (rows.children.length) panel.appendChild(rows);
+          if (o.consequence) panel.appendChild(el("p", "bb-panel__cost", pick(o.consequence)));
+          if (item.recommend_why && o.value === item.recommend_value) {
+            var why2 = el("div", "bb-ctx");
+            why2.appendChild(ctxRow(t("k_why"), pick(item.recommend_why), "rec"));
+            panel.appendChild(why2);
+          }
+          var choose = el("button", "fm-btn fm-btn--sm " +
+            (o.value === item.recommend_value ? "fm-btn--primary" : "fm-btn--gold"),
+            t("choose", { x: pick(o.label) }));
+          /* never a submit button: the first submit button in a form is the one
+             the browser presses when the captain hits Enter in the free-form
+             field, and that must stay the foot button, which answers in his
+             own words rather than choosing an option for him */
+          choose.type = "button";
+          choose.addEventListener("click", function () { queueAnswer(o.value); });
+          panel.appendChild(choose);
+          addTab(pick(o.label), DOTS[i % DOTS.length], panel);
+        });
+        form.appendChild(tabs);
+        panels.forEach(function (x, i) {
+          x.panel.hidden = i !== 0;
+          x.btn.setAttribute("aria-selected", i === 0 ? "true" : "false");
+          x.btn.addEventListener("click", function () {
+            panels.forEach(function (y, j) {
+              y.panel.hidden = j !== i;
+              y.btn.setAttribute("aria-selected", j === i ? "true" : "false");
+            });
+          });
+          form.appendChild(x.panel);
+        });
+      } else {
+        var opts = el("div", "bb-opts");
+        item.options.forEach(function (o) {
+          var lab = el("label", "bb-opt");
+          var input = document.createElement("input");
+          input.type = "radio"; input.name = "answer"; input.value = o.value;
+          lab.appendChild(input);
+          var body = el("span", "bb-opt__body");
+          body.appendChild(el("span", "bb-opt__label", pick(o.label)));
+          if (o.hint) body.appendChild(el("span", "bb-opt__hint", pick(o.hint)));
+          if (o.consequence) body.appendChild(el("span", "bb-opt__consequence", pick(o.consequence)));
+          lab.appendChild(body);
+          if (item.recommend_value && o.value === item.recommend_value) {
+            lab.appendChild(el("span", "bb-opt__rec", t("rec")));
+          }
+          opts.appendChild(lab);
+        });
+        form.appendChild(opts);
+        if (item.recommend_value && item.recommend_why) {
+          var why = el("div", "bb-ctx");
+          why.appendChild(ctxRow(t("k_why"), pick(item.recommend_why), "rec"));
+          form.appendChild(why);
+        }
       }
 
       var hasEvidence = Array.isArray(item.evidence) && item.evidence.length;
-      if (hasEvidence || item.packet_url) {
+      /* The link to a separately served packet page is offered only while the
+         packet is NOT in the card. Once it is here there is no second address
+         worth sending the captain to, and sending him to one is the thing he
+         asked us to stop doing. */
+      var offerPage = item.packet_url && !packet;
+      if (hasEvidence || offerPage) {
         var ev = el("div", "bb-evidence");
         ev.appendChild(el("span", "bb-ctx__k", t("k_evidence")));
         var chips = el("span", "bb-evidence__chips");
-        if (item.packet_url) {
+        if (offerPage) {
           chips.appendChild(link("bb-chip bb-chip--packet", t("packet"), item.packet_url));
         }
         (item.evidence || []).forEach(function (e) {
@@ -858,6 +1201,36 @@ __FM_BEARINGS_BOARD_DATA__
         });
         ev.appendChild(chips);
         form.appendChild(ev);
+      }
+      /* The rest of the packet, behind one collapsed line. It arrives as data,
+         never as markup: a heading and its items, built here with the same
+         el()/textContent path every other payload string takes, so nothing a
+         worker writes into a packet can restyle or re-script the surface the
+         captain answers on. Every string in it is copy, so the whole block
+         follows the captain like the rest of the card - the packet carries the
+         three languages because the worker who wrote the words wrote them. */
+      if (packet && packet.sections.length) {
+        var more = el("details", "bb-packet");
+        more.appendChild(el("summary", "", t("packet_all")));
+        var bodyBox = el("div", "bb-packet__body");
+        bodyBox.setAttribute("lang", lang === "en" ? "en" : (lang === "hans" ? "zh-Hans" : "zh-Hant"));
+        packet.sections.forEach(function (s) {
+          bodyBox.appendChild(el("h4", "pk-part__h", pick(s.heading)));
+          var ul = el("ul", "bb-packet__list");
+          (s.items || []).forEach(function (it) {
+            var li = el("li", "");
+            var words = pick(it.text);
+            if (it.code) li.appendChild(el("code", "", words));
+            else if (words) li.appendChild(el("span", "", words));
+            (it.links || []).forEach(function (l) {
+              li.appendChild(link("bb-packet__link", pick(l.label), l.url));
+            });
+            ul.appendChild(li);
+          });
+          bodyBox.appendChild(ul);
+        });
+        more.appendChild(bodyBox);
+        form.appendChild(more);
       }
 
       if (item.allow_freeform) {
@@ -881,10 +1254,12 @@ __FM_BEARINGS_BOARD_DATA__
 
       form.addEventListener("submit", function (ev2) {
         ev2.preventDefault();
+        queueAnswer(new FormData(form).get("answer"));
+      });
+
+      function queueAnswer(value) {
         answerLimit.className = "bb-limit";
-        var fd = new FormData(form);
-        var value = fd.get("answer");
-        var note = (fd.get("note") || "").trim();
+        var note = (new FormData(form).get("note") || "").trim();
         var displayAnswer = value ? (note ? value + " - " + note : value) : note;
         if (!displayAnswer) return;
         if (utf8ByteLength(displayAnswer) > 512) {
@@ -915,7 +1290,7 @@ __FM_BEARINGS_BOARD_DATA__
         card.classList.add("is-queued");
         /* deal the next card once this one is answered */
         setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, 450);
-      });
+      }
 
       if (queuedKeys[item.key]) card.classList.add("is-queued");
       pad.appendChild(form);

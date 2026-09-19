@@ -429,6 +429,72 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   assert_grep "Read the primary source before writing a check" "$brief" \
     "no-mistakes DOD lost the primary-source practice"
 
+  # The firstmate-side rule fires on a party that is not reading at the moment it
+  # matters, so the round threshold has to reach the worker holding the round
+  # number: without these the instruction arrives and nothing in the contract
+  # lets the worker refuse it.
+  assert_grep "From the third fix round on one step, " "$brief" \
+    "no-mistakes DOD lost the round threshold the worker enforces"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`ask-user-authority` requires firstmate to stop naming a narrow remedy' "$brief" \
+    "no-mistakes DOD must cross-reference the owner of the firstmate-side rule, not restate it"
+  assert_grep "Refuse an instruction that still names a narrow remedy: append " "$brief" \
+    "no-mistakes DOD lost the third-round refusal clause"
+  # Firstmate counts the round it is about to open; a worker counting rounds
+  # already spent fires one round later and the two deadlock a round apart.
+  # There is no machine source for the number, so the basis has to be legible
+  # from the brief alone.
+  assert_grep "the round it opens, counted the way step 4 of that skill counts it" "$brief" \
+    "no-mistakes DOD must fix the threshold on the arriving round, as its owner counts it"
+  assert_grep "where {n} is that arriving round number" "$brief" \
+    "no-mistakes DOD must leave the round number in the blocked line unambiguous"
+  # A refusal held quietly is the deadlock the refusal was supposed to prevent:
+  # firstmate reads status events, so the refusal has to surface as one, in the
+  # vocabulary the brief already defines.
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`blocked: fix round {n} on this step, instruction still names a narrow remedy`' "$brief" \
+    "no-mistakes DOD must raise the refusal as a status event firstmate can see"
+  # Without a way out the refusal never terminates, and the coherent change the
+  # refusal itself asked for is that way out.
+  assert_grep "One answer ends that refusal: the coherent-change instruction you asked for" "$brief" \
+    "no-mistakes DOD must leave the coherent-change instruction answerable at the gate"
+  assert_grep "A resend that still names a narrow remedy is not one, and the refusal stands" "$brief" \
+    "no-mistakes DOD must exclude a resent narrow remedy from the termination"
+  # A second exit that a narrow remedy can satisfy by declaring itself
+  # deliberate is a bypass, not a termination: the seventeen-round branch
+  # behaves identically under it.
+  assert_no_grep "states the narrow remedy is deliberate" "$brief" \
+    "no-mistakes DOD must not let an acknowledged narrow remedy end the refusal"
+  # The rule has two halves and the worker needs a lever for both. A declarative
+  # about what the response "carries" gives it nothing to do, so the second half
+  # is an imperative with an explicit permission to append the ask - otherwise a
+  # coherent-change instruction that omits it sails through the refusal test.
+  assert_grep "Ask the reviewer for the pass conditions in the same response you do answer that gate with" "$brief" \
+    "no-mistakes DOD lost the pass-conditions clause"
+  # The worker composes the ask, so it must be able to do that without opening
+  # another file - the same reason the refusal test is stated inline.
+  assert_grep "everything still wanted, stated as conditions to satisfy in one pass rather than as one more repair" "$brief" \
+    "no-mistakes DOD must state what the pass-conditions ask contains, not point at it"
+  # Most gates carry no ask-user finding at all and the worker writes its own
+  # --instructions, so hanging the ask on a firstmate decision arriving misses
+  # the majority path. The round is the trigger, not the finding class.
+  assert_grep "That ask rides with every response you send from this round on, whoever authored the instruction it accompanies" "$brief" \
+    "no-mistakes DOD must fire the pass-conditions ask on the round, not on a firstmate decision"
+  # The ask-user bullet forbids implementing the decision, which reads as
+  # forbidding additions, so the permission has to be squared with it in words.
+  assert_grep "where adding it is the one addition that is not implementing the decision" "$brief" \
+    "no-mistakes DOD must square the append permission with the feed-the-decision bullet"
+  assert_grep "Nothing carries that ask to the reviewer and returns a reply, so never wait for one" "$brief" \
+    "no-mistakes DOD must tell the worker no reviewer reply ever comes back"
+
+  # The ask-user bullet is read from round 1 and the threshold clause sits
+  # paragraphs below it, so the bullet has to carry its own exception or a
+  # worker feeds a round-3 narrow remedy straight to the gate.
+  assert_grep "From the third fix round on one step the round-threshold clause below narrows this" "$brief" \
+    "no-mistakes DOD must narrow the feed-the-decision bullet where the reader meets it"
+  assert_grep "goes back to firstmate instead of to the gate, and that clause is where the one answer you may give the gate instead is stated, along with the one thing you append to the decision you do send" "$brief" \
+    "no-mistakes DOD must not leave the feed-the-decision bullet contradicting the termination clause"
+
   # Every practice a worker could read as a worktree edit has to carry its own
   # mid-run half, because the no-hand-edit rule sits paragraphs away from these
   # bullets and a worker who reads only the bullet must not reach an edit.
@@ -466,6 +532,8 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     assert_present "$other_brief" "$other_mode: brief was not scaffolded"
     assert_no_grep "One site is a class" "$other_brief" \
       "$other_mode brief must not carry the no-mistakes fix-round technique"
+    assert_no_grep "From the third fix round on one step" "$other_brief" \
+      "$other_mode brief must not carry the third-round refusal, which has no rounds to count"
   done
   pass "fm-brief.sh: no-mistakes DOD carries the fix-round technique and the faster paths do not"
 }

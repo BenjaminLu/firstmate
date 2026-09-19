@@ -103,10 +103,10 @@
 #            including a packet copy object whose own en or hant is blank - so
 #            a blank title degrades that row instead of refusing the whole
 #            skeleton, and a gate's `filed` is normalized to null unless it
-#            matches the accepted date shapes, and a pr_url or packet_url is
-#            emitted only when it satisfies the same link rule the validator
-#            applies, so one hand-written `since` word or one malformed link
-#            cannot refuse the board either. A held task's title,
+#            matches the accepted date shapes, and a pr_url is emitted only
+#            when it satisfies the same link rule the validator applies, so one
+#            hand-written `since` word or one malformed link cannot refuse the
+#            board either. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close.
@@ -271,6 +271,25 @@
 # to its proof. `detail` is rendered for a MERGE card only, so a decision card
 # is composed without it. Links must be https, or http on 127.0.0.1/localhost for a page
 # served by lavish-axi.
+#
+# THE PACKET RIDES THE CARD. A decision card MAY also carry `packet`, the whole
+# decision packet as `bin/fm-packet.sh card` reads it:
+#   {figures: [{slug, svg, nodes, option}],
+#    sections: [{heading, items: [{text, code?, links?}]}]}
+# The template opens it in place - a tab strip whose first tab is the drawing
+# that names every option, one tab per option after it, and the rest of the
+# packet behind one collapsed line - so the captain decides on the board's own
+# address instead of on a second page a closed tab loses. `fm-packet.sh serve`
+# stays the one explicit way to put a packet on its own address; nothing here
+# calls it, and no second session is ever established for a card.
+# The packet's prose rides as DATA, so it reaches the page through the same
+# el()/textContent path as every other payload string and can no more style or
+# script the captain's surface than a title can. The drawings cannot: an svg is
+# inlined as markup because that is what a drawing is, so every one of them is
+# run through `bin/fm-packet.sh svg-check` - the figure contract's own
+# implementation, never a second copy - before the board is built. `card` wrote
+# those drawings, but the composing agent edits this file afterwards, so the
+# payload is checked rather than trusted.
 #
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
@@ -438,6 +457,56 @@ fail() {
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
+# The board INLINES a packet's drawings into the captain's page, beside the
+# answer channel, so the bytes it inlines are held to the figure contract that
+# governs a drawing anywhere. The check is not restated here: it is
+# `bin/fm-packet.sh svg-check`, the one implementation, run over the payload
+# THIS script was handed - `fm-packet.sh card` wrote those drawings, but the
+# composing agent edits that file afterwards, so verify's word about the packet
+# on disk is not a word about the drawing in this payload.
+# The decode flag is spelled --decode on GNU and -D on BSD, so both are tried -
+# the same two-spelling fallback bin/fm-remote-home-provision.sh already needs.
+# Without it a board carrying any drawing refuses to build on half the
+# platforms, blaming the drawing for a flag.
+decode_drawing() {  # <base64> <destination>
+  printf '%s' "$1" | base64 --decode > "$2" 2>/dev/null && return 0
+  printf '%s' "$1" | base64 -D > "$2" 2>/dev/null && return 0
+  return 1
+}
+
+validate_packet_drawings() {  # <data.json> ; names every refusal on stderr
+  local rows key encoded slug tmp problems status=0
+  # Every field but the LAST must be one that cannot be empty: tab is an IFS
+  # whitespace character, so bash collapses a run of tabs and drops the empty
+  # field between them - a figure with no slug would otherwise shift its own
+  # drawing out of the variable the loop checks and be inlined unread.
+  rows=$(jq -r '.captains_call[]? | select(has("packet"))
+    | .key as $k | .packet.figures[]? | [$k, (.svg | @base64), (.slug // "")] | @tsv' "$1") \
+    || return 1
+  # A board with no drawing on it needs nothing to check it: this script is a
+  # jq script, and a home whose cards carry no figures must not need python3.
+  [ -n "$rows" ] || return 0
+  command -v python3 >/dev/null 2>&1 \
+    || { printf 'fm-bearings-board: python3 is required to check a packet drawing\n' >&2; return 1; }
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-figure.XXXXXX") || return 1
+  while IFS=$'\t' read -r key encoded slug; do
+    [ -n "$key" ] || continue
+    if ! decode_drawing "$encoded" "$tmp"; then
+      printf 'fm-bearings-board: card %s: a packet drawing could not be read\n' "$key" >&2
+      status=1; continue
+    fi
+    if ! problems=$("$SCRIPT_DIR/fm-packet.sh" svg-check "$tmp" "$slug" 2>&1); then
+      printf '%s\n' "$problems" \
+        | sed "s|^|fm-bearings-board: card $key: drawing ${slug:-(unnamed)}: |" >&2
+      status=1
+    fi
+  done <<EOF
+$rows
+EOF
+  rm -f -- "$tmp"
+  return "$status"
+}
+
 validate_payload() {  # <data.json>
   jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     def copy_or_empty: (type == "string") or i18n;
@@ -463,6 +532,117 @@ validate_payload() {  # <data.json>
       and optional_null_string("active_for")
       and optional_null_string("last_activity")
       and optional_null_string("activity");
+    def optional_https_url($name): (has($name) | not) or (.[$name] | https_url);
+    def optional_link_url($name): (has($name) | not) or (.[$name] | link_url);
+    def version: type == "string" and test("^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$");
+    def optional_subject:
+      (has("subject") | not)
+      or (.subject
+        | type == "object"
+          and (keys | sort) == ["artifact", "version"]
+          and (.artifact | slug(128))
+          and (.version | version));
+    def evidence_item: type == "object" and (.label | copy) and (.url | link_url);
+    # The packet the card opens in place (bin/fm-packet.sh card). The template
+    # consumes every field here, so every field is typed here: a drawing that
+    # is not a drawing, or a section that is not a section, refuses the board
+    # rather than reaching the captain as a blank panel.
+    #
+    # A figure `option` says which option tab that drawing opens in, and the
+    # template renders it in the tab whose value matches EXACTLY - and in no
+    # tab at all otherwise. So a drawing that names an option this card does
+    # not offer refuses the board here, rather than going missing from the one
+    # surface the captain decides on.
+    def figure_item($values):
+      type == "object"
+      # The same shape the packet requires, because a slug that is absent here
+      # is a slug the drawing check would skip its id-namespace clause over -
+      # absence passing for a passed check, at the one boundary whose reason
+      # for existing is that this file is edited after the packet wrote it.
+      and (.slug | type == "string" and test("^[a-z0-9][a-z0-9-]*$"))
+      and (.svg | type == "string" and test("^[[:space:]]*<svg\\b"))
+      and (.nodes | type == "array") and ([.nodes[] | type == "string"] | all)
+      and ((has("option") | not) or (.option == "")
+           or ((.option | type == "string")
+               and (.option as $o | $values | index($o) != null)));
+    # The prose of a packet reaches the page through el()/textContent like
+    # every other string in this payload, so it is DATA here rather than
+    # markup: one heading and its items, each item a line and the links it
+    # named. Nothing in a packet can style or script the surface it is read on.
+    def packet_link: type == "object" and (.label | copy) and (.url | link_url);
+    def packet_item:
+      type == "object"
+      and ((has("text") | not) or (.text | copy))
+      and ((has("code") | not) or (.code | type == "boolean"))
+      and ((has("links") | not)
+           or ((.links | type == "array") and ([.links[] | packet_link] | all)))
+      and (has("text") or has("links"));
+    def packet_section:
+      type == "object"
+      and (.heading | copy)
+      and (.items | type == "array") and ([.items[] | packet_item] | all);
+    def optional_packet($values):
+      (has("packet") | not)
+      or (.packet
+        | type == "object"
+          and (.sections | type == "array")
+          and ([.sections[] | packet_section] | all)
+          and (.figures | type == "array")
+          and ([.figures[] | figure_item($values)] | all)
+          # and unique within the card, for the same reason the packet makes
+          # them unique within itself: two drawings sharing a slug share an id
+          # namespace once the board inlines them side by side
+          and ([.figures[].slug] | length == (unique | length)));
+    def call_item:
+      type == "object"
+      and (.key | slug(128))
+      and (.type == "decision" or .type == "merge" or .type == "credential")
+      and repo_marker
+      and (.title | copy)
+      and (.options | type == "array")
+      and ((.options | length) > 0 or .allow_freeform == true)
+      and ([.options[]
+        | type == "object"
+          and (.value | slug(128))
+          and (.label | copy)
+          and optional_copy("hint")
+          and optional_copy("consequence")
+          and optional_copy("buys")
+          and ((has("files") | not)
+               or ((.files | type == "array") and ([.files[] | type == "string"] | all)))
+          and ((has("changes") | not)
+               or ((.changes | type == "object")
+                   and ([.changes | to_entries[]
+                         | (.key == "added" or .key == "removed" or .key == "unchanged")
+                           and (.value | type == "array")
+                           and ([.value[] | copy] | all)] | all)))] | all)
+      and (optional_copy("about"))
+      and (optional_copy("decide"))
+      and (optional_copy("detail"))
+      and (optional_copy("if_nothing"))
+      and (optional_copy("recommend_why"))
+      and (optional_copy("reversible_note"))
+      and ((has("reversible") | not) or (.reversible | placeholder)
+        or (.reversible == "yes" or .reversible == "no" or .reversible == "partly"))
+      and (if .type == "merge" then true
+        else ((has("risk") | not) or (.risk | placeholder)
+          or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
+      and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
+      and (optional_link_url("packet_url"))
+      and ([.options[].value] as $values | optional_packet($values))
+      and (optional_https_url("pr_url"))
+      and optional_subject
+      and (if has("subject") then .type == "decision" else true end)
+      and (optional_copy("freeform_hint"))
+      and ((has("close") | not) or (.close == "done" or .close == "release"))
+      and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
+      and ((has("recommend_value") | not)
+        or (.recommend_value | placeholder)
+        or ((.recommend_value | slug(128))
+          and (.recommend_value as $recommend
+            | ([.options[].value] | index($recommend) != null))))
+      and ([.options[].value] | index("reconcile") == null)
+      and (if .type == "merge" then (.risk | nonempty_string) else true end);
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
       and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string)
@@ -500,7 +680,8 @@ validate_payload() {  # <data.json>
     and ([.underway[] | underway_item] | all)
     and ([.landed[] | landed_item] | all)
     and ([.charted[] | charted_item] | all)
-  ' "$1" >/dev/null
+  ' "$1" >/dev/null || return 1
+  validate_packet_drawings "$1"
 }
 
 # --- Lavish session liveness -------------------------------------------------
@@ -991,7 +1172,11 @@ EOF
          options: [$card.options[] | . as $o
            | .label |= i18n($o.value)
            | if $o.consequence == null then del(.consequence)
-             else .consequence |= i18n($o.value) end]}
+             else .consequence |= i18n($o.value) end
+           | if has("buys") then .buys |= i18n($o.value) else . end
+           | if has("changes")
+             then .changes |= with_entries(.value |= [.[] | i18n($o.value)])
+             else . end]}
       + (if $card.decide != null then {decide: ($card.decide | i18n($card.key))} else {} end)
       + (if $card.if_nothing != null then {if_nothing: ($card.if_nothing | i18n($card.key))} else {} end)
       + (if $card.about != null then {about: ($card.about | i18n($card.key))}

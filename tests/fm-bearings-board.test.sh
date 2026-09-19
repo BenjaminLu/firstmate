@@ -983,15 +983,27 @@ make_compose_home() {  # <name> [decision-json] -> a board home whose backlog an
   python3 - "$packet" "$decision" <<'PY2'
 import sys, re, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
-s = re.sub(r"\{FILL: every path you tried.*?\}", "- tried a flag; dropped it\n- the bound is unverified\n- the order assumes one region", s, flags=re.S)
-s = re.sub(r"\{FILL: file:line.*?\}", "- bin/example.sh:1 the change", s, flags=re.S)
+said = "\n".join("- en: %s\n- hant: %s\n- hans: %s" % t for t in (
+    ("tried a flag; dropped it", "試過一個旗標，後來放棄", "试过一个旗标，后来放弃"),
+    ("the bound is unverified", "上限沒有驗證過", "上限没有验证过"),
+    ("the order assumes one region", "這個順序假設只有一個區域", "这个顺序假设只有一个区域")))
+s = re.sub(r"- en: \{FILL: every path you tried.*?- hans: \{FILL[^}]*\}", lambda m: said, s, flags=re.S)
+evidence = ("- en: the change is at the top of the forge loop\n"
+            "- hant: 改動在 forge 迴圈的最前面\n"
+            "- hans: 改动在 forge 循环的最前面\n"
+            "- `bin/example.sh:1`")
+s = re.sub(r"- en: \{FILL: file:line.*?- hans: \{FILL[^}]*\}", lambda m: evidence, s, flags=re.S)
 s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
 s = re.sub(r"```json fm-packet-decision.v1\n.*?\n```", "```json fm-packet-decision.v1\n" + sys.argv[2] + "\n```", s, flags=re.S)
 # A needs-decision packet owes one figure putting both options in one drawing;
-# the board only carries the packet's link, but the packet must still verify.
+# the board card carries the packet itself, and only a packet that verifies.
 figure = """### Where the two rollout orders differ
+heading.hant: 兩種上線順序差在哪
+heading.hans: 两种上线顺序差在哪
 figure: roll
 caption: Both orders reach the same release; only the first hour differs.
+caption.hant: 兩種順序最後都上線，只有第一個小時不同。
+caption.hans: 两种顺序最后都上线，只有第一个小时不同。
 
 <svg role="img" viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
   <defs><marker id="roll-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="var(--muted)"/></marker></defs>
@@ -1491,6 +1503,35 @@ test_compose_degrades_a_packet_copy_object_with_a_blank_member() {
   pass "compose degrades a packet copy object whose translation is blank"
 }
 
+# What an option CHANGES is inside the tab strip the captain was shown, so it is
+# captain-facing copy like the label beside it. A panel whose label switches
+# while "what it buys" stands still in English is the half-switched surface the
+# standing rule forbids, so compose owes those fields a translation slot too.
+test_compose_asks_for_a_translation_of_what_an_option_changes() {
+  local home skeleton decision
+  decision=$(printf '%s' "$COMPOSE_DECISION" | jq -c '
+    .options[0] += {
+      buys: "One behaviour to reason about.",
+      files: ["bin/example.sh"],
+      changes: {added: ["a merged-record rule"], removed: ["the stdout probe"],
+                unchanged: [{en: "the answer channel", hant: "answer 通道"}]}}')
+  home=$(make_compose_home compose-option-detail "$decision")
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a packet whose option says what it changes"
+  jq -e '.captains_call[0].options[0]
+    | .buys == {en: "One behaviour to reason about.", hant: "{TRANSLATE: One behaviour to reason about.}"}
+    and .changes.added == [{en: "a merged-record rule", hant: "{TRANSLATE: a merged-record rule}"}]
+    and .changes.removed == [{en: "the stdout probe", hant: "{TRANSLATE: the stdout probe}"}]
+    # one the worker already translated is left alone
+    and .changes.unchanged == [{en: "the answer channel", hant: "answer 通道"}]
+    # the files it touches are paths, and a path is the same path in every language
+    and .files == ["bin/example.sh"]
+  ' "$skeleton" >/dev/null \
+    || fail "what the option changes got no translation slot: $(cat "$skeleton")"
+  pass "compose asks for a translation of what an option buys and changes"
+}
+
 test_compose_never_dispatches_a_charted_row_under_a_rewritten_id() {
   local home skeleton long
   home=$(make_compose_home compose-charted-id)
@@ -1736,6 +1777,7 @@ test_compose_refuses_to_card_a_merge_two_prs_claim
 test_compose_drops_a_link_the_payload_contract_refuses
 test_compose_warns_instead_of_carding_a_hold_it_cannot_key
 test_compose_degrades_a_packet_copy_object_with_a_blank_member
+test_compose_asks_for_a_translation_of_what_an_option_changes
 test_compose_never_dispatches_a_charted_row_under_a_rewritten_id
 test_compose_cards_a_merge_only_for_a_pr_this_backlog_claims
 test_compose_suppresses_merge_cards_and_warns_when_the_backlog_is_unreadable
