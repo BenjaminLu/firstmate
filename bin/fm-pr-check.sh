@@ -5,7 +5,14 @@
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
 # including a merge request on a self-hosted GitLab instance.
-# Usage: fm-pr-check.sh <task-id> <pr-url>
+# Usage: fm-pr-check.sh <task-id> <pr-url> [--arm-only]
+# Arming the merge poll and announcing the PR as ready are separate acts.
+# The default does both, which is correct once the task's own ready signal
+# has been seen. --arm-only records and arms WITHOUT publishing the child's
+# PR-ready line to a parent channel, so the poll can be armed the moment a PR
+# URL exists - its pr step opening one, or a listing showing one - without
+# telling a parent home that work is ready while its checks are still red or
+# unrun. Both forms are idempotent and may be re-run for the same task.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +27,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 
-if [ "$#" -ne 2 ]; then
+ARM_ONLY=0
+if [ "$#" -eq 3 ]; then
+  [ "$3" = "--arm-only" ] || { echo "error: invalid PR check request" >&2; exit 2; }
+  ARM_ONLY=1
+elif [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
   exit 2
 fi
@@ -157,6 +168,15 @@ if command -v jq >/dev/null 2>&1; then
 else
   printf 'contributions: jq unavailable; coverage is unconfirmed\n' >&2
 fi
+# --arm-only stops here: the poll is armed and the canonical PR data recorded,
+# but nothing is announced. Arming early is safe; announcing early is not,
+# because the ready line below states the work IS ready, which is not yet true
+# when the poll is armed the moment a PR URL appears.
+if [ "$ARM_ONLY" -eq 1 ]; then
+  printf 'armed: state/%s.check.sh\n' "$ID"
+  exit 0
+fi
+
 # In a secondmate home the registration itself is a captain-facing fact:
 # publish the child's PR-ready line with the canonical URL just recorded, so it
 # reaches the parent whether or not the mate model appends anything

@@ -41,6 +41,18 @@ Hard rules, in priority order:
 5. **Report outcomes faithfully.**
    If work failed, say so plainly with the evidence.
 
+**Self-contained and working out of the box is the governing principle for every addition to this workflow.**
+Hold each change to one test: a clone of this repository, on a machine configured with nothing, gets the working behavior.
+Anything that works only because of a file on one machine, a tool installed by hand, a value someone knew to set, or a step someone remembered to run fails that test.
+Where something genuinely cannot be self-contained, the system says so loudly at the moment it matters rather than degrading quietly.
+Two consequences decide real arguments: a default that is wrong for everyone but convenient for one home is the wrong default, and a check that cannot verify something reports that rather than passing by silence.
+**Vendor-agnostic is the other half of it, and the captain names it this system's biggest value.**
+The workflow runs without any one vendor's agent: a clone on a machine running a different coding agent, or none, gets the working behavior.
+A native primitive is an optional acceleration behind an adapter, while the file-based contract stays the source of truth and the mandatory fallback.
+Where a part genuinely cannot be vendor-neutral, it says so where it is described and says what a clone without that vendor gets instead; a stated gap is workable, a hidden one makes the whole claim false.
+The remote board's store and its answer path are reachable only from a first-party Claude session, so that surface is never described as vendor-neutral.
+`firstmate-coding-guidelines` owns how to hold a change to shared tracked material to both tests.
+
 You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
@@ -172,7 +184,8 @@ Run-tier harness surfaces run this command for you at session open while the res
 Read the complete digest once and trust it as this turn's startup and recovery input.
 If the harness shows only a preview and persists the full output to a file, read that file before acting.
 Do not separately re-read the context, backlog, metadata, or bulk status inputs it just printed unless a source was reported absent or corrupt, older history is specifically needed, or a targeted workflow must inspect before writing.
-An `ABSENT` captain, shared-captain, secondmate, or learnings file means the firstmate repo's built-in defaults, no shared captain preferences, no registered secondmates, or no captured learnings; rebuild an absent or stale project registry from the clones before dispatch.
+An `ABSENT` captain, shared-captain, secondmate, or learnings file means this home has recorded no preferences of its own, no shared captain preferences, no registered secondmates, or no captured learnings; the tracked contract - this file and the skills it names - is the whole operating behavior in that case, so nothing further is owed.
+Rebuild an absent or stale project registry from the clones before dispatch.
 
 If the session lock cannot be acquired and verified, report its exact diagnostic and remain read-only; another active session is only one possible cause.
 A lock-refused session must not spawn, steer, merge, drain the wake queue, repair supervision, repair a checkout, or perform any other fleet mutation.
@@ -201,12 +214,12 @@ When that section reports its checks still in progress it names exactly what is 
 6. **Network checks** - after the fleet-state digest, the deferred stage's result, or an explicit statement of what it has not confirmed yet.
    A read-only session runs no network checks at all and says so.
 7. **Context digest and next step** - last of the bulk sections, the full contents of `data/projects.md`, `data/secondmates.md`, `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, each clearly delimited, followed by the closing reminder.
-   A file that does not exist prints an explicit `ABSENT` marker, never confused with an empty-but-present file: absence is meaningful (`captain.md` absent means use the firstmate repo's built-in defaults, `projects.md` absent means rebuild it from the clones under `projects/`, etc.).
+   A file that does not exist prints an explicit `ABSENT` marker, never confused with an empty-but-present file: absence is meaningful (`captain.md` absent means no home-recorded preferences, leaving the tracked contract as the whole behavior, `projects.md` absent means rebuild it from the clones under `projects/`, etc.).
    The closing reminder points back to the emitted supervision block and preserves only the lock, afk, Relay, and read-once reminders.
 
 Bootstrap detects first, asks for consent, and installs only after the captain approves in the current session.
 Do not dispatch until the essential launch tools are present and GitHub authentication is good; presentation availability follows `bootstrap-diagnostics` and does not block nonvisual work.
-Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for visual decisions or reports; consult current help rather than memorizing flags.
+Use `gh-axi` for GitHub, `chrome-devtools-axi` for browser work, and compatible `lavish-axi` for the captain's one board that the `bearings` skill owns; consult current help rather than memorizing flags.
 A silent bootstrap section needs no action; for any printed actionable diagnostic line, load `bootstrap-diagnostics` and follow its owner procedure.
 `BOOTSTRAP_INFO:` lines are completed no-action facts and do not require loading a skill.
 `secondmate-provisioning` owns startup secondmate sync, liveness, and inherited local-material convergence.
@@ -311,6 +324,12 @@ Never both present a likely-enough solution and launch a parallel design exercis
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
 
+When an ask has more than one reading and those readings produce different work, reach consensus with the captain before briefing anything rather than filing your own guess, asking the sharp questions that separate the readings.
+Do not dispatch work that changes how a captain-facing surface is rendered - its design, layout, or presentation, such as the board, a card, a packet page, or a rendered report page - until the captain has approved a prototype of it, built from the shipped surface rather than drawn as a fresh mock; hold the task for the captain through `bin/fm-captain-hold.sh` with a reason naming the surface it awaits a prototype for, never merely queued, then carry the approved prototype into the brief as the contract the worker builds to.
+`bearings` owns how to build that prototype from the shipped surface.
+Publishing ordinary content through a surface is unaffected: writing a scout's report, filing a backlog note, or relaying an outcome needs no prototype.
+During an away window the gate stalls by design, because nobody may approve a prototype in the captain's place; the recorded hold is what makes that stall a named item in the return brief instead of a silent queue.
+
 Resolve every ship task's concrete delivery mode and `yolo` merge posture at intake.
 Pass the mode explicitly to the brief, and pass both values explicitly to the spawn and any scout promotion; each command refuses to guess the values it consumes.
 A current explicit captain instruction wins; otherwise the project's registry entry is the captain's standing posture, and dropping below its rigor needs a reason you can state.
@@ -395,7 +414,10 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 ### PR ready, landing, and teardown
 
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
-Run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from that ready signal - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
+Run `bin/fm-pr-check.sh <id> <PR url> --arm-only` as soon as a PR URL exists for a live task - the worker's pr step opening one, or a listing that shows one - rather than waiting for the worker to finish: it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll without announcing the work as ready.
+Run the same command without `--arm-only` once the task's own ready signal has arrived, which additionally publishes the child's PR-ready line to a parent channel.
+Both forms are idempotent, and arming is not a one-time cost: the armed poll runs on every `*.check.sh` sweep for as long as it stays armed, so arming at the PR rather than at the ready signal buys forge polls across the whole validation phase.
+Spend that deliberately, because a merge that lands before the ready signal is otherwise watched by nothing.
 Tell the captain the PR's full `https://...` URL copied from the worker's ready line or the task's `pr=` metadata, a concise outcome summary, and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
@@ -414,7 +436,7 @@ Retire one only on an explicit captain or main-firstmate decision, after loading
 A completed scout must leave a self-contained report before its scratch worktree can be discarded; read and relay its findings, record the report as the Done artifact, and re-evaluate the queue.
 A report may recommend implementation but does not authorize it.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.
-When a scout's deliverable is a visual artifact the captain will iterate on, prefer keeping that scout alive to host its own Lavish loop rather than tearing it down and mediating from firstmate, so the scout keeps its investigation context and the captain iterates in one continuous session.
+When a scout's deliverable is a visual artifact the captain will iterate on, prefer keeping that scout alive to host its own review loop rather than tearing it down and mediating from firstmate, so the scout keeps its investigation context and the captain iterates in one continuous session; `bearings` owns that bounded exception to the one-surface rule and what must not live only in that session.
 When implementation is separately authorized, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.
 The promoted worker must inventory scratch state, return to a clean default-branch base, carry over only intended fix changes, create the ship branch, and follow the project's selected delivery path while leaving scratch commits and debug edits behind and turning a reproduced bug into the regression test.
 
@@ -527,7 +549,7 @@ Reply exactly `Captain, shipshape.` only for a true no-op that still needs an an
 For a captain-requested completion, or any wake that needs the captain's review, approval, merge, or design pick, give a captain-facing outcome that states what finished and never reply `Captain, shipshape.`; a finished requested deliverable is an outcome rather than progress or a no-op, and a transcript entry or durable record already showing the substance does not discharge the reply.
 Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 Batch non-urgent updates into the next natural reply.
-Use plain chat for a yes-or-no decision and `lavish-axi` only when several options or a structured report benefit from a visual surface.
+Use plain chat for a yes-or-no decision, and render anything that needs a visual surface - a packet, a report, a multi-option decision - inside its card on the captain's one board rather than handing over a second place to look; the `bearings` skill owns how.
 Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 Mention cost as a courtesy when unusually much work is running, but never block on it.
 

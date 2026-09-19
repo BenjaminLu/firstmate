@@ -118,6 +118,34 @@ five_question_payload() {  # <lang>
     }]}'
 }
 
+# The routed captain-facing surface rule states that 简体 is optional and that
+# the board shows the 繁體 text where it is absent. That fallback is what keeps
+# an optional-hans board from rendering an empty cell to a captain reading 简体,
+# so it is pinned here rather than left as template behavior nobody reading the
+# rule would know about.
+test_hans_absent_falls_back_to_hant_not_empty() {
+  local home payload out
+  home=$(make_home hans-fallback)
+  # A captain reading 简体, and copy that carries en + hant but no hans.
+  payload=$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"hans", captains_call:[], underway:[], landed:[],
+    charted:[{id:"q1", repo:"sample",
+              title:{en:"Queued work", hant:"排隊中的工作"},
+              reason:{en:"waits on the cutover", hant:"等切換完成"},
+              dispatchable:true}],
+    charted_more:0, charted_warning_more:0}')
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the row: $out"
+  # The 繁體 string, not empty and not the English.
+  printf '%s' "$out" | jq -e '
+    (.charted[0].title == "排隊中的工作")
+      and (.charted[0].sub | test("等切換完成"))
+  ' >/dev/null || fail "a missing hans did not fall back to hant: $out"
+  pass "board render: a captain-facing string with no 简体 falls back to 繁體 rather than rendering empty"
+}
+
 test_a_decision_card_answers_the_five_questions_in_english_by_default() {
   local home out
   home=$(make_home five-en)
@@ -967,3 +995,4 @@ test_a_card_with_no_packet_renders_exactly_as_it_did
 test_an_option_panel_carries_what_it_changes_touches_and_buys
 test_the_fuller_option_panel_follows_the_captains_language
 test_a_free_form_answer_never_counts_as_choosing_an_option
+test_hans_absent_falls_back_to_hant_not_empty

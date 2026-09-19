@@ -521,7 +521,7 @@ fi
 
 if [ "$KIND" = scout ]; then
 if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
-  LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, you may host the Lavish review loop yourself (poll, revise, re-serve, staying alive) instead of handing it back to firstmate.'
+  LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, you may host the Lavish review loop yourself (poll, revise, re-serve, staying alive) instead of handing it back to firstmate. Every string the captain reads on that artifact carries all three of EN / 繁體 / 简体, like every other captain-facing visual surface.'
 else
   LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
 fi
@@ -535,13 +535,21 @@ $HERDR_SECTION
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 This is a SCOUT task: the deliverable is a written report, not a PR.
-The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
+The worktree is your laboratory - install this project's own dependencies into it, run, edit, and make scratch commits freely; all of it is discarded at teardown, but rule 2 below still bounds what you may change outside it.
 The report is the only thing that survives, so anything worth keeping must be in it.
 
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+   Installing this project's own dependencies is part of investigating it, and a shared
+   package cache or store outside the worktree is expected: do that freely.
+   What is out is changing the MACHINE - a system package (Homebrew, apt, a global
+   npm or pip install, and the like): do not, even to unblock yourself.
+   If the task genuinely needs one, report it and stop.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   Name the repository explicitly on every PR or issue lookup (\`--repo <owner>/<name>\`):
+   numbers collide between a fork and its upstream, so an unqualified lookup can resolve
+   against the wrong repository and answer confidently about someone else's work.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -628,7 +636,15 @@ If the top-level path is the primary checkout or not the worktree you were launc
 # Rules
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
+   Installing this project's own dependencies is part of building and testing it,
+   and a shared package cache or store outside the worktree is expected: do that freely.
+   What is out is changing the MACHINE - a system package (Homebrew, apt, a global
+   npm or pip install, and the like): do not, even to unblock yourself.
+   If the task genuinely needs one, report it and stop.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   Name the repository explicitly on every PR or issue lookup (\`--repo <owner>/<name>\`):
+   numbers collide between a fork and its upstream, so an unqualified lookup can resolve
+   against the wrong repository and answer confidently about someone else's work.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
