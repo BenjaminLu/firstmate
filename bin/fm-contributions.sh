@@ -413,7 +413,7 @@ settle_final() { # canonical-url task... : copy the URL's final observation to e
       jq -n --slurpfile final "$TMP/final.json" '
         $final[0] + {error:null,cut_at:null,pending:[],notified:[]}' > "$TMP/row.json"
       write_record "$task" "$TMP/row.json"
-    elif jq -e '.error != null' "$TMP/old.json" >/dev/null; then
+    elif jq -e '.error != null or .cut_at != null' "$TMP/old.json" >/dev/null; then
       jq '.error = null | .cut_at = null' "$TMP/old.json" > "$TMP/row.json"
       write_record "$task" "$TMP/row.json"
     fi
