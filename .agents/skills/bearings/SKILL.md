@@ -159,6 +159,17 @@ A board "Merge now" answer IS the captain's explicit merge word for that one exa
 The safeguards are mandatory, not optional: resolve the PR from the task's own `state/<task-id>.meta` `pr=` record, never from board bytes; re-verify at wake time that the PR is still open and CI-green; refuse and report a red or changed PR rather than merging it; record the exact `merge` answer through `bin/fm-captain-hold.sh answer <task-id> --decision-file <file> --release` before invoking the merge; proceed only when that release succeeds; merge only through `bin/fm-pr-merge.sh`; and echo every merge in chat with the full PR URL.
 Only the exact answer value `merge` authorizes a merge; an answer carrying a freeform note is the captain's instruction text to read and act on with judgment, never an auto-merge.
 
+## Captain-facing surface rules
+
+These hold for every surface the captain reads or acts on - the board, a card, a packet page, a report - not only for a `/bearings` invocation.
+
+- The board is the captain's one surface, so render a packet, report, or decision inside its card rather than sending them somewhere else to look.
+  `bin/fm-packet.sh card` composes that card and `serve` gives the packet page its own stable, reopenable URL that the card carries as `packet_url`.
+  Never hand the captain a one-shot session URL whose content is lost when the tab closes; reopening the same URL must bring the content back.
+- Build a captain-facing prototype from the shipped surface, never as a fresh mock.
+  `AGENTS.md` section 7 owns the gate that holds a task queued until the prototype is approved; what belongs here is how to build one: copy the shipped template and a live payload, apply the proposed change to that copy, and show that.
+  A hand-drawn mock cannot tell the captain whether the direction is right, because they cannot recognize it as the surface they actually use - which is the whole reason the gate exists.
+
 ## Chat-response contract
 
 This skill is the one owner of the `/bearings` chat-response format; the snapshot and classifier own the data that feeds it, and no other file restates this contract.

@@ -535,13 +535,19 @@ $HERDR_SECTION
 # Setup
 You are in a disposable git worktree of $REPO, at a detached HEAD on a clean default branch.
 This is a SCOUT task: the deliverable is a written report, not a PR.
-The worktree is your laboratory - install, run, edit, and make scratch commits freely; all of it is discarded at teardown.
+The worktree is your laboratory - install this project's own dependencies into it, run, edit, and make scratch commits freely; all of it is discarded at teardown, but rule 2 below still bounds what you may change outside it.
 The report is the only thing that survives, so anything worth keeping must be in it.
 
 # Rules
 1. Never push to any remote and never open a PR.
 2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+   Installing a system package (Homebrew, apt, a global npm or pip install, and the like)
+   changes the machine outside your worktree: do not, even to unblock yourself.
+   If the task genuinely needs one, report it and stop.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   Name the repository explicitly on every PR or issue lookup (\`--repo <owner>/<name>\`):
+   numbers collide between a fork and its upstream, so an unqualified lookup can resolve
+   against the wrong repository and answer confidently about someone else's work.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
@@ -628,7 +634,13 @@ If the top-level path is the primary checkout or not the worktree you were launc
 # Rules
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
+   Installing a system package (Homebrew, apt, a global npm or pip install, and the like)
+   changes the machine outside your worktree: do not, even to unblock yourself.
+   If the task genuinely needs one, report it and stop.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+   Name the repository explicitly on every PR or issue lookup (\`--repo <owner>/<name>\`):
+   numbers collide between a fork and its upstream, so an unqualified lookup can resolve
+   against the wrong repository and answer confidently about someone else's work.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.

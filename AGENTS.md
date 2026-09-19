@@ -41,6 +41,13 @@ Hard rules, in priority order:
 5. **Report outcomes faithfully.**
    If work failed, say so plainly with the evidence.
 
+**Self-contained and working out of the box is the governing principle for every addition to this workflow.**
+Hold each change to one test: a clone of this repository, on a machine configured with nothing, gets the working behavior.
+Anything that works only because of a file on one machine, a tool installed by hand, a value someone knew to set, or a step someone remembered to run fails that test.
+Where something genuinely cannot be self-contained, the system says so loudly at the moment it matters rather than degrading quietly.
+Two consequences decide real arguments: a default that is wrong for everyone but convenient for one home is the wrong default, and a check that cannot verify something reports that rather than passing by silence.
+`firstmate-coding-guidelines` owns how to hold a change to shared tracked material to this test.
+
 You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
@@ -170,7 +177,8 @@ Run-tier harness surfaces run this command for you at session open while the res
 Read the complete digest once and trust it as this turn's startup and recovery input.
 If the harness shows only a preview and persists the full output to a file, read that file before acting.
 Do not separately re-read the context, backlog, metadata, or bulk status inputs it just printed unless a source was reported absent or corrupt, older history is specifically needed, or a targeted workflow must inspect before writing.
-An `ABSENT` captain, shared-captain, secondmate, or learnings file means the firstmate repo's built-in defaults, no shared captain preferences, no registered secondmates, or no captured learnings; rebuild an absent or stale project registry from the clones before dispatch.
+An `ABSENT` captain, shared-captain, secondmate, or learnings file means this home has recorded no preferences of its own, no shared captain preferences, no registered secondmates, or no captured learnings; the tracked contract - this file and the skills it names - is the whole operating behavior in that case, so nothing further is owed.
+Rebuild an absent or stale project registry from the clones before dispatch.
 
 If the session lock cannot be acquired and verified, report its exact diagnostic and remain read-only; another active session is only one possible cause.
 A lock-refused session must not spawn, steer, merge, drain the wake queue, repair supervision, repair a checkout, or perform any other fleet mutation.
@@ -199,7 +207,7 @@ When that section reports its checks still in progress it names exactly what is 
 6. **Network checks** - after the fleet-state digest, the deferred stage's result, or an explicit statement of what it has not confirmed yet.
    A read-only session runs no network checks at all and says so.
 7. **Context digest and next step** - last of the bulk sections, the full contents of `data/projects.md`, `data/secondmates.md`, `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, each clearly delimited, followed by the closing reminder.
-   A file that does not exist prints an explicit `ABSENT` marker, never confused with an empty-but-present file: absence is meaningful (`captain.md` absent means use the firstmate repo's built-in defaults, `projects.md` absent means rebuild it from the clones under `projects/`, etc.).
+   A file that does not exist prints an explicit `ABSENT` marker, never confused with an empty-but-present file: absence is meaningful (`captain.md` absent means no home-recorded preferences, leaving the tracked contract as the whole behavior, `projects.md` absent means rebuild it from the clones under `projects/`, etc.).
    The closing reminder points back to the emitted supervision block and preserves only the lock, afk, Relay, and read-once reminders.
 
 Bootstrap detects first, asks for consent, and installs only after the captain approves in the current session.
@@ -309,6 +317,11 @@ Never both present a likely-enough solution and launch a parallel design exercis
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
 
+When an ask has more than one reading and those readings produce different work, reach consensus with the captain before briefing anything rather than filing your own guess; ask the sharp questions that separate the readings, and use the `grilling` skill for that when it is installed.
+Do not dispatch work that changes a captain-facing visual surface - the board, a card, a packet page, a report - until the captain has approved a prototype of it, built from the shipped surface rather than drawn as a fresh mock; hold the task queued until they approve or redirect it, then carry the approved prototype into the brief as the contract the worker builds to.
+`bearings` owns how to build that prototype from the shipped surface.
+Work with no captain-facing surface is unaffected by that gate.
+
 Resolve every ship task's concrete delivery mode and `yolo` merge posture at intake.
 Pass the mode explicitly to the brief, and pass both values explicitly to the spawn and any scout promotion; each command refuses to guess the values it consumes.
 A current explicit captain instruction wins; otherwise the project's registry entry is the captain's standing posture, and dropping below its rigor needs a reason you can state.
@@ -393,7 +406,8 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 ### PR ready, landing, and teardown
 
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
-Run `bin/fm-pr-check.sh <id> <PR url>` with the URL copied from that ready signal - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
+Run `bin/fm-pr-check.sh <id> <PR url>` as soon as a PR URL exists for a live task - the ready signal, the worker's pr step opening one, or a listing that shows one - rather than waiting for the worker to finish: it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
+It is idempotent, so arming early costs one slow check, while a merge that lands before the ready signal is otherwise watched by nothing.
 Tell the captain the PR's full `https://...` URL copied from the worker's ready line or the task's `pr=` metadata, a concise outcome summary, and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.

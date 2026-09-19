@@ -61,6 +61,11 @@ Only positive socket refusal or absence is a daemon-down finding; escalate that 
 
 ## Live-endpoint escalation
 
+A silent pane is not evidence on its own.
+A worker blocked inside a synchronous `no-mistakes axi run` or `axi respond` call prints nothing for as long as that call takes, so the watcher escalates it as a possible wedge while it is working normally.
+The run's own `active_steps` settles that in one read: a moving `last_activity`, with an `agent_pid` while a fix round runs and none while a ci monitor waits, means working rather than stuck.
+Start the ladder below only when `last_activity` itself stops moving.
+
 Escalate in order:
 
 1. Peek the pane, and check the task's steering inbox (`state/<id>.inbox/`) for unhandled `*.msg` records - a stale wake naming an unread firstmate instruction means the worker never acknowledged a durable steer, and the record itself shows exactly what was intended.

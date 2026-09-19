@@ -15,6 +15,18 @@ Load this before changing firstmate's shared, tracked material, as defined by `A
 It exists because `AGENTS.md` grew from 585 to 958 lines between its last two restructures, entirely from conditional detail added inline instead of routed to its right home.
 Applying the rules below on every change is what keeps that from happening again.
 
+## Self-contained by default
+
+`AGENTS.md` section 1 states the principle; this section is how a change to tracked material is held to it.
+
+Before calling a change done, answer it for a clone on a machine configured with nothing: does that clone get this behavior?
+Trace every input the change reads - a config file, an environment variable, an installed tool, a path outside the repository, a credential - and say for each whether a clone has it and what happens when it does not.
+An input a clone lacks is either given a shipped default that is right for every home, or detected and reported by name at the moment it is needed.
+Silent degradation is the defect the principle exists to catch: a feature that quietly does less, a check that quietly passes because it could not run, or a posture that quietly differs from the one the documents describe.
+A default that is wrong for everyone but convenient for one home is the wrong default; ship the one that is right for a clone and let a home that wants otherwise configure it.
+Never write a promise the tracked tree does not keep - a document that names a built-in default, template, or fallback must point at something a clone actually has, and the cheapest way to check is to grep for it.
+Knowledge the fleet operates by belongs in tracked material by the decision tree below, never left in a gitignored file where only one machine can read it; a rule that lives only in a private file does not ship, which is the same failure one level up.
+
 ## Knowledge-placement decision tree
 
 Before writing a new fact anywhere in this repo, ask where it belongs, in this order.
@@ -77,6 +89,9 @@ Firstmate adds this skill's load instruction to firstmate-repo briefs by hand in
 
 Before changing shared tracked behavior, review every affected supported primary harness and runtime backend rather than checking only the adapters active in the current fleet.
 Mark an axis not applicable only after inspecting its integration surface, and update the corresponding verification evidence when behavior changes.
+
+Vendor-agnostic is the value of this harness, so preserve it.
+Any use of a harness- or backend-native primitive is an optional acceleration behind an adapter, while the file-based contract - the steering inbox with its `mv handled/` acknowledgement, the append-only status log, and the durable wake queue - stays the source of truth and the mandatory fallback, so every verified harness and backend keeps working.
 
 For critical safety, routing, startup, and supervision infrastructure, prefer deterministic and idempotent enforcement over relying on agent memory alone.
 Keep instructions as the authority and discovery layer, but make repeated execution converge safely and make invalid or unsafe states fail closed wherever the runtime can enforce them.
