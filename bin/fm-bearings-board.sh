@@ -121,7 +121,12 @@
 #            packet, the card is seeded from `bin/fm-packet.sh card <id>`.
 #            A call with neither - one whose stored card a re-hold retired, one
 #            that never had one - still needs copy written once, and gets
-#            placeholders for it. Every captain-facing copy field is emitted
+#            placeholders for it. A card that gets placeholders carries the
+#            task's recorded pull request as `evidence` links - the pull
+#            request, its checks, its commits, and its review comments - so a
+#            card with no packet behind it hands the captain the repository
+#            rather than an empty panel; a task with no recorded PR emits no
+#            evidence at all. Every captain-facing copy field is emitted
 #            as {"en": <english>, "hant": "{TRANSLATE: <english>}"} so hant
 #            (and optionally hans) is filled without re-typing the English;
 #            the fixed merge choices carry their known translations. A card's
@@ -344,6 +349,10 @@ REFRESH_LOG_MAX_BYTES=${FM_BEARINGS_REFRESH_LOG_MAX_BYTES:-65536}
 case "$REFRESH_LOG_MAX_BYTES" in ''|*[!0-9]*|0) REFRESH_LOG_MAX_BYTES=65536 ;; esac
 REFRESH_TIMEOUT=${FM_BEARINGS_REFRESH_TIMEOUT:-90}
 case "$REFRESH_TIMEOUT" in ''|*[!0-9]*|0) REFRESH_TIMEOUT=90 ;; esac
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
 
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
@@ -1004,6 +1013,37 @@ task_progress() {  # <task-id>
        refreshed: .generated}' 2>/dev/null | head -1
 }
 
+# The task's pull request as board `evidence` links, or [] when no PR is
+# recorded. A decision card with no packet behind it still owes the captain
+# something to decide against, and the ground truth is the pull request itself:
+# the PR, its checks, its commits, and its review comments. The URL is the
+# canonical one `bin/fm-pr-check.sh` validated into the task's meta, re-parsed
+# here through its own owner so the forge - and therefore which tab is which -
+# is read rather than assumed.
+pr_evidence() {  # <task-id>
+  local url self checks checks_tab comments_tab
+  url=$(fm_meta_get "$STATE/$1.meta" pr)
+  if [ -z "$url" ] || ! fm_pr_url_parse "$url"; then printf '[]\n'; return 0; fi
+  if [ "$FM_PR_PROVIDER" = gitlab ]; then
+    self='{"en":"merge request","hant":"這個 MR","hans":"这个 MR"}'
+    checks='{"en":"pipelines","hant":"流水線","hans":"流水线"}'
+    checks_tab=pipelines
+    comments_tab=diffs
+  else
+    self='{"en":"pull request","hant":"這個 PR","hans":"这个 PR"}'
+    checks='{"en":"checks","hant":"檢查","hans":"检查"}'
+    checks_tab=checks
+    comments_tab=files
+  fi
+  jq -nc --arg url "$FM_PR_URL" --argjson self "$self" --argjson checks "$checks" \
+    --arg checks_tab "$checks_tab" --arg comments_tab "$comments_tab" '
+    [{label: $self, url: $url},
+     {label: $checks, url: ($url + "/" + $checks_tab)},
+     {label: {en: "commits", hant: "提交", hans: "提交"}, url: ($url + "/commits")},
+     {label: {en: "review comments", hant: "review 意見", hans: "review 意见"},
+      url: ($url + "/" + $comments_tab)}]' 2>/dev/null || printf '[]\n'
+}
+
 list_placeholders() {  # <data.json> -> "<path>: <value>" lines
   jq -r --arg re "$PLACEHOLDER_RE" '
     . as $doc
@@ -1027,7 +1067,7 @@ command_compose_check() {  # <data.json>
 }
 
 command_compose() {
-  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
+  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' links='{}' id record card link ids tmp readable=true
   local deterministic=false progress='{}' row merge_cards
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1069,6 +1109,8 @@ EOF
     [ -n "$id" ] || continue
     card=$(packet_card "$id")
     cards=$(jq -n --argjson acc "$cards" --arg id "$id" --argjson card "$card" '$acc + {($id): $card}')
+    link=$(pr_evidence "$id")
+    links=$(jq -n --argjson acc "$links" --arg id "$id" --argjson link "$link" '$acc + {($id): $link}')
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
@@ -1101,7 +1143,7 @@ EOF
     || fail "cannot read the stored merge cards under $DATA"
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
-    --argjson records "$records" --argjson cards "$cards" \
+    --argjson records "$records" --argjson cards "$cards" --argjson links "$links" \
     --argjson merge_cards "$merge_cards" \
     --argjson progress "$progress" --argjson deterministic "$deterministic" \
     --argjson readable "$readable" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
@@ -1159,6 +1201,7 @@ EOF
        recommend_why: fill("recommend_why"),
        recommend_value: recommend_slot(["option-a", "option-b"]),
        reversible: reversible_slot, risk: risk_slot, allow_freeform: true}
+      + (($links[.id] // []) | if length == 0 then {} else {evidence: .} end)
       + hold_close;
     # i18n($fallback) fills an ABSENT field with its fallback, which is right
     # for a field the card carries in one language and wrong for one it does

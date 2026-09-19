@@ -293,20 +293,6 @@ fm_ask_user_escalation_block() {  # <data-dir> <task-id>
 EOF
 }
 
-# fm_dod_packet_block <task-id>: the decision-packet contract every ship brief
-# carries, rendered once here so the three delivery modes cannot drift.
-# bin/fm-packet.sh owns the packet format and the verify rules.
-fm_dod_packet_block() {  # <task-id>
-  local id=$1
-  cat <<EOF
-Before the \`done:\` line, and before any \`needs-decision:\` line, leave the decision packet: run \`$FM_ROOT/bin/fm-packet.sh scaffold $id\` (add \`--kind needs-decision\` when you are asking for a decision), fill every \`{FILL}\` placeholder in the packet it writes - above all "What only this session knows": every path you tried and dropped and why, every assumption you could not verify - then run \`$FM_ROOT/bin/fm-packet.sh verify $id\` and fix what it reports until it prints \`packet: ok\`.
-The captain reads EN / 繁體 / 简体, and the board opens your whole packet inside his decision card, so every prose line of every section - "What only this session knows", "Evidence", "How to pull more" - is written in all three as \`- en:\`, \`- hant:\` and \`- hans:\` lines, three consecutive lines written the same way, one item. A line that is only a command, a path or an identifier is exempt and says so by being a fenced block or one \`backticked\` span alone on its line, because translating a command would break it. A figure's heading and caption owe all three too, through \`heading.hant:\`, \`heading.hans:\`, \`caption.hant:\` and \`caption.hans:\`. You write them because nobody else knows what you meant; verify refuses the half of a line you leave out.
-The packet's figures are drawn through the diagram-design skill at \`~/.claude/skills/diagram-design\`, never hand-written SVG, against the contract \`$FM_ROOT/bin/fm-packet.sh --help\` states and verify enforces; a needs-decision packet owes one drawing that puts every option together.
-If that skill is not installed where you are running, that is a blocker you escalate to firstmate, not a line you write in the packet: verify has no path that excuses a needs-decision packet its figures.
-A status line is a wake, not an explanation; the packet is what firstmate and the captain read, so a \`done:\` or \`needs-decision:\` line without a verified packet is not accepted.
-EOF
-}
-
 fm_dod_block() {  # <mode> <task-id>
   local mode=$1 id=$2
   case "$mode" in
@@ -316,7 +302,6 @@ fm_dod_block() {  # <mode> <task-id>
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 The task is complete only when committed on your branch.
-$(fm_dod_packet_block "$id")
 When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
@@ -328,7 +313,6 @@ Delivery contract: mode=local-only
 This task ships **local-only**: no remote, no PR, no pipeline.
 The task is complete only when committed on your branch \`fm/$id\`. Do NOT push, do NOT open a PR, do NOT merge.
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
-$(fm_dod_packet_block "$id")
 When it is implemented and committed, append \`done: ready in branch fm/$id\` to the status file and stop.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
 EOF
@@ -338,7 +322,6 @@ EOF
 # Definition of done
 Delivery contract: mode=no-mistakes
 The task is complete only when committed on your branch.
-$(fm_dod_packet_block "$id")
 When you believe the implementation is complete, append \`done: {summary}\` to the status file and stop - that is the pause before validation, not this mode's finish, which the last line of this Definition of done states.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 

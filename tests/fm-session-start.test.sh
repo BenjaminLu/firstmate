@@ -1019,6 +1019,67 @@ EOF
   pass "digest sections are ordered safety-preamble first, live fleet state before curated memory"
 }
 
+# The permission posture a home launches its workers with used to be stated
+# nowhere: an unconfigured home ran one posture while its captain believed
+# another. The digest must name the posture in force AND what selected it, in
+# every case.
+test_worker_launch_posture_is_stated_in_every_digest() {
+  local rec root home fakebin out posture_line boot_line wake_line
+  rec=$(new_world posture)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "WORKER LAUNCH POSTURE" "the digest named no worker launch posture at all"
+  assert_contains "$out" "--permission-mode auto" "an unconfigured home did not report the reviewed posture"
+  assert_contains "$out" "the shipped default" "the digest did not say what selected the posture"
+  assert_not_contains "$out" "--dangerously-skip-permissions" "an unconfigured home must not report bypass mode"
+
+  posture_line=$(printf '%s\n' "$out" | grep -n '^WORKER LAUNCH POSTURE$' | head -1 | cut -d: -f1)
+  boot_line=$(printf '%s\n' "$out" | grep -n '^BOOTSTRAP$' | head -1 | cut -d: -f1)
+  wake_line=$(printf '%s\n' "$out" | grep -n '^WAKE QUEUE$' | head -1 | cut -d: -f1)
+  { [ -n "$posture_line" ] && [ -n "$boot_line" ] && [ -n "$wake_line" ]; } \
+    || fail "posture/bootstrap/wake-queue headers missing from digest: $out"
+  [ "$boot_line" -lt "$posture_line" ] || fail "the posture did not follow the bootstrap diagnostics"
+  [ "$posture_line" -lt "$wake_line" ] || fail "the posture was buried behind the work queue"
+
+  printf 'bypass\n' > "$home/config/claude-permission-mode"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "--dangerously-skip-permissions" "an opted-in home did not report the posture it chose"
+  assert_contains "$out" "selected by config/claude-permission-mode" "the digest did not name the file that selected the posture"
+  assert_contains "$out" "Every permission check is skipped" "the digest did not say what the weaker posture costs"
+
+  printf 'yolo\n' > "$home/config/claude-permission-mode"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "UNRESOLVED" "an unusable permission file must be reported, not passed over in silence"
+  assert_contains "$out" "refuses until that is fixed" "the digest did not say what an unusable posture file costs"
+
+  # The second failure mode, which carries no reason of its own: the resolver
+  # cannot even inspect the path. A home whose config is a regular file reaches
+  # it, and the posture is unknown rather than the default - a digest that said
+  # "the shipped default" here would be stating a posture no spawn from this
+  # home can reach, which is the silence this section exists to end.
+  rec=$(new_world posture-uninspectable)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  rm -rf "$home/config"
+  printf 'not a directory\n' > "$home/config"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "WORKER LAUNCH POSTURE" "the posture section must still be printed when the posture cannot be resolved"
+  assert_contains "$out" "UNRESOLVED" "an uninspectable config must be reported as unresolved"
+  assert_not_contains "$out" "the shipped default" "an uninspectable config must never be described as the shipped default"
+  assert_not_contains "$out" "launch  (" "the digest must never print a posture sentence with an empty flag"
+
+  pass "every session digest names the worker launch posture and what selected it"
+}
+
 # The contract has to survive tail truncation and stay honest once it precedes
 # the sections it governs, so it carries the truncated-stage escape itself.
 test_read_once_contract_is_stated_once_before_its_subject() {
@@ -2676,6 +2737,7 @@ test_lock_write_failure_read_only_path
 test_trace_context_effective_state_is_frozen_after_lock
 test_session_lock_concurrent_single_winner
 test_output_ordering_diagnostics_lead
+test_worker_launch_posture_is_stated_in_every_digest
 test_read_once_contract_is_stated_once_before_its_subject
 test_herdr_backend_diagnostics_follow_real_session_start
 test_session_start_relaunches_missing_pi_secondmate

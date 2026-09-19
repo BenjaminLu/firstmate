@@ -45,6 +45,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-ff-lib.sh"
 # shellcheck source=/dev/null
@@ -678,6 +680,10 @@ exit 0
 SH
   chmod +x "$fakebin/tmux"
   fm_fake_exit0 "$fakebin" pi
+  # A claude launch derives the worker's readable directories, and one of them
+  # comes out of `no-mistakes doctor`. BASE_PATH has no such tool, so stub it
+  # here rather than let the asserted launch depend on the host.
+  fm_test_fake_no_mistakes_doctor "$fakebin"
   # BASE_PATH deliberately omits the developer's node, which the trust
   # registration below needs, so link the real one in rather than presenting a
   # node-less spawn host no real fleet member looks like.
@@ -790,7 +796,7 @@ test_spawn_secondmate_harness_model_token() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-token: meta model not opus (got '$(meta_field "$meta" model)')"
   [ "$(meta_field "$meta" effort)" = default ] || fail "model-token: meta effort not default (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus'" \
+  assert_contains "$launch" "claude $(fm_test_claude_add_dir "$sm" "$w/home/user-home")--permission-mode auto --settings '$FM_TEST_CLAUDE_SETTINGS_JSON' --model 'opus'" \
     "model-token: launch did not carry --model opus"
   assert_not_contains "$launch" "--effort" "model-token: launch must not carry an --effort flag"
   pass "C3 spawn: config/secondmate-harness's model token threads --model into the launch and meta"
@@ -812,7 +818,7 @@ test_spawn_secondmate_harness_model_and_effort_tokens() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-effort-tokens: meta model not opus"
   [ "$(meta_field "$meta" effort)" = high ] || fail "model-effort-tokens: meta effort not high (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus' --effort 'high'" \
+  assert_contains "$launch" "claude $(fm_test_claude_add_dir "$sm" "$w/home/user-home")--permission-mode auto --settings '$FM_TEST_CLAUDE_SETTINGS_JSON' --model 'opus' --effort 'high'" \
     "model-effort-tokens: launch did not carry both --model opus and --effort high"
   pass "C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta"
 }
@@ -1413,28 +1419,48 @@ test_bootstrap_sweep_materializes_and_inherits_memory_default() {
 }
 
 # config/backend: present and absent primary state converges exactly.
-# config/claude-permission-mode=auto reaches a Claude SECONDMATE launch too: the
-# same template swap as a crewmate, with model/effort untouched.
-test_spawn_secondmate_claude_permission_mode_auto() {
+# config/claude-permission-mode=bypass reaches a Claude SECONDMATE launch too:
+# the same template swap as a crewmate, with model/effort untouched.
+test_spawn_secondmate_claude_permission_mode_bypass() {
   local w sm meta launchlog launch out status
   w="$TMP_ROOT/spawn-claude-permmode"
   sm="$w/sm"
   launchlog="$w/launch.log"
   mkdir -p "$w/home/config"
   printf 'claude opus\n' > "$w/home/config/secondmate-harness"
-  printf 'auto\n' > "$w/home/config/claude-permission-mode"
+  printf 'bypass\n' > "$w/home/config/claude-permission-mode"
   make_seeded_home "$sm" sm
 
   out=$(spawn_secondmate_capture "$w" sm "$sm" "$launchlog" 2>&1); status=$?
-  expect_code 0 "$status" "claude secondmate spawn under claude-permission-mode=auto should succeed"
+  expect_code 0 "$status" "claude secondmate spawn under claude-permission-mode=bypass should succeed"
 
   meta="$w/home/state/sm.meta"
   [ "$(meta_field "$meta" harness)" = claude ] || fail "permmode: meta harness not claude"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --permission-mode auto --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus'" \
+  assert_contains "$launch" "claude $(fm_test_claude_add_dir "$sm" "$w/home/user-home")--dangerously-skip-permissions --settings '$FM_TEST_CLAUDE_SETTINGS_JSON' --model 'opus'" \
     "permmode: secondmate launch did not swap the permission flag while keeping --model"
-  assert_not_contains "$launch" "--dangerously-skip-permissions" "permmode: secondmate launch must not request bypass mode"
-  pass "C2b spawn: config/claude-permission-mode=auto reaches a Claude secondmate launch"
+  assert_not_contains "$launch" "--permission-mode auto" "permmode: an opted-in bypass launch must not also request auto mode"
+  pass "C2b spawn: config/claude-permission-mode=bypass reaches a Claude secondmate launch"
+}
+
+# A secondmate is a firstmate in its OWN home, so the readable-directory grant
+# has to name that home. Granting the launching home instead would hand it a
+# home it has no business reading and miss the one its charter lives in.
+test_spawn_secondmate_grant_names_its_own_home() {
+  local w sm launchlog launch out status
+  w="$TMP_ROOT/spawn-claude-grant-home"
+  sm="$w/sm"
+  launchlog="$w/launch.log"
+  mkdir -p "$w/home/config"
+  printf 'claude\n' > "$w/home/config/secondmate-harness"
+  make_seeded_home "$sm" sm
+
+  out=$(spawn_secondmate_capture "$w" sm "$sm" "$launchlog" 2>&1); status=$?
+  expect_code 0 "$status" "claude secondmate spawn should succeed"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "--add-dir '$sm' " "the grant did not name the secondmate's own home first"
+  assert_not_contains "$launch" "--add-dir '$w/home' " "the grant must not hand a secondmate the launching home"
+  pass "C2c spawn: a Claude secondmate is granted its own home, not the launching one"
 }
 
 # The file is a captain-wide safety preference, so it inherits like
@@ -2656,7 +2682,8 @@ test_bootstrap_sweep_propagates_when_tracked_current
 test_bootstrap_sweep_defers_dispatch_on_stale_unignored_home
 test_bootstrap_sweep_materializes_and_inherits_memory_default
 test_backend_inheritance_present_and_absent
-test_spawn_secondmate_claude_permission_mode_auto
+test_spawn_secondmate_claude_permission_mode_bypass
+test_spawn_secondmate_grant_names_its_own_home
 test_claude_permission_mode_inheritance_present_and_absent
 test_presentation_inheritance_default_on_and_opt_out
 test_bootstrap_sweep_surfaces_config_propagation_failure

@@ -1152,6 +1152,72 @@ test_compose_lang_and_snapshot_arguments() {
   pass "compose honors --lang and refuses a foreign snapshot"
 }
 
+# A held task with no packet still reaches the captain with ground truth: its
+# card carries the pull request's own tabs as evidence links. The fixture's
+# `pick-route` hold is the packetless one, so a recorded PR on it exercises the
+# placeholder path; `gated-work` beside it has a packet and no recorded PR, and
+# carries no evidence key at all rather than an empty list.
+test_compose_gives_a_packetless_card_the_pull_requests_links() {
+  local home skeleton filled pr
+  home=$(make_compose_home compose-pr-links)
+  pr=https://github.com/example/sample/pull/12
+  fm_write_meta "$home/state/pick-route.meta" "worktree=$home" "pr=$pr"
+  skeleton="$home/skeleton.json"
+  filled="$home/filled.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a held task whose meta records a PR"
+  jq -e --arg pr "$pr" '
+    (.captains_call[1] | .key == "pick-route"
+      and ([.evidence[].url] == [$pr, ($pr + "/checks"), ($pr + "/commits"), ($pr + "/files")])
+      and (.evidence[0].label.en == "pull request")
+      and (.evidence[1].label.en == "checks")
+      and (.evidence[3].label.en == "review comments")
+      # The captain reads the card in three languages, so an evidence label
+      # that is only English would go blank the moment he switches.
+      and ([.evidence[] | .label.hant, .label.hans]
+           | length == 8 and all(type == "string" and length > 0)))
+    and (.captains_call[0] | .key == "gated-work" and (has("evidence") | not))
+  ' "$skeleton" >/dev/null || fail "the packetless card did not carry the PR links: $(cat "$skeleton")"
+  # Those links must also survive the payload validator, or the card the
+  # captain actually opens would be refused rather than degraded.
+  fill_skeleton "$skeleton" "$filled"
+  run_board "$home" build "$filled" >/dev/null 2>&1 || fail "build refused a card carrying the PR links"
+  pass "compose gives a card with no packet the pull request's own links"
+}
+
+# Which tab is the checks tab is the forge's answer, not this script's: a
+# GitLab merge request's are pipelines and diffs, and reading github's tab
+# names onto one would hand the captain four links that 404.
+test_compose_reads_the_pr_tab_names_from_the_forge() {
+  local home skeleton mr
+  home=$(make_compose_home compose-pr-links-gitlab)
+  mr=https://gitlab.example.com/group/sub/proj/-/merge_requests/7
+  fm_write_meta "$home/state/pick-route.meta" "worktree=$home" "pr=$mr"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a held task whose meta records a merge request"
+  jq -e --arg mr "$mr" '
+    .captains_call[1] | .key == "pick-route"
+    and ([.evidence[].url] == [$mr, ($mr + "/pipelines"), ($mr + "/commits"), ($mr + "/diffs")])
+    and (.evidence[0].label.en == "merge request") and (.evidence[1].label.en == "pipelines")
+  ' "$skeleton" >/dev/null || fail "the card used GitHub tab names for a merge request: $(cat "$skeleton")"
+  pass "compose reads a card's PR tab names from the forge the URL names"
+}
+
+# A PR field that is not a PR URL is not a link the captain can be handed, so
+# the card degrades to no evidence rather than to a link that goes nowhere.
+test_compose_drops_an_unparseable_pr_record() {
+  local home skeleton
+  home=$(make_compose_home compose-pr-links-bad)
+  fm_write_meta "$home/state/pick-route.meta" "worktree=$home" "pr=not-a-url"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a held task whose recorded PR does not parse"
+  jq -e '.captains_call[1] | .key == "pick-route" and (has("evidence") | not)' "$skeleton" >/dev/null \
+    || fail "an unparseable PR record still produced evidence links: $(cat "$skeleton")"
+  pass "compose drops a PR record it cannot parse instead of linking it"
+}
+
 test_compose_seeds_a_packet_card_without_a_recorded_project() {
   local home skeleton
   home=$(make_compose_home compose-no-project)
@@ -1769,6 +1835,9 @@ test_compose_maps_every_section_from_the_recorded_snapshot
 test_compose_cards_every_live_hold_and_merge_ready_pr
 test_compose_lang_and_snapshot_arguments
 test_compose_seeds_a_packet_card_without_a_recorded_project
+test_compose_gives_a_packetless_card_the_pull_requests_links
+test_compose_reads_the_pr_tab_names_from_the_forge
+test_compose_drops_an_unparseable_pr_record
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
