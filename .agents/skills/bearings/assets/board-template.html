@@ -258,6 +258,30 @@ a { color: inherit; text-decoration: none; }
 }
 .bb-empty { padding: 18px; font-size: var(--fs-sm); color: var(--text-muted); }
 
+/* ---- the state between the captain's click and its consequence ----
+   One pill, rendered on whichever row the captain clicked: a Captain's Call
+   card, a Charted Next row, or the Underway row dispatched work landed on.
+   Acting and waiting share the gold of an unfinished thing and are told apart
+   by their words and by the pulse; a refusal takes the danger rust and brings
+   its reason with it. */
+.bb-ack {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; line-height: 1;
+  border: 1.5px solid currentColor; border-radius: var(--radius-xs); padding: 4px 8px 3px;
+}
+.bb-ack::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.bb-ack--acting, .bb-ack--late { color: var(--gold-600); }
+.bb-ack--refused { color: var(--rust-600); }
+@media (prefers-reduced-motion: no-preference) {
+  .bb-ack--acting::before { animation: bb-ack-pulse 1.6s ease-in-out infinite; }
+  @keyframes bb-ack-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+}
+.bb-ack__why {
+  margin-top: 6px; font-size: var(--fs-xs); color: var(--text-body); line-height: 1.4;
+  border-inline-start: 2px solid var(--rust-600); padding-inline-start: 9px;
+}
+
 /* ---- Charted Next dispatch picker ---- */
 /* margin:0 kills the UA default checkbox margin so picker rows and spacer rows
    share one text left edge */
@@ -445,6 +469,7 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "pick queued work to dispatch", pick_n: "{n} picked for dispatch",
       pick_limit: "Selection limit reached (512 bytes maximum). ", pick_too_long: "Selection is too long to queue (512 bytes maximum). ",
       dispatch: "Queue dispatch order",
+      ack_acting: "acting on it", ack_refused: "not started", ack_late: "still waiting · {t}",
       err_title: "This board could not load", err_ask: " - ask firstmate to rebuild the board."
     },
     hant: {
@@ -469,6 +494,7 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "勾選排隊中的工作來派工", pick_n: "已選 {n} 項派工",
       pick_limit: "已達選取上限（512 bytes）。", pick_too_long: "選取內容太長，無法排入（上限 512 bytes）。",
       dispatch: "送出派工順序",
+      ack_acting: "處理中", ack_refused: "沒有派出", ack_late: "還在等處理 · {t}",
       err_title: "這個看板無法載入", err_ask: "，請 firstmate 重建看板。"
     },
     hans: {
@@ -493,6 +519,7 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "勾选排队中的工作来派工", pick_n: "已选 {n} 项派工",
       pick_limit: "已达选取上限（512 bytes）。", pick_too_long: "选取内容太长，无法排入（上限 512 bytes）。",
       dispatch: "提交派工顺序",
+      ack_acting: "处理中", ack_refused: "没有派出", ack_late: "还在等处理 · {t}",
       err_title: "这个看板无法加载", err_ask: "，请 firstmate 重建看板。"
     }
   };
@@ -586,6 +613,42 @@ __FM_BEARINGS_BOARD_DATA__
     a.href = url; a.target = "_blank"; a.rel = "noopener"; a.title = url;
     a.setAttribute("data-lavish-action", "open-link");
     return a;
+  }
+  /* ---- the captain's click, acknowledged -------------------------------
+     A control that sets fleet work in motion answers for itself twice. The
+     click appends an `acting` pill straight to the row, so the board never
+     looks as if nothing was heard while the answer is still in the queue.
+     Every publication after that renders the row's `ack` from the payload
+     instead, which is what lets an acknowledgement resolve into a refusal
+     that says why, or age into a waiting time when nothing arrived.
+     `kind` is machine vocabulary this template translates; `elapsed` is the
+     duration the composer measured, carried raw like every other duration in
+     the payload; only a refusal's `why` is prose the first mate wrote, and so
+     is the one field that is payload copy. An unknown kind renders nothing
+     rather than an unstyled pill under an unknown class. */
+  var ACK_KINDS = { acting: true, refused: true, late: true };
+  function ackLabel(a) {
+    if (a.kind === "refused") return t("ack_refused");
+    if (a.kind === "late") return t("ack_late", { t: a.elapsed || "" });
+    return t("ack_acting");
+  }
+  function appendAck(parent, a) {
+    if (!a || !ACK_KINDS[a.kind]) return;
+    parent.appendChild(el("span", "bb-ack bb-ack--" + a.kind, ackLabel(a)));
+    if (a.why) parent.appendChild(el("div", "bb-ack__why", pick(a.why)));
+  }
+  /* The click's own half of that: no payload, no clock, no stored state -
+     just the pill, on the element the captain clicked, right now. A row
+     already carrying an acknowledgement is answered again rather than given a
+     second pill, and the reason a refusal brought with it is retired with the
+     refusal it explained. */
+  function ackClicked(parent) {
+    var pill = parent.querySelectorAll(".bb-ack")[0];
+    if (!pill) { appendAck(parent, { kind: "acting" }); return; }
+    pill.className = "bb-ack bb-ack--acting";
+    pill.textContent = t("ack_acting");
+    Array.prototype.forEach.call(parent.querySelectorAll(".bb-ack__why"),
+      function (w) { w.hidden = true; });
   }
   function clear(n) { n.textContent = ""; }
   function setText(id, text) { document.getElementById(id).textContent = text; }
@@ -810,12 +873,14 @@ __FM_BEARINGS_BOARD_DATA__
         }
         rememberAnswered(item.key);
         card.classList.add("is-queued");
+        ackClicked(pad);
         /* deal the next card once this one is answered */
         setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, 450);
       });
 
       if (queuedKeys[item.key]) card.classList.add("is-queued");
       pad.appendChild(form);
+      appendAck(pad, item.ack);
       card.appendChild(pad);
       deck.appendChild(card);
     });
@@ -871,6 +936,7 @@ __FM_BEARINGS_BOARD_DATA__
       /* captain-facing rows name the repo; the internal task id shows only when
          no repo is known */
       main.appendChild(el("div", "bb-row__sub", pick(x.doing) + " · " + x.kind + " · " + (x.repo || x.id)));
+      appendAck(main, x.ack);
       row.appendChild(main);
       uw.appendChild(row);
     });
@@ -939,6 +1005,7 @@ __FM_BEARINGS_BOARD_DATA__
       var chSub = x.repo || x.id;
       var reason = pick(x.reason);
       main.appendChild(el("div", "bb-row__sub", reason ? reason + " · " + chSub : chSub));
+      appendAck(main, x.ack);
       row.appendChild(main);
       if (isWarning(x)) row.appendChild(badge("danger", t("needs_repair")));
       else if (reason) row.appendChild(badge("warn", t("waiting")));
@@ -976,6 +1043,13 @@ __FM_BEARINGS_BOARD_DATA__
         }
         dispatchQueued = true;
         bar.classList.add("is-queued");
+        /* the answer is about the rows he picked, so that is where it is
+           acknowledged - the bar's own chip says only that something was sent */
+        Array.prototype.forEach.call(ch.querySelectorAll(".bb-pick"), function (c) {
+          if (!c.checked || !c.parentNode) return;
+          var rowMain = c.parentNode.querySelectorAll(".bb-row__main")[0];
+          if (rowMain) ackClicked(rowMain);
+        });
       };
     } else {
       bar.hidden = true;

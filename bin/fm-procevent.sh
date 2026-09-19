@@ -164,6 +164,15 @@
 # binding-verified `reconcile-requests` intake, never the keyed-answer value.
 # External binding responses never enter either authority-bearing intake.
 #
+# One capture-time seam is narrower still, and named here because it is the
+# single place this runner knows a particular artifact. The captain's Bearings
+# board republishes on fleet events, all of which are consequence-side, so an
+# answer whose consequence has not happened yet left the board looking as if
+# nothing was heard. The capture of THAT board's own result therefore records
+# an acknowledgement per answered key through bin/fm-bearings-board.sh, which
+# owns the carrier and every rule about it; no other Lavish session and no
+# other adapter is touched.
+#
 # Feeding is deliberately independent of handling: it never acknowledges a result
 # and never suppresses a wake. Recording the captain's answer is transcription,
 # while ACTING on it is firstmate's judgement, so the capture stays unacknowledged
@@ -408,6 +417,54 @@ feed_keyed_answers() {  # <adapter> <source-id> <result-file>
   "$script" answers "$result" 2>/dev/null \
     | "$SCRIPT_DIR/fm-captain-hold.sh" answers "$origin" \
         --source "the captured result $id sequence $seq" >/dev/null 2>&1
+}
+
+# Acknowledge the captain's own click on the board he clicked it in. Every
+# event the board republishes on is consequence-side - a spawn, a teardown, a
+# status change - so an answer whose consequence has not happened yet left the
+# board looking as if nothing was heard. Recording the answer here, at capture,
+# is the one captain-side trigger those events cannot supply; what the
+# acknowledgement then means, how long it may stay unresolved, and who retires
+# it all belong to bin/fm-bearings-board.sh, which owns the carrier.
+#
+# Scoped to the board's own source, because this is the board's behaviour and
+# not Lavish's: any other Lavish review is an ephemeral discussion that
+# acknowledges nothing. Silenced and best-effort exactly like the seams
+# below: it acknowledges no capture and can never change what the handler
+# receives.
+feed_board_acks() {  # <adapter> <source-id> <result-file>
+  local adapter=$1 id=$2 result=$3 script board rows key answer picked acked=0
+  [ "$adapter" = lavish ] || return 1
+  script=$(adapter_script "$adapter")
+  [ -f "$script" ] && [ ! -L "$script" ] || return 1
+  board=$("$SCRIPT_DIR/fm-bearings-board.sh" path 2>/dev/null) || return 1
+  [ "$id" = "$("$script" source-id "$board" 2>/dev/null)" ] || return 1
+  # Both halves of one click: an ordinary answer, and the reconcile choice,
+  # which is an option button on the same card.
+  # Each read stands alone: one adapter command failing must not discard the
+  # keys the other already reported.
+  rows=$("$script" answers "$result" 2>/dev/null || true)
+  rows=$(printf '%s\n%s\n' "$rows" "$("$script" reconciles "$result" 2>/dev/null || true)")
+  [ -n "$(printf '%s' "$rows" | tr -d '[:space:]')" ] || return 1
+  while IFS=$(printf '\t') read -r key answer _; do
+    [ -n "$key" ] || continue
+    # The dispatch send button answers for the rows it picked, not for
+    # itself, so its own pseudo-key acknowledges nothing and each picked row
+    # is acknowledged where the captain checked it.
+    if [ "$key" = dispatch.charted ]; then
+      while IFS= read -r picked; do
+        [ -n "$picked" ] || continue
+        "$SCRIPT_DIR/fm-bearings-board.sh" ack "$picked" --acting >/dev/null 2>&1 && acked=1
+      done <<EOF
+$(printf '%s\n' "$answer" | tr ',' '\n')
+EOF
+    else
+      "$SCRIPT_DIR/fm-bearings-board.sh" ack "$key" --acting >/dev/null 2>&1 && acked=1
+    fi
+  done <<EOF
+$rows
+EOF
+  [ "$acked" -eq 1 ]
 }
 
 feed_reconcile_requests() {  # <adapter> <source-id> <result-file>
@@ -1012,6 +1069,10 @@ EOF
   if [ "$extension_owner" -eq 0 ] \
     && feed_keyed_answers "$adapter" "$id" "$durable"; then
     printf 'answers-fed: %s\n' "$id"
+  fi
+  if [ "$extension_owner" -eq 0 ] \
+    && feed_board_acks "$adapter" "$id" "$durable"; then
+    printf 'board-acked: %s\n' "$id"
   fi
 
   # A self-announcing adapter's autohandle announces through its own durable

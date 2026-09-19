@@ -18,7 +18,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-home-summary-refresh.sh` | Atomically publish this home's structured summary ledger                         |
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
 | `fm-bearings-snapshot.sh` | Project the bounded remote-ledger fleet snapshot to compact TOON; `--include-prs` adds live GitHub enrichment |
-| `fm-bearings-board.sh`   | Compose the trilingual payload skeleton, then build and arm the stable `/bearings lavish` fleet board |
+| `fm-bearings-board.sh`   | Compose the trilingual payload skeleton, build and arm the stable `/bearings lavish` fleet board, and carry the acknowledgement a captain's click leaves on its row |
 | `fm-packet.sh`           | Scaffold, verify, and render the worker's decision packet - its context, its figures, and its decision block - beside its task, serve the page with Lavish, and compose the board's five-question card from it |
 | `fm-secondmate-reconcile.sh` | Queue Bearings reconcile requests for later supervision delivery and ask each mismatched home through its durable inbox with a per-home cooldown |
 | `fm-update.sh`           | Guarded self-update of firstmate and local or remote secondmate homes, reconciling redundant divergence and classifying every live mate left on the target commit for restart or fallback nudge |

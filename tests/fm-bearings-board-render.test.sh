@@ -311,6 +311,134 @@ test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order() 
   pass "charted rows with no filed date follow the dated rows in payload order"
 }
 
+# ---- the captain's click, acknowledged --------------------------------------
+
+# Render a payload that carries acknowledgements, optionally replaying one
+# captain click through the real handler first.
+render_click() {  # <home> <payload-json> [click]
+  local home=$1 data="$1/payload.json"
+  printf '%s\n' "$2" > "$data"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+  node "$HARNESS" "$home/.lavish/bearings-board.html" ${3:+"$3"} \
+    || fail "the built board could not be rendered"
+}
+
+ack_payload() {  # <underway-ack-json>
+  jq -n --argjson ack "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, captains_call:[], landed:[], charted:[],
+    underway:[{id:"acked", repo:"sample", name:"Acknowledged work", state:"working",
+               kind:"ship", doing:"under way"} + (if $ack == null then {} else {ack:$ack} end)]}'
+}
+
+test_an_acknowledged_row_says_it_is_being_acted_on() {
+  local home out
+  home=$(make_home ack-acting)
+  out=$(render_click "$home" "$(ack_payload '{"kind":"acting"}')")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.underway[0].ack | .kind == "acting" and .label == "acting on it" and .why == null)
+  ' >/dev/null || fail "an acting acknowledgement did not reach the row: $out"
+  pass "an acknowledged row says the answer is being acted on"
+}
+
+test_a_refused_acknowledgement_says_so_with_its_reason() {
+  local home out
+  home=$(make_home ack-refused)
+  out=$(render_click "$home" \
+    "$(ack_payload '{"kind":"refused","why":"it is waiting on the board refresh, which is still in review"}')")
+  printf '%s' "$out" | jq -e '
+    .error == ""
+      and (.underway[0].ack
+        | .kind == "refused" and .label == "not started"
+          and .why == "it is waiting on the board refresh, which is still in review")
+  ' >/dev/null || fail "the refusal did not reach the row with its reason: $out"
+  pass "a refused acknowledgement says so on the row, with the reason"
+}
+
+test_a_late_acknowledgement_says_how_long_it_has_waited() {
+  local home out
+  home=$(make_home ack-late)
+  out=$(render_click "$home" "$(ack_payload '{"kind":"late","elapsed":"3m"}')")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.underway[0].ack | .kind == "late" and .label == "still waiting · 3m")
+  ' >/dev/null || fail "a late acknowledgement did not report its elapsed time: $out"
+  pass "a late acknowledgement says it is still waiting and for how long"
+}
+
+test_a_row_with_no_acknowledgement_is_unchanged() {
+  local home with without
+  home=$(make_home ack-absent)
+  without=$(render_click "$home" "$(ack_payload null)")
+  printf '%s' "$without" | jq -e '.error == "" and .underway[0].ack == null' >/dev/null \
+    || fail "a row with no acknowledgement grew one: $without"
+  # Everything else about that row reads exactly as it does with the field
+  # absent, so the feature costs an unacknowledged board nothing.
+  with=$(render_click "$home" "$(ack_payload '{"kind":"acting"}')")
+  printf '%s' "$with" | jq --argjson bare "$(printf '%s' "$without" | jq -c '.underway[0]')" -e '
+    (.underway[0] | del(.ack)) == ($bare | del(.ack))
+  ' >/dev/null || fail "an acknowledgement changed the rest of the row: $with"
+  pass "a row with no acknowledgement renders exactly as it does today"
+}
+
+test_an_unknown_acknowledgement_kind_renders_nothing() {
+  local home board out
+  home=$(make_home ack-unknown)
+  render_click "$home" "$(ack_payload '{"kind":"acting"}')" >/dev/null
+  board="$home/.lavish/bearings-board.html"
+  # The payload contract refuses an unknown kind, so the only way to reach the
+  # renderer with one is to rewrite what was already published. The renderer's
+  # own guard is the second, independent detection of the same class, and this
+  # is what proves it is not decoration.
+  perl -pi -e 's/"kind":"acting"/"kind":"sudo-merge"/' "$board" \
+    || fail "could not rewrite the published payload"
+  out=$(node "$HARNESS" "$board") || fail "the rewritten board could not be rendered"
+  printf '%s' "$out" | jq -e '.error == "" and .underway[0].ack == null' >/dev/null \
+    || fail "an unknown acknowledgement kind rendered a pill: $out"
+  pass "an unknown acknowledgement kind renders nothing at all"
+}
+
+test_the_dispatch_send_acknowledges_every_row_it_picked() {
+  local home out
+  home=$(make_home ack-dispatch)
+  out=$(render_click "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true},
+             {id:"held", repo:"sample", title:"Blocked work", reason:"waits on the cutover",
+              dispatchable:false}]}')" dispatch)
+  printf '%s' "$out" | jq -e '
+    .error == ""
+      and (.charted[0] | .title == "Queued work" and .ack.kind == "acting"
+        and .ack.label == "acting on it")
+      and (.charted[1] | .title == "Blocked work" and .ack == null)
+  ' >/dev/null || fail "the dispatch send did not acknowledge the rows it picked: $out"
+  pass "sending a dispatch order acknowledges every row it picked, and only those"
+}
+
+test_answering_a_decision_card_acknowledges_it_on_the_card() {
+  local home out
+  home=$(make_home ack-answer)
+  out=$(render_click "$home" "$(five_question_payload en)" answer)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.cards[0].ack | .kind == "acting" and .label == "acting on it")
+  ' >/dev/null || fail "answering a decision card left the card silent: $out"
+  pass "answering a decision card acknowledges it on the card"
+}
+
+test_the_acknowledgement_speaks_the_captains_language() {
+  local home out
+  home=$(make_home ack-lang)
+  out=$(render_click "$home" "$(ack_payload '{"kind":"late","elapsed":"3m"}' \
+    | jq -c '.lang = "hant"')")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.underway[0].ack.label == "還在等處理 · 3m")
+  ' >/dev/null || fail "the acknowledgement did not follow the board language: $out"
+  pass "an acknowledgement is worded in the language the board is showing"
+}
+
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first
@@ -322,3 +450,11 @@ test_omitted_warnings_never_count_as_more_queued
 test_an_omitted_kind_keeps_the_existing_queued_rendering
 test_a_decision_card_answers_the_five_questions_in_english_by_default
 test_the_payload_language_switches_every_visible_string
+test_an_acknowledged_row_says_it_is_being_acted_on
+test_a_refused_acknowledgement_says_so_with_its_reason
+test_a_late_acknowledgement_says_how_long_it_has_waited
+test_a_row_with_no_acknowledgement_is_unchanged
+test_an_unknown_acknowledgement_kind_renders_nothing
+test_the_dispatch_send_acknowledges_every_row_it_picked
+test_answering_a_decision_card_acknowledges_it_on_the_card
+test_the_acknowledgement_speaks_the_captains_language

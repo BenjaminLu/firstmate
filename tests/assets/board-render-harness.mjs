@@ -2,12 +2,19 @@
 // shim and print what the renderer actually produced, so board behavior is
 // asserted through the real template rather than by reading its source.
 //
-// Usage: node board-render-harness.mjs <built-board.html>
+// Usage: node board-render-harness.mjs <built-board.html> [click]
 // Prints one JSON document:
-//   { stats:[{n,label}], underway:[{title,sub,badges}],
-//     charted:[{title,sub,badges,pickable}], empty, more,
-//     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips}],
+//   { stats:[{n,label}], underway:[{title,sub,badges,ack}],
+//     charted:[{title,sub,badges,pickable,ack}], empty, more,
+//     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips,ack}],
 //     headings:[call,charted,underway,landed], error }
+// An `ack` is {label, why} or null.
+//
+// A second argument replays a captain click before the page is read, so the
+// immediate acknowledgement is asserted through the real handler rather than
+// by reading the template's source:
+//   dispatch        check every pickable Charted Next row, then send
+//   answer          submit the dealt Captain's Call card
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -39,7 +46,13 @@ class Node {
   set textContent(v) { this._text = String(v); this.children = []; }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
   setAttribute(k, v) { this.attributes[k] = v; }
-  addEventListener() {}
+  addEventListener(type, fn) {
+    (this._listeners || (this._listeners = {}))[type] = fn;
+  }
+  dispatch(type, ev) {
+    const fn = this._listeners && this._listeners[type];
+    if (fn) fn.call(this, ev || { preventDefault() {} });
+  }
   querySelectorAll(sel) {
     const want = sel.replace(/^\./, "").replace(/:checked$/, "");
     const checkedOnly = sel.endsWith(":checked");
@@ -82,9 +95,50 @@ globalThis.document = {
 };
 globalThis.window = {};
 globalThis.TextEncoder = TextEncoder;
+// The card's submit handler reads its own inputs; a radio is answered only
+// when something checked it, exactly as in a browser.
+globalThis.FormData = class {
+  constructor(form) { this.form = form; }
+  get(name) {
+    const inputs = [];
+    const walk = (n) => { for (const c of n.children) { if (c.tagName === "input") inputs.push(c); walk(c); } };
+    walk(this.form);
+    const radio = inputs.find((i) => i.name === name && i.type === "radio" && i.checked);
+    if (radio) return radio.value;
+    const field = inputs.find((i) => i.name === name && i.type !== "radio");
+    return field ? field.value : null;
+  }
+};
+// The deck deals the next card on a timer; the acknowledgement is not on it,
+// so the shim never runs one and the read below sees the click's own effect.
+globalThis.setTimeout = () => 0;
 
 const script = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
 new Function(script)();
+
+/* Replay one captain click through the real handler before the page is read. */
+const nodesWhere = (root, pred) => {
+  const out = [];
+  const walk = (n) => { for (const c of n.children) { if (pred(c)) out.push(c); walk(c); } };
+  walk(root);
+  return out;
+};
+const click = process.argv[3] || "";
+if (click === "dispatch") {
+  const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
+  for (const p of picks) { p.checked = true; p.dispatch("change"); }
+  const btn = byId.get("bb-dispatch-btn");
+  if (typeof btn.onclick === "function") btn.onclick();
+} else if (click === "answer") {
+  const form = nodesWhere(byId.get("bb-call"), (n) => n.tagName === "form")[0];
+  if (form) {
+    const radio = nodesWhere(form, (n) => n.tagName === "input" && n.type === "radio")[0];
+    if (radio) radio.checked = true;
+    form.dispatch("submit", { preventDefault() {} });
+  }
+} else if (click) {
+  throw new Error("unknown click: " + click);
+}
 
 const badgesOf = (row) =>
   row.children
@@ -97,6 +151,19 @@ const stats = strip.children.map((t) => ({
   label: t.children.find((c) => c.className.includes("bb-stat__label"))?.textContent,
 }));
 
+/* The pill the click or the payload put on the row, and a refusal's reason. */
+const ackOf = (n) => {
+  if (!n) return null;
+  const pill = n.children.find((c) => c.className.split(/\s+/).includes("bb-ack"));
+  if (!pill) return null;
+  const why = n.children.find((c) => c.className.includes("bb-ack__why"));
+  return {
+    label: pill.textContent,
+    kind: pill.className.replace(/.*bb-ack--/, "").trim(),
+    why: why ? why.textContent : null,
+  };
+};
+
 const rowsOf = (container) =>
   container.children
     .filter((r) => r.className.split(/\s+/).includes("bb-row"))
@@ -107,6 +174,7 @@ const rowsOf = (container) =>
         sub: main?.children.find((c) => c.className.includes("bb-row__sub"))?.textContent ?? "",
         badges: badgesOf(row),
         pickable: row.children.some((c) => c.className.includes("bb-pick") && !c.className.includes("spacer")),
+        ack: ackOf(main),
       };
     });
 
@@ -130,6 +198,7 @@ const cards = deck.children
       rec: findAll(o, "bb-opt__rec").length > 0,
     })),
     chips: findAll(card, "bb-chip").map((a) => a.textContent),
+    ack: ackOf(card.children.find((c) => c.className.includes("bb-decision__pad"))),
   }));
 const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
   .map((id) => byId.get(id)?.textContent ?? "");
