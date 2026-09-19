@@ -948,8 +948,8 @@ test_compose_maps_every_section_from_the_recorded_snapshot() {
       and .filed == null and .repo == null)
     # Neither omitted count is derivable from the snapshot, so both arrive as
     # slots naming how many gate rows the snapshot itself omitted.
-    and (.charted_more | startswith("{FILL: queued Charted Next rows not shown, counting the 0 "))
-    and (.charted_warning_more | startswith("{FILL: warning Charted Next rows not shown, counting the 0 "))
+    and (.charted_more | startswith("{FILL: queued Charted Next rows not shown: your share of the 0 "))
+    and (.charted_warning_more | startswith("{FILL: warning Charted Next rows not shown: your share of the 0 "))
   ' "$skeleton" >/dev/null || fail "the skeleton did not map the fleet sections as recorded: $(cat "$skeleton")"
   pass "compose maps underway, landed, and charted rows from the recorded snapshot"
 }
@@ -1070,10 +1070,15 @@ test_compose_leaves_the_omitted_charted_counts_to_the_composer() {
   skeleton="$home/skeleton.json"
   run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
     || fail "compose refused a snapshot that omitted gate rows"
+  # Both slots name the SAME 3, so each must say so and point at the sibling
+  # that takes the rest; a hint that reads as 3 of its own kind gets written
+  # into both counts and the board over-reports what it hid.
   jq -e '
     (.charted_more | type == "string") and (.charted_warning_more | type == "string")
-    and (.charted_more | contains("queued") and contains("3 gate rows"))
-    and (.charted_warning_more | contains("warning") and contains("3 gate rows"))
+    and (.charted_more | contains("queued") and contains("your share of the 3 gate rows")
+      and contains("belonging to charted_warning_more"))
+    and (.charted_warning_more | contains("warning") and contains("your share of the 3 gate rows")
+      and contains("belonging to charted_more"))
   ' "$skeleton" >/dev/null || fail "the omitted counts were asserted instead of slotted: $(cat "$skeleton")"
   set +e; out=$(run_board "$home" compose --check "$skeleton" 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "compose --check passed a skeleton whose omitted counts are unresolved"

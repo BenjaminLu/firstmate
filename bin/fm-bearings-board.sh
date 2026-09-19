@@ -74,11 +74,12 @@
 #            reversible, and recommend_value and gets a placeholder only for
 #            the ones the packet left out. charted_more and
 #            charted_warning_more are {FILL: ...} placeholders too, each
-#            naming how many gate rows the snapshot omitted, because the
-#            snapshot reports one total and never splits it into queued and
-#            warning rows. The top-level lang comes from --lang (default
-#            hant). The skeleton satisfies the payload validator as-is, but
-#            build refuses it until every placeholder is gone.
+#            naming the SAME omitted-gates total as a figure to divide with
+#            the other count, because the snapshot reports one total and never
+#            splits it into queued and warning rows. The top-level lang comes
+#            from --lang (default hant). The skeleton satisfies the payload
+#            validator as-is, but build refuses it until every placeholder is
+#            gone.
 #            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
 #            placeholder as `<path>: <value>` and exits 1 while any remain.
 # path       Print the stable board path for this home.
@@ -644,15 +645,15 @@ EOF
            {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
          allow_freeform: true};
     # The snapshot reports ONE omitted-gates total and never splits it into
-    # queued and warning rows, so the skeleton states that total in the hint and
-    # leaves both counts to the composer instead of asserting a split it cannot
-    # derive.
+    # queued and warning rows, so each slot names that one total as a shared
+    # figure to divide, and points at the sibling count that takes the rest.
     def gates_omitted:
       [ .omitted[]? | .surface | capture("^gates showing (?<shown>[0-9]+) of (?<total>[0-9]+)") ]
       | if length == 0 then 0 else ((.[0].total | tonumber) - (.[0].shown | tonumber)) end;
-    def more_slot($kind): gates_omitted as $n
-      | fillv($kind + " Charted Next rows not shown, counting the " + ($n | tostring)
-        + " gate rows the snapshot omitted plus any you cut");
+    def more_slot($kind; $sibling): gates_omitted as $n
+      | fillv($kind + " Charted Next rows not shown: your share of the " + ($n | tostring)
+        + " gate rows the snapshot omitted, the rest of that same total belonging to "
+        + $sibling + ", plus any " + $kind + " rows you cut");
     {
       schema: $schema, home: .home, generated: .generated, lang: $lang,
       prs_live: (.prs | startswith("checked")),
@@ -669,8 +670,8 @@ EOF
            dispatchable: ((warning_gate | not) and .blocked_by == "-" and .reason == "-"),
            kind: (if warning_gate then "warning" else "queued" end),
            filed: .filed} ],
-      charted_more: more_slot("queued"),
-      charted_warning_more: more_slot("warning")
+      charted_more: more_slot("queued"; "charted_warning_more"),
+      charted_warning_more: more_slot("warning"; "charted_more")
     }' > "$tmp" || { rm -f -- "$tmp"; fail "cannot compose the board skeleton"; }
   if ! validate_payload "$tmp"; then
     rm -f -- "$tmp"
