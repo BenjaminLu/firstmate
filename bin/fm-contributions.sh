@@ -20,24 +20,22 @@
 # task and records[]. Each record contains url, kind, checked_at, error,
 # observation, verdict, seen event tokens, pending events, and notified tokens.
 # observation is one coherent forge read. Observing one pull request costs four
-# forge calls, down from eight: one GraphQL document carries the pull request
-# core, the repository's push permission, the forge review decision, the head,
-# and both check lanes in a single snapshot, so the checks are bound to that
-# head without a separate recheck; comments, reviews and inline review comments
-# stay on their REST list endpoints so their event tokens are unchanged. Eight
-# calls at the 0.9-4.4s measured on a slow forge needed 7.2-35.2s, which the
-# default 20s budget could not hold, and left the row unobserved. The one
-# document does five reads' worth of work, and four calls at the sibling task's
-# five-second per-call bound fit that budget where eight never could. A commit
-# with more than one page of check contexts pages the same document with an
-# after cursor, costing five, so one normalization rule defines a check lane and
-# one commit cannot read two ways. This change holds itself to lane equivalence:
-# the lanes reported here are exactly the lanes the REST check-runs and statuses
-# lanes reported, so a required context the forge only expects and nobody has
-# posted is no lane. Checks are normalized by name, id,
-# started_at, status and conclusion; projection picks the newest attempt per
-# distinct name. The last observation's lane names also disclose a lane absent
-# from the next head.
+# forge calls, and that count is load-bearing: a slow forge answers each call in
+# 0.9-4.4 seconds, so four fit the default 20s budget while the eight a per-lane
+# REST read needs (7.2-35.2s) do not, and a budget that cannot hold one whole
+# observation leaves the row unobserved rather than merely slow. One GraphQL
+# document carries the pull request core, the repository's push permission, the
+# forge review decision, the head, and both check lanes in a single snapshot, so
+# the checks are bound to that head without a separate recheck; comments,
+# reviews and inline review comments stay on their REST list endpoints so their
+# event tokens are unchanged. A commit with more than one page of check contexts
+# pages the same document with an after cursor, costing five, so one
+# normalization rule defines a check lane and one commit cannot read two ways. Lane equivalence is deliberate: the lanes
+# reported here are exactly the lanes the REST check-runs and statuses reads
+# reported, so a required context the forge only expects and nobody has posted
+# is no lane. Checks are normalized by name, id, started_at, status and
+# conclusion; projection picks the newest attempt per distinct name. The last
+# observation's lane names also disclose a lane absent from the next head.
 # A verdict records the EXACT judged head, source URL, actor and summary. A
 # comment's arrival time never supplies its judged head. Record a prose verdict
 # only after its source identifies that head; otherwise leave it unbound and
@@ -69,10 +67,14 @@
 # Oldest observations go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. A URL
-# the budget cut short is still stamped, silently: an attempt that recorded
-# nothing would otherwise keep its old place in the ordering for ever and
-# starve the rest. Only a genuine forge failure or head change wakes, and a
-# budget stamp never opens or extends a failure episode.
+# the budget cut short is still stamped: an attempt that recorded nothing would
+# otherwise keep its old place in the ordering for ever and starve the rest.
+# That stamp wakes nobody, but it is not invisible: the row carries the budget
+# reason instead of an observation, so projection reports it as fleet work to
+# refresh until a later poll reads it. Only a genuine forge failure or head
+# change wakes; a budget stamp never opens a failure episode and never replaces
+# a recorded error, so the failure already suppressing the wake keeps
+# suppressing it until a successful read ends that episode.
 # API failure leaves error evidence; an expired or absent observation is not
 # silence. FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # A URL whose last good observation is merged or closed is final: it is
@@ -445,6 +447,9 @@ poll() {
           error='forge observation unavailable or changed during read'
           jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
         else
+          # The budget string never replaces a recorded failure: overwriting one
+          # would end the episode that is suppressing the wake, so the same
+          # unreadable contribution would wake the captain a second time.
           jq --arg now "$NOW" --arg error "$BUDGET_ERROR" \
             '.checked_at=$now | .error=(.error // $error)' "$old" > "$TMP/row.json"
         fi
