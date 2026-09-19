@@ -40,12 +40,17 @@
 #
 # What that closes is the forge whose calls are merely slower than the old
 # five-second bound. What it does not close is a forge slow enough that a whole
-# observation - eight forge calls - does not fit the budget at all. There the
-# poll leaves every owner's records exactly as it found them, so the row ages
-# out under the ordinary freshness rule below and the board shows it unchecked;
-# it is never shown as freshly checked when it was not. Making that repository
-# observable needs fewer forge calls per observation, which is its own task, not
-# a larger fleet-wide FM_CHECK_TIMEOUT.
+# observation - eight forge calls - does not fit the budget at all. That URL is
+# not the only one it costs. The poll breaks where the budget ran out, so every
+# row behind it in the queue is skipped, and because its records are left
+# exactly as they were found its checked_at never advances, so it keeps the head
+# of the oldest-first queue and blocks those same rows in every later poll too,
+# until its observation fits. No budget in the documented 1..25 range fits eight
+# calls at the measured latency, so an operator cannot configure around it.
+# Every blocked row ages out under the ordinary freshness rule below and the
+# board shows it unchecked; none is ever shown as freshly checked when it was
+# not. What stops this firing is fewer forge calls per observation - a four-call
+# observation is its own task, not a larger fleet-wide FM_CHECK_TIMEOUT.
 # Oldest observations go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. When
