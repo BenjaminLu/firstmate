@@ -2,13 +2,15 @@
 # Behavioral tests for bin/fm-procevent-board-remote.sh, the remote board's
 # answer wake path.
 #
-# The two properties the captain paid for get the most attention here, and both
-# are driven through the real adapter against real answer documents rather than
+# The properties the captain paid for get the most attention here, and each is
+# driven through the real adapter against real answer documents rather than
 # through a stub that answers whatever the assertion wants:
 #
 #   - a captured answer is never delivered twice, and the deduplication keys on
 #     the answer's own identity rather than on its position or on a count, so
 #     the same answer re-listed beside new ones is still recognized;
+#   - an answer settles the card it was given for and no other, so an answer
+#     already in the store when a card was armed never settles or retires it;
 #   - an answer that has not been captured is never lost by the act of reading,
 #     so a read that fails before the record lands leaves the store and the
 #     cursor exactly as they were and the next pass still delivers it.
@@ -93,25 +95,30 @@ test_help_advertises_the_commands() {
 }
 
 test_arm_refuses_what_it_cannot_serve() {
-  local home out
+  local home dir out
   home=$(make_home arm-refusals)
+  dir=$(answers_dir "$home")
 
-  out=$(run_adapter "$home" arm 2>&1) && fail "arming with nothing awaited was accepted"
+  out=$(run_adapter "$home" arm --documents "$dir" 2>&1) && fail "arming with nothing awaited was accepted"
   assert_contains "$out" "at least one --key" "arming with no key did not name what was missing"
 
-  out=$(run_adapter "$home" arm --key "not a key" 2>&1) && fail "an invalid card key was accepted"
-  out=$(run_adapter "$home" arm --key sample-call=maybe 2>&1) && fail "an invalid close mode was accepted"
+  out=$(run_adapter "$home" arm --key sample-call 2>&1) && fail "arming without the answers was accepted"
+  assert_contains "$out" "--documents" "arming without the answers did not name what was missing"
+
+  out=$(run_adapter "$home" arm --documents "$dir" --key "not a key" 2>&1) && fail "an invalid card key was accepted"
+  out=$(run_adapter "$home" arm --documents "$dir" --key sample-call=maybe 2>&1) && fail "an invalid close mode was accepted"
   assert_contains "$out" "done or release" "the close-mode refusal did not name the accepted modes"
 
   assert_absent "$home/state/board-remote/awaiting" \
     "a refused arm still wrote an awaited card set"
-  pass "arm refuses an empty card set, a bad key and a bad close mode"
+  pass "arm refuses an empty card set, an unread store, a bad key and a bad close mode"
 }
 
 test_arm_reports_the_cards_it_will_wait_for() {
-  local home out
+  local home dir out
   home=$(make_home arm-records)
-  out=$(run_adapter "$home" arm --key sample-call=release --key merge.other) \
+  dir=$(answers_dir "$home")
+  out=$(run_adapter "$home" arm --documents "$dir" --key sample-call=release --key merge.other) \
     || fail "could not arm the source"
   assert_contains "$out" "armed: board-remote" "arm did not report the source it registered"
   assert_contains "$out" "awaiting: 2" "arm did not report the awaited card count"
@@ -123,10 +130,11 @@ test_arm_reports_the_cards_it_will_wait_for() {
 }
 
 test_tick_is_due_while_a_card_is_open_and_settled_when_none_is() {
-  local home out
+  local home dir out
   home=$(make_home tick-states)
+  dir=$(answers_dir "$home")
 
-  run_adapter "$home" arm --key sample-call >/dev/null || fail "could not arm the source"
+  run_adapter "$home" arm --documents "$dir" --key sample-call >/dev/null || fail "could not arm the source"
   run_adapter "$home" tick --interval 0.2 > "$home/due.result" || fail "the tick failed while a card was open"
   assert_equals "due" "$(run_adapter "$home" classify "$home/due.result")" \
     "a tick with a card open did not classify due"
@@ -304,7 +312,7 @@ test_an_over_long_answer_is_truncated_rather_than_stranding_its_card() {
   local home dir out long value
   home=$(make_home long-answer)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --key long-call >/dev/null || fail "could not arm the source"
+  run_adapter "$home" arm --documents "$dir" --key long-call >/dev/null || fail "could not arm the source"
   long=$(printf 'x%.0s' $(seq 1 600))
   jq -n --arg v "$long" '{at: "2026-09-19T07:00:00.000Z", key: "long-call", lang: "hant",
                           label: "", value: $v}' > "$dir/long_call.json"
@@ -334,7 +342,7 @@ test_the_close_mode_comes_from_arming() {
   local home dir out
   home=$(make_home close-mode)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --key gated-work=release --key plain-call >/dev/null \
+  run_adapter "$home" arm --documents "$dir" --key gated-work=release --key plain-call >/dev/null \
     || fail "could not arm the source"
   write_answer "$home" gated_work gated-work proceed "Proceed" 2026-09-19T07:00:00.000Z
   write_answer "$home" plain_call plain-call gold-only "Gold only" 2026-09-19T07:01:00.000Z
@@ -354,7 +362,7 @@ test_ingest_retires_the_source_once_every_card_is_answered() {
   local home dir out
   home=$(make_home retire-on-settled)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --key first-call --key second-call >/dev/null \
+  run_adapter "$home" arm --documents "$dir" --key first-call --key second-call >/dev/null \
     || fail "could not arm the source"
 
   write_answer "$home" first_call first-call yes "Yes" 2026-09-19T07:00:00.000Z
@@ -376,7 +384,7 @@ test_another_cards_answer_does_not_settle_a_card() {
   local home dir out
   home=$(make_home key-column)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --key sample-call >/dev/null \
+  run_adapter "$home" arm --documents "$dir" --key sample-call >/dev/null \
     || fail "could not arm the source"
   write_answer "$home" dispatch_charted dispatch.charted sample-call "sample-call" 2026-09-19T07:00:00.000Z
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
@@ -399,6 +407,67 @@ test_an_unarmed_ingest_claims_no_retirement() {
   pass "a read against a board that was never armed here claims no retirement"
 }
 
+# A replay of the sequence that costs the captain his answer: he answers while
+# the tick is still asleep, a new board round goes up over it, and the read only
+# happens afterwards. That answer was given for a card that no longer exists, so
+# it must not settle - and therefore must not retire - the card standing now.
+test_an_answer_given_before_a_new_round_does_not_settle_its_card() {
+  local home dir out
+  home=$(make_home answered-before-arm)
+  dir=$(answers_dir "$home")
+  run_adapter "$home" arm --documents "$dir" --key dispatch.charted >/dev/null \
+    || fail "could not arm the first round"
+  write_answer "$home" dispatch_charted dispatch.charted first-task "First task" 2026-09-19T07:00:00.000Z
+  run_adapter "$home" arm --documents "$dir" --key dispatch.charted >/dev/null \
+    || fail "could not arm the second round"
+
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  assert_contains "$out" "discarded: 1" "the answer to the retired card was not discarded"
+  assert_contains "$out" "answered-before-arm: dispatch_charted" \
+    "a discarded captain answer went unreported instead of being visible"
+  assert_not_contains "$out" "answer: dispatch.charted" \
+    "an answer to a question that no longer exists was fed to the intake"
+  assert_contains "$out" "awaiting: 1" "the previous round's answer settled the card standing now"
+  assert_not_contains "$out" "retired: yes" "the source retired with this round's card unanswered"
+  run_adapter "$home" tick --interval 0.2 > "$home/open.result" || fail "the tick failed while the card was open"
+  assert_equals "due" "$(run_adapter "$home" classify "$home/open.result")" \
+    "the source stopped waking firstmate while the captain still owed an answer"
+
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  assert_contains "$out" "discarded: 0" "the discarded answer was reported again on the next pass"
+  assert_contains "$out" "awaiting: 1" "the card standing now stopped being awaited"
+
+  write_answer "$home" dispatch_charted dispatch.charted second-task "Second task" 2026-09-19T08:00:00.000Z
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  assert_contains "$out" "answer: dispatch.charted	second-task" "this round's own answer was not delivered"
+  assert_contains "$out" "retired: yes" "this round's own answer did not settle its card"
+  pass "an answer given before a new round is discarded, and only the answer to the card standing now settles it"
+}
+
+# The first arm in a real home meets a store that already holds every answer of
+# every earlier board round, because the board never deletes one.
+test_earlier_rounds_answers_are_discarded_by_the_first_arm() {
+  local home dir out
+  home=$(make_home store-already-full)
+  dir=$(answers_dir "$home")
+  write_answer "$home" dispatch_charted dispatch.charted old-task "Old task" 2026-09-18T07:00:00.000Z
+  write_answer "$home" old_call old-call yes "Yes" 2026-09-18T07:05:00.000Z
+
+  out=$(run_adapter "$home" arm --documents "$dir" --key dispatch.charted --key new-call) \
+    || fail "could not arm against a store that already holds answers"
+  assert_contains "$out" "already-answered: 2" "arm did not report what the store already held"
+
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  assert_contains "$out" "new: 0" "an answer from an earlier board round was delivered as if it were new"
+  assert_contains "$out" "discarded: 2" "the earlier rounds' answers were not discarded"
+  assert_contains "$out" "answered-before-arm: dispatch_charted" "a discarded answer went unreported"
+  assert_contains "$out" "answered-before-arm: old_call" "a discarded answer went unreported"
+  assert_contains "$out" "awaiting: 2" "an earlier round's answer settled a card armed today"
+  assert_not_contains "$out" "retired:" "the source retired on answers nobody gave to its cards"
+  run_adapter "$home" retire >/dev/null || fail "could not retire the armed source"
+  pass "answers already in the store when the cards were armed are discarded, not delivered"
+}
+
 # `dispatch.charted` is asked again on every board round, so the cursor - which
 # is never pruned, because that is what keeps an answer from arriving twice -
 # holds an answer under that key from the last round. A card armed now is open
@@ -407,12 +476,12 @@ test_an_earlier_rounds_answer_does_not_settle_a_freshly_armed_card() {
   local home dir out
   home=$(make_home re-armed-key)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --key dispatch.charted >/dev/null || fail "could not arm the source"
+  run_adapter "$home" arm --documents "$dir" --key dispatch.charted >/dev/null || fail "could not arm the source"
   write_answer "$home" dispatch_charted dispatch.charted first-task "First task" 2026-09-19T07:00:00.000Z
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
   assert_contains "$out" "retired: yes" "the first round did not retire once its card was answered"
 
-  run_adapter "$home" arm --key dispatch.charted >/dev/null || fail "could not arm the same card again"
+  run_adapter "$home" arm --documents "$dir" --key dispatch.charted >/dev/null || fail "could not arm the same card again"
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
   assert_contains "$out" "new: 0" "last round's answer was delivered a second time"
   assert_contains "$out" "awaiting: 1" "last round's answer settled a freshly armed card"
@@ -440,7 +509,7 @@ test_answers_close_their_captain_held_tasks() {
     || fail "could not hold the sample captain call"
   run_captain "$home" hold gated-work --reason "needs the captain's word" --title "Gated work" >/dev/null \
     || fail "could not hold the sample gated work"
-  run_adapter "$home" arm --key membership-call --key gated-work=release >/dev/null \
+  run_adapter "$home" arm --documents "$dir" --key membership-call --key gated-work=release >/dev/null \
     || fail "could not arm the source"
 
   write_answer "$home" membership_call membership-call gold-only "Gold only" 2026-09-19T07:00:00.000Z
@@ -479,6 +548,8 @@ test_the_close_mode_comes_from_arming
 test_ingest_retires_the_source_once_every_card_is_answered
 test_another_cards_answer_does_not_settle_a_card
 test_an_earlier_rounds_answer_does_not_settle_a_freshly_armed_card
+test_an_answer_given_before_a_new_round_does_not_settle_its_card
+test_earlier_rounds_answers_are_discarded_by_the_first_arm
 test_an_unarmed_ingest_claims_no_retirement
 test_answers_close_their_captain_held_tasks
 

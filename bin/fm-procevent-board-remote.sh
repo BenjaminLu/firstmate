@@ -2,7 +2,7 @@
 # Remote-board answer adapter for the generic process-to-event runner.
 #
 # Usage:
-#   fm-procevent-board-remote.sh arm --key <key>[=done|release] [--key ...]
+#   fm-procevent-board-remote.sh arm --documents <dir> --key <key>[=done|release] [--key ...]
 #   fm-procevent-board-remote.sh ingest --documents <dir>
 #   fm-procevent-board-remote.sh tick [--interval <secs>]
 #   fm-procevent-board-remote.sh classify <result-file>
@@ -25,8 +25,10 @@
 #
 # WHAT ARMS IT AND WHAT RETIRES IT, so a reader can tell whether it should be
 # running right now.
-#   arms:    `arm`, naming every card on the board the captain has not answered.
-#            Composing a board that carries open cards is the moment to call it.
+#   arms:    `arm`, naming every card on the board the captain has not answered
+#            and given the answer documents as they stand at that moment.
+#            Composing a board that carries open cards is the moment to call it,
+#            and the read comes before the arm, never after it.
 #   retires: `ingest`, the moment the last awaited key has an answer. That is
 #            the deterministic path, not something an agent has to remember.
 #            A `tick` that finds nothing awaited is the backstop: it classifies
@@ -70,14 +72,19 @@
 # forgetting an identity would re-deliver an answer that is still sitting there.
 # The cursor grows by one line per distinct answer ever given.
 #
-# AN ARM OPENS A GENERATION, which is how a never-pruned cursor and a reusable
-# card key live together. `dispatch.charted` is asked again on every board round,
-# so "has this key ever been answered" is the wrong question; "has it been
-# answered since it was armed" is the right one. `arm` bumps a counter and stamps
-# every awaited card with it, `ingest` stamps every record it writes with the
-# counter's value at delivery, and a card armed at generation G is settled only
-# by a record at G or later. It is still identity, never position and never a
-# count, that decides whether an answer is delivered.
+# AN ANSWER SETTLES THE CARD IT WAS GIVEN FOR AND NO OTHER. `dispatch.charted`
+# is asked again on every board round, so "has this key ever been answered" is
+# the wrong question; "was this answer given for the card standing now" is the
+# right one. The only evidence the adapter can have that an answer predates a
+# card is that its document was already in the store when that card was armed,
+# which is why `arm` is given the documents and records the identities it finds:
+# every one of them answers a question that no longer exists. Such an answer is
+# DISCARDED rather than applied - it never reaches the intake and never settles
+# a card - and it is counted and named in the ingest report, because a captain
+# answer that goes nowhere must be visible rather than absent. It is recorded in
+# the cursor all the same, or the next pass would find it and report it forever.
+# On the very first arm in a home the store already holds every answer of every
+# earlier board round, and all of them are pre-existing by exactly this rule.
 #
 # THE CHANNEL DECIDES NOTHING. `ingest` turns documents into
 # `<key>TAB<answer>TAB<label>[TAB<mode>]` lines and pipes them into
@@ -118,8 +125,9 @@ ADAPTER=board-remote
 # time. That figure is the responsiveness standard, which is why the cadence is
 # this constant and not something a caller sets.
 DEFAULT_INTERVAL=90
-# The intake truncates every field at this bound too, so framing a longer answer
-# is what the channel refuses, never delivering it at all.
+# The intake truncates every field at this bound itself, so a longer answer is
+# truncated here rather than refused: being stricter than the consumer would
+# only strand the card it answers.
 MAX_FIELD=512
 KEY_PATTERN='^[A-Za-z0-9._-]{1,128}$'
 TAB=$'\t'
@@ -127,7 +135,7 @@ TAB=$'\t'
 STATE_DIR="$STATE/board-remote"
 AWAITING="$STATE_DIR/awaiting"
 DELIVERED="$STATE_DIR/delivered"
-GENERATION="$STATE_DIR/generation"
+PRE_ARM="$STATE_DIR/pre-arm"
 
 usage() {
   awk '
@@ -181,7 +189,7 @@ record_usable() {  # <path>
 require_usable_records() {
   record_usable "$AWAITING" || die "the awaited card set is not a plain file: $AWAITING"
   record_usable "$DELIVERED" || die "the answer record is not a plain file: $DELIVERED"
-  record_usable "$GENERATION" || die "the arm generation counter is not a plain file: $GENERATION"
+  record_usable "$PRE_ARM" || die "the pre-arm answer set is not a plain file: $PRE_ARM"
 }
 
 read_lines() {  # <path>  (an absent file reads as empty)
@@ -197,25 +205,12 @@ count_lines() {  # <path>
 
 awaiting_count() { count_lines "$AWAITING"; }
 
-# A counter that has never been written, or that no longer reads as a whole
-# number, is generation 0: every card armed from here carries a higher one, so
-# no record can settle a card it did not answer.
-current_generation() {
-  local n
-  n=$(read_lines "$GENERATION" | head -1)
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  printf '%s\n' "$n"
-}
-
-# The counter is published before the awaited set that cites it, so a crash in
-# between skips a generation rather than handing two boards the same one.
-open_generation() {
-  local n staged
-  n=$(( $(current_generation) + 1 ))
-  staged=$(stage_in_state generation) || return 1
-  printf '%s\n' "$n" > "$staged" || { rm -f -- "$staged"; return 1; }
-  publish_file "$staged" "$GENERATION" || { rm -f -- "$staged"; return 1; }
-  printf '%s\n' "$n"
+# Whole-line membership, so one identity is never read as a prefix of another.
+line_present() {  # <line> <newline-separated-lines>
+  case $'\n'"$2"$'\n' in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+  esac
+  return 1
 }
 
 # --- arming -----------------------------------------------------------------
@@ -232,10 +227,15 @@ positive_number() {
 }
 
 cmd_arm() {
-  local key mode staged generation entry
-  local -a keys=() awaited=()
+  local dir='' key mode staged pre_arm
+  local -a keys=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --documents)
+        [ -n "${2-}" ] || die "--documents needs the directory holding the answer documents"
+        dir=$2
+        shift 2
+        ;;
       --key)
         [ -n "${2-}" ] || die "--key needs a board card key"
         key=${2%%=*}
@@ -256,16 +256,26 @@ cmd_arm() {
   done
   [ "${#keys[@]}" -gt 0 ] \
     || die "arm needs at least one --key: a source with nothing awaited would wake firstmate for a board nobody owes an answer on"
+  [ -n "$dir" ] \
+    || die "arm needs --documents <dir>: the answers already in the store are the ones these cards are NOT asking about, so the read comes before the arm"
+  [ -d "$dir" ] && [ ! -L "$dir" ] || die "not a directory: $dir"
+  command -v jq >/dev/null 2>&1 || die "jq is not installed"
   state_dir_ready || die "cannot prepare the adapter's state directory: $STATE_DIR"
   require_usable_records
-  generation=$(open_generation) || die "cannot open a new arm generation"
-  for entry in "${keys[@]}"; do
-    awaited+=("$entry$TAB$generation")
-  done
+  # The pre-arm set is published BEFORE the cards that rely on it, so a crash in
+  # between leaves the previous cards guarded by a newer set - they stay awaited
+  # and keep waking firstmate - rather than leaving new cards a stale answer
+  # could settle.
+  pre_arm=$(snapshot_identities "$dir")
+  staged=$(stage_in_state pre-arm) || die "cannot stage the pre-arm answer set"
+  { [ -z "$pre_arm" ] || printf '%s\n' "$pre_arm"; } > "$staged" \
+    || { rm -f -- "$staged"; die "cannot write the pre-arm answer set"; }
+  publish_file "$staged" "$PRE_ARM" \
+    || { rm -f -- "$staged"; die "cannot publish the pre-arm answer set"; }
   # The awaited set is written BEFORE the registration, so a tick can never run
   # against a missing record and read a freshly armed board as settled.
   staged=$(stage_in_state awaiting) || die "cannot stage the awaited card set"
-  printf '%s\n' "${awaited[@]}" > "$staged" \
+  printf '%s\n' "${keys[@]}" > "$staged" \
     || { rm -f -- "$staged"; die "cannot write the awaited card set"; }
   publish_file "$staged" "$AWAITING" \
     || { rm -f -- "$staged"; die "cannot publish the awaited card set"; }
@@ -274,6 +284,7 @@ cmd_arm() {
   printf 'armed: %s\n' "$CANONICAL_SOURCE_ID"
   printf 'interval: %ss\n' "$DEFAULT_INTERVAL"
   printf 'awaiting: %s\n' "${#keys[@]}"
+  printf 'already-answered: %s\n' "$(count_lines "$PRE_ARM")"
 }
 
 cmd_source_id() { printf '%s\n' "$CANONICAL_SOURCE_ID"; }
@@ -365,6 +376,21 @@ document_identity() {  # <doc-id> <file>
   printf '%s\n%s\n' "$1" "$canon" | sha256_text
 }
 
+# Print the identity of every answer the store already holds. A document this
+# channel cannot even parse is left out: it has no identity, so it can settle
+# nothing and needs guarding against nothing.
+snapshot_identities() {  # <dir>
+  local f docid identity
+  for f in "$1"/*.json; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    docid=${f##*/}
+    docid=${docid%.json}
+    identity=$(document_identity "$docid" "$f") || continue
+    [ -n "$identity" ] || continue
+    printf '%s\n' "$identity"
+  done
+}
+
 # Print `<key>TAB<answer>TAB<label>` for one document, or nothing when its
 # stored content is not an answer this channel can frame. Control characters are
 # replaced before the line is built, so a typed value cannot forge a field, and
@@ -387,8 +413,7 @@ document_row() {  # <file>
 }
 
 # The fields are read with awk rather than bash's own splitting, because `read`
-# folds the empty close mode of an ordinary card into one separator and would
-# hand back the card's generation as its mode.
+# folds the empty close mode of an ordinary card into its separator.
 awaited_mode() {  # <key>
   [ -f "$AWAITING" ] && [ ! -L "$AWAITING" ] || return 0
   awk -F'\t' -v key="$1" '$1 == key { print $2; exit }' "$AWAITING"
@@ -412,31 +437,34 @@ feed_intake() {  # <rows-file>
   return 1
 }
 
-# An awaited key is settled once an answer for it has been recorded SINCE IT WAS
-# ARMED - not only one delivered on this pass, so a repeated ingest converges
-# instead of drifting, and not one from an earlier generation, so asking the same
-# key again on a later board round is a genuinely open card.
+# An awaited key is settled once an answer for it has been recorded that was not
+# already in the store when the card was armed. Any answer that was is one this
+# card never asked for, so it settles nothing however it got into the cursor -
+# whether it was delivered for an earlier round of the same key or discarded on
+# arrival. Not only an answer delivered on this pass counts, so a repeated
+# ingest converges instead of drifting.
 # The record is matched on its KEY COLUMN, never as a substring of the line: an
 # answer's own value can be a task id - `dispatch.charted` carries exactly that -
 # and a substring match would read one card's dispatch pick as an answer to the
 # card that task happens to own.
-answer_recorded() {  # <key> <armed-generation>
+answer_recorded() {  # <key>
   [ -f "$DELIVERED" ] && [ ! -L "$DELIVERED" ] || return 1
-  awk -F'\t' -v key="$1" -v gen="${2:-0}" \
-    '$2 == key && ($6 + 0) >= (gen + 0) { found = 1; exit } END { exit !found }' "$DELIVERED"
+  awk -F'\t' -v key="$1" -v snapshot="$PRE_ARM" '
+    BEGIN { while ((getline line < snapshot) > 0) if (line != "") pre[line] = 1 }
+    $2 == key && !($1 in pre) { found = 1; exit }
+    END { exit !found }
+  ' "$DELIVERED"
 }
 
 prune_awaiting() {
-  local lines line key generation staged
+  local lines line key staged
   local -a remaining=()
   lines=$(read_lines "$AWAITING")
   [ -n "$lines" ] || return 0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     key=${line%%"$TAB"*}
-    generation=${line##*"$TAB"}
-    case "$generation" in ''|*[!0-9]*) generation=0 ;; esac
-    if answer_recorded "$key" "$generation"; then
+    if answer_recorded "$key"; then
       continue
     fi
     remaining+=("$line")
@@ -466,8 +494,9 @@ retire_when_settled() {  # <awaited-before>
 }
 
 cmd_ingest() {
-  local dir='' f docid identity row key answer label mode generation
-  local documents=0 new=0 unusable=0 staged rows_file delivered_lines awaited_before
+  local dir='' f docid identity row key answer label mode
+  local documents=0 new=0 unusable=0 discarded=0
+  local staged rows_file delivered_lines pre_arm_lines awaited_before
   local -a notes=() rows=() records=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -487,8 +516,8 @@ cmd_ingest() {
   require_usable_records
 
   awaited_before=$(awaiting_count)
-  generation=$(current_generation)
   delivered_lines=$(read_lines "$DELIVERED")
+  pre_arm_lines=$(read_lines "$PRE_ARM")
   for f in "$dir"/*.json; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     documents=$((documents + 1))
@@ -503,6 +532,12 @@ cmd_ingest() {
     case "$delivered_lines" in
       "$identity$TAB"*|*$'\n'"$identity$TAB"*) continue ;;
     esac
+    if line_present "$identity" "$pre_arm_lines"; then
+      discarded=$((discarded + 1))
+      notes+=("answered-before-arm: $docid")
+      records+=("$identity$TAB$TAB$TAB$TAB")
+      continue
+    fi
     row=$(document_row "$f")
     if [ -z "$row" ]; then
       unusable=$((unusable + 1))
@@ -517,18 +552,20 @@ cmd_ingest() {
     else
       rows+=("$key$TAB$answer$TAB$label")
     fi
-    records+=("$identity$TAB$key$TAB$answer$TAB$label$TAB$mode$TAB$generation")
+    records+=("$identity$TAB$key$TAB$answer$TAB$label$TAB$mode")
   done
 
   printf 'board-remote: ingest\n'
   printf 'documents: %s\n' "$documents"
   printf 'new: %s\n' "$new"
+  printf 'discarded: %s\n' "$discarded"
   printf 'unusable: %s\n' "$unusable"
   [ "${#notes[@]}" -eq 0 ] || printf '%s\n' "${notes[@]}"
 
-  if [ "$new" -gt 0 ]; then
+  if [ "${#records[@]}" -gt 0 ]; then
     # The cursor advances only once these answers are recorded here. Until that
     # write lands the store still holds them and the next pass finds them again.
+    # A discarded answer is recorded too, so it is reported once and not forever.
     staged=$(stage_in_state delivered) || die "cannot stage the answer record"
     {
       [ -z "$delivered_lines" ] || printf '%s\n' "$delivered_lines"
@@ -536,7 +573,12 @@ cmd_ingest() {
     } > "$staged" || { rm -f -- "$staged"; die "cannot write the answer record"; }
     publish_file "$staged" "$DELIVERED" \
       || { rm -f -- "$staged"; die "cannot publish the answer record"; }
-    printf 'cursor: advanced by %s\n' "$new"
+    printf 'cursor: advanced by %s\n' "${#records[@]}"
+  else
+    printf 'cursor: unchanged (nothing new)\n'
+  fi
+
+  if [ "$new" -gt 0 ]; then
     printf 'answer: %s\n' "${rows[@]}"
     rows_file=$(stage_in_state rows) || die "cannot stage the answer rows"
     printf '%s\n' "${rows[@]}" > "$rows_file" \
@@ -544,7 +586,6 @@ cmd_ingest() {
     feed_intake "$rows_file" || true
     rm -f -- "$rows_file"
   else
-    printf 'cursor: unchanged (nothing new)\n'
     printf 'intake: not run (nothing new)\n'
   fi
 
