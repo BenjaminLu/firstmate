@@ -515,6 +515,50 @@ test_invalid_entrypoints_have_zero_side_effects() {
   pass "PR and teardown entrypoints reject invalid arguments before every side effect"
 }
 
+test_arm_only_arms_without_announcing_ready() {
+  local dir parent expected child_status
+  dir=$(make_case arm-only-split)
+  write_task_meta "$dir"
+  expected=0123456789abcdef0123456789abcdef01234567
+
+  # Make this home a seeded secondmate bound to a local parent, so the
+  # PR-ready line the default path publishes is observable as a file append.
+  parent="$dir/parent"
+  mkdir -p "$parent/state"
+  printf 'child-home\n' > "$dir/home/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+    > "$dir/home/.fm-secondmate-parent"
+  child_status="$parent/state/child-home.status"
+
+  # --arm-only records and arms, and announces nothing.
+  FM_TEST_GH_HEAD=$expected run_check_entry "$dir" task-a \
+    https://github.com/my-org/repo/pull/37 --arm-only \
+    > "$dir/arm.out" 2> "$dir/arm.err" || fail "--arm-only check failed"
+  grep -qxF 'pr=https://github.com/my-org/repo/pull/37' "$dir/home/state/task-a.meta" \
+    || fail "--arm-only did not record the canonical PR"
+  cmp -s "$POLL" "$dir/home/state/task-a.check.sh" || fail "--arm-only did not arm the static poll"
+  assert_grep 'armed: state/task-a.check.sh' "$dir/arm.out" "--arm-only did not report arming"
+  [ ! -e "$child_status" ] \
+    || fail "--arm-only announced a PR-ready line to the parent channel"
+
+  # The default form announces, so the two acts are genuinely separable.
+  FM_TEST_GH_HEAD=$expected run_check_entry "$dir" task-a \
+    https://github.com/my-org/repo/pull/37 \
+    > "$dir/ready.out" 2> "$dir/ready.err" || fail "default check failed"
+  [ -e "$child_status" ] || fail "the default form published no PR-ready line"
+  assert_grep 'PR ready: https://github.com/my-org/repo/pull/37' "$child_status" \
+    "the published ready line did not name the canonical PR"
+
+  # A third argument that is not --arm-only is refused rather than ignored,
+  # so a typo cannot silently fall through to the announcing path.
+  if FM_TEST_GH_HEAD=$expected run_check_entry "$dir" task-a \
+    https://github.com/my-org/repo/pull/37 --arm-onyl >/dev/null 2>&1; then
+    fail "an unrecognized third argument was accepted"
+  fi
+
+  pass "fm-pr-check.sh: --arm-only arms the merge poll without announcing the work ready"
+}
+
 test_valid_recording_and_merge_derivation() {
   local dir expected sidecar count rc
   dir=$(make_case valid-recording)
@@ -2771,6 +2815,7 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
+test_arm_only_arms_without_announcing_ready
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_atomic_interruption_leaves_no_partial_artifact
