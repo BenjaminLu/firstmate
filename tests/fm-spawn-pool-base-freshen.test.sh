@@ -471,6 +471,47 @@ test_unresolved_remote_default_refuses_pool() {
   pass "an unresolved remote default branch refuses the pooled worktree"
 }
 
+# A clone whose remote.origin.fetch omits the default branch - `git clone
+# --single-branch`, or a refspec narrowed afterwards - gets no refresh for
+# refs/remotes/origin/<default> out of the one fetch spawn makes. When that slot
+# also still carries a resolvable origin/HEAD, nothing else asks origin anything,
+# so resetting onto that ref would launch the worker from whatever base the slot
+# last saw, silently. The freshness guarantee is that it refuses instead.
+test_fetch_refspec_missing_the_default_branch_refuses_the_pool() {
+  local rec id out status before tracked current
+  id='pool-narrowed-refspec-r1'
+  rec=$(make_case narrowed-refspec "$id")
+  read_case_record "$rec"
+  git -C "$CASE_DIR/publisher" checkout --quiet -b side
+  git -C "$CASE_DIR/publisher" push --quiet origin side
+  git -C "$PROJECT_DIR" config remote.origin.fetch '+refs/heads/side:refs/remotes/origin/side'
+  # The stale remote-tracking pair a narrowed clone keeps carrying: origin/HEAD
+  # resolves, so the remote-HEAD query stays skipped, and origin/main still
+  # names the tip the slot was allocated at.
+  git -C "$POOL_DIR" update-ref refs/remotes/origin/main "$INITIAL_SHA"
+  git -C "$POOL_DIR" remote set-head origin main
+  before=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "spawn launched from a base its one fetch could not refresh"$'\n'"$out"
+  assert_contains "$out" "refusing to launch from a potentially stale base" \
+    "spawn did not clearly refuse a refspec that cannot refresh the default branch"
+  tracked=$(git -C "$POOL_DIR" rev-parse refs/remotes/origin/main)
+  current=$(git --git-dir="$CASE_DIR/origin.git" rev-parse "$DEFAULT_BRANCH")
+  [ "$tracked" != "$current" ] \
+    || fail "fixture did not leave origin/main stale, so the refusal proves nothing"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+    || fail "spawn moved the slot onto a ref its fetch never refreshed"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# observed narrowed-refspec refusal: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
+    printf '# observed base: origin/main=%s origin tip=%s\n' "$tracked" "$current"
+  fi
+  pass "a fetch refspec that omits the default branch refuses the pooled worktree"
+}
+
 # A slot left on a stale submodule pin is the field failure this diagnosis exists
 # for: a refresh moved the superproject and left the submodule behind, so the
 # refusal fires a spawn later, on a slot whose own `git status` looks clean to the
@@ -898,6 +939,7 @@ test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
 test_unresolved_remote_default_refuses_pool
+test_fetch_refspec_missing_the_default_branch_refuses_the_pool
 test_unreachable_origin_refuses_stale_pool_base
 test_originless_pool_launches_without_a_freshness_fetch
 test_originless_dirty_pool_refuses_without_discarding_work

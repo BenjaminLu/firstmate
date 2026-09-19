@@ -210,9 +210,11 @@
 #   spawn never probes for it), `git remote set-head origin --auto` runs only
 #   when refs/remotes/origin/HEAD is missing or points at a ref that does not
 #   resolve, and the default branch's remote-tracking ref is trusted as the
-#   fetch just left it rather than fetched a second time - which holds whenever
-#   remote.origin.fetch covers that branch, as the wildcard refspec of a normal
-#   clone does. The fetch carries
+#   fetch just left it rather than fetched a second time - but only once
+#   remote.origin.fetch, read from local config for free, is shown to map that
+#   branch onto refs/remotes/origin/<default>, as the wildcard refspec of a
+#   normal clone does. A refspec that omits it refuses rather than resetting
+#   onto a ref this fetch never touched. The fetch carries
 #   `-c remote.origin.followRemoteHEAD=always` so that a default-branch rename
 #   on origin repoints refs/remotes/origin/HEAD from that same round trip.
 #   RESIDUAL: `remote.origin.followRemoteHEAD` is git >= 2.48; below that floor
@@ -227,15 +229,15 @@
 #   the slots share) on a git below that floor. Closing this in code by adding
 #   --prune would delete remote-tracking refs, a behavior change wider than
 #   this change's stated intent, so it is left to the captain.
-#   RESIDUAL: a single-branch clone (`git clone --single-branch --branch dev`)
-#   narrows remote.origin.fetch to that one branch, so the broad fetch never
-#   creates refs/remotes/origin/<default>. Such a slot does not launch stale:
-#   the `'origin/<default>' is not a commit` refusal above fires and the spawn
-#   stops loudly. Before this change the narrowed fetch created that ref and
-#   the spawn launched, so this is a behavior change for single-branch
-#   checkouts only. Restoring that fetch would re-add a round trip the intent
-#   cut, so it too is left to the captain; bin/fm-review-diff.sh keeps its own
-#   narrowed fetch for the same reason. When no origin
+#   A clone whose remote.origin.fetch omits the default branch - `git clone
+#   --single-branch --branch dev`, or a refspec narrowed by hand afterwards -
+#   never launches from that slot: it stops at the refspec check above, or
+#   earlier still, at the default-branch resolution, when it also carries no
+#   refs/remotes/origin/HEAD. Before this change the second, narrowed fetch
+#   created or updated that ref and the spawn launched, so this is a behavior
+#   change for such checkouts. Restoring that fetch would re-add a round trip
+#   the intent cut, so it is left to the captain; bin/fm-review-diff.sh keeps
+#   its own narrowed fetch for the same reason. When no origin
 #   configuration is detected, spawn skips that remote freshness check and
 #   launches from the clean worktree's current HEAD. Relaunch reuses the
 #   recorded worktree without fetching or resetting its base. An unreachable
@@ -2842,6 +2844,55 @@ spawn_worktree_origin_head_resolves() { # <worktree>
   git -C "$worktree" rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1
 }
 
+# Echo the text a refspec side's `*` matched against <ref>, empty for an exact
+# side, or return 1 when the side does not name that ref at all. A bare side
+# ("main") means refs/heads/main, the shorthand git itself accepts.
+spawn_refspec_side_match() { # <refspec-side> <ref>
+  local side=$1 ref=$2 prefix suffix middle
+  case $side in refs/*) ;; *) side="refs/heads/$side" ;; esac
+  case $side in
+    *'*'*)
+      prefix=${side%%'*'*}
+      suffix=${side#*'*'}
+      case $ref in "$prefix"*"$suffix") ;; *) return 1 ;; esac
+      middle=${ref#"$prefix"}
+      printf '%s' "${middle%"$suffix"}"
+      ;;
+    "$ref") ;;
+    *) return 1 ;;
+  esac
+}
+
+# Does remote.origin.fetch map refs/heads/<branch> onto
+# refs/remotes/origin/<branch>? The single fetch only refreshes the
+# remote-tracking refs its configured refspec names, so a clone that narrows
+# that refspec past the default branch leaves refs/remotes/origin/<default>
+# holding whatever the slot last saw - which reads as current here and is not.
+# Local config answers this for free, with no second round trip. A negative
+# refspec matching the branch excludes it however many positives named it, and
+# a refspec landing it anywhere but refs/remotes/origin/<branch> leaves that
+# ref untouched, so neither counts as covered.
+spawn_worktree_fetch_covers_branch() { # <worktree> <branch>
+  local worktree=$1 ref="refs/heads/$2" want="refs/remotes/origin/$2" spec src dst middle covered=
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    case $spec in
+      '^'*)
+        spawn_refspec_side_match "${spec#^}" "$ref" >/dev/null && return 1
+        continue
+        ;;
+    esac
+    spec=${spec#+}
+    case $spec in *:*) ;; *) continue ;; esac
+    src=${spec%%:*}
+    dst=${spec#*:}
+    middle=$(spawn_refspec_side_match "$src" "$ref") || continue
+    case $dst in *'*'*) dst="${dst%%'*'*}$middle${dst#*'*'}" ;; esac
+    [ "$dst" = "$want" ] && covered=yes
+  done < <(git -C "$worktree" config --get-all remote.origin.fetch 2>/dev/null)
+  [ -n "$covered" ]
+}
+
 freshen_spawn_worktree_base() { # <worktree>
   local worktree=$1 default target expected actual status
   status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
@@ -2879,9 +2930,13 @@ freshen_spawn_worktree_base() { # <worktree>
   # Whenever remote.origin.fetch covers the default branch - the wildcard a
   # normal clone installs - the fetch above already updated
   # refs/remotes/origin/<default>, so a second fetch narrowed to that ref would
-  # be a subset of it. A single-branch clone narrows that refspec and is the
-  # exception the header's RESIDUAL records; it refuses below rather than
-  # launching stale.
+  # be a subset of it. When it does not cover that branch, the fetch left the
+  # ref exactly as the slot last saw it, and resetting onto it would launch
+  # from a stale base without a word; refuse instead.
+  if ! spawn_worktree_fetch_covers_branch "$worktree" "$default"; then
+    echo "error: remote.origin.fetch for pooled worktree '$worktree' does not map 'refs/heads/$default' onto '$target', so the fetch of origin could not refresh it; refusing to launch from a potentially stale base" >&2
+    return 1
+  fi
   expected=$(git -C "$worktree" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
     echo "error: '$target' is not a commit for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
