@@ -202,13 +202,48 @@
 #   set (its header owns the refusal). A secondmate runs in its own home and is
 #   not marked.
 #   Only after this isolation check, every fresh ship or scout requires a clean
-#   task worktree. When an origin configuration is detected, spawn fetches it,
-#   resolves the current remote default branch, and resets to its tip. When none
-#   is detected, spawn skips that remote freshness check and launches from the
-#   clean worktree's current HEAD. Relaunch reuses the recorded worktree without
-#   fetching or resetting its base. An unreachable detected origin, unresolved
-#   default branch, or non-clean worktree refuses a fresh spawn rather than
-#   risking a PR based on stale history or discarding local work.
+#   task worktree. When an origin configuration is detected, spawn fetches it
+#   exactly once, resolves the current remote default branch, and resets to its
+#   tip. That one `git fetch origin` is the spawn's only network round trip:
+#   the pool slot is acquired with `treehouse get --no-fetch` unconditionally
+#   (bin/fm-bootstrap.sh's treehouse floor owns that flag's availability, so
+#   spawn never probes for it), `git remote set-head origin --auto` runs only
+#   when refs/remotes/origin/HEAD is missing or points at a ref that does not
+#   resolve, and the default branch's remote-tracking ref is trusted as the
+#   fetch just left it rather than fetched a second time - but only once
+#   remote.origin.fetch, read from local config for free, is shown to map that
+#   branch onto refs/remotes/origin/<default>, as the wildcard refspec of a
+#   normal clone does. A refspec that omits it refuses rather than resetting
+#   onto a ref this fetch never touched. The fetch carries
+#   `-c remote.origin.followRemoteHEAD=always` so that a default-branch rename
+#   on origin repoints refs/remotes/origin/HEAD from that same round trip.
+#   RESIDUAL: `remote.origin.followRemoteHEAD` is git >= 2.48; below that floor
+#   git silently ignores it and a default-branch rename on origin goes
+#   unnoticed. This fetch does not pass --prune and nothing here sets
+#   fetch.prune, so refs/remotes/origin/<old> survives locally either way:
+#   whether origin keeps or deletes the old branch, origin/HEAD still resolves,
+#   the set-head above stays skipped, and the slot is reset to the old default
+#   branch - to a tip that no longer exists on origin at all in the delete
+#   variant - and launched with no error. Both rename variants therefore need
+#   one `git remote set-head origin --auto` in the primary clone (whose refs
+#   the slots share) on a git below that floor. Closing this in code by adding
+#   --prune would delete remote-tracking refs, a behavior change wider than
+#   this change's stated intent, so it is left to the captain.
+#   A clone whose remote.origin.fetch omits the default branch - `git clone
+#   --single-branch --branch dev`, or a refspec narrowed by hand afterwards -
+#   never launches from that slot: it stops at the refspec check above, or
+#   earlier still, at the default-branch resolution, when it also carries no
+#   refs/remotes/origin/HEAD. Before this change the second, narrowed fetch
+#   created or updated that ref and the spawn launched, so this is a behavior
+#   change for such checkouts. Restoring that fetch would re-add a round trip
+#   the intent cut, so it is left to the captain; bin/fm-review-diff.sh keeps
+#   its own narrowed fetch for the same reason. When no origin
+#   configuration is detected, spawn skips that remote freshness check and
+#   launches from the clean worktree's current HEAD. Relaunch reuses the
+#   recorded worktree without fetching or resetting its base. An unreachable
+#   detected origin, unresolved default branch, or non-clean worktree refuses a
+#   fresh spawn rather than risking a PR based on stale history or discarding
+#   local work.
 #   A slot whose only deviation is a stale submodule gitlink is refused by that
 #   same clean check, but is reported as a stale checkout naming each submodule
 #   and both pins; nothing is converged or removed, and no remedy is suggested.
@@ -2802,6 +2837,62 @@ spawn_worktree_has_origin_config() { # <worktree>
   return 1
 }
 
+spawn_worktree_origin_head_resolves() { # <worktree>
+  local worktree=$1 ref
+  ref=$(git -C "$worktree" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) || return 1
+  [ -n "$ref" ] || return 1
+  git -C "$worktree" rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1
+}
+
+# Echo the text a refspec side's `*` matched against <ref>, empty for an exact
+# side, or return 1 when the side does not name that ref at all. A bare side
+# ("main") means refs/heads/main, the shorthand git itself accepts.
+spawn_refspec_side_match() { # <refspec-side> <ref>
+  local side=$1 ref=$2 prefix suffix middle
+  case $side in refs/*) ;; *) side="refs/heads/$side" ;; esac
+  case $side in
+    *'*'*)
+      prefix=${side%%'*'*}
+      suffix=${side#*'*'}
+      case $ref in "$prefix"*"$suffix") ;; *) return 1 ;; esac
+      middle=${ref#"$prefix"}
+      printf '%s' "${middle%"$suffix"}"
+      ;;
+    "$ref") ;;
+    *) return 1 ;;
+  esac
+}
+
+# Does remote.origin.fetch map refs/heads/<branch> onto
+# refs/remotes/origin/<branch>? The single fetch only refreshes the
+# remote-tracking refs its configured refspec names, so a clone that narrows
+# that refspec past the default branch leaves refs/remotes/origin/<default>
+# holding whatever the slot last saw - which reads as current here and is not.
+# Local config answers this for free, with no second round trip. A negative
+# refspec matching the branch excludes it however many positives named it, and
+# a refspec landing it anywhere but refs/remotes/origin/<branch> leaves that
+# ref untouched, so neither counts as covered.
+spawn_worktree_fetch_covers_branch() { # <worktree> <branch>
+  local worktree=$1 ref="refs/heads/$2" want="refs/remotes/origin/$2" spec src dst middle covered=
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    case $spec in
+      '^'*)
+        spawn_refspec_side_match "${spec#^}" "$ref" >/dev/null && return 1
+        continue
+        ;;
+    esac
+    spec=${spec#+}
+    case $spec in *:*) ;; *) continue ;; esac
+    src=${spec%%:*}
+    dst=${spec#*:}
+    middle=$(spawn_refspec_side_match "$src" "$ref") || continue
+    case $dst in *'*'*) dst="${dst%%'*'*}$middle${dst#*'*'}" ;; esac
+    [ "$dst" = "$want" ] && covered=yes
+  done < <(git -C "$worktree" config --get-all remote.origin.fetch 2>/dev/null)
+  [ -n "$covered" ]
+}
+
 freshen_spawn_worktree_base() { # <worktree>
   local worktree=$1 default target expected actual status
   status=$(git -C "$worktree" -c core.quotePath=false status --porcelain) || {
@@ -2819,11 +2910,15 @@ freshen_spawn_worktree_base() { # <worktree>
   if ! spawn_worktree_has_origin_config "$worktree"; then
     return 0
   fi
-  if ! git -C "$worktree" fetch --quiet origin; then
+  if ! git -C "$worktree" -c remote.origin.followRemoteHEAD=always fetch --quiet origin; then
     echo "error: could not fetch origin for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   fi
-  if ! git -C "$worktree" remote set-head origin --auto >/dev/null 2>&1; then
+  # A clone already holds refs/remotes/origin/HEAD, so asking origin again for
+  # the same value is a wasted round trip; only a slot with no usable
+  # remote-HEAD symref pays for the network query.
+  if ! spawn_worktree_origin_head_resolves "$worktree" \
+    && ! git -C "$worktree" remote set-head origin --auto >/dev/null 2>&1; then
     echo "error: could not resolve origin's current default branch for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   fi
@@ -2832,8 +2927,14 @@ freshen_spawn_worktree_base() { # <worktree>
     return 1
   }
   target="origin/$default"
-  if ! git -C "$worktree" fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default"; then
-    echo "error: could not fetch '$target' for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
+  # Whenever remote.origin.fetch covers the default branch - the wildcard a
+  # normal clone installs - the fetch above already updated
+  # refs/remotes/origin/<default>, so a second fetch narrowed to that ref would
+  # be a subset of it. When it does not cover that branch, the fetch left the
+  # ref exactly as the slot last saw it, and resetting onto it would launch
+  # from a stale base without a word; refuse instead.
+  if ! spawn_worktree_fetch_covers_branch "$worktree" "$default"; then
+    echo "error: remote.origin.fetch for pooled worktree '$worktree' does not map 'refs/heads/$default' onto '$target', so the fetch of origin could not refresh it; refusing to launch from a potentially stale base" >&2
     return 1
   fi
   expected=$(git -C "$worktree" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
@@ -3594,7 +3695,13 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  # The interactive `treehouse get` would fetch origin before handing the slot
+  # over, and freshen_spawn_worktree_base fetches again right after; only the
+  # second fetch is load-bearing. bin/fm-bootstrap.sh's treehouse floor already
+  # requires `--no-fetch`, so it is sent unconditionally rather than probed
+  # here - a probe would run in fm-spawn's PATH while this line runs in the
+  # pane's interactive shell, which can resolve a different treehouse.
+  spawn_send_text_line "$WT_TARGET" 'treehouse get --no-fetch'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an

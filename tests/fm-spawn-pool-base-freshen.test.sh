@@ -6,6 +6,12 @@
 # These tests drive the real spawn path with a fake terminal, then prove it
 # starts the worker from the fetched origin tip, launches a clean origin-less
 # pool as-is, or stops when a configured origin is unusable.
+# The fetch-count cases prove that refresh costs one fetch of origin per spawn,
+# that the remote-HEAD query runs only when the slot has no usable
+# refs/remotes/origin/HEAD, and that the slot is acquired without treehouse's
+# own fetch. `--no-fetch` is sent unconditionally: bin/fm-bootstrap.sh's
+# treehouse floor owns that flag's availability, and tests/fm-bootstrap.test.sh
+# pins it.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -247,13 +253,19 @@ test_originless_pool_launches_without_a_freshness_fetch() {
     || fail "fixture unexpectedly configured an origin remote"
   before=$(git -C "$POOL_DIR" rev-parse HEAD)
 
-  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
   expect_code 0 "$status" "spawn should launch a local-only pooled worktree with no origin"$'\n'"$out"
   assert_contains "$out" "spawned $id" "spawn did not report success for the origin-less pool"
   assert_not_contains "$out" "could not fetch origin" \
     "spawn attempted a freshness fetch against a nonexistent origin"
   [ ! -e "$POOL_DIR/.git/FETCH_HEAD" ] || fail "spawn fetched against a pooled worktree with no origin"
+  # Without this the zero counts below would also pass if nothing was logged.
+  [ -s "$CASE_DIR/git.log" ] || fail "the logging git recorded no call at all, so the counts below prove nothing"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 0 ] \
+    || fail "spawn fetched for an origin-less pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$(set_head_count "$CASE_DIR/git.log")" = 0 ] \
+    || fail "spawn queried a remote HEAD for an origin-less pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
   [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
     || fail "spawn moved HEAD on an origin-less pooled worktree that had nothing to refresh against"
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
@@ -417,7 +429,7 @@ test_dirty_pool_refuses_without_discarding_work() {
   before=$(git -C "$POOL_DIR" rev-parse HEAD)
   printf 'keep this local work\n' > "$POOL_DIR/uncommitted.txt"
 
-  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "spawn succeeded despite a dirty pooled worktree"
   assert_contains "$out" "is not clean" "spawn did not clearly refuse a dirty pooled worktree"
@@ -425,6 +437,12 @@ test_dirty_pool_refuses_without_discarding_work() {
     || fail "spawn moved HEAD while refusing a dirty pooled worktree"
   assert_grep 'keep this local work' "$POOL_DIR/uncommitted.txt" \
     "spawn discarded uncommitted work while refusing the pool"
+  # Without this the zero counts below would also pass if nothing was logged.
+  [ -s "$CASE_DIR/git.log" ] || fail "the logging git recorded no call at all, so the counts below prove nothing"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 0 ] \
+    || fail "spawn fetched before refusing a dirty pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$(set_head_count "$CASE_DIR/git.log")" = 0 ] \
+    || fail "spawn queried a remote HEAD before refusing a dirty pool:"$'\n'"$(cat "$CASE_DIR/git.log")"
   if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
     printf '# observed dirty refusal: %s; preserved=%s\n' \
       "$(printf '%s\n' "$out" | tail -n 1)" "$(cat "$POOL_DIR/uncommitted.txt")"
@@ -451,6 +469,47 @@ test_unresolved_remote_default_refuses_pool() {
     printf '# observed unresolved-default refusal: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
   fi
   pass "an unresolved remote default branch refuses the pooled worktree"
+}
+
+# A clone whose remote.origin.fetch omits the default branch - `git clone
+# --single-branch`, or a refspec narrowed afterwards - gets no refresh for
+# refs/remotes/origin/<default> out of the one fetch spawn makes. When that slot
+# also still carries a resolvable origin/HEAD, nothing else asks origin anything,
+# so resetting onto that ref would launch the worker from whatever base the slot
+# last saw, silently. The freshness guarantee is that it refuses instead.
+test_fetch_refspec_missing_the_default_branch_refuses_the_pool() {
+  local rec id out status before tracked current
+  id='pool-narrowed-refspec-r1'
+  rec=$(make_case narrowed-refspec "$id")
+  read_case_record "$rec"
+  git -C "$CASE_DIR/publisher" checkout --quiet -b side
+  git -C "$CASE_DIR/publisher" push --quiet origin side
+  git -C "$PROJECT_DIR" config remote.origin.fetch '+refs/heads/side:refs/remotes/origin/side'
+  # The stale remote-tracking pair a narrowed clone keeps carrying: origin/HEAD
+  # resolves, so the remote-HEAD query stays skipped, and origin/main still
+  # names the tip the slot was allocated at.
+  git -C "$POOL_DIR" update-ref refs/remotes/origin/main "$INITIAL_SHA"
+  git -C "$POOL_DIR" remote set-head origin main
+  before=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "spawn launched from a base its one fetch could not refresh"$'\n'"$out"
+  assert_contains "$out" "refusing to launch from a potentially stale base" \
+    "spawn did not clearly refuse a refspec that cannot refresh the default branch"
+  tracked=$(git -C "$POOL_DIR" rev-parse refs/remotes/origin/main)
+  current=$(git --git-dir="$CASE_DIR/origin.git" rev-parse "$DEFAULT_BRANCH")
+  [ "$tracked" != "$current" ] \
+    || fail "fixture did not leave origin/main stale, so the refusal proves nothing"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+    || fail "spawn moved the slot onto a ref its fetch never refreshed"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# observed narrowed-refspec refusal: %s\n' "$(printf '%s\n' "$out" | tail -n 1)"
+    printf '# observed base: origin/main=%s origin tip=%s\n' "$tracked" "$current"
+  fi
+  pass "a fetch refspec that omits the default branch refuses the pooled worktree"
 }
 
 # A slot left on a stale submodule pin is the field failure this diagnosis exists
@@ -743,14 +802,144 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
+# --- one fetch per spawn ------------------------------------------------------
+
+# Every git call fm-spawn makes lands in FM_FAKE_GIT_LOG through the logging
+# git on the fakebin PATH; only spawn's own top-level calls are recorded.
+git_log_count() {  # <log> <pattern>
+  local log=$1 pattern=$2
+  [ -e "$log" ] || { printf '0\n'; return; }
+  grep -cE "$pattern" "$log" || true
+}
+
+fetch_count() {  # <log>
+  git_log_count "$1" '(^| )fetch( |$)'
+}
+
+set_head_count() {  # <log>
+  git_log_count "$1" '(^| )remote set-head( |$)'
+}
+
+run_counting_spawn() {  # <id> [spawn args...]
+  local id=$1
+  shift
+  fm_test_fake_git_log "$FAKEBIN_DIR" || fail "could not install the logging git"
+  FM_FAKE_GIT_LOG="$CASE_DIR/git.log" FM_FAKE_SEND_LOG="$CASE_DIR/send.log" \
+    run_spawn "$id" "$@"
+}
+
+test_refresh_fetches_origin_exactly_once_and_skips_set_head_when_origin_head_resolves() {
+  local rec id out status current fetches set_heads
+  id='pool-one-fetch-resolved-r1'
+  rec=$(make_case one-fetch-resolved "$id")
+  read_case_record "$rec"
+  # A clone's slot already carries refs/remotes/origin/HEAD; reproduce that
+  # shape with local operations only, before anything talks to origin.
+  git -C "$POOL_DIR" update-ref refs/remotes/origin/main "$INITIAL_SHA"
+  git -C "$POOL_DIR" remote set-head origin main
+  git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null \
+    || fail "fixture did not give the slot a resolvable origin/HEAD"
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should refresh a slot whose origin/HEAD already resolves"$'\n'"$out"
+  fetches=$(fetch_count "$CASE_DIR/git.log")
+  set_heads=$(set_head_count "$CASE_DIR/git.log")
+  [ "$fetches" = 1 ] || fail "spawn fetched origin $fetches times, not once:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$set_heads" = 0 ] || fail "spawn queried origin's HEAD although refs/remotes/origin/HEAD already resolved:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  current=$(git -C "$POOL_DIR" rev-parse origin/main)
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$current" ] \
+    || fail "the single fetch did not leave the slot at current origin/main"
+  [ "$current" != "$INITIAL_SHA" ] || fail "fixture did not prove origin/main advanced past the pool base"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# git calls with origin/HEAD resolvable:\n'; cat "$CASE_DIR/git.log"
+  fi
+  pass "a slot whose origin/HEAD resolves refreshes with one fetch and no remote-HEAD query"
+}
+
+test_refresh_queries_remote_head_only_when_origin_head_is_missing() {
+  local rec id out status fetches set_heads
+  id='pool-one-fetch-missing-r1'
+  rec=$(make_case one-fetch-missing "$id")
+  read_case_record "$rec"
+  ! git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null 2>&1 \
+    || fail "fixture unexpectedly gave the slot an origin/HEAD"
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should refresh a slot with no origin/HEAD"$'\n'"$out"
+  fetches=$(fetch_count "$CASE_DIR/git.log")
+  set_heads=$(set_head_count "$CASE_DIR/git.log")
+  [ "$fetches" = 1 ] || fail "spawn fetched origin $fetches times, not once:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$set_heads" -le 1 ] \
+    || fail "spawn ran the remote-HEAD query $set_heads times for one slot missing origin/HEAD:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  # The outcome proves the query ran on any git that ignores followRemoteHEAD:
+  # a plain fetch cannot create this symref, so only the set-head above can have.
+  [ "$(git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD)" = refs/remotes/origin/main ] \
+    || fail "spawn left the slot without a usable origin/HEAD"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse origin/main)" ] \
+    || fail "spawn did not leave the slot at current origin/main after resolving its default branch"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# git calls with origin/HEAD missing:\n'; cat "$CASE_DIR/git.log"
+  fi
+  pass "a slot with no origin/HEAD ends with a usable one, from one fetch plus at most one remote-HEAD query"
+}
+
+test_dangling_origin_head_is_repaired_before_launch() {
+  local rec id out status set_heads
+  id='pool-one-fetch-dangling-r1'
+  rec=$(make_case one-fetch-dangling "$id")
+  read_case_record "$rec"
+  git -C "$POOL_DIR" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/gone
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should repair a dangling origin/HEAD"$'\n'"$out"
+  set_heads=$(set_head_count "$CASE_DIR/git.log")
+  [ "$set_heads" -le 1 ] \
+    || fail "spawn ran the remote-HEAD query $set_heads times for one dangling origin/HEAD:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  # Repointing a symref that already exists is likewise beyond a plain fetch, so
+  # this outcome is the set-head having run on a git without followRemoteHEAD.
+  [ "$(git -C "$POOL_DIR" symbolic-ref -q refs/remotes/origin/HEAD)" = refs/remotes/origin/main ] \
+    || fail "spawn left origin/HEAD dangling"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 1 ] || fail "repairing origin/HEAD cost more than one fetch"
+  pass "a dangling origin/HEAD is repaired before launch, still with one fetch"
+}
+
+test_treehouse_get_always_skips_its_own_fetch() {
+  local rec id out status sent
+  id='pool-treehouse-nofetch-r1'
+  rec=$(make_case treehouse-nofetch "$id")
+  read_case_record "$rec"
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "spawn should launch and acquire its slot without treehouse's fetch"$'\n'"$out"
+  sent=$(grep -E '(^| )treehouse get' "$CASE_DIR/send.log" || true)
+  [ -n "$sent" ] || fail "spawn never sent a treehouse get line"
+  assert_contains "$sent" 'treehouse get --no-fetch' \
+    "spawn let treehouse fetch origin on its own: $sent"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 1 ] \
+    || fail "spawn fetched more than once while acquiring its slot:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# treehouse get line sent: %s\n' "$sent"
+  fi
+  pass "treehouse get always carries --no-fetch, leaving spawn's own fetch the only one"
+}
+
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
+test_refresh_fetches_origin_exactly_once_and_skips_set_head_when_origin_head_resolves
+test_refresh_queries_remote_head_only_when_origin_head_is_missing
+test_dangling_origin_head_is_repaired_before_launch
+test_treehouse_get_always_skips_its_own_fetch
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching
 test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
 test_unresolved_remote_default_refuses_pool
+test_fetch_refspec_missing_the_default_branch_refuses_the_pool
 test_unreachable_origin_refuses_stale_pool_base
 test_originless_pool_launches_without_a_freshness_fetch
 test_originless_dirty_pool_refuses_without_discarding_work
