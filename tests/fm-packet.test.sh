@@ -960,6 +960,29 @@ MARKER
 # renders have to read that line the same way: a backticked path is exempt
 # BECAUSE it is command material, so it has to reach the captain looking like
 # command material, on the card and on the page alike.
+# A heading is copy this renderer owns in all three languages, and it owns the
+# six the scaffold writes. A seventh would stand still in the language the
+# worker typed while every line under it is required to switch - the
+# half-switched block the whole rule exists to prevent.
+test_a_section_the_scaffold_never_wrote_is_refused() {
+  local home packet out rc
+  home=$(make_home prose-unknown-section)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  run_packet "$home" verify pk-1 >/dev/null || fail "verify refused a scaffolded packet"
+  python3 - "$packet" <<'INVENT'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("## Evidence", "## Open questions\n\n- en: does the bound hold on Linux\n- hant: 上限在 Linux 上成立嗎\n- hans: 上限在 Linux 上成立吗\n\n## Evidence", 1))
+INVENT
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a section this renderer has no heading for: $out"
+  assert_contains "$out" '"## Open questions" section' \
+    "the refusal does not name the section it refused: $out"
+  pass "a section the scaffold never wrote is refused, rather than half-switched"
+}
+
 test_a_backticked_line_is_code_on_both_surfaces() {
   local home packet out page
   home=$(make_home card-code-line)
@@ -1636,6 +1659,7 @@ test_an_empty_language_line_is_that_language_missing
 test_verify_refuses_a_group_the_renderer_would_read_differently
 test_a_line_that_is_a_link_only_collapses_when_every_language_is
 test_a_backticked_line_is_code_on_both_surfaces
+test_a_section_the_scaffold_never_wrote_is_refused
 test_the_packet_block_switches_every_heading_it_owns
 test_the_packet_block_reaches_the_card_in_all_three_languages
 test_verify_refuses_prose_the_captain_could_not_read

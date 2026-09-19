@@ -282,6 +282,11 @@
 #     every language and translating it would break it, so it says so for
 #     itself rather than being guessed at.
 #
+#     A section HEADING is copy this renderer owns, and it owns exactly the six
+#     the scaffold writes. verify refuses a seventh rather than let a heading
+#     stand still in the language the worker typed over lines this rule makes
+#     switch.
+#
 # WHO writes them is the worker who writes the packet, the same worker the
 # figure contract already requires to put data-en, data-hant and data-hans on
 # every drawn label. Nothing in this repo can translate, and a renderer that
@@ -509,6 +514,10 @@ content_lines() {  # stdin -> count of lines that carry content
 # and anywhere else a tagged line may not be written by halves.
 prose_problems() {  # <packet> -> one problem per line
   awk '
+    BEGIN {
+      split("What changed (generated)|What only this session knows|The decision|Figures|Evidence|How to pull more", every, "|")
+      for (i in every) known[every[i]] = 1
+    }
     function flush(  missing) {
       if (!opened) return
       missing = ""
@@ -520,7 +529,16 @@ prose_problems() {  # <packet> -> one problem per line
     }
     /^```/ { flush(); fence = !fence; next }
     fence { next }
-    /^## / { flush(); section = substr($0, 4); next }
+    /^## / {
+      flush(); section = substr($0, 4)
+      # A heading is captain-facing copy this renderer owns in all three
+      # languages, and it owns exactly the six the scaffold writes. A seventh
+      # would stand still in the language the worker typed while the rule below
+      # makes every line under it switch, so the packet carries the six.
+      if (!(section in known))
+        printf "the packet carries a \"## %s\" section; a packet carries the six sections the scaffold writes and no others, because a heading is copy this renderer has in all three languages - put those lines under the section they belong to\n", section
+      next
+    }
     {
       line = $0
       marker = ""
@@ -1585,13 +1603,12 @@ def decision_card(d):
     return "\n".join(parts)
 
 # ---- the card fragment: the packet, ready to open inside the board card ------
-# This script's header owns the one language rule; this is where it is applied.
-# The switching part of the card gets what the packet carries in three
-# languages - the decision block's copy, the drawings whose <text> nodes carry
-# all three by the figure contract, and the SECTION HEADINGS of the block
-# below, which this renderer owns in all three and therefore owes in all three.
-# What stays as written is the worker's own prose, which exists in exactly the
-# language they typed it in.
+# This script's header owns the language rule; this is where it is applied.
+# Every string the card carries is in all three - the decision block's copy,
+# the drawings whose <text> nodes carry them by the figure contract, the
+# section headings this renderer owns, and the worker's own prose and figure
+# words, which the packet format makes them write. Command, path and identifier
+# material rides as the one string it is in every language, marked `code`.
 #
 # The card carries that prose as DATA, never as markup: the board builds every
 # other payload string with el()/textContent, and a packet body that arrived as
@@ -1735,17 +1752,14 @@ if mode == "card":
         body, _decision = split_decision(body)
         if heading == "Figures":
             figures = figures_of(body)
-            # The drawings move up into the switching part of the card; their
-            # headings and captions stay down here, where one language is the
-            # rule rather than a leak.
+            # The drawings go up into the tabs; what they SAY in words stays
+            # down here, carried once, in all three languages.
             items = figures_words(figures)
         else:
             items = packet_items(body)
-        key = SECTION_KEYS.get(heading)
-        # A heading this renderer knows is a heading it has in all three, so it
-        # rides as copy and follows the captain. One the worker invented rides
-        # as written, like the prose under it.
-        title = {l: T[l][key] for l in LANGS} if key else heading
+        # verify refuses a heading this renderer does not own, so every one of
+        # them is a heading it has in all three: the block switches whole.
+        title = {l: T[l][SECTION_KEYS[heading]] for l in LANGS}
         # "The decision" is the card itself; a section left with nothing but
         # the block that moved into the card is not worth a heading.
         if items:
@@ -1774,11 +1788,8 @@ for key in ("task", "kind", "branch", "head", "base", "generated", "worktree"):
 section_html = []
 for heading, body in sections:
     body, decision = split_decision(body)
-    key = SECTION_KEYS.get(heading)
-    if key:
-        h_text, h_attrs = tri(key)
-    else:
-        h_text, h_attrs = esc(heading), ""
+    key = SECTION_KEYS[heading]
+    h_text, h_attrs = tri(key)
     sub = ""
     if key == "s_changed":
         s_text, s_attrs = tri("s_generated")
@@ -1787,7 +1798,7 @@ for heading, body in sections:
     if decision is not None:
         inner = decision_card(decision) + inner
     section_html.append('<section class="fm-card pk-section" id="%s">%s%s<div class="pk-prose">%s</div></section>'
-                        % (esc(key or heading), span("fm-sign fm-sign--eyebrow pk-section__h", h_text, h_attrs, tag="h2"), sub, inner))
+                        % (esc(key), span("fm-sign fm-sign--eyebrow pk-section__h", h_text, h_attrs, tag="h2"), sub, inner))
 
 copy_t, copy_a = tri("copy"); hint_t, hint_a = tri("copy_hint")
 rawt_t, rawt_a = tri("raw_title"); close_t, close_a = tri("close")

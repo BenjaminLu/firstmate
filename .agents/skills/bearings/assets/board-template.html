@@ -814,6 +814,11 @@ __FM_BEARINGS_BOARD_DATA__
           if (key === "id") v = ns + v;
           else if ((key === "href" || key === "xlink:href") && v.charAt(0) === "#") {
             v = "#" + ns + v.slice(1);
+          } else if (key === "aria-labelledby" || key === "aria-describedby") {
+            /* an IDREF list names ids with no "#", and diagram-design puts one
+               on every drawing over its own <title>/<desc> - miss it and the
+               drawing loses its accessible name the moment it is inlined */
+            v = v.split(/\s+/).map(function (id) { return id ? ns + id : id; }).join(" ");
           }
           v = v.replace(/url\(\s*(['"]?)#([^)'"\s]*)\1\s*\)/gi, function (m, uq, target) {
             return "url(" + uq + "#" + ns + target + uq + ")";

@@ -397,7 +397,9 @@ drawing_with_marker() {  # <slug> <node...> -> a drawing that references its own
   jq -n --arg slug "$slug" --arg rects "$rects" \
     --argjson nodes "$(printf '%s\n' "$@" | jq -R . | jq -s .)" '{
     slug: $slug, heading: ("Figure " + $slug), caption: ("what " + $slug + " proves"),
-    svg: ("<svg viewBox=\"0 0 20 20\"><defs><marker id=\"" + $slug + "-arrow\">"
+    svg: ("<svg viewBox=\"0 0 20 20\" role=\"img\" aria-labelledby=\"" + $slug + "-title\">"
+      + "<title id=\"" + $slug + "-title\">what " + $slug + " proves</title>"
+      + "<defs><marker id=\"" + $slug + "-arrow\">"
       + "<path d=\"M0 0 L8 4 L0 8 z\" fill=\"var(--muted)\"/></marker></defs>"
       + $rects
       + "<path data-edge=\"a-b\" d=\"M1 1 L9 9\" stroke=\"var(--muted)\" fill=\"none\" "
@@ -426,13 +428,18 @@ test_two_cards_drawing_with_the_same_slug_do_not_share_ids() {
     and ((.cards | map(.panels[0].figures[0])) as $svgs
       # what each card POINTS AT, and what each card DECLARES
       | ($svgs | map(capture("url\\(#(?<r>[^)]+)\\)").r)) as $refs
-      | ($svgs | map(capture("id=\"(?<i>[^\"]+)\"").i)) as $ids
+      | ($svgs | map(capture("id=\"(?<i>[^\"]*-arrow)\"").i)) as $ids
       # each card resolves inside its own drawing
       | ($refs == $ids)
       # and the two cards are not in one namespace
       and (($refs | unique | length) == 2)
       # the slug the packet actually wrote is still what the figure is tagged
-      and ($refs | all(. | test("cmp-arrow$"))))
+      and ($refs | all(. | test("cmp-arrow$")))
+      # and the accessible name the drawing declares still points at its own
+      # <title>, which an IDREF list names with no "#" to give it away
+      and ($svgs | all(. as $s
+        | ($s | capture("aria-labelledby=\"(?<a>[^\"]+)\"").a) as $named
+        | $s | test("id=\"" + $named + "\""))))
   ' >/dev/null || fail "two cards sharing a slug shared one id namespace: $out"
   pass "two cards drawing with the same slug each resolve their own ids"
 }

@@ -11,7 +11,7 @@
 //             panels:[{hidden,figures,notes,rows,label,cost,
 //                      buttons:[{text,queues}]}],
 //             on_enter, on_enter_all,
-//             packet:{lang,headings,items,links,text}|null}],
+//             packet:{lang,headings,items,links}|null}],
 //     headings:[call,charted,underway,landed], error }
 import { readFileSync } from "node:fs";
 
@@ -246,7 +246,6 @@ const cards = deck.children
         items: findAll(box, "bb-packet__list").map((ul) =>
           ul.children.map((li) => li.textContent)),
         links: findAll(box, "bb-packet__link").map((a) => ({ text: a.textContent, url: a.href })),
-        text: box.textContent,
       };
     })(),
   }));
