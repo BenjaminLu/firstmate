@@ -66,9 +66,15 @@
 #            owning task gets no card, a secondmate-owned hold gets no card
 #            (its snapshot key is the mate's bare local task id, which
 #            `bin/fm-captain-hold.sh` would resolve against this home's
-#            backlog), and a secondmate-owned gate is emitted
-#            owner-qualified, repo-less, and never dispatchable. A held
-#            task's title,
+#            backlog), a secondmate-owned gate is emitted owner-qualified,
+#            repo-less, and never dispatchable, and a secondmate-owned landed
+#            row is owner-qualified and repo-less too, so a mate's bare local
+#            id can never label itself with this home's repo or drop this
+#            home's live decision card as already landed. Every captain-facing
+#            string passes through one guard that substitutes the row's own
+#            durable identity when the snapshot value is empty or absent, so a
+#            blank title degrades that row instead of refusing the whole
+#            skeleton. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
@@ -83,10 +89,11 @@
 #            placeholders; a packet-seeded card keeps the worker's risk,
 #            reversible, and recommend_value and gets a placeholder only for
 #            the ones the packet left out. charted_more and
-#            charted_warning_more are {FILL: ...} placeholders too, each
-#            naming the SAME omitted-gates total as a figure to divide with
-#            the other count, because the snapshot reports one total and never
-#            splits it into queued and warning rows. The top-level lang comes
+#            charted_warning_more appear only when the snapshot actually
+#            omitted gate rows, and then as {FILL: ...} placeholders that each
+#            name the SAME omitted total as a figure to divide with the other
+#            count, because the snapshot reports one total and never splits it
+#            into queued and warning rows. The top-level lang comes
 #            from --lang (default hant). The skeleton satisfies the payload
 #            validator as-is, but build refuses it until every placeholder is
 #            gone.
@@ -602,13 +609,19 @@ EOF
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" '
-    def t($s): {en: $s, hant: ("{TRANSLATE: " + $s + "}")};
+    # Every captain-facing string goes through this one guard: the validator
+    # refuses an empty en, and an ordinary metadata-only backlog row parses to
+    # an empty title, so each projection names the durable value that stands in
+    # for its row rather than letting one blank field refuse the whole board.
+    def t($s; $fallback):
+      ([$s, $fallback] | map(select(type == "string" and length > 0)) | .[0] // "(untitled)") as $v
+      | {en: $v, hant: ("{TRANSLATE: " + $v + "}")};
     def fillv($what): "{FILL: " + $what + "}";
     def fill($what): {en: fillv($what), hant: fillv($what)};
     def risk_slot: fillv("low | medium | high");
     def reversible_slot: fillv("yes | no | partly");
     def recommend_slot($values): fillv("recommend one of " + ($values | join(" | ")));
-    def i18n: if type == "string" then t(.) else . end;
+    def i18n($fallback): if type == "object" then . else t(.; $fallback) end;
     def slugify: gsub("[^A-Za-z0-9._-]"; "-") | gsub("^-+|-+$"; "") | if length == 0 then "row" else . end;
     def record($id): $records[$id] // null;
     def repo_of($id): record($id) | if . == null then null else .repo end;
@@ -620,7 +633,7 @@ EOF
     def hold_close: record(.id) as $r
       | if $r != null and $r.kind != null and $r.kind != "captain" then {close: "release"} else {} end;
     def placeholder_card:
-      {key: .key, type: "decision", repo: repo_of(.id), title: t(hold_title),
+      {key: .key, type: "decision", repo: repo_of(.id), title: t(hold_title; .key),
        about: fill("about"), decide: fill("decide"), if_nothing: fill("if_nothing"),
        options: [
          {value: "option-a", label: fill("option A label"), consequence: fill("option A consequence")},
@@ -632,10 +645,12 @@ EOF
     def packet_seeded($card): . as $row
       | $card
       + {repo: ($card.repo | if . == null or . == "" then repo_of($row.id) else . end),
-         title: ($card.title | i18n), decide: ($card.decide | i18n), if_nothing: ($card.if_nothing | i18n),
+         title: ($card.title | i18n($card.key)), decide: ($card.decide | i18n($card.key)),
+         if_nothing: ($card.if_nothing | i18n($card.key)),
          about: fill("about"),
-         options: [$card.options[] | .label |= i18n | .consequence |= i18n]}
-      + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n)} else {} end)
+         options: [$card.options[] | . as $o
+           | .label |= i18n($o.value) | .consequence |= i18n($o.value)]}
+      + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n($card.key))} else {} end)
       + ({recommend_value: recommend_slot([$card.options[].value]),
           reversible: reversible_slot, risk: risk_slot}
          | with_entries(select($card[.key] == null)))
@@ -648,8 +663,8 @@ EOF
          // ([$snap.in_flight[]? | select(.id == $task) | .name] | .[0])) as $title
       | {key: ("merge." + $task), type: "merge",
          repo: (.repo | split("/") | last),
-         title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo))),
-         detail: t("checks " + .checks + ", review " + .review),
+         title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo)); $task),
+         detail: t("checks " + .checks + ", review " + .review; $task),
          pr_url: .url, risk: risk_slot,
          options: [
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
@@ -671,17 +686,20 @@ EOF
       captains_call: (
         [ .decisions_open[]? | select(.verb == "captain-hold" and owned) | decision_card ]
         + [ .candidate_prs[]? | select(.task != "-" and merge_ready) | merge_card ]),
-      underway: [ .in_flight[]? | {id, repo, name: (.name | t(.)), state, kind,
-        doing: ((if .doing == "" then .state else .doing end) | t(.))} ],
-      landed: [ .landed[]? | {id, repo: repo_of(.id), what: (.what | t(.)), owner}
+      underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
+        doing: t(.doing; .state)} ],
+      landed: [ .landed[]?
+        | {id: (if owned then .id else (.owner + "/" + .id) end),
+           repo: (if owned then repo_of(.id) else null end),
+           what: t(.what; .id), owner}
         + (if (.artifact | https) then {pr_url: .artifact} else {} end) ],
       charted: (
         [ .gates[]?
           | {id: (if owned then (.id | slugify) else ((.owner + "/" + .id) | slugify) end),
              repo: (if owned then repo_of(.id) else null end),
-             title: (.title | t(.)),
-             reason: (if .reason != "-" then (.reason | t(.))
-               elif .blocked_by != "-" then t("waiting on " + (.blocked_by | gsub(","; ", ")))
+             title: t(.title; .id),
+             reason: (if (.reason // "-") | . != "-" and . != "" then t(.reason; .id)
+               elif .blocked_by != "-" then t("waiting on " + (.blocked_by | gsub(","; ", ")); .id)
                else "" end),
              dispatchable: (owned and (warning_gate | not) and .blocked_by == "-" and .reason == "-"),
              kind: (if warning_gate then "warning" else "queued" end),
@@ -690,19 +708,22 @@ EOF
           | select(.state == "unknown" or .state == "externally_held")
           | {id: (("secondmate/" + .id) | slugify), repo: null,
              title: t("Secondmate home " + .id + " is "
-               + (if .state == "unknown" then "unavailable" else "held outside this home" end)),
+               + (if .state == "unknown" then "unavailable" else "held outside this home" end); .id),
              reason: ((if (.doing // "") != "" then .doing else (.reason // "-") end)
-               | if . == "-" or . == "" then t("its current state is unreadable from here") else t(.) end),
+               | if . == "-" or . == "" then null else . end
+               | t(.; "its current state is unreadable from here")),
              dispatchable: false, kind: "warning", filed: null} ]
         + [ .secondmate_reconcile[]?
           | {id: (("reconcile/" + .id) | slugify), repo: null,
-             title: t("Secondmate home " + .id + " reports an inventory mismatch"),
+             title: t("Secondmate home " + .id + " reports an inventory mismatch"; .id),
              reason: t((.kind // "inventory mismatch")
-               + (if ((.ids // []) | length) > 0 then ": " + ((.ids // []) | join(", ")) else "" end)),
-             dispatchable: false, kind: "warning", filed: null} ]),
-      charted_more: more_slot("queued"; "charted_warning_more"),
-      charted_warning_more: more_slot("warning"; "charted_more")
-    }' > "$tmp" || { rm -f -- "$tmp"; fail "cannot compose the board skeleton"; }
+               + (if ((.ids // []) | length) > 0 then ": " + ((.ids // []) | join(", ")) else "" end); .id),
+             dispatchable: false, kind: "warning", filed: null} ])
+    }
+    + (if gates_omitted > 0 then {
+        charted_more: more_slot("queued"; "charted_warning_more"),
+        charted_warning_more: more_slot("warning"; "charted_more")}
+      else {} end)' > "$tmp" || { rm -f -- "$tmp"; fail "cannot compose the board skeleton"; }
   if ! validate_payload "$tmp"; then
     rm -f -- "$tmp"
     fail "the composed skeleton does not satisfy $BOARD_SCHEMA"

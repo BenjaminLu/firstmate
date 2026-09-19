@@ -899,8 +899,8 @@ PY2
 fill_skeleton() {  # <skeleton.json> <filled.json>
   jq '
     def unfilled: type == "string" and startswith("{FILL: ");
-    .charted_more = 0
-    | .charted_warning_more = 0
+    (if (.charted_more | unfilled) then .charted_more = 0 else . end)
+    | (if (.charted_warning_more | unfilled) then .charted_warning_more = 0 else . end)
     | .captains_call |= map(
         if .type == "decision" then
           (if (.reversible | unfilled) then .reversible = "yes" else . end)
@@ -950,10 +950,9 @@ test_compose_maps_every_section_from_the_recorded_snapshot() {
       and (.reason.en | startswith("until 2030-01-01")) and (.reason.hant | startswith("{TRANSLATE: until")))
     and (.charted[3] | .id == "main-inventory" and .kind == "warning" and .dispatchable == false
       and .filed == null and .repo == null)
-    # Neither omitted count is derivable from the snapshot, so both arrive as
-    # slots naming how many gate rows the snapshot itself omitted.
-    and (.charted_more | startswith("{FILL: queued Charted Next rows not shown: your share of the 0 "))
-    and (.charted_warning_more | startswith("{FILL: warning Charted Next rows not shown: your share of the 0 "))
+    # This snapshot omitted no gate rows, so there is nothing to divide and
+    # neither count is emitted at all.
+    and (has("charted_more") | not) and (has("charted_warning_more") | not)
   ' "$skeleton" >/dev/null || fail "the skeleton did not map the fleet sections as recorded: $(cat "$skeleton")"
   pass "compose maps underway, landed, and charted rows from the recorded snapshot"
 }
@@ -1225,10 +1224,61 @@ test_compose_badges_a_warning_only_for_a_synthesized_gate() {
   pass "compose badges a warning from the synthesized gate id alone"
 }
 
+test_compose_degrades_every_blank_snapshot_string_to_its_row_identity() {
+  local home skeleton
+  home=$(make_compose_home compose-blank-strings)
+  # A metadata-only backlog row parses to an empty title, and the payload
+  # validator refuses an empty `en`; one such row must degrade its own row
+  # rather than refuse the whole board.
+  jq '.landed[0].what = ""
+      | .gates[0].title = ""
+      | .gates[2].reason = ""
+      | .decisions_open += [{id: "ghost-hold", key: "ghost-hold", verb: "captain-hold",
+          summary: "", owner: "(main)"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying blank strings"
+  jq -e '
+    (.landed[0] | .id == "done-a" and .what == {en: "done-a", hant: "{TRANSLATE: done-a}"})
+    and (.charted[0] | .id == "plain-queued" and .title.en == "plain-queued")
+    and (.charted[2] | .id == "later-call" and .reason == "")
+    and (.captains_call[] | select(.key == "ghost-hold") | .title.en == "ghost-hold")
+  ' "$skeleton" >/dev/null || fail "a blank snapshot string did not degrade to its row id: $(cat "$skeleton")"
+  pass "compose degrades every blank snapshot string to its own row identity"
+}
+
+test_compose_keeps_a_secondmate_landed_row_off_this_homes_books() {
+  local home skeleton filled board out
+  home=$(make_compose_home compose-mate-landed)
+  # The snapshot keeps a mate Done row under its BARE local id, which can equal
+  # a live local captain hold; borrowing this home's repo mislabels it and the
+  # bare id makes build drop that live card as already landed.
+  jq '.landed += [{id: "gated-work", what: "Mate landed the same-named task",
+        artifact: "-", owner: "mate-a"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  filled="$home/filled.json"
+  board="$home/.lavish/bearings-board.html"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying a secondmate landed row"
+  jq -e '
+    (.landed[] | select(.owner == "mate-a")
+      | .id == "mate-a/gated-work" and .repo == null
+      and .what.en == "Mate landed the same-named task")
+    and ([.landed[].id] | index("gated-work") == null)
+  ' "$skeleton" >/dev/null || fail "a mate landed row borrowed this home's books: $(cat "$skeleton")"
+  fill_skeleton "$skeleton" "$filled"
+  out=$(run_board "$home" build "$filled" 2>&1) || fail "build refused the filled skeleton: $out"
+  extract_payload "$board" | jq -e '[.captains_call[].key] | index("gated-work") != null' >/dev/null \
+    || fail "the mate landed row dropped this home's live decision card: $out"
+  pass "a secondmate landed row keeps its own id and never drops a local card"
+}
+
 test_compose_validates_the_skeleton_on_stdout_too() {
   local home out rc
   home=$(make_compose_home compose-stdout-validate)
-  jq '.in_flight[0].name = ""' "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  jq '.gates[0].filed = "last week"' "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
   set +e; out=$(run_board "$home" compose --snapshot "$home/snapshot.json" 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "compose emitted an unvalidated skeleton on stdout"
   assert_contains "$out" "does not satisfy fm-bearings-board.v1" "compose did not name the validator as the reason: $out"
@@ -1332,6 +1382,8 @@ test_compose_seeds_a_packet_card_without_a_recorded_project
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
+test_compose_degrades_every_blank_snapshot_string_to_its_row_identity
+test_compose_keeps_a_secondmate_landed_row_off_this_homes_books
 test_compose_cards_only_the_holds_this_home_owns
 test_compose_never_dispatches_a_charted_row_this_home_does_not_own
 test_compose_carries_the_secondmate_integrity_warnings
