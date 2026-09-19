@@ -50,7 +50,7 @@
 # The sweep has to finish inside the watcher's own per check bound, because a run
 # the watcher kills prints nothing and writes no record, so it would repeat that
 # silence on every poll. That coupling is enforced rather than assumed: a budget
-# larger than FM_CHECK_TIMEOUT (default 30, read from this check's own
+# larger than FM_CHECK_TIMEOUT (default 60, read from this check's own
 # environment because the watcher runs it as a direct child) allows is cut down
 # to what fits, and the cut is reported in the report line so the operator sees
 # it. A budget that cannot be read as a whole number from 1 to 120 is still
@@ -160,9 +160,9 @@ KILL_GRACE_SECS=1
 # The watcher's per check bound, read from this check's own environment. The
 # watcher runs the check as a direct child, so an operator who raised it is seen
 # here too, and when it is unset both sides resolve the same default.
-CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}
+CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-60}
 case "$CHECK_TIMEOUT" in
-  ''|*[!0-9]*|0) CHECK_TIMEOUT=30 ;;
+  ''|*[!0-9]*|0) CHECK_TIMEOUT=60 ;;
 esac
 # The last probe of a sweep can end this far past the deadline, so that is what
 # the budget has to leave the watcher's own bound.

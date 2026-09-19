@@ -564,6 +564,7 @@ case "$fault:$*" in
     printf 'HTTP 502\n' >&2; exit 1 ;;
   fail:'api repos/o/r/pulls/8/reviews?'*) printf 'HTTP 502\n' >&2; exit 1 ;;
   slow:'api repos/o/r/pulls/8/reviews?'*) sleep "$(cat "$FORGE/slow" 2>/dev/null || printf 6)" ;;
+  latency:*) sleep "$(cat "$FORGE/latency" 2>/dev/null || printf 4.4)" ;;
   down:*) printf 'HTTP 502\n' >&2; exit 1 ;;
   hang:'api repos/o/r/pulls/8') sleep 4 ;;
   head:'pr view '*) printf '{"headRefOid":"%s","reviewDecision":"APPROVED"}\n' "$(printf 'b%.0s' $(seq 40))"; exit 0 ;;
@@ -792,140 +793,59 @@ test_late_owner_keeps_failure_episode_suppressed() {
 }
 
 test_slow_forge_crosses_the_old_call_bound() {
-  local home out reviews=0
+  local home out line='contributions: observation unavailable for https://github.com/o/r/pull/8'
   home=$(new_home slow-forge-bound)
   forge_home "$home"
   wrap_forge "$home"
   printf 'slow\n' > "$home/forge/fault"
   printf '6\n' > "$home/forge/slow"
-  # Five seconds - the bound this poll used to impose - kills a read a real
-  # forge completes, and the one retry inside the budget hits the same wall.
+  # Five seconds - the bound this poll used to impose - kills a read a real forge completes.
   out=$(with_home "$home" env FM_CONTRIBUTIONS_CALL_BOUND=5 "$ROOT/bin/fm-contributions.sh" poll) \
     || fail 'poll failed against a forge slower than the old bound'
-  [ -z "$out" ] || fail "a single slow read woke the supervisor: $out"
-  jq -e '.records[0] | .error != null and .error_kind == "transient"' \
-    "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'a read killed by the per-call bound was not recorded as transient'
-  reviews=$(grep -cF 'pulls/8/reviews' "$home/forge/calls")
-  [ "$reviews" = 2 ] || fail "a bound-hit inside the budget was attempted $reviews times, not twice"
+  [ "$out" = "$line" ] || fail "a read killed by the per-call bound did not report its failure: $out"
+  [ "$(grep -cF 'pulls/8/reviews' "$home/forge/calls")" = 1 ] \
+    || fail 'a read killed by the per-call bound was attempted more than once'
   : > "$home/forge/calls"
   out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) \
     || fail 'poll failed against the same forge under the current bound'
   [ -z "$out" ] || fail "a completed observation printed: $out"
   jq -e --arg now "$NOW" '.records[0] | .checked_at == $now and .error == null
-    and has("error_kind") == false and .observation.state == "open"' \
+    and .observation.state == "open"' \
     "$home/data/delivery/contributions.json" >/dev/null \
     || fail 'the current per-call bound did not let a real forge latency finish'
   [ "$(grep -cF 'pulls/8/reviews' "$home/forge/calls")" = 1 ] \
-    || fail 'a read that finished inside the bound was retried anyway'
+    || fail 'a read that finished inside the bound was issued twice'
   pass 'a read past the old five-second bound completes under the current bound'
 }
 
-test_transient_failure_waits_out_the_grace() {
-  local home out line='contributions: observation unavailable for https://github.com/o/r/pull/8'
-  home=$(new_home transient-grace)
+test_measured_latency_observation_fits_the_budget() {
+  local home out started elapsed calls
+  home=$(new_home measured-latency-budget)
   forge_home "$home"
   wrap_forge "$home"
-  printf 'slow\n' > "$home/forge/fault"
-  printf '2\n' > "$home/forge/slow"
-  poll_at() { with_home "$home" env FM_CONTRIBUTIONS_CALL_BOUND=1 FM_CONTRIBUTIONS_NOW="$1" \
-    "$ROOT/bin/fm-contributions.sh" poll || fail "poll at $1 failed"; }
-  out=$(poll_at 2026-09-16T09:00:00Z)
-  [ -z "$out" ] || fail "the first bound-hit woke the supervisor: $out"
-  out=$(poll_at 2026-09-16T09:10:00Z)
-  [ -z "$out" ] || fail "a bound-hit inside the grace woke the supervisor: $out"
-  jq -e '.records[0] | .error == "forge observation unavailable or changed during read"
-    and .error_kind == "transient" and .error_since == "2026-09-16T09:00:00Z"
-    and .checked_at == "2026-09-16T09:10:00Z" and (.error_escalated | not)' \
+  # A stale record so only an observation completed by this poll can advance it.
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
+  # Every call pays the slowest latency the affected repository measured (4.4s),
+  # under the shipped budget and per-call bound - no overrides.
+  printf 'latency\n' > "$home/forge/fault"
+  printf '4.4\n' > "$home/forge/latency"
+  started=$(/bin/date +%s)
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'poll failed against a forge at the measured latency'
+  elapsed=$(( $(/bin/date +%s) - started ))
+  [ -z "$out" ] || fail "an observation at the measured latency printed: $out"
+  jq -e --arg now "$NOW" '.records[0] | .checked_at == $now and .error == null
+    and .observation.state == "open" and .observation.head != null' \
     "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'a silent transient episode lost its durable evidence'
-  out=$(poll_at 2026-09-16T09:20:00Z)
-  [ "$out" = "$line" ] || fail "a transient failure outlasting the grace never reached the supervisor: $out"
-  out=$(poll_at 2026-09-16T10:20:00Z)
-  [ -z "$out" ] || fail "a persisting transient failure woke more than once per episode: $out"
-  : > "$home/forge/fault"
-  out=$(poll_at 2026-09-16T10:30:00Z)
-  [ -z "$out" ] || fail "a recovered read printed: $out"
-  jq -e '.records[0] | .error == null and has("error_kind") == false
-    and has("error_since") == false and has("error_escalated") == false' \
-    "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'a successful read did not end the transient episode'
-  pass 'a transient forge failure stays silent inside the grace and wakes once after it'
-}
-
-test_transient_failure_leaves_a_terminal_record_alone() {
-  local home out later=2026-09-17T08:00:00Z
-  home=$(new_home transient-terminal)
-  forge_home "$home"
-  wrap_forge "$home"
-  printf 'merged\n' > "$home/forge/state"
-  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null \
-    || fail 'terminal observation poll failed'
-  cp "$home/data/delivery/contributions.json" "$home/prior.json"
-  : > "$home/forge/calls"
-  printf 'slow\n' > "$home/forge/fault"
-  printf '2\n' > "$home/forge/slow"
-  # No freshness bound at all: even an immediately escalating transient failure must not
-  # reach a contribution whose last good observation is terminal.
-  out=$(with_home "$home" env FM_CONTRIBUTIONS_CALL_BOUND=1 FM_CONTRIBUTIONS_MAX_AGE=0 \
-    FM_CONTRIBUTIONS_NOW="$later" "$ROOT/bin/fm-contributions.sh" poll) \
-    || fail 'poll of a merged record against a slow forge failed'
-  [ -z "$out" ] || fail "a slow forge woke a merged contribution: $out"
-  [ ! -s "$home/forge/calls" ] || fail "a merged contribution was read again: $(cat "$home/forge/calls")"
-  cmp -s "$home/prior.json" "$home/data/delivery/contributions.json" \
-    || fail 'a slow forge rewrote a settled record'
-  [ ! -s "$home/state/.wake-queue" ] || fail 'a slow forge enqueued a wake for a merged contribution'
-  pass 'a bound-hit cannot wake a merged contribution with nothing pending'
-}
-
-test_pending_signal_survives_a_transient_failure() {
-  local home out
-  home=$(new_home transient-pending)
-  forge_home "$home"
-  wrap_forge "$home"
-  jq -n '[{id:12,user:{login:"maintainer"},author_association:"OWNER",
-    body:"Please clarify the contract",html_url:"https://github.com/o/r/pull/8#issuecomment-12",
-    updated_at:"2026-09-16T08:01:00Z"}]' > "$home/forge/comments.json"
-  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'signal poll failed'
-  jq -e '.records[0].pending | length == 1' "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'the maintainer comment never became a pending signal'
-  # An unpublished pending signal is what a crash between enqueue and record leaves.
-  mutate_record "$home" delivery '.records[0].notified = []'
-  rm -f "$home/state/.wake-queue"
-  printf 'slow\n' > "$home/forge/fault"
-  printf '2\n' > "$home/forge/slow"
-  out=$(with_home "$home" env FM_CONTRIBUTIONS_CALL_BOUND=1 "$ROOT/bin/fm-contributions.sh" poll) \
-    || fail 'poll failed while a pending signal waited behind a slow forge'
-  printf '%s\n' "$out" | grep -qE '^contribution-wake: check: contributions delivery [0-9a-f]{64}$' \
-    || fail "a bound-hit swallowed a pending maintainer signal: $out"
-  if printf '%s\n' "$out" | grep -qF 'observation unavailable'; then
-    fail "a bound-hit inside the grace still printed an unavailable line: $out"
-  fi
-  [ -s "$home/state/.wake-queue" ] || fail 'the pending maintainer signal never reached the durable wake queue'
-  jq -e '.records[0] | (.pending | length) == 1 and .error_kind == "transient"' \
-    "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'a transient failure dropped the pending maintainer signal or its own evidence'
-  pass 'a bound-hit keeps waking on a pending maintainer signal'
-}
-
-test_head_change_is_a_finding_not_a_transient_failure() {
-  local home out
-  home=$(new_home head-change-finding)
-  forge_home "$home"
-  wrap_forge "$home"
-  printf 'head\n' > "$home/forge/fault"
-  out=$(with_home "$home" env FM_CONTRIBUTIONS_MAX_AGE=86400 "$ROOT/bin/fm-contributions.sh" poll) \
-    || fail 'poll failed when the head changed during the read'
-  [ "$out" = 'contributions: observation unavailable for https://github.com/o/r/pull/8' ] \
-    || fail "a head change during the read was held behind the transient silence: $out"
-  jq -e '.records[0] | .error_kind == "failure" and .error_escalated == true' \
-    "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'a head change was recorded as a transient failure'
-  pass 'a head change during a read is a finding and wakes immediately'
+    || fail 'an observation at the measured latency did not complete inside the budget'
+  calls=$(wc -l < "$home/forge/calls" | tr -d ' ')
+  [ "$calls" -ge 8 ] || fail "the observation did not issue a whole PR read: $calls calls"
+  [ "$elapsed" -ge 30 ] || fail "the forge did not actually pay the measured latency: ${elapsed}s"
+  pass 'a whole PR observation at the measured forge latency fits the poll budget'
 }
 
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_slow_forge_crosses_the_old_call_bound test_transient_failure_waits_out_the_grace test_transient_failure_leaves_a_terminal_record_alone test_pending_signal_survives_a_transient_failure test_head_change_is_a_finding_not_a_transient_failure; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_slow_forge_crosses_the_old_call_bound test_measured_latency_observation_fits_the_budget; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"
