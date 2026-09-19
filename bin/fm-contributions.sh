@@ -324,8 +324,7 @@ publish_pending() { # task canonical-url record-file
 settle_final() { # canonical-url task... : copy the URL's final observation to every owner
   local url=$1 task
   shift
-  jq -L "$SCRIPT_DIR" -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '
-    include "fm-contributions";
+  jq_lib -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '
     [$saved[0][] | .records[] | select(.url == $url and observation_terminal(.))] as $final
     | ([$final[] | select(.error == null)] | first) // ($final | first)' > "$TMP/final.json"
   for task in "$@"; do
@@ -361,7 +360,7 @@ poll() {
   # out of the margin the watcher's kill leaves - down to the same one-second
   # floor the budget itself keeps, because a poll that reads nothing at all is
   # the permanent silence this bound exists to prevent.
-  HARD_DEADLINE=$((START_EPOCH + CHECK_TIMEOUT - POST_WORK_SECS - CLOCK_ROUNDING_SECS - KILL_GRACE_SECS))
+  HARD_DEADLINE=$((START_EPOCH + BUDGET_MAX))
   [ "$HARD_DEADLINE" -gt "$now" ] || HARD_DEADLINE=$((now + 1))
   [ "$DEADLINE" -le "$HARD_DEADLINE" ] || DEADLINE=$HARD_DEADLINE
   BUDGET_EXHAUSTED=0

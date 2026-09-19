@@ -123,17 +123,17 @@ case "$*" in
     jq -n --arg head "$(cat "$FORGE/head")" '{headRefOid:$head,reviewDecision:"APPROVED"}' ;;
   'pr view '*headRefOid*) cat "$FORGE/head" ;;
   'pr view '*state*) printf 'OPEN\n' ;;
-  'api repos/o/r/issues/9')
-    jq -n --slurpfile labels "$FORGE/labels.json" '{state:"open",user:{login:"author"},labels:$labels[0]}' ;;
-  'api repos/o/r/issues/'*'/events?'*) jq -s . "$FORGE/events.json" ;;
-  'api repos/o/r/issues/'*'/comments?'*) jq -s . "$FORGE/comments.json" ;;
-  'api repos/o/r/pulls/'*'/reviews?'*) jq -s . "$FORGE/reviews.json" ;;
-  'api repos/o/r/pulls/'*'/comments?'*) jq -s . "$FORGE/inline.json" ;;
-  'api repos/o/r/pulls/'*)
+  'api repos/o/r/pulls/8')
     jq -n --arg head "$(cat "$FORGE/head")" --arg state "$(cat "$FORGE/state" 2>/dev/null || printf open)" '
       {state:(if $state == "open" then "open" else "closed" end),user:{login:"author"},head:{sha:$head},draft:false,
        mergeable:(if $state == "open" then true else null end),
        merged_at:(if $state == "merged" then "2026-09-16T07:00:00Z" else null end)}' ;;
+  'api repos/o/r/issues/9')
+    jq -n --slurpfile labels "$FORGE/labels.json" '{state:"open",user:{login:"author"},labels:$labels[0]}' ;;
+  'api repos/o/r/issues/'*'/events?'*) jq -s . "$FORGE/events.json" ;;
+  'api repos/o/r/issues/'*'/comments?'*) jq -s . "$FORGE/comments.json" ;;
+  'api repos/o/r/pulls/8/reviews?'*) jq -s . "$FORGE/reviews.json" ;;
+  'api repos/o/r/pulls/8/comments?'*) jq -s . "$FORGE/inline.json" ;;
   'api repos/o/r/commits/'*'/check-runs?'*)
     printf '[{"check_runs":[{"name":"test","id":1,"status":"completed","conclusion":"success","started_at":"2026-09-16T08:00:00Z"}]}]\n' ;;
   'api repos/o/r/commits/'*'/statuses?'*) printf '[[]]\n' ;;
@@ -584,9 +584,7 @@ test_budget_exhaustion_keeps_prior_record() { # exhaust|hang
   home=$(new_home "budget-$mode")
   forge_home "$home"
   wrap_forge "$home"
-  # Still inside the freshness bound, so the budget simply moves this URL to the
-  # next poll and has nothing to disclose about it.
-  mutate_record "$home" delivery '.records[0].checked_at="2026-09-16T07:50:00Z"'
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
   cp "$home/data/delivery/contributions.json" "$home/prior.json"
   # Both modes run on the fixture clock: on a real one the 1s budget can expire
   # before the first forge call, leaving the observation unstarted.
@@ -600,7 +598,7 @@ test_budget_exhaustion_keeps_prior_record() { # exhaust|hang
   cmp -s "$home/prior.json" "$home/data/delivery/contributions.json" \
     || fail "budget exhaustion ($mode) rewrote the prior record: $(cat "$home/data/delivery/contributions.json")"
   [ ! -s "$home/state/.wake-queue" ] || fail "budget exhaustion ($mode) enqueued a wake"
-  pass "budget exhausted mid-observation ($mode) keeps a fresh prior record and stays silent"
+  pass "budget exhausted mid-observation ($mode) keeps the prior record and stays silent"
 }
 
 test_budget_refusal_between_calls() { test_budget_exhaustion_keeps_prior_record exhaust; }
