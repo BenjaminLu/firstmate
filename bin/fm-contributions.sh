@@ -48,10 +48,10 @@
 # cut down to what fits, and the forge deadline is then clamped to the time the
 # local snapshot and record read actually left, so local work that runs long
 # shortens the reads instead of overrunning the bound. At the default bound the
-# cut leaves 23 seconds.
+# reads get 25 seconds, less whatever that local work really cost.
 #
 # One PR observation costs eight forge calls, so on a forge slow enough that
-# eight of them do not fit 23 seconds this poll does not complete that
+# eight of them do not fit 25 seconds this poll does not complete that
 # observation: the records are left untouched, the row passes the freshness
 # bound below, and the board shows it unchecked - never freshly checked when it
 # was not. That is accepted as what ships, and it is reported once rather than
@@ -69,8 +69,9 @@
 # state/.contributions-unreached by a poll that reaches all of them, so the next
 # onset reports again. Which contributions the board counts as measured is
 # observation_fresh in bin/fm-contributions.jq, and this poll reads that same
-# definition rather than restating it: a settled or unsupported-forge URL is
-# never named as one it failed to check.
+# definition rather than restating it, counting only a URL it would have spent
+# budget on: a settled contribution is never named as one it failed to check,
+# and neither is an unsupported forge, which costs no forge call at all.
 # API failure leaves error evidence; an expired or absent observation is not
 # silence. FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # A URL whose last good observation is merged or closed is final: it is
@@ -136,14 +137,13 @@ case "$CHECK_TIMEOUT" in ''|*[!0-9]*|0) CHECK_TIMEOUT=30 ;; esac
 # reads - the fleet snapshot and durable records read before the first call, the
 # record writes and wake publication after the last - plus what fm_run_timed
 # adds to a bounded call: it counts a whole second before it alarms and asks its
-# runner for -k 1. Only the work before the reads is an estimate, and the
-# deadline clamp below charges whatever it really cost.
-PRE_WORK_SECS=2
+# runner for -k 1. The work before the reads is not estimated here at all: the
+# deadline clamp below charges exactly what it really cost.
 POST_WORK_SECS=3
 CLOCK_ROUNDING_SECS=1
 KILL_GRACE_SECS=1
 START_EPOCH=$(date +%s)
-BUDGET_MAX=$((CHECK_TIMEOUT - PRE_WORK_SECS - POST_WORK_SECS - CLOCK_ROUNDING_SECS - KILL_GRACE_SECS))
+BUDGET_MAX=$((CHECK_TIMEOUT - POST_WORK_SECS - CLOCK_ROUNDING_SECS - KILL_GRACE_SECS))
 [ "$BUDGET_MAX" -ge 1 ] || BUDGET_MAX=1
 # Cut rather than refuse: a poll that refuses to run leaves the contributions
 # unmeasured, which is the silence this bound exists to prevent.
@@ -425,7 +425,8 @@ poll() {
     known($input[0];$saved[0])
     | map(. as $k | ([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url)] | first) as $record
       | . + {at:($record.checked_at // ""),
-             unchecked:(observation_fresh($record; $k.url; $now; $max_age) | not)})
+             unchecked:(($k.url | startswith("https://github.com/"))
+                        and (observation_fresh($record; $k.url; $now; $max_age) | not))})
     | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),
         unchecked:any(.[]; .unchecked),tasks:(map(.task) | unique)})
     | sort_by(.at,.tasks[0],.url)[]
