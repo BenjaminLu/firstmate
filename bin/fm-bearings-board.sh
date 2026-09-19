@@ -11,6 +11,7 @@
 # Usage:
 #   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
 #   fm-bearings-board.sh compose --check <data.json>
+#   fm-bearings-board.sh validate <data.json>
 #   fm-bearings-board.sh build <data.json>
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh url
@@ -128,6 +129,14 @@
 #            gone.
 #            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
 #            placeholder as `<path>: <value>` and exits 1 while any remain.
+# validate   Check <data.json> against the fm-bearings-board.v1 payload contract
+#            this script owns, print `payload: ok`, and exit 1 with a reason when
+#            it does not satisfy it. This is the same check `build` runs, exposed
+#            as its own door so a second consumer of the contract - the remote
+#            board's `bin/fm-remote-board.sh render` - reaches THIS validator
+#            instead of keeping a second copy of the rules that would drift.
+#            Placeholders are accepted exactly as they are for a skeleton; only
+#            `build` refuses those.
 # path       Print the stable board path for this home.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
@@ -602,6 +611,15 @@ list_placeholders() {  # <data.json> -> "<path>: <value>" lines
   ' "$1"
 }
 
+command_validate() {  # <data.json>
+  local data=${1-}
+  [ -n "$data" ] || { usage >&2; exit 2; }
+  [ -f "$data" ] || fail "board data does not exist: $data"
+  jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
+  validate_payload "$data" || fail "board data does not satisfy $BOARD_SCHEMA: $data"
+  printf 'payload: ok\n'
+}
+
 command_compose_check() {  # <data.json>
   local data=$1 found
   [ -f "$data" ] || fail "board data does not exist: $data"
@@ -979,6 +997,7 @@ command_open() {
 case "${1-}" in
   compose) shift; command_compose "$@" ;;
   build) shift; command_build "$@" ;;
+  validate) shift; command_validate "$@" ;;
   path) board_path ;;
   url) command_url ;;
   open) command_open ;;

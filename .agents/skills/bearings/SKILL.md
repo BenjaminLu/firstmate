@@ -6,6 +6,7 @@ description: >-
   Plain /bearings is chat-only by default, /bearings file explicitly writes the dated data/status-report-<YYYY-MM-DD>.md artifact, and /bearings lavish additionally builds and arms the interactive fleet board; live PR enrichment remains opt-in and composes with the other modes.
   Also use on a contributions check wake or when filing work linked to an upstream issue.
   Also load this skill's board-wake handling when a procevent lavish wake's source id matches the canonical source id of the stable bearings board path.
+  Also use before building, changing, or reviewing any other surface that presents the same board, such as a remote copy, an export, or a mirror.
 user-invocable: true
 metadata:
   internal: true
@@ -95,6 +96,15 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
 
 `/bearings lavish` adds one deliverable beside the unchanged chat digest: the interactive fleet board, a myfirstmate-styled Lavish page where the captain answers Captain's Call items directly instead of replying in chat.
 `bin/fm-bearings-board.sh` owns every board mechanic - the stable board path, the deterministic payload skeleton, fm-bearings-board.v1 payload validation, template injection, live Lavish session verification and ended-session reopening, the any-origin answer binding, and listener registration - so the per-invocation work is filling the skeleton and running its `build`.
+That template is also the board's single definition for every other surface; see "One board, one definition" below.
+
+## One board, one definition
+
+The bearings board has ONE definition, and `.agents/skills/bearings/assets/board-template.html` is it.
+Any other surface presenting the same board - a remote copy, an export, a mirror - is DERIVED from that template mechanically, never re-authored, and renders everything it renders: every card type with its badges and context rows, the packet and its figures including inline drawings, the queued and warning kinds with their counts, the pickers, and the language switch.
+This is a default of the system, not a preference: a surface that genuinely cannot carry one of those names it explicitly, in its own header and in the change that introduces it, and never drops it silently.
+A hand-maintained second copy is not a derivation, because it loses features without anyone measuring it.
+`bin/fm-remote-board.sh` is the worked example, deriving the captain's phone-reachable remote board from that same template and proving the result still matches it.
 
 Never hand-write the payload from the snapshot.
 Start from `bin/fm-bearings-board.sh compose --lang <captain's language> --out <file>`, which reads the same snapshot command and maps every structured row deterministically: Underway, Recently Landed, and Charted Next rows (including an unavailable or externally held secondmate home and every inventory-mismatch notice, as non-dispatchable warning rows), one decision card per live captain hold THIS home owns whose task id is a routable key, and a merge card per merge-ready PR that a task in THIS home's backlog claims (the script header owns the exact mapping and the placeholder shapes).

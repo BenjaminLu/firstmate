@@ -1645,6 +1645,32 @@ test_url_reads_the_live_session_listing() {
   pass "url prints the open session's URL and refuses when none is open"
 }
 
+# `validate` is the door a second consumer of the contract reaches it through,
+# so it must give the same verdict `build` would give without building a board.
+test_validate_is_the_contracts_one_door() {
+  local home data out rc
+  home=$(make_home validate-door)
+  data="$home/data.json"
+
+  write_valid_payload "$data"
+  rc=0; out=$(run_board "$home" validate "$data" 2>&1) || rc=$?
+  expect_code 0 "$rc" "validate must accept a payload the contract accepts: $out"
+  assert_contains "$out" "payload: ok" "validate must say the payload is good"
+
+  # The field whose absence made the hand-written remote board's own seed
+  # unreadable by this very contract.
+  jq 'del(.prs_live)' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  rc=0; out=$(run_board "$home" validate "$data" 2>&1) || rc=$?
+  expect_code 1 "$rc" "validate must refuse a payload the contract refuses"
+  assert_contains "$out" "fm-bearings-board.v1" "the refusal must name the contract"
+
+  printf 'not json\n' > "$data"
+  rc=0; out=$(run_board "$home" validate "$data" 2>&1) || rc=$?
+  expect_code 1 "$rc" "validate must refuse a payload that is not JSON"
+  assert_contains "$out" "not valid JSON" "the non-JSON refusal must say why"
+  pass "validate is the contract's one door"
+}
+
 test_path_is_stable_and_home_scoped
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
@@ -1695,3 +1721,4 @@ test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled
 test_url_reads_the_live_session_listing
+test_validate_is_the_contracts_one_door
