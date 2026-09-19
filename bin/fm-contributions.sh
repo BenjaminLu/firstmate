@@ -24,12 +24,18 @@
 # core, the repository's push permission, the forge review decision, the head,
 # and both check lanes in a single snapshot, so the checks are bound to that
 # head without a separate recheck; comments, reviews and inline review comments
-# stay on their REST list endpoints so their event tokens are unchanged. At the
-# 0.9-4.4s per call measured on a slow forge that is 3.6-17.6s against the
-# default 20s budget, where eight calls (7.2-35.2s) could not finish and left
-# the row unobserved. A commit with more than one page of check contexts falls
-# back to the two paginated REST check lanes rather than dropping a lane, so
-# that rare observation costs six. Checks are normalized by name, id,
+# stay on their REST list endpoints so their event tokens are unchanged. Eight
+# calls at the 0.9-4.4s measured on a slow forge needed 7.2-35.2s, which the
+# default 20s budget could not hold, and left the row unobserved. The one
+# document does five reads' worth of work, so it is legitimately slower than
+# any single REST read it replaced and is held to no per-call constant: every
+# call is bounded by what remains of the poll budget alone. A commit with more
+# than one page of check contexts falls back to the two paginated REST check
+# lanes rather than dropping a lane, so that rare observation costs six. This
+# change holds itself to lane equivalence: the lanes reported here are exactly
+# the lanes the REST check-runs and statuses lanes reported, so a required
+# context the forge only expects and nobody has posted is no lane on either
+# path and one commit cannot read two ways. Checks are normalized by name, id,
 # started_at, status and conclusion; projection picks the newest attempt per
 # distinct name. The last observation's lane names also disclose a lane absent
 # from the next head.
@@ -205,15 +211,15 @@ write_record() { # task record-json-file
 }
 
 forge() {
-  local remaining bounded=0 rc=0
+  local remaining rc=0
   remaining=$((DEADLINE - $(date +%s)))
   # The budget, not the forge, refused this read.
   [ "$remaining" -gt 0 ] || { BUDGET_EXHAUSTED=1; return 1; }
   if [ "$remaining" -le "$CALL_BOUND" ]; then bounded=1; else remaining=$CALL_BOUND; fi
   fm_run_timed "$remaining" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
     gh "$@" 2> "$TMP/forge.err" || rc=$?
-  # A read killed at the budget's own deadline is budget exhaustion too.
-  [ "$rc" -ne 124 ] || [ "$bounded" -eq 0 ] || BUDGET_EXHAUSTED=1
+  # A read killed at the budget's own deadline is budget exhaustion, not failure.
+  [ "$rc" -ne 124 ] || BUDGET_EXHAUSTED=1
   return "$rc"
 }
 
@@ -225,8 +231,8 @@ PR_GRAPHQL='query($o:String!,$r:String!,$n:Int!){
   repository(owner:$o,name:$r){
     viewerPermission
     pullRequest(number:$n){
-      state merged isDraft mergeable reviewDecision headRefOid
-      author{login}
+      state isDraft mergeable reviewDecision headRefOid
+      author{login __typename}
       commits(last:1){nodes{commit{oid
         statusCheckRollup{contexts(first:100){pageInfo{hasNextPage}
           nodes{
@@ -243,7 +249,9 @@ observe() { # canonical GitHub URL -> normalized JSON
   owner=${part%%/*}; repo=${part#*/}
   case "$kind" in
     pull)
-      forge api graphql -f query="$PR_GRAPHQL" -F o="$owner" -F r="$repo" -F n="$number" > "$TMP/core.json" || return 1
+      # Owner and repo are raw fields: -F would send an all-digit name as a
+      # JSON number against a String variable and the document would be refused.
+      forge api graphql -f query="$PR_GRAPHQL" -f o="$owner" -f r="$repo" -F n="$number" > "$TMP/core.json" || return 1
       jq -e '.data.repository.pullRequest
         | (.state | IN("OPEN","CLOSED","MERGED")) and (.headRefOid | test("^[a-fA-F0-9]{40}$"))
         and (.isDraft | type == "boolean")' "$TMP/core.json" >/dev/null || return 1
@@ -276,23 +284,25 @@ observe() { # canonical GitHub URL -> normalized JSON
           status:(if .state == "pending" then "in_progress" else "completed" end),
           conclusion:(if .state == "pending" then null else .state end)} ]' > "$TMP/rollup.json" || return 1
     else
+      # A context the forge only expects is unposted: the REST statuses lane
+      # never reported one, so it is no lane here either.
       jq '[ (.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
+        | select(.state != "EXPECTED")
         | if .__typename == "CheckRun" then
             {name,id:.databaseId,status:(.status | ascii_downcase),
              conclusion:(if .conclusion == null then null else (.conclusion | ascii_downcase) end),
              started_at:.startedAt}
           else
-            # An expected-but-unposted status is not a verdict, like REST pending.
             {name:.context,id:null,started_at:.createdAt,
-             status:(if (.state | IN("PENDING","EXPECTED")) then "in_progress" else "completed" end),
-             conclusion:(if (.state | IN("PENDING","EXPECTED")) then null else (.state | ascii_downcase) end)}
+             status:(if .state == "PENDING" then "in_progress" else "completed" end),
+             conclusion:(if .state == "PENDING" then null else (.state | ascii_downcase) end)}
           end ]' "$TMP/core.json" > "$TMP/rollup.json" || return 1
     fi
     jq -n --slurpfile core "$TMP/core.json" --slurpfile comments "$TMP/comments.json" \
       --slurpfile reviews "$TMP/reviews.json" --slurpfile inline "$TMP/inline.json" --slurpfile checks "$TMP/rollup.json" '
       $core[0].data.repository as $r
       | $r.pullRequest as $c
-      | ($c.author.login // "") as $author
+      | (($c.author.login // "") + (if $c.author.__typename == "Bot" then "[bot]" else "" end)) as $author
       | ($reviews[0] | add // []) as $reviews
       | {head:$c.headRefOid,state:($c.state | ascii_downcase),
           draft:$c.isDraft,
