@@ -32,6 +32,9 @@ make_home() {  # <name>
 #!/usr/bin/env bash
 set -u
 state=${LAVISH_FAKE_STATE:?}
+# Every invocation in order, so a test can assert what the build asked the
+# vendor for and when. A bare listing logs as `<list>`.
+printf '%s\n' "${*:-<list>}" >> "$state/calls"
 emit() {  # <canonical-file> <status>
   printf 'session:\n'
   printf '  file: %s\n' "$1"
@@ -40,6 +43,15 @@ emit() {  # <canonical-file> <status>
 }
 case "${1-}" in
   --version) printf '0.1.61\n'; exit 0 ;;
+  --help)
+    # Inert: help never opens, lists, or ends a session. A release that names
+    # sessions advertises the flag here; the `advertise-name` marker selects it.
+    printf 'help[1]: "Run `lavish-axi <html-file>` to open or resume a session"\n'
+    if [ -e "$state/advertise-name" ]; then
+      printf 'help[2]: "Pass `--name <slug>` to give a session a stable URL"\n'
+    fi
+    exit 0
+    ;;
   poll)
     # A real blocking listener: it returns only when the trigger appears, so a
     # live owner in these tests is a live process rather than a timing artifact.
@@ -579,6 +591,42 @@ test_build_reopens_when_an_opened_session_ends_before_listing() {
   pass "build reopens a session that ends between establish and listing"
 }
 
+test_name_support_probe_never_lists_before_the_session_is_established() {
+  local home data first
+  home=$(make_home name-probe-inert)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the build failed"
+  # A listing is the read the liveness proof consumes, so nothing the build asks
+  # before opening the session may be one. Pinning the FIRST call keeps a future
+  # probe from answering a question the build has not asked yet.
+  first=$(sed -n '1p' "$home/lavish-state/calls")
+  case "$first" in
+    '<list>') fail "the build listed sessions before establishing one" ;;
+  esac
+  pass "the session-name probe never lists sessions before the session is established"
+}
+
+test_name_support_probe_follows_what_the_release_advertises() {
+  local home data opened
+  home=$(make_home name-probe-absent)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the unnamed build failed"
+  opened=$(grep -c -- '--name bearings' "$home/lavish-state/calls" || true)
+  [ "$opened" = 0 ] \
+    || fail "the build named a session on a release that does not advertise --name"
+
+  home=$(make_home name-probe-present)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  : > "$home/lavish-state/advertise-name"
+  run_board "$home" build "$data" >/dev/null || fail "the named build failed"
+  grep -q -- '--name bearings' "$home/lavish-state/calls" \
+    || fail "the build did not name the session on a release that advertises --name"
+  pass "the session-name probe reads the installed release in both directions"
+}
+
 test_build_refuses_to_arm_when_the_session_stays_ended() {
   local home data rc out sid
   home=$(make_home dead-session)
@@ -885,6 +933,8 @@ test_rebuild_is_idempotent_and_does_not_double_arm
 test_build_refuses_a_template_without_exactly_one_slot
 test_build_reopens_a_session_the_captain_ended
 test_build_reopens_when_an_opened_session_ends_before_listing
+test_name_support_probe_never_lists_before_the_session_is_established
+test_name_support_probe_follows_what_the_release_advertises
 test_build_refuses_to_arm_when_the_session_stays_ended
 test_build_starts_a_listener_for_an_already_armed_board
 test_build_drops_decision_cards_whose_subject_already_landed
