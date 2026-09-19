@@ -123,7 +123,7 @@ derive() {  # <payload.json> <out-file>
   [ -f "$TEMPLATE" ] || fail "the shipped board template is missing: $TEMPLATE"
   [ -f "$TRANSPORT" ] || fail "the remote transport is missing: $TRANSPORT"
   python3 - "$TEMPLATE" "$TRANSPORT" "$1" "$2" <<'PY'
-import json, re, sys
+import json, os, re, sys
 
 template_path, transport_path, payload_path, out_path = sys.argv[1:5]
 html = open(template_path, encoding="utf-8").read()
@@ -173,7 +173,15 @@ out = html[:m.start()] + m.group(1) + payload + m.group(3)
 # The template's script tag is replaced by the transport, which runs that same
 # script itself: one copy of the board's code on the page, not two.
 rest = tail[:board.start()] + "<script>\n" + transport + "</script>" + tail[board.end():]
-open(out_path, "w", encoding="utf-8").write(out + rest)
+# The derived page carries the same private fleet content as the desk board -
+# repo names, task titles, PR links, decision and credential card copy - so it
+# is created 0600 like its sibling, never readable by other accounts on this
+# machine. Opened through os.open so the mode is set at creation rather than
+# after a world-readable file has already existed.
+fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    fh.write(out + rest)
+os.chmod(out_path, 0o600)
 PY
 }
 
@@ -330,7 +338,9 @@ command_publish() {  # <data.json>
   [ -f "$data" ] || fail "board data does not exist: $data"
   url=$(board_address) || url=""
 
-  mkdir -p "$(dirname "$DERIVED_PATH")" || fail "cannot create $(dirname "$DERIVED_PATH")"
+  # Same invariant as the desk board's own directory: private, not world-readable.
+  (umask 077; mkdir -p "$(dirname "$DERIVED_PATH")") \
+    || fail "cannot create $(dirname "$DERIVED_PATH")"
   command_render "$data" --out "$DERIVED_PATH" >/dev/null
 
   printf 'derived: %s\n' "$DERIVED_PATH"

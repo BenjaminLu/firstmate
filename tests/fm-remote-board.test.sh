@@ -105,6 +105,23 @@ test_the_derived_board_has_one_copy_of_the_board_code() {
   pass "the derived board has one copy of the board code"
 }
 
+# The derived page carries the same private fleet content as the desk board, and
+# the desk board's own sibling in that directory is deliberately 0600. Asserting
+# the mode rather than the code keeps this true however the file gets written.
+test_the_derived_page_is_not_world_readable() {
+  local home dir page
+  home=$TMP_ROOT/perms
+  mkdir -p "$home"
+  valid_payload "$home/p.json"
+  FM_HOME="$home" "$REMOTE" publish "$home/p.json" >/dev/null 2>&1 || true
+  assert_present "$home/.lavish/remote-board.html" "publish must leave the derived page"
+  page=$(ls -l "$home/.lavish/remote-board.html" | cut -c1-10)
+  dir=$(ls -ld "$home/.lavish" | cut -c1-10)
+  assert_equals "-rw-------" "$page" "the derived page must not be readable by other accounts"
+  assert_equals "drwx------" "$dir" "the directory holding it must not be readable either"
+  pass "the derived page is not world-readable"
+}
+
 test_the_contract_owner_gates_what_can_be_rendered() {
   local d=$TMP_ROOT/gate out rc=0
   mkdir -p "$d"
@@ -720,3 +737,4 @@ else
   echo "skip: node not found - the remote transport's behavior cases need a JS runtime"
 fi
 test_the_status_line_does_not_displace_the_language_switch
+test_the_derived_page_is_not_world_readable
