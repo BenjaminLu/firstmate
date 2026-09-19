@@ -2907,8 +2907,9 @@ spawn_worktree_fetch_covers_branch() { # <worktree> <branch>
 # default-branch-resolution failure - and quote the clone's own refspec beside
 # the branch, so an operator whose entries exclude it some other way than by
 # omission reads that off the message instead of off a command that would not
-# help. The remedy only ever adds an entry: a clone narrowed on purpose keeps
-# its narrowing.
+# help. The remedy only ever adds an entry, and says so in those terms: a clone
+# narrowed on purpose keeps its narrowing, and an operator whose refspec
+# excludes the branch outright is told that adding will not reach them.
 spawn_report_refspec_cannot_refresh() { # <worktree> <branch> <target>
   local worktree=$1 branch=$2 target=$3 spec specs=
   while IFS= read -r spec; do
@@ -2916,7 +2917,7 @@ spawn_report_refspec_cannot_refresh() { # <worktree> <branch> <target>
     specs="${specs:+$specs, }'$spec'"
   done < <(git -C "$worktree" config --get-all remote.origin.fetch 2>/dev/null)
   echo "error: the clone behind pooled worktree '$worktree' does not fetch '$branch', the default branch this clone records: its remote.origin.fetch is ${specs:-unset}, which never maps 'refs/heads/$branch' onto '$target' - the shape of a single-branch clone, or of a refspec narrowed by hand - so spawn's one fetch of origin left that ref exactly as this slot last saw it. Origin is reachable and that fetch succeeded; only the refspec is the problem; refusing to launch from a potentially stale base" >&2
-  echo "fix the clone once by widening the refspec: git -C '$worktree' remote set-branches --add origin '$branch'" >&2
+  echo "fix the clone once by widening the refspec - this adds '$branch' back only if nothing above excludes it, and an entry starting with '^' that matches it is itself the cause, which no added entry can undo: git -C '$worktree' remote set-branches --add origin '$branch'" >&2
 }
 
 freshen_spawn_worktree_base() { # <worktree>

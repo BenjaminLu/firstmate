@@ -521,6 +521,10 @@ test_fetch_refspec_missing_the_default_branch_refuses_the_pool() {
   assert_contains "$out" \
     "git -C '$POOL_DIR' remote set-branches --add origin '$DEFAULT_BRANCH'" \
     "the refusal did not print the command that widens the refspec"
+  # And it claims no more than it does: adding an entry cannot undo an entry
+  # that excludes the branch, so the line says so rather than promising a fix.
+  assert_contains "$out" "only if nothing above excludes it" \
+    "the remedy promised a fix it cannot deliver against an excluding refspec entry"
   # Still one fetch: the remedy is advice, not a second round trip taken here.
   [ "$(fetch_count "$CASE_DIR/git.log")" = 1 ] \
     || fail "spawn fetched more than once instead of refusing:"$'\n'"$(cat "$CASE_DIR/git.log")"
