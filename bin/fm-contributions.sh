@@ -19,10 +19,20 @@
 # This script owns fm-contributions.v1: one atomic file per durable task with
 # task and records[]. Each record contains url, kind, checked_at, error,
 # observation, verdict, seen event tokens, pending events, and notified tokens.
-# observation is one coherent forge read (a PR head is rechecked after fetching
-# checks/reviews). Checks are normalized by name, id, started_at, status and
-# conclusion; projection picks the newest attempt per distinct name. The last
-# observation's lane names also disclose a lane absent from the next head.
+# observation is one coherent forge read. Observing one pull request costs four
+# forge calls, down from eight: one GraphQL document carries the pull request
+# core, the repository's push permission, the forge review decision, the head,
+# and both check lanes in a single snapshot, so the checks are bound to that
+# head without a separate recheck; comments, reviews and inline review comments
+# stay on their REST list endpoints so their event tokens are unchanged. At the
+# 0.9-4.4s per call measured on a slow forge that is 3.6-17.6s against the
+# default 20s budget, where eight calls (7.2-35.2s) could not finish and left
+# the row unobserved. A commit with more than one page of check contexts falls
+# back to the two paginated REST check lanes rather than dropping a lane, so
+# that rare observation costs six. Checks are normalized by name, id,
+# started_at, status and conclusion; projection picks the newest attempt per
+# distinct name. The last observation's lane names also disclose a lane absent
+# from the next head.
 # A verdict records the EXACT judged head, source URL, actor and summary. A
 # comment's arrival time never supplies its judged head. Record a prose verdict
 # only after its source identifies that head; otherwise leave it unbound and
@@ -188,41 +198,92 @@ forge() {
   return "$rc"
 }
 
+# One GraphQL document replaces five REST reads: the pull request core, the
+# repository's push permission, the forge review decision, the head recheck,
+# and both check lanes. Head and checks come from one snapshot, so the checks
+# are bound to that head without a second head read.
+PR_GRAPHQL='query($o:String!,$r:String!,$n:Int!){
+  repository(owner:$o,name:$r){
+    viewerPermission
+    pullRequest(number:$n){
+      state merged isDraft mergeable reviewDecision headRefOid
+      author{login}
+      commits(last:1){nodes{commit{oid
+        statusCheckRollup{contexts(first:100){pageInfo{hasNextPage}
+          nodes{
+            __typename
+            ... on CheckRun{name databaseId status conclusion startedAt}
+            ... on StatusContext{context createdAt state}
+          }}}}}}
+    }}}'
+
 observe() { # canonical GitHub URL -> normalized JSON
-  local url=$1 part number kind endpoint head after label
+  local url=$1 part number kind endpoint head label owner repo
   case "$url" in https://github.com/*) ;; *) return 1 ;; esac
   part=${url#https://github.com/}; number=${part##*/}; part=${part%/*}; kind=${part##*/}; part=${part%/*}
-  case "$kind" in pull) endpoint="repos/$part/pulls/$number" ;; issues) endpoint="repos/$part/issues/$number" ;; *) return 1 ;; esac
-  forge api "$endpoint" > "$TMP/core.json" || return 1
-  jq -e '(.state == "open" or .state == "closed") and (.user.login | type == "string")' "$TMP/core.json" >/dev/null || return 1
+  owner=${part%%/*}; repo=${part#*/}
+  case "$kind" in
+    pull)
+      forge api graphql -f query="$PR_GRAPHQL" -F o="$owner" -F r="$repo" -F n="$number" > "$TMP/core.json" || return 1
+      jq -e '.data.repository.pullRequest
+        | (.state | IN("OPEN","CLOSED","MERGED")) and (.headRefOid | test("^[a-fA-F0-9]{40}$"))
+        and (.isDraft | type == "boolean")' "$TMP/core.json" >/dev/null || return 1
+      head=$(jq -er '.data.repository.pullRequest.headRefOid' "$TMP/core.json") || return 1
+      # The rollup is read from the branch tip in the same snapshot as the head.
+      jq -e --arg head "$head" '((.data.repository.pullRequest.commits.nodes[0].commit.oid) // $head) == $head' \
+        "$TMP/core.json" >/dev/null || { printf 'head changed during observation\n' > "$TMP/forge.err"; return 1; }
+      ;;
+    issues)
+      endpoint="repos/$part/issues/$number"
+      forge api "$endpoint" > "$TMP/core.json" || return 1
+      jq -e '(.state == "open" or .state == "closed") and (.user.login | type == "string")' "$TMP/core.json" >/dev/null || return 1
+      ;;
+    *) return 1 ;;
+  esac
   forge api "repos/$part/issues/$number/comments?per_page=100" --paginate --slurp > "$TMP/comments.json" || return 1
   jq -e 'type == "array" and all(.[]; type == "array")' "$TMP/comments.json" >/dev/null || return 1
   if [ "$kind" = pull ]; then
-    head=$(jq -er '.head.sha | select(test("^[a-fA-F0-9]{40}$"))' "$TMP/core.json") || return 1
-    forge api "$endpoint/reviews?per_page=100" --paginate --slurp > "$TMP/reviews.json" || return 1
-    forge api "$endpoint/comments?per_page=100" --paginate --slurp > "$TMP/inline.json" || return 1
-    forge api "repos/$part/commits/$head/check-runs?filter=all&per_page=100" --paginate --slurp > "$TMP/checks.json" || return 1
-    forge api "repos/$part/commits/$head/statuses?per_page=100" --paginate --slurp > "$TMP/statuses.json" || return 1
-    forge api "repos/$part" > "$TMP/repo.json" || return 1
-    forge pr view "$url" --json headRefOid,reviewDecision > "$TMP/after.json" || return 1
-    after=$(jq -er .headRefOid "$TMP/after.json")
-    [ "$head" = "$after" ] || { printf 'head changed during observation\n' > "$TMP/forge.err"; return 1; }
+    forge api "repos/$part/pulls/$number/reviews?per_page=100" --paginate --slurp > "$TMP/reviews.json" || return 1
+    forge api "repos/$part/pulls/$number/comments?per_page=100" --paginate --slurp > "$TMP/inline.json" || return 1
+    # A commit carrying more check contexts than one page is rare; page it
+    # through the two REST lanes rather than silently dropping a lane.
+    if jq -e '.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.pageInfo.hasNextPage == true' \
+      "$TMP/core.json" >/dev/null; then
+      forge api "repos/$part/commits/$head/check-runs?filter=all&per_page=100" --paginate --slurp > "$TMP/checks.json" || return 1
+      forge api "repos/$part/commits/$head/statuses?per_page=100" --paginate --slurp > "$TMP/statuses.json" || return 1
+      jq -n --slurpfile checks "$TMP/checks.json" --slurpfile statuses "$TMP/statuses.json" '
+        [ $checks[0][] | .check_runs[] | {name,id,status,conclusion,started_at} ]
+        + [ $statuses[0][] | .[] | {name:.context,id,started_at:.created_at,
+          status:(if .state == "pending" then "in_progress" else "completed" end),
+          conclusion:(if .state == "pending" then null else .state end)} ]' > "$TMP/rollup.json" || return 1
+    else
+      jq '[ (.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
+        | if .__typename == "CheckRun" then
+            {name,id:.databaseId,status:(.status | ascii_downcase),
+             conclusion:(if .conclusion == null then null else (.conclusion | ascii_downcase) end),
+             started_at:.startedAt}
+          else
+            # An expected-but-unposted status is not a verdict, like REST pending.
+            {name:.context,id:null,started_at:.createdAt,
+             status:(if (.state | IN("PENDING","EXPECTED")) then "in_progress" else "completed" end),
+             conclusion:(if (.state | IN("PENDING","EXPECTED")) then null else (.state | ascii_downcase) end)}
+          end ]' "$TMP/core.json" > "$TMP/rollup.json" || return 1
+    fi
     jq -n --slurpfile core "$TMP/core.json" --slurpfile comments "$TMP/comments.json" \
-      --slurpfile reviews "$TMP/reviews.json" --slurpfile inline "$TMP/inline.json" --slurpfile after "$TMP/after.json" --slurpfile checks "$TMP/checks.json" \
-      --slurpfile statuses "$TMP/statuses.json" --slurpfile repo "$TMP/repo.json" '
-      $core[0] as $c
+      --slurpfile reviews "$TMP/reviews.json" --slurpfile inline "$TMP/inline.json" --slurpfile checks "$TMP/rollup.json" '
+      $core[0].data.repository as $r
+      | $r.pullRequest as $c
+      | ($c.author.login // "") as $author
       | ($reviews[0] | add // []) as $reviews
-      | {head:$c.head.sha,state:(if $c.merged_at != null then "merged" else $c.state end),
-          draft:$c.draft,mergeable:(if $c.mergeable == true then "mergeable" elif $c.mergeable == false then "conflicting" else "unknown" end),
-          can_merge:($repo[0].permissions.push // false),
-          review_decision:($after[0].reviewDecision // ""),
+      | {head:$c.headRefOid,state:($c.state | ascii_downcase),
+          draft:$c.isDraft,
+          mergeable:(if $c.mergeable == "MERGEABLE" then "mergeable" elif $c.mergeable == "CONFLICTING" then "conflicting" else "unknown" end),
+          can_merge:(($r.viewerPermission // "") | IN("ADMIN","MAINTAIN","WRITE")),
+          review_decision:($c.reviewDecision // ""),
           reviews:$reviews,
-          checks:([ $checks[0][] | .check_runs[] | {name,id,status,conclusion,started_at} ]
-            + [ $statuses[0][] | .[] | {name:.context,id,started_at:.created_at,
-              status:(if .state == "pending" then "in_progress" else "completed" end),
-              conclusion:(if .state == "pending" then null else .state end)} ]),
+          checks:$checks[0],
           events:((($comments[0] | add // [] | map(. + {_signal:"comment"})) + ($reviews | map(. + {_signal:"review"})) + ($inline[0] | add // [] | map(. + {_signal:"review-comment"})))
-            | map(select(.user.login != $c.user.login and (.author_association | IN("OWNER","MEMBER","COLLABORATOR")))
+            | map(select(.user.login != $author and (.author_association | IN("OWNER","MEMBER","COLLABORATOR")))
               | {token:((._signal + ":") + (.id|tostring) + ":" + (.updated_at // .submitted_at // "") + ":" + (.state // "")),
                  type:._signal,source:.html_url,head:.commit_id,
                  author:.user.login,body:(.body // "" | .[:500])}))}' > "$TMP/observation.json" || return 1
