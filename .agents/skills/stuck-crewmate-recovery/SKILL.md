@@ -65,7 +65,9 @@ A silent pane is not evidence on its own.
 A worker blocked inside a synchronous `no-mistakes axi run` or `axi respond` call prints nothing for as long as that call takes, so the watcher escalates it as a possible wedge while it is working normally.
 The run's own `active_steps` settles that in one read, on the signal the pipeline emits rather than on movement a single read cannot show: a present `active_steps` row whose `last_activity` carries no `quiet` prefix means working rather than stuck, with an `agent_pid` while a fix round runs and none while a ci monitor waits.
 An absent `active_steps` table is not evidence of life; the pipeline emits it only while a step is actually running or fixing, so a run record that merely still says running while nothing executes it never reads as alive.
-Read both rules through `bin/fm-crew-state.sh <id>`, which already folds them in, rather than inventing a second recency threshold here, and start the ladder below when that read does not report the worker working.
+Read both rules off the run's own `active_steps` rows, which `no-mistakes axi status` emits, rather than inventing a second recency threshold here.
+`bin/fm-crew-state.sh <id>` applies them only to supersede a `blocked:` status line that claims the pipeline is unreachable; its ordinary verdict maps a `running` or `fixing` run record to working without consulting them, so a working verdict from it is not by itself evidence that the step is alive.
+Start the ladder below when the run reports no present unquiet `active_steps` row.
 
 Escalate in order:
 

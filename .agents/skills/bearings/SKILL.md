@@ -164,7 +164,8 @@ Only the exact answer value `merge` authorizes a merge; an answer carrying a fre
 These hold for every surface the captain reads or acts on - the board, a card, a packet page, a report - not only for a `/bearings` invocation.
 
 - The board is the captain's one surface, so render a packet, report, or decision inside its card rather than sending them somewhere else to look.
-  `bin/fm-packet.sh card` composes that card and `serve` gives the packet page its own stable, reopenable URL that the card carries as `packet_url`.
+  `bin/fm-packet.sh card` composes that card, and `serve` publishes the packet page under the stable session name `packet-<task-id>` when the installed `lavish-axi` advertises `--name`, falling back to a keyed session when it does not; the card carries whichever URL results as `packet_url`.
+  That fallback is the one place this rule is not enforceable by the tooling, so say so when it applies rather than letting a losable URL pass as a stable one.
   Never hand the captain a one-shot session URL whose content is lost when the tab closes; reopening the same URL must bring the content back.
 - Every captain-facing visual surface is trilingual EN / 繁體 / 简体, so every string the captain reads on it carries all three.
   The board's skeleton enforces this through its `{TRANSLATE: ...}` slots above, and `bin/fm-packet.sh verify` enforces it for packet figures; a surface built by hand outside those two - a scout's own Lavish artifact, a one-off review page - carries the same rule with nothing checking it for you.
