@@ -1704,7 +1704,7 @@ test_dormant_fork_checks_are_reported() {
 # from this checkout's own origin remote or the check would confidently report
 # the parent's healthy Actions while this fork's sat dormant.
 test_actions_check_uses_this_repositorys_own_origin() {
-  local case_dir out fake_root
+  local case_dir out fake_root origin
   case_dir=$(clone_truth_case actions-origin)
   fake_root="$case_dir/origin-root"
   # The check only asks about a repository that actually ships workflows.
@@ -1732,6 +1732,27 @@ test_actions_check_uses_this_repositorys_own_origin() {
   case "$out" in
     *ACTIONS_*) fail "a non-GitHub origin should be skipped, not reported, got: $out" ;;
   esac
+
+  # A GitHub origin carrying credentials or a username is still a GitHub origin.
+  # Reading the userinfo as the host sent it down the skip-silently path, which
+  # is the one outcome this check forbids - so every shape that can carry
+  # userinfo or a port is pinned here, not just the one the finding named.
+  gh_actions_stub "$case_dir/fakebin" "disabled_fork" -
+  for origin in \
+    "https://user@github.com/someone-else/their-fork.git" \
+    "https://user:token@github.com/someone-else/their-fork.git" \
+    "ssh://git@github.com:22/someone-else/their-fork.git" \
+    "https://github.com:443/someone-else/their-fork"; do
+    git -C "$fake_root" remote set-url origin "$origin"
+    out=$(env PATH="$case_dir/fakebin:$BASE_PATH" FM_HOME="$case_dir/home" \
+      FM_ROOT_OVERRIDE="$fake_root" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+      FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 \
+      "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+    case "$out" in
+      *"ACTIONS_DORMANT: no workflow is active in someone-else/their-fork"*) ;;
+      *) fail "a GitHub origin of the form $origin was not reported, got: $out" ;;
+    esac
+  done
 
   # An origin that cannot be parsed at all IS reported, so the two cases stay
   # distinguishable rather than collapsing into one silent skip.

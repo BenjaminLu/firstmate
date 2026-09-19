@@ -1906,10 +1906,17 @@ actions_repo_slug() {
   url=${url%.git}
   case "$url" in
     https://*|http://*) url=${url#*://}; host=${url%%/*}; url=${url#*/} ;;
-    ssh://*) url=${url#ssh://}; url=${url#*@}; host=${url%%/*}; url=${url#*/} ;;
-    *:*) url=${url#*@}; host=${url%%:*}; url=${url#*:} ;;
+    ssh://*) url=${url#ssh://}; host=${url%%/*}; url=${url#*/} ;;
+    *:*) host=${url%%:*}; url=${url#*:} ;;
     *) return 1 ;;
   esac
+  # Userinfo and port come off the authority ONCE, for every URL shape, rather
+  # than inside the branches: stripping it per branch is what let the https case
+  # read `user@github.com` as the host, fail the github.com test, and take the
+  # skip-silently path - no ACTIONS_DORMANT and no ACTIONS_UNVERIFIED for a
+  # GitHub origin, which is the one outcome this check forbids. Userinfo first,
+  # because a password inside it may itself contain the port separator.
+  host=${host#*@}
   host=${host%%:*}
   [ "$host" = github.com ] || return 2
   case "$url" in
