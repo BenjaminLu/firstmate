@@ -64,6 +64,21 @@ free_port() {
 
 # --- the publisher -----------------------------------------------------------
 
+test_publishing_never_resurrects_a_retired_home() {
+  local home rc
+  # A teardown that retires a secondmate removes the home it ran in. A
+  # publisher that then created the directory would bring the retired home
+  # back as a side effect of telling a board that no longer exists.
+  home="$TMP_ROOT/retired"
+  rm -rf "$home"
+  rc=0
+  FM_HOME="$home" "$LIVE" event landed alpha --owner main >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || fail "publishing into a retired home exited $rc; a teardown would have died with it"
+  [ ! -e "$home" ] \
+    || fail "publishing recreated the retired home at $home"
+  pass "publishing into a home that has been retired creates nothing and still exits 0"
+}
+
 test_publishing_is_one_append_and_needs_no_server() {
   local home out
   home=$(make_home publish-no-server) || fail "could not build a home"
@@ -426,6 +441,7 @@ test_publishing_sites_reach_the_board() {
   pass "a publisher addressed at a named home publishes into that home"
 }
 
+test_publishing_never_resurrects_a_retired_home
 test_publishing_is_one_append_and_needs_no_server
 test_a_publisher_never_fails_its_caller
 test_a_published_value_cannot_corrupt_the_log

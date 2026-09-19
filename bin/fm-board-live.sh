@@ -136,8 +136,13 @@ command_event() {
     printf 'fm-board-live: cannot stamp the event; not publishing\n' >&2
     return 0
   fi
-  if ! { [ -d "$STATE" ] || mkdir -p "$STATE" 2>/dev/null; }; then
-    printf 'fm-board-live: no state directory; not publishing\n' >&2
+  # PUBLISHING NEVER CREATES A HOME. A teardown that retires a secondmate
+  # removes the home it was torn down in, and a publisher that ran afterwards
+  # and made the directory would resurrect the retired home as a side effect of
+  # telling a board that no longer exists. So an absent state directory means
+  # there is nothing here to tell, not something to create.
+  if [ ! -d "$STATE" ]; then
+    printf 'fm-board-live: no state directory at %s; not publishing\n' "$STATE" >&2
     return 0
   fi
   # One append of one line. O_APPEND on a line this short is atomic against
