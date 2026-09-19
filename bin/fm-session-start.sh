@@ -28,7 +28,10 @@
 #
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       mutating step runs.
-#   2. bootstrap      - home-local stale Herdr projection cleanup runs only
+#   2. bootstrap      - detect-only diagnostics, then the one unconditional line
+#                       naming the permission posture this home launches Claude
+#                       workers with and what selected it.
+#                       Home-local stale Herdr projection cleanup runs only
 #                       when this session actually holds the lock. Detect-only
 #                       diagnostics always run. Bootstrap's six MUTATING sweeps
 #                       (same-home backlog reconciliation,
@@ -343,6 +346,8 @@ PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-line-cap-lib.sh
 . "$SCRIPT_DIR/fm-line-cap-lib.sh"
+# shellcheck source=bin/fm-claude-launch-lib.sh
+. "$SCRIPT_DIR/fm-claude-launch-lib.sh"
 
 # One tasks-axi compatibility verdict per session start. The probe costs three
 # tasks-axi subprocesses and this digest needs the same answer twice - here for
@@ -700,6 +705,20 @@ if [ -n "$BOOT_OUT" ]; then
 else
   printf '(silent - all good)\n'
 fi
+
+# --- 2b. worker launch posture ---------------------------------------------
+# Still the `bootstrap` stage: a pure local file read with no subprocess, so a
+# truncation here is already named by that stage.
+# This line is UNCONDITIONAL, including on the read-only path. The permission
+# posture a home launches its workers with used to be stated nowhere at all:
+# an unconfigured home ran one posture, its captain believed another, and
+# nothing in a session start would have said so. A wrong default is arguable;
+# a silent one is not reviewable. bin/fm-claude-launch-lib.sh resolves it, and
+# bin/fm-spawn.sh resolves it the same way, so this line and the launch it
+# describes cannot drift apart.
+subsection "WORKER LAUNCH POSTURE"
+fm_claude_permission_resolve "$CONFIG" || true
+fm_claude_permission_describe
 
 # --- 3. wake-drain ---------------------------------------------------------
 # The inactive-outcome startup scan runs in the deferred worker launched above,

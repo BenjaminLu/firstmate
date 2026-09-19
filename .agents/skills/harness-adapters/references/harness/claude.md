@@ -12,7 +12,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Skill | `/<skill>`, for example `/no-mistakes`. |
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
-| Permissions | `--dangerously-skip-permissions` by default, or `--permission-mode auto` when `config/claude-permission-mode` is `auto`; the `auto` shape verified on 2.1.269, and `../../../../../docs/configuration.md` "Claude permission mode" owns the file. |
+| Permissions | `--permission-mode auto` by default, or `--dangerously-skip-permissions` when `config/claude-permission-mode` is `bypass`; the `auto` shape verified on 2.1.269, and `../../../../../docs/configuration.md` "Claude permission mode" owns the file. Every launch also carries a generated `permissions.additionalDirectories` grant in its inline settings, derived per launch by `../../../bin/fm-claude-launch-lib.sh`. |
 
 ## Workspace trust
 
@@ -41,7 +41,8 @@ The once-per-machine bypass-permissions confirmation is a third, separate dialog
 Never send Enter to that one either: it was observed rendering in the same shape as the trust dialog, with the selection on `No, exit` and the footer `Enter to confirm . Esc to cancel`, so Enter ends the session rather than accepting.
 It numbers no options either, so the key plane cannot reach its accepting option at all, and an operator accepts it once per machine instead.
 Inspect the pane to identify which dialog is on screen, and report it rather than answering it.
-A launch under `config/claude-permission-mode=auto` never meets the bypass confirmation, because it does not request bypass mode: on 2.1.269 `claude --permission-mode auto` reached the composer directly with the footer `⏵⏵ auto mode on (shift+tab to cycle)`, so a captain who refuses the bypass dialog selects `auto` there instead of accepting it.
+A launch under `auto` never meets the bypass confirmation, because it does not request bypass mode: on 2.1.269 `claude --permission-mode auto` reached the composer directly with the footer `⏵⏵ auto mode on (shift+tab to cycle)`.
+Since `auto` is what an unconfigured home launches, that dialog is no longer on a fresh machine's first-spawn path at all; a home that opts into `bypass` puts it back, and an operator accepts it once per machine.
 The workspace-trust dialog is unaffected by the permission mode and still needs the pre-registration above.
 
 ## Composer ghost

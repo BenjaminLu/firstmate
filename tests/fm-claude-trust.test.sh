@@ -646,7 +646,7 @@ test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   assert_trusted "$config/.claude.json" "$wt" \
     "the claude spawn did not pre-register trust for its worktree"
   assert_present "$launch_log" "the claude spawn sent no launch command"
-  assert_grep 'claude --dangerously-skip-permissions' "$launch_log" \
+  assert_grep 'claude --permission-mode auto' "$launch_log" \
     "the launch command was not the claude worker launch"
   assert_grep "$home/data/trustspawn/launch-brief.md" "$launch_log" \
     "the launch command did not carry the brief the worker must read"
@@ -672,7 +672,7 @@ test_secondmate_standalone_clone_home_is_trusted() {
   assert_trusted "$case_dir/claude-config/.claude.json" "$home" \
     "the claude secondmate spawn did not pre-register trust for its standalone-clone home"
   assert_present "$case_dir/launch.log" "the claude secondmate spawn sent no launch command"
-  assert_grep 'claude --dangerously-skip-permissions' "$case_dir/launch.log" \
+  assert_grep 'claude --permission-mode auto' "$case_dir/launch.log" \
     "the launch command was not the claude secondmate launch"
   assert_grep "$home/data/charter.md" "$case_dir/launch.log" \
     "the launch command did not carry the charter the secondmate must read"

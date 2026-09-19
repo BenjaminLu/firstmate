@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+# fm-claude-launch-lib.sh - the shared resolver for how a Claude worker launches:
+# the permission posture the launch carries, and the directories the worker may
+# read outside its own worktree.
+#
+# Sourced, never executed. Two consumers share one resolution so they cannot
+# disagree: bin/fm-spawn.sh turns both results into launch flags, and
+# bin/fm-session-start.sh prints the posture in its digest, so a session can
+# never be wrong about which posture its own workers run in.
+#
+# The operator-facing posture contract - accepted tokens, the shipped default,
+# what a bad value does - is owned by bin/fm-spawn.sh's header and
+# docs/configuration.md "Claude permission mode". This file owns the resolution
+# and the directory derivation only.
+#
+# DIRECTORY GRANT (fm_claude_grant_resolve).
+# A worker legitimately reads four directories outside its own worktree because
+# its own brief sends it to each of them. Each one is derived per launch from
+# the running system, so nothing machine-specific is ever committed and no
+# operator has to discover and hand-write them into a settings file:
+#
+#   1. the active Firstmate home, which carries the brief, the steering inbox,
+#      the status file, and the packet - the caller's resolved FM_HOME
+#   2. the Claude scratch root for this user - /tmp/claude-<uid>, plus its
+#      resolved spelling when /tmp is a symlink. macOS resolves /tmp to
+#      /private/tmp and reports the RESOLVED path to the agent, so a grant
+#      written only one way can miss the path the worker is actually handed;
+#      both spellings are emitted when they differ (verified: this host's
+#      scratchpad is /private/tmp/claude-501/... while /tmp/claude-501 is the
+#      same directory)
+#   3. the validation tool's data root, read from `no-mistakes doctor`'s own
+#      "data directory" line rather than assumed to be ~/.no-mistakes
+#   4. the user skills directory, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills,
+#      where the skills a brief names live
+#
+# EXISTENCE IS NOT A FILTER. A machine configured with nothing has not created
+# its scratch root or its skills directory yet, and those are exactly the grants
+# it will need; filtering on existence would drop them precisely on the fresh
+# clone this derivation exists for.
+#
+# WHAT CANNOT BE DERIVED IS NAMED, NEVER DROPPED SILENTLY. A directory whose
+# SOURCE does not resolve - no-mistakes absent or its doctor line unreadable,
+# neither CLAUDE_CONFIG_DIR nor HOME set, a path carrying a single quote that
+# cannot survive the launch command's quoting - is left out of the grant AND
+# listed in FM_CLAUDE_DIRS_UNRESOLVED, so the caller reports what the worker did
+# not get instead of launching a short list quietly.
+set -u
+
+# shellcheck source=bin/fm-config-inherit-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
+
+# The posture an unconfigured home launches with. This is the posture the fleet
+# actually runs; `bypass` is the deliberate opt-in, not what a clone inherits.
+FM_CLAUDE_PERMISSION_DEFAULT=auto
+FM_CLAUDE_PERMISSION_FILE=claude-permission-mode
+# Bound on the validation tool's doctor call: it contacts its own daemon, and a
+# worker launch must not hang behind an unhealthy one.
+FM_CLAUDE_DOCTOR_TIMEOUT=${FM_CLAUDE_DOCTOR_TIMEOUT:-10}
+# A non-positive or non-numeric bound is not a bound (fm-timeout-lib.sh header),
+# so an unusable value falls back to the default rather than removing the bound.
+case $FM_CLAUDE_DOCTOR_TIMEOUT in '' | *[!0-9]* | 0) FM_CLAUDE_DOCTOR_TIMEOUT=10 ;; esac
+
+# fm_claude_permission_resolve <config-dir>
+# Sets FM_CLAUDE_PERMISSION_MODE, FM_CLAUDE_PERMISSION_FLAG and
+# FM_CLAUDE_PERMISSION_SOURCE (default|config). Returns 1 when the file is
+# present but unusable, with the operator-facing reason in
+# FM_CLAUDE_PERMISSION_ERROR - empty when the inspection itself failed and has
+# already reported its own diagnostic.
+fm_claude_permission_resolve() {
+  local config=$1 present token path
+  path="$config/$FM_CLAUDE_PERMISSION_FILE"
+  FM_CLAUDE_PERMISSION_MODE=$FM_CLAUDE_PERMISSION_DEFAULT
+  FM_CLAUDE_PERMISSION_SOURCE=default
+  FM_CLAUDE_PERMISSION_FLAG=
+  FM_CLAUDE_PERMISSION_ERROR=
+  if ! present=$(fm_config_source_present "$path"); then
+    return 1
+  fi
+  if [ "$present" = 1 ]; then
+    if [ ! -f "$path" ] || [ ! -r "$path" ]; then
+      FM_CLAUDE_PERMISSION_ERROR="config/$FM_CLAUDE_PERMISSION_FILE must be a readable regular file holding one of: auto, bypass"
+      return 1
+    fi
+    token=$(tr -d '[:space:]' <"$path" || true)
+    case $token in
+    auto | bypass)
+      FM_CLAUDE_PERMISSION_MODE=$token
+      FM_CLAUDE_PERMISSION_SOURCE=config
+      ;;
+    *)
+      FM_CLAUDE_PERMISSION_ERROR="config/$FM_CLAUDE_PERMISSION_FILE holds '$token'; accepted values are: auto (--permission-mode auto, and the default when the file is absent), bypass (--dangerously-skip-permissions)"
+      return 1
+      ;;
+    esac
+  fi
+  case $FM_CLAUDE_PERMISSION_MODE in
+  bypass) FM_CLAUDE_PERMISSION_FLAG='--dangerously-skip-permissions' ;;
+  *) FM_CLAUDE_PERMISSION_FLAG='--permission-mode auto' ;;
+  esac
+  return 0
+}
+
+# fm_claude_permission_describe
+# One line naming the posture in force and what selected it, for a reader who
+# has run fm_claude_permission_resolve. Silence is what let an inverted default
+# stand unnoticed, so this line is printed whether or not anything is wrong.
+fm_claude_permission_describe() {
+  if [ -n "${FM_CLAUDE_PERMISSION_ERROR:-}" ]; then
+    printf 'UNRESOLVED - %s. Every Claude spawn from this home refuses until that file is fixed.\n' \
+      "$FM_CLAUDE_PERMISSION_ERROR"
+    return 0
+  fi
+  case ${FM_CLAUDE_PERMISSION_SOURCE:-default} in
+  config)
+    printf 'Claude workers launch %s (%s), selected by config/%s.\n' \
+      "$FM_CLAUDE_PERMISSION_FLAG" "$FM_CLAUDE_PERMISSION_MODE" "$FM_CLAUDE_PERMISSION_FILE"
+    ;;
+  *)
+    printf 'Claude workers launch %s (%s), the shipped default: this home has no config/%s.\n' \
+      "$FM_CLAUDE_PERMISSION_FLAG" "$FM_CLAUDE_PERMISSION_MODE" "$FM_CLAUDE_PERMISSION_FILE"
+    ;;
+  esac
+  if [ "${FM_CLAUDE_PERMISSION_MODE:-}" = bypass ]; then
+    printf 'Every permission check is skipped in that posture; auto is the safer one.\n'
+  fi
+}
+
+# fm_claude_no_mistakes_data_root
+# The validation tool's data root as the tool itself reports it. Prints nothing
+# and returns 1 when the tool is absent, the call does not finish inside its
+# bound, or the line does not carry an absolute path - a root this cannot read
+# is reported unresolved, never guessed.
+fm_claude_no_mistakes_data_root() {
+  local out root esc
+  command -v no-mistakes >/dev/null 2>&1 || return 1
+  out=$(fm_run_timed "$FM_CLAUDE_DOCTOR_TIMEOUT" no-mistakes doctor 2>/dev/null) || {
+    [ -n "$out" ] || return 1
+  }
+  esc=$(printf '\033')
+  root=$(printf '%s\n' "$out" |
+    sed -e "s/${esc}\[[0-9;]*[A-Za-z]//g" |
+    sed -n 's/^.*data directory[[:space:]][[:space:]]*//p' |
+    head -n 1)
+  root=${root%"${root##*[![:space:]]}"}
+  case $root in
+  /*) printf '%s\n' "$root" ;;
+  *) return 1 ;;
+  esac
+}
+
+# fm_claude_grant_resolve <fm-home>
+# Sets FM_CLAUDE_DIRS (one absolute directory per line, declaration order,
+# deduplicated), FM_CLAUDE_DIRS_JSON (the same grant as a JSON array, ready to
+# drop into the inline --settings object the launch already carries), and
+# FM_CLAUDE_DIRS_UNRESOLVED.
+#
+# It SETS rather than prints, and that is load bearing: a caller that read the
+# grant through command substitution would fork away the unresolved list, and
+# the unresolved list is the half that has to be reported. Printing the grant
+# and reporting what is missing must not be separable.
+fm_claude_grant_resolve() {
+  local home=${1:-} list= missing= uid tmp_root data_root config_dir candidate kept
+  FM_CLAUDE_DIRS=
+  FM_CLAUDE_DIRS_JSON='[]'
+  FM_CLAUDE_DIRS_UNRESOLVED=
+
+  if [ -n "$home" ]; then
+    list="$list$home"$'\n'
+  else
+    missing="$missing firstmate-home(no resolved FM_HOME)"
+  fi
+
+  uid=$(id -u 2>/dev/null || true)
+  if [ -n "$uid" ]; then
+    list="$list/tmp/claude-$uid"$'\n'
+    tmp_root=$(cd /tmp 2>/dev/null && pwd -P) || tmp_root=
+    if [ -n "$tmp_root" ] && [ "$tmp_root" != /tmp ]; then
+      list="$list$tmp_root/claude-$uid"$'\n'
+    fi
+  else
+    missing="$missing claude-scratch-root(no user id)"
+  fi
+
+  if data_root=$(fm_claude_no_mistakes_data_root); then
+    list="$list$data_root"$'\n'
+  else
+    missing="$missing no-mistakes-data-root(no absolute 'data directory' line from no-mistakes doctor)"
+  fi
+
+  config_dir=${CLAUDE_CONFIG_DIR:-}
+  if [ -z "$config_dir" ] && [ -n "${HOME:-}" ]; then
+    config_dir="$HOME/.claude"
+  fi
+  if [ -n "$config_dir" ]; then
+    list="$list$config_dir/skills"$'\n'
+  else
+    missing="$missing user-skills-dir(neither CLAUDE_CONFIG_DIR nor HOME is set)"
+  fi
+
+  # A single quote cannot survive the single-quoted --settings argument the
+  # launch command carries, so such a path is refused rather than shipped in a
+  # command that would break at the shell.
+  kept=
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    case $candidate in
+    *\'*)
+      missing="$missing $candidate(path contains a single quote)"
+      continue
+      ;;
+    esac
+    kept="$kept$candidate"$'\n'
+  done <<EOF
+$list
+EOF
+
+  FM_CLAUDE_DIRS=$(printf '%s' "$kept" | awk 'NF && !seen[$0]++')
+  FM_CLAUDE_DIRS_UNRESOLVED=${missing# }
+  FM_CLAUDE_DIRS_JSON=$(printf '%s\n' "$FM_CLAUDE_DIRS" | awk '
+    BEGIN { printf "[" ; first = 1 }
+    {
+      if (length($0) == 0) next
+      gsub(/\\/, "\\\\")
+      gsub(/"/, "\\\"")
+      if (!first) printf ","
+      printf "\"%s\"", $0
+      first = 0
+    }
+    END { printf "]" }
+  ')
+}

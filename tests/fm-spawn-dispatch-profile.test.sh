@@ -36,6 +36,18 @@ make_spawn_fakebin() {
   fakebin=$(fm_test_make_spawn_fakebin "$dir")
   cat > "$fakebin/timeout" <<'SH'
 #!/usr/bin/env bash
+# bin/fm-timeout-lib.sh calls `timeout -k <grace> <seconds> <command...>`;
+# drop the option and both numbers, then run the command unbounded.
+while [ "$#" -gt 0 ]; do
+  case $1 in
+  -k)
+    shift 2
+    ;;
+  -k*) shift ;;
+  --*) shift ;;
+  *) break ;;
+  esac
+done
 shift
 exec "$@"
 SH
@@ -132,7 +144,7 @@ test_no_profile_keeps_claude_profile_defaults() {
   assert_meta_profile "$HOME_DIR/state/$id.meta" claude default default
 
   launch=$(cat "$LAUNCH_LOG")
-  expected="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/launch-brief.md')\""
+  expected="env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --settings '$(fm_test_claude_settings_json "$HOME_DIR" "$HOME_DIR/user-home")' $CLAUDE_CONTROL_CHANNEL_FLAG \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$HOME_DIR/data/$id/launch-brief.md')\""
   [ "$launch" = "$expected" ] || fail "no-profile claude launch did not use the canonical launch kind"$'\n'"expected: $expected"$'\n'"actual:   $launch"
   pass "no --model/--effort records defaults and types the claude launch instructions"
 }
@@ -880,7 +892,7 @@ test_claude_forwards_firstmate_config_dir_when_set() {
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
+  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --settings '$(fm_test_claude_settings_json "$HOME_DIR" "$HOME_DIR/user-home" "$CASE_DIR/claude-work")'" \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
 }
@@ -1321,31 +1333,33 @@ SH
   pass "fm-spawn: actual ship/scout launch commands deliver the worker role contract"
 }
 
-# config/claude-permission-mode (bin/fm-spawn.sh header): absent and `bypass`
-# must both produce today's launch byte-for-byte, `auto` swaps only the
+# config/claude-permission-mode (bin/fm-spawn.sh header): absent and `auto`
+# must produce the same launch byte-for-byte, `bypass` swaps only the
 # permission flag, and any other token refuses before endpoint or metadata.
+# The absent case is the one that matters most: a home configured with nothing
+# must launch the reviewed posture, not the one that skips every check.
 claude_expected_launch() {  # <home> <id> <permission-flag>
   local home=$1 id=$2 flag=$3
-  printf '%s' "env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $flag --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$home/data/$id/launch-brief.md')\""
+  printf '%s' "env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $flag --settings '$(fm_test_claude_settings_json "$home" "$home/user-home")' $CLAUDE_CONTROL_CHANNEL_FLAG \"\$('${ROOT}/bin/fm-operational-input.sh' encode launch-brief < '$home/data/$id/launch-brief.md')\""
 }
 
-test_claude_permission_mode_bypass_matches_absent_launch() {
-  local rec id out status launch expected
-  id=permmode-bypass-z19
-  rec=$(make_spawn_case permmode-bypass claude "$id")
+test_claude_permission_mode_absent_launches_the_reviewed_posture() {
+  local rec id out status launch
+  id=permmode-absent-z19
+  rec=$(make_spawn_case permmode-absent claude "$id")
   read_case_record "$rec"
-  printf 'bypass\n' > "$HOME_DIR/config/claude-permission-mode"
+  assert_absent "$HOME_DIR/config/claude-permission-mode" "this case must start with no permission-mode file"
 
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
   status=$?
-  expect_code 0 "$status" "claude spawn with claude-permission-mode=bypass should succeed"
+  expect_code 0 "$status" "claude spawn with no claude-permission-mode should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  expected=$(claude_expected_launch "$HOME_DIR" "$id" --dangerously-skip-permissions)
-  [ "$launch" = "$expected" ] || fail "explicit bypass did not reproduce the absent-file launch"$'\n'"expected: $expected"$'\n'"actual:   $launch"
-  pass "config/claude-permission-mode=bypass launches exactly as an absent file does"
+  assert_contains "$launch" "claude --permission-mode auto --settings" "an unconfigured home did not launch the reviewed posture"
+  assert_not_contains "$launch" "--dangerously-skip-permissions" "an unconfigured home must never launch in bypass mode"
+  pass "a home with no config/claude-permission-mode launches --permission-mode auto"
 }
 
-test_claude_permission_mode_auto_swaps_only_the_permission_flag() {
+test_claude_permission_mode_auto_matches_absent_launch() {
   local rec id out status launch expected
   id=permmode-auto-z20
   rec=$(make_spawn_case permmode-auto claude "$id")
@@ -1359,25 +1373,100 @@ test_claude_permission_mode_auto_swaps_only_the_permission_flag() {
   assert_contains "$out" "spawned $id harness=claude" "auto spawn did not report claude"
   launch=$(cat "$LAUNCH_LOG")
   expected=$(claude_expected_launch "$HOME_DIR" "$id" '--permission-mode auto')
-  [ "$launch" = "$expected" ] || fail "auto changed more than the permission flag"$'\n'"expected: $expected"$'\n'"actual:   $launch"
-  assert_not_contains "$launch" "--dangerously-skip-permissions" "auto launch must not request bypass mode"
-  pass "config/claude-permission-mode=auto replaces --dangerously-skip-permissions with --permission-mode auto"
+  [ "$launch" = "$expected" ] || fail "explicit auto did not reproduce the absent-file launch"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  pass "config/claude-permission-mode=auto launches exactly as an absent file does"
 }
 
-test_claude_permission_mode_auto_reaches_scout_launch() {
+test_claude_permission_mode_bypass_swaps_only_the_permission_flag() {
+  local rec id out status launch expected
+  id=permmode-bypass-z21
+  rec=$(make_spawn_case permmode-bypass claude "$id")
+  read_case_record "$rec"
+  printf 'bypass\n' > "$HOME_DIR/config/claude-permission-mode"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn with claude-permission-mode=bypass should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  expected=$(claude_expected_launch "$HOME_DIR" "$id" --dangerously-skip-permissions)
+  [ "$launch" = "$expected" ] || fail "bypass changed more than the permission flag"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  assert_not_contains "$launch" "--permission-mode auto" "a bypass launch must not also request auto mode"
+  pass "config/claude-permission-mode=bypass is the only way to reach --dangerously-skip-permissions"
+}
+
+test_claude_permission_mode_bypass_reaches_scout_launch() {
   local rec id out status launch
-  id=permmode-scout-z21
+  id=permmode-scout-z22
   rec=$(make_spawn_case permmode-scout claude "$id")
   read_case_record "$rec"
-  printf 'auto\n' > "$HOME_DIR/config/claude-permission-mode"
+  printf 'bypass\n' > "$HOME_DIR/config/claude-permission-mode"
 
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout)
   status=$?
-  expect_code 0 "$status" "claude scout spawn with claude-permission-mode=auto should succeed"
+  expect_code 0 "$status" "claude scout spawn with claude-permission-mode=bypass should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "claude --permission-mode auto --settings" "scout launch did not carry --permission-mode auto"
-  assert_not_contains "$launch" "--dangerously-skip-permissions" "scout launch must not request bypass mode"
-  pass "config/claude-permission-mode=auto reaches scout launches too"
+  assert_contains "$launch" "claude --dangerously-skip-permissions --settings" "scout launch did not carry the opted-in bypass flag"
+  pass "config/claude-permission-mode=bypass reaches scout launches too"
+}
+
+# The readable-directory grant (bin/fm-claude-launch-lib.sh header): every path
+# is derived from the running system at launch, so a home configured with
+# nothing still hands its worker the directories its own brief sends it to.
+test_claude_launch_grants_the_worker_its_readable_directories() {
+  local rec id out status launch uid tmp_root
+  id=grantdirs-z23
+  rec=$(make_spawn_case grantdirs claude "$id")
+  read_case_record "$rec"
+  uid=$(id -u)
+  tmp_root=$(cd /tmp && pwd -P)
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" '"permissions":{"additionalDirectories":[' "launch carried no readable-directory grant"
+  assert_contains "$launch" "\"$HOME_DIR\"" "grant omitted the firstmate home that carries the brief and inbox"
+  assert_contains "$launch" "\"/tmp/claude-$uid\"" "grant omitted this user's claude scratch root"
+  [ "$tmp_root" = /tmp ] ||
+    assert_contains "$launch" "\"$tmp_root/claude-$uid\"" "grant omitted the resolved spelling of the scratch root"
+  assert_contains "$launch" "\"$FM_TEST_NO_MISTAKES_DATA_DIR\"" "grant omitted the data root no-mistakes doctor reported"
+  assert_contains "$launch" "\"$HOME_DIR/user-home/.claude/skills\"" "grant omitted the user skills directory"
+  assert_not_contains "$out" "could not derive" "nothing should have been unresolvable in this case"
+  pass "a claude launch grants the four worker-readable directories, derived per launch"
+}
+
+test_claude_launch_names_a_directory_it_could_not_derive() {
+  local rec id out status launch
+  id=grantmiss-z24
+  rec=$(make_spawn_case grantmiss claude "$id")
+  read_case_record "$rec"
+
+  # The validation tool answers, but says nothing a data root can be read from.
+  # Silence is the case that must be reported rather than passed over.
+  out=$(FM_FAKE_NO_MISTAKES_DOCTOR='' run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "an underivable directory must not fail the spawn"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "$FM_TEST_NO_MISTAKES_DATA_DIR" "a data root that was never reported must not appear in the grant"
+  assert_contains "$out" "could not derive" "the spawn must say which directories the worker did not get"
+  assert_contains "$out" "no-mistakes-data-root" "the report must name the source that did not resolve"
+  assert_contains "$launch" "\"$HOME_DIR\"" "one underivable source must not drop the rest of the grant"
+  pass "a directory that cannot be derived is named on the spawn's output, not dropped silently"
+}
+
+test_non_claude_harness_receives_no_directory_grant() {
+  local rec id out status launch
+  id=grantcodex-z25
+  rec=$(make_spawn_case grantcodex codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex)
+  status=$?
+  expect_code 0 "$status" "codex spawn should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "additionalDirectories" "the claude directory grant must not leak into another harness"
+  assert_not_contains "$launch" "__CLAUDEDIRS__" "an unsubstituted placeholder must never reach a launch"
+  pass "the readable-directory grant reaches claude launches only"
 }
 
 test_claude_permission_mode_invalid_refuses_before_endpoint_or_metadata() {
@@ -1391,8 +1480,8 @@ test_claude_permission_mode_invalid_refuses_before_endpoint_or_metadata() {
   status=$?
   expect_code 1 "$status" "an unrecognized claude-permission-mode token must refuse the spawn"
   assert_contains "$out" "config/claude-permission-mode holds 'yolo'" "refusal must name the file and the offending token"
-  assert_contains "$out" "bypass" "refusal must list bypass as an accepted value"
-  assert_contains "$out" "--permission-mode auto" "refusal must list auto as an accepted value"
+  assert_contains "$out" "--dangerously-skip-permissions" "refusal must list bypass as an accepted value"
+  assert_contains "$out" "the default when the file is absent" "refusal must say which value an absent file means"
   [ ! -s "$LAUNCH_LOG" ] || fail "an invalid permission mode must launch nothing (got: $(cat "$LAUNCH_LOG"))"
   assert_absent "$HOME_DIR/state/$id.meta" "refusal must happen before meta is written"
   pass "an unrecognized config/claude-permission-mode token refuses before any endpoint or metadata"
@@ -1450,11 +1539,15 @@ test_pi_signed_persistent_secondmate_uses_pi_extensions_and_identity
 test_batch_forwards_shared_profile_flags
 test_claude_forwards_firstmate_config_dir_when_set
 test_claude_omits_config_dir_prefix_when_unset
-test_claude_permission_mode_bypass_matches_absent_launch
-test_claude_permission_mode_auto_swaps_only_the_permission_flag
-test_claude_permission_mode_auto_reaches_scout_launch
+test_claude_permission_mode_absent_launches_the_reviewed_posture
+test_claude_permission_mode_auto_matches_absent_launch
+test_claude_permission_mode_bypass_swaps_only_the_permission_flag
+test_claude_permission_mode_bypass_reaches_scout_launch
 test_claude_permission_mode_invalid_refuses_before_endpoint_or_metadata
 test_non_claude_harness_ignores_claude_permission_mode
+test_claude_launch_grants_the_worker_its_readable_directories
+test_claude_launch_names_a_directory_it_could_not_derive
+test_non_claude_harness_receives_no_directory_grant
 test_non_claude_harness_ignores_config_dir
 test_claude_task_launch_carries_control_channel_authority
 test_claude_secondmate_launch_omits_task_control_channel_authority

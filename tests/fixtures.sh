@@ -281,14 +281,55 @@ fm_test_make_spawn_fakebin() {
   shift
   fakebin=$(fm_fakebin "$dir")
   fm_test_fake_tmux_spawn "$fakebin"
+  fm_test_fake_no_mistakes_doctor "$fakebin"
   fm_fake_exit0 "$fakebin" treehouse "$@"
   printf '%s\n' "$fakebin"
+}
+
+# A claude launch reads the validation tool's data root out of `no-mistakes
+# doctor` to build the worker's readable-directory grant. Without a stub the
+# launch a suite asserts would carry whichever root the developer's own
+# installation reports - or none at all on a machine without the tool - so pin
+# it. FM_FAKE_NO_MISTAKES_DOCTOR overrides the whole output, which is how a test
+# exercises the unreadable case.
+FM_TEST_NO_MISTAKES_DATA_DIR=/fake-no-mistakes-data
+
+fm_test_fake_no_mistakes_doctor() {
+  local fakebin=$1
+  cat > "$fakebin/no-mistakes" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = doctor ]; then
+  if [ -n "\${FM_FAKE_NO_MISTAKES_DOCTOR+x}" ]; then
+    printf '%s\\n' "\$FM_FAKE_NO_MISTAKES_DOCTOR"
+  else
+    printf '  data directory  %s\\n' '$FM_TEST_NO_MISTAKES_DATA_DIR'
+  fi
+fi
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
 }
 
 # Drop-in name used by the spawn suites. Extra args are additional exit-0 tools
 # (gh, gh-axi, pi, ...).
 make_spawn_fakebin() {
   fm_test_make_spawn_fakebin "$@"
+}
+
+# fm_test_claude_settings_json <worker-home> <user-home> [<claude-config-dir>]
+# The inline --settings object every claude launch carries, including the
+# readable-directory grant. Rebuilt here from the contract rather than read back
+# out of the script under test, so a change on either side shows up as a
+# failure instead of agreeing with itself.
+fm_test_claude_settings_json() {
+  local home=$1 user_home=$2 config_dir=${3:-} dirs uid tmp_root skills
+  uid=$(id -u)
+  tmp_root=$(cd /tmp && pwd -P)
+  dirs="\"$home\",\"/tmp/claude-$uid\""
+  [ "$tmp_root" = /tmp ] || dirs="$dirs,\"$tmp_root/claude-$uid\""
+  if [ -n "$config_dir" ]; then skills=$config_dir/skills; else skills=$user_home/.claude/skills; fi
+  dirs="$dirs,\"$FM_TEST_NO_MISTAKES_DATA_DIR\",\"$skills\""
+  printf '{"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false},"permissions":{"additionalDirectories":[%s]}}' "$dirs"
 }
 
 # fm_test_run_spawn <home> <pane-path> <fakebin> [fm-spawn args...]
