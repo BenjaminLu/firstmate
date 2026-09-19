@@ -508,6 +508,65 @@ The lab home was deleted and the test entry was removed from the store and verif
 That automated spawn case runs against a fake claude, so it asserts the store entry and the launch command and nothing more; the live arms above are what establish that the entry actually suppresses the dialog.
 The composer-classification record below observes the same gate from the other side, where an untrusted worktree left Claude, Grok, and Muse unverified because the guard reads a first-launch trust dialog as an unreadable composer.
 
+## Claude worker launch posture and readable-directory grant
+
+Verified 2026-09-19 on Claude Code 2.1.267, macOS arm64, against a repository clone made for the purpose and a home with nothing in `config/`.
+
+The shipped posture and the grant are both observed from the clone's own output, not from reading the scripts.
+A scratch clone was given an empty home, a fake tmux recorded the literal launch command `bin/fm-spawn.sh` builds, and the clone's own `bin/fm-session-start.sh` was run against that home.
+
+On the pre-change ref the digest said nothing about the posture and the launch carried no grant:
+
+```
+--- what the session digest says about the launch posture ---
+(the digest says NOTHING about the permission posture)
+
+permission flag on the launch:
+  claude --dangerously-skip-permissions
+directories the worker is granted:
+  (none - the launch grants the worker no directory at all)
+```
+
+On the current ref, same home, same harness:
+
+```
+WORKER LAUNCH POSTURE
+Claude workers launch --permission-mode auto (auto), the shipped default: this home has no config/claude-permission-mode.
+
+permission flag on the launch:
+  claude --permission-mode auto
+directories the worker is granted:
+  "<home>"
+  "/tmp/claude-501"
+  "/private/tmp/claude-501"
+  "<sandbox HOME>/.no-mistakes"
+  "<sandbox HOME>/.claude/skills"
+```
+
+The fourth entry is the load-bearing one: the sandbox carried its own `HOME`, and the data root came back pointed at that home because it was read out of `no-mistakes doctor` rather than assumed.
+`tests/fm-spawn-dispatch-profile.test.sh` and `tests/fm-session-start.test.sh` pin both halves portably with no harness; this record is what establishes that a real clone reproduces them.
+
+Claude 2.1.267 accepts a `permissions.additionalDirectories` entry naming a directory that does not exist, alongside a real one, and runs normally:
+
+```sh
+claude --permission-mode auto --model haiku \
+  --settings '{"permissions":{"additionalDirectories":["<real dir>","<missing dir>"]}}' \
+  -p 'Read <real dir>/secret.txt and reply with only its contents.'
+```
+
+```
+GRANTPROBE_TOKEN_7Q4
+```
+
+That is why the grant deliberately does not filter on existence: a machine configured with nothing has not created its scratch root or its skills directory, and those are exactly the grants it needs.
+
+**Not established here, deliberately recorded as unverified.**
+That this grant is what suppresses the interactive permission prompt was not measured.
+`--print` mode read an absolute path outside the working directory with the grant, without it, and under `--permission-mode default` as well, so print mode does not gate on this setting and cannot serve as the control arm.
+The interactive arm, which is the shape a worker actually runs in, stopped on the workspace-trust dialog, and once trust was pre-registered against an isolated `CLAUDE_CONFIG_DIR` it stopped again on `Not logged in`, because that isolated directory loses the operator's authentication.
+The mechanism therefore rests on `permissions.additionalDirectories` being the settings form of `claude --add-dir` ("Additional directories to allow tool access to") and on this fleet's own working home already carrying that key for these paths, not on a measurement made here.
+Refreshing that claim needs an interactive live arm with a real login, in the `live-harness-optin` shape the arms above use.
+
 ## Codex hook trust
 
 Verified 2026-09-16 on codex-cli 0.151.0, macOS arm64, in a fresh linked worktree of this repository.
