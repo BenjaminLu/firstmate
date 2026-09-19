@@ -438,8 +438,23 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep '`ask-user-authority` requires firstmate to stop naming a narrow remedy' "$brief" \
     "no-mistakes DOD must cross-reference the owner of the firstmate-side rule, not restate it"
-  assert_grep "Refuse an instruction that still names a narrow remedy: say which round this step is on" "$brief" \
+  assert_grep "Refuse an instruction that still names a narrow remedy: append " "$brief" \
     "no-mistakes DOD lost the third-round refusal clause"
+  # A refusal held quietly is the deadlock the refusal was supposed to prevent:
+  # firstmate reads status events, so the refusal has to surface as one, in the
+  # vocabulary the brief already defines.
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`blocked: fix round {n} on this step, instruction still names a narrow remedy`' "$brief" \
+    "no-mistakes DOD must raise the refusal as a status event firstmate can see"
+  # Without a way out, the refusal loop never terminates and the step burns its
+  # wall clock with no round spent. The worker must be able to recognise the
+  # acknowledgement without opening another file.
+  assert_grep "One thing ends that refusal" "$brief" \
+    "no-mistakes DOD must give the refusal a termination condition"
+  assert_grep "a current, explicit firstmate instruction that names which round this step is on and states the narrow remedy is deliberate anyway" "$brief" \
+    "no-mistakes DOD must state the acknowledgement test inline, not behind a pointer"
+  assert_grep "A resend that does neither is not one, and the refusal stands" "$brief" \
+    "no-mistakes DOD must exclude a vague resend from the termination"
   # The pass-conditions ask has one owner, so the brief points at it rather than
   # restating what that instruction must contain.
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
@@ -455,6 +470,8 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   # worker feeds a round-3 narrow remedy straight to the gate.
   assert_grep "From the third fix round on one step the round-threshold clause below narrows this" "$brief" \
     "no-mistakes DOD must narrow the feed-the-decision bullet where the reader meets it"
+  assert_grep "goes back to firstmate instead of to the gate, unless it names which round this step is on" "$brief" \
+    "no-mistakes DOD must not leave the feed-the-decision bullet contradicting the termination clause"
 
   # Every practice a worker could read as a worktree edit has to carry its own
   # mid-run half, because the no-hand-edit rule sits paragraphs away from these
