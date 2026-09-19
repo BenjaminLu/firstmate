@@ -863,9 +863,14 @@ The watcher delivers a queued result on its ordinary cycle by reporting it as an
 A queued `check` delivery is reported at most once per captured source and sequence while any records for that key remain queued.
 A durable handled acknowledgement stops future source re-announcement, while a record already queued remains under the durable queue's authority until the ordinary drain's sequence-bound post-handling acknowledgement consumes it.
 
-Discovery is never a timer.
+Discovery is never a timer wherever the source can be read from a child process, which is every source but the one named below.
 Each registered source has its own child process blocking on that source, and the watcher's per-cycle `reconcile` republishes every captured result with no durable handled acknowledgement yet - regardless of any earlier publication - restarts a source whose owner is gone, and stops this home's runner when reconciliation runs after its registration disappeared unexpectedly.
 In supported steady state, a home with no registered source runs nothing, generates no state, and keeps its ordinary cadence.
+
+`bin/fm-procevent-board-remote.sh` is the one source whose child is a timer, because its source cannot be read from a child process at all: the remote board's answers live in a claude.ai artifact database that only a first-party Claude session's own Artifact tool reaches, so the read happens in firstmate's turn and the registered child exists only to bring that turn forward.
+Everything else about it is the unchanged contract above - registration, durable capture, acknowledgement, retirement - and the adapter's header owns its commands and the evidence for that boundary.
+The timer is gated rather than perpetual: `arm` names the board cards the captain has not answered, and a tick carrying `state: settled` is the adapter's own silent and terminal verdict, so a board nobody owes an answer on retires the source without announcing anything and a home with no open card runs no timer at all.
+Its source is deliberately left unbound, because a tick carries no answer for the keyed-answer feed below to read; the adapter's `ingest` command pipes the captain's answers into that same one intake after firstmate's read, under the identical `<task-id>\t<answer>\t<label>[\t<mode>]` contract.
 
 Whether a captured result is a routine no-op is adapter knowledge too, and the runner names no adapter-specific condition for it either.
 Before publishing, the runner asks the immutable captured owner through the built-in `silent` command or external `result.silent` operation and treats exit 0 as the only silence verdict: the result is recorded as durably handled and never announced, so it neither wakes a handler now nor returns on a later reconcile.
