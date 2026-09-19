@@ -801,31 +801,85 @@ __FM_BEARINGS_BOARD_DATA__
        href or xlink:href fragment. Only markup inside a tag is touched, so a
        label that happens to read "id=" stays the words the worker wrote, and
        nothing about the packet on disk or the figure contract changes. */
-    var SVG_TAG_RE = /<\s*\/?\s*[A-Za-z][\w:-]*(?:[^<>"']|"[^"]*"|'[^']*')*>/g;
-    /* Attribute by attribute, left to right, so a value is consumed whole: a
-       label that reads "set id=7" is a value, not an attribute named id. */
-    var SVG_ATTR_RE = /([A-Za-z_:][-\w:.]*)(\s*=\s*)("[^"]*"|'[^']*'|[^\s"'>=`]+)/g;
-    function namespaceIds(svg, ns) {
-      return String(svg).replace(SVG_TAG_RE, function (tag) {
-        return tag.replace(SVG_ATTR_RE, function (whole, name, eq, raw) {
-          var q = raw.charAt(0) === '"' || raw.charAt(0) === "'" ? raw.charAt(0) : "";
-          var v = q ? raw.slice(1, -1) : raw;
-          var key = name.toLowerCase();
-          if (key === "id") v = ns + v;
-          else if ((key === "href" || key === "xlink:href") && v.charAt(0) === "#") {
-            v = "#" + ns + v.slice(1);
-          } else if (key === "aria-labelledby" || key === "aria-describedby") {
-            /* an IDREF list names ids with no "#", and diagram-design puts one
-               on every drawing over its own <title>/<desc> - miss it and the
-               drawing loses its accessible name the moment it is inlined */
-            v = v.split(/\s+/).map(function (id) { return id ? ns + id : id; }).join(" ");
-          }
-          v = v.replace(/url\(\s*(['"]?)#([^)'"\s]*)\1\s*\)/gi, function (m, uq, target) {
-            return "url(" + uq + "#" + ns + target + uq + ")";
-          });
-          return name + eq + q + v + q;
-        });
+    /* Which bytes are an attribute value is walked the way the HTML tokenizer
+       walks it, not matched as a shape - the same states bin/fm-packet.sh
+       scan_tags walks, for the same reason: a bare "<" ends a regex and does
+       not end an unquoted value, so a shape-matcher rewrites the wrong bytes.
+       A drawing only reaches here after `fm-packet.sh svg-check` accepted it,
+       and that check refuses anything it cannot tokenize, so the two readers
+       agree on every drawing that gets this far. */
+    var WHITESPACE = "\t\n\f\r ";
+    function isSpace(c) { return WHITESPACE.indexOf(c) >= 0; }
+    function nsValue(name, v, ns) {
+      var key = name.toLowerCase();
+      if (key === "id") v = ns + v;
+      else if ((key === "href" || key === "xlink:href") && v.charAt(0) === "#") {
+        v = "#" + ns + v.slice(1);
+      } else if (key === "aria-labelledby" || key === "aria-describedby") {
+        /* an IDREF list names ids with no "#", and diagram-design puts one on
+           every drawing over its own <title>/<desc> - miss it and the drawing
+           loses its accessible name the moment it is inlined */
+        v = v.split(/\s+/).map(function (id) { return id ? ns + id : id; }).join(" ");
+      }
+      return v.replace(/url\(\s*(['"]?)#([^)'"\s]*)\1\s*\)/gi, function (m, uq, target) {
+        return "url(" + uq + "#" + ns + target + uq + ")";
       });
+    }
+    function namespaceIds(svg, ns) {
+      svg = String(svg);
+      var out = "", i = 0, n = svg.length;
+      while (i < n) {
+        var lt = svg.indexOf("<", i);
+        if (lt < 0) { out += svg.slice(i); break; }
+        out += svg.slice(i, lt + 1);
+        i = lt + 1;
+        if (svg.slice(i, i + 3) === "!--") {
+          var endc = svg.indexOf("-->", i + 3);
+          if (endc < 0) { out += svg.slice(i); break; }
+          out += svg.slice(i, endc + 3); i = endc + 3; continue;
+        }
+        if (svg.charAt(i) === "!" || svg.charAt(i) === "?") {
+          var endb = svg.indexOf(">", i);
+          if (endb < 0) { out += svg.slice(i); break; }
+          out += svg.slice(i, endb + 1); i = endb + 1; continue;
+        }
+        if (svg.charAt(i) === "/") { out += "/"; i += 1; }
+        if (i >= n || !/[A-Za-z]/.test(svg.charAt(i))) continue;
+        while (i < n && !isSpace(svg.charAt(i)) && svg.charAt(i) !== "/" && svg.charAt(i) !== ">") {
+          out += svg.charAt(i); i += 1;
+        }
+        var closed = false;
+        while (!closed && i < n) {
+          while (i < n && (isSpace(svg.charAt(i)) || svg.charAt(i) === "/")) {
+            out += svg.charAt(i); i += 1;
+          }
+          if (i >= n) break;
+          if (svg.charAt(i) === ">") { out += ">"; i += 1; closed = true; break; }
+          var astart = i;
+          while (i < n && !isSpace(svg.charAt(i)) && ">/=".indexOf(svg.charAt(i)) < 0) i += 1;
+          var name = svg.slice(astart, i);
+          out += name;
+          while (i < n && isSpace(svg.charAt(i))) { out += svg.charAt(i); i += 1; }
+          if (i >= n) break;
+          if (svg.charAt(i) !== "=") continue;
+          out += "="; i += 1;
+          while (i < n && isSpace(svg.charAt(i))) { out += svg.charAt(i); i += 1; }
+          if (i >= n) break;
+          var q = svg.charAt(i);
+          if (q === '"' || q === "'") {
+            var close = svg.indexOf(q, i + 1);
+            if (close < 0) { out += svg.slice(i); i = n; break; }
+            out += q + nsValue(name, svg.slice(i + 1, close), ns) + q;
+            i = close + 1;
+          } else {
+            var vstart = i;
+            while (i < n && !isSpace(svg.charAt(i)) && svg.charAt(i) !== ">") i += 1;
+            out += nsValue(name, svg.slice(vstart, i), ns);
+          }
+        }
+        if (!closed && i >= n) { out += svg.slice(Math.min(i, n)); break; }
+      }
+      return out;
     }
     /* A drawing is in the switching part of the card, so its own labels follow
        the captain through the same three-language lookup every other string

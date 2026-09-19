@@ -490,9 +490,18 @@ command_scaffold() {
 
 # ---- verify -----------------------------------------------------------------
 
+# What a "## " heading is, read the one way every reader of this packet reads
+# it: the text after "## ", stripped, and never a line inside a fenced block -
+# the scaffold writes a fenced block itself. Three readers that answered this
+# differently is how a packet verify called clean became one card could not
+# render.
 section_body() {  # <packet> <heading text> -> body lines of that ## section
-  awk -v want="## $2" '
-    /^## / { inside = ($0 == want); next }
+  awk -v want="$2" '
+    /^```/ { fence = !fence; if (inside) print; next }
+    !fence && /^## / {
+      h = substr($0, 4); gsub(/^[[:space:]]+|[[:space:]]+$/, "", h)
+      inside = (h == want); next
+    }
     inside { print }
   ' "$1"
 }
@@ -531,6 +540,7 @@ prose_problems() {  # <packet> -> one problem per line
     fence { next }
     /^## / {
       flush(); section = substr($0, 4)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", section)
       # A heading is captain-facing copy this renderer owns in all three
       # languages, and it owns exactly the six the scaffold writes. A seventh
       # would stand still in the language the worker typed while the rule below
@@ -666,8 +676,6 @@ PALETTE = ("fg", "muted", "soft", "card", "card-2", "bg", "rule", "rule-strong",
            "accent", "accent-tint", "amber", "seal", "ok", "link")
 COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)\)"
                        r"|url\(#[A-Za-z0-9._:-]+\))$" % "|".join(map(re.escape, PALETTE)))
-ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
-TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
 LATIN_ID = re.compile(os.environ["FM_NAME_RE"])
 FIG_FIELD = re.compile(r"^(figure|caption|caption\.hant|caption\.hans|heading\.hant"
@@ -704,15 +712,92 @@ def colour_advice(value):
     return ("the page binds no %s for a figure to draw against; the palette is %s"
             % (m.group(1), ", ".join("--" + name for name in PALETTE)))
 
-# FIRST occurrence wins, exactly as the HTML tokenizer does with a duplicate
-# attribute: it takes the first and drops the rest. Every clause below reads a
-# value through this map, so a map that kept the last one would let a drawing
-# show the checker a harmless value and the browser the real one.
-def attrs_of(text):
-    out = {}
-    for m in ATTR.finditer(text):
-        value = next(g for g in m.groups()[1:] if g is not None)
-        out.setdefault(m.group(1).lower(), value)
+# Which bytes are a tag, and which are an attribute inside it, WALKED the way
+# the HTML tokenizer walks them rather than matched as a shape. Four times on
+# this branch a drawing slipped past a pattern the browser read differently -
+# an attribute after a solidus, one with no separator at all, a duplicate name,
+# and a bare "<" inside an unquoted value, which ends a regex and does not end
+# a value. A shape can always be spelled around; the state walk is what the
+# browser will actually do. Anything this cannot read comes back as None, and
+# the caller refuses the drawing rather than passing bytes nobody understood.
+#
+# The states are the spec ones: before-attribute-name, attribute-name,
+# after-attribute-name, before-attribute-value, the three attribute-value
+# states and after-attribute-value-quoted. A duplicate name keeps the FIRST,
+# as the tokenizer does. EOF anywhere inside a tag is eof-in-tag: unreadable.
+WHITESPACE = "\t\n\f\r "
+
+def scan_tags(svg):
+    """-> [(tag name, {attr: value})] in document order, or None if unreadable"""
+    out, i, n = [], 0, len(svg)
+    while i < n:
+        lt = svg.find("<", i)
+        if lt < 0:
+            return out
+        i = lt + 1
+        if svg.startswith("!--", i):
+            end = svg.find("-->", i + 3)
+            if end < 0:
+                return None
+            i = end + 3; continue
+        if svg.startswith("![CDATA[", i):
+            end = svg.find("]]>", i + 8)
+            if end < 0:
+                return None
+            i = end + 3; continue
+        if i < n and svg[i] in "!?":
+            end = svg.find(">", i)
+            if end < 0:
+                return None
+            i = end + 1; continue
+        closing = i < n and svg[i] == "/"
+        if closing:
+            i += 1
+        if i >= n or not svg[i].isalpha():
+            # a "<" the tokenizer keeps as text, not the start of a tag
+            continue
+        start = i
+        while i < n and svg[i] not in WHITESPACE and svg[i] not in "/>":
+            i += 1
+        name = svg[start:i].lower()
+        attrs, done = {}, False
+        while not done:
+            while i < n and (svg[i] in WHITESPACE or svg[i] == "/"):
+                i += 1
+            if i >= n:
+                return None
+            if svg[i] == ">":
+                i += 1; done = True; break
+            astart = i
+            while i < n and svg[i] not in WHITESPACE and svg[i] not in "/>=":
+                i += 1
+            attr = svg[astart:i].lower()
+            while i < n and svg[i] in WHITESPACE:
+                i += 1
+            if i >= n:
+                return None
+            value = ""
+            if svg[i] == "=":
+                i += 1
+                while i < n and svg[i] in WHITESPACE:
+                    i += 1
+                if i >= n:
+                    return None
+                if svg[i] in "\"'":
+                    quote = svg[i]; i += 1
+                    close = svg.find(quote, i)
+                    if close < 0:
+                        return None
+                    value = svg[i:close]; i = close + 1
+                else:
+                    vstart = i
+                    while i < n and svg[i] not in WHITESPACE and svg[i] != ">":
+                        i += 1
+                    value = svg[vstart:i]
+            if attr:
+                attrs.setdefault(attr, value)
+        if not closing:
+            out.append((name, attrs))
     return out
 
 def style_decls(value):
@@ -773,8 +858,14 @@ def svg_problems(svg, slug):
                             "positioned <text> elements, which also keeps the geometry from drifting "
                             "between languages")
 
-    for m in TAG.finditer(svg):
-        tag, at = m.group(1).lower(), attrs_of(m.group(2))
+    tags = scan_tags(svg)
+    if tags is None:
+        problems.append("the drawing cannot be read the way a browser reads it - an unclosed "
+                        "tag, comment or quoted value. A drawing this checker cannot tokenize "
+                        "is one the page would tokenize differently, so it is refused rather "
+                        "than inlined on the captain's word that it was checked")
+        return problems, nodes, edges_drawn
+    for tag, at in tags:
         for k, v in at.items():
             if k.startswith("on"):
                 problems.append("<%s> carries an inline %s handler; a figure is static markup" % (tag, k))
@@ -1206,6 +1297,7 @@ def figure_heading(line):
 
 meta = {}
 body_start = 0
+fenced = False
 for i, line in enumerate(lines):
     if section_heading(line) is not None:
         body_start = i
@@ -1214,8 +1306,14 @@ for i, line in enumerate(lines):
     if m:
         meta[m.group(1)] = m.group(2)
 sections = []  # [heading, [lines]]
+# A "## " line inside a fenced block is a line of code, which is what verify
+# reads it as - the scaffold writes a fenced block itself, so a reader that
+# counted one as a heading would refuse a packet verify called clean, or
+# worse, look up a heading this renderer has no words for.
 for line in lines[body_start:]:
-    h = section_heading(line)
+    if line.startswith("```"):
+        fenced = not fenced
+    h = None if fenced else section_heading(line)
     if h is not None:
         sections.append([h, []])
     elif sections:
@@ -1731,11 +1829,8 @@ def figures_of(body):
     return out_figs
 
 def fig_copy(en, fields, name):
-    """a figure's words: all three when the figure carries them, else as written"""
-    hant, hans = fields.get(name + ".hant"), fields.get(name + ".hans")
-    if hant and hans:
-        return {"en": en, "hant": hant, "hans": hans}
-    return en
+    """a figure's words, in the three languages verify makes every figure carry"""
+    return {"en": en, "hant": fields[name + ".hant"], "hans": fields[name + ".hans"]}
 
 def figures_words(figs):
     """what a figure says in words: its heading and its caption"""

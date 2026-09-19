@@ -410,6 +410,18 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$dup}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     'has fill="red"' "a baked colour hidden behind a duplicate attribute"
+  # A "<" inside an UNQUOTED value ends a pattern and does not end a value: the
+  # browser appends it and keeps reading the same tag. A reader that stopped
+  # there would never see the handler at all.
+  angle='<rect onclick=window.lavish.queuePrompt("x")<z id="opt-box-end"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$angle}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "inline onclick handler" "a handler hidden behind a bare angle bracket"
+  # And markup this reader cannot tokenize is refused rather than passed on the
+  # word that it was checked: the page would tokenize it some other way.
+  svg=${GOOD_SVG/<title id=\"opt-title\">/<!-- never closed <title id="opt-title">}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "cannot be read the way a browser reads it" "a drawing with an unterminated comment"
 
   # 3. an identity that is claimed is the source's latin name. A shape that
   # claims none stands for nothing a reader selects - a label mask, a panel -
@@ -964,6 +976,46 @@ MARKER
 # six the scaffold writes. A seventh would stand still in the language the
 # worker typed while every line under it is required to switch - the
 # half-switched block the whole rule exists to prevent.
+# verify and the renderer have to agree on what a "## " line IS. The scaffold
+# writes a fenced block itself, so a "## " comment inside one is reachable from
+# the packet the tool generates - and a packet verify called clean has to be a
+# packet the captain can be shown.
+test_a_heading_inside_a_fence_is_a_line_of_code_to_both_readers() {
+  local home packet out
+  home=$(make_home prose-fenced-heading)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
+  python3 - "$packet" <<'FENCE'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("```sh\n", "```sh\n## the two commands worth running first\n", 1))
+FENCE
+  run_packet "$home" verify pk-1 >/dev/null || fail "verify refused a comment inside its own fenced block"
+  out=$(run_packet "$home" card pk-1) || fail "a packet verify called clean could not be carded: $out"
+  printf '%s' "$out" | jq -e '
+    ([.packet.sections[].heading.en] | index("How to pull more")) != null
+    # the comment is a line of that section, not a section of its own
+    and ([.packet.sections[].heading.en] | index("the two commands worth running first")) == null
+    and ([.packet.sections[] | select(.heading.en == "How to pull more") | .items[].text]
+         | index("## the two commands worth running first")) != null
+  ' >/dev/null || fail "a fenced heading was read as a section: $out"
+  run_packet "$home" render pk-1 >/dev/null || fail "render refused what verify accepted"
+
+  # and the two read the heading itself the same way, trailing space included
+  python3 - "$packet" <<'PAD'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("## Evidence\n", "## Evidence \n", 1))
+PAD
+  run_packet "$home" verify pk-1 >/dev/null \
+    || fail "verify refused a heading over a difference the reader cannot see"
+  run_packet "$home" card pk-1 >/dev/null || fail "card could not read a padded heading"
+  pass "a heading inside a fence is a line of code to verify and to both renderers"
+}
+
 test_a_section_the_scaffold_never_wrote_is_refused() {
   local home packet out rc
   home=$(make_home prose-unknown-section)
@@ -1660,6 +1712,7 @@ test_verify_refuses_a_group_the_renderer_would_read_differently
 test_a_line_that_is_a_link_only_collapses_when_every_language_is
 test_a_backticked_line_is_code_on_both_surfaces
 test_a_section_the_scaffold_never_wrote_is_refused
+test_a_heading_inside_a_fence_is_a_line_of_code_to_both_readers
 test_the_packet_block_switches_every_heading_it_owns
 test_the_packet_block_reaches_the_card_in_all_three_languages
 test_verify_refuses_prose_the_captain_could_not_read
