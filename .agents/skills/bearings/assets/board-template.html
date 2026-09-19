@@ -615,22 +615,19 @@ __FM_BEARINGS_BOARD_DATA__
     return a;
   }
   /* ---- the captain's click, acknowledged -------------------------------
-     A control that sets fleet work in motion answers for itself twice. The
-     click paints an `acting` pill straight onto the row and remembers the key
-     it was clicked on, so the board never looks as if nothing was heard and a
-     re-render - a language switch, a reload - cannot take the acknowledgement
-     away again. A publication carries the row's own `ack`, which is what lets
-     an acknowledgement resolve into a refusal that says why; where both exist
-     the NEWER of the two is what the row shows, because the board may tell
-     the captain anything except that a click he has just made did not happen.
+     The acknowledgement lifecycle is stated once, in bin/fm-bearings-board.sh's
+     header, which owns it. This is the page's share of it and nothing more:
+     it DRAWS, and it holds the one clock the lifecycle's AGES stage names.
+     The click paints an `acting` pill straight onto the row and remembers the
+     key it was clicked on, so the board never looks as if nothing was heard
+     and a re-render - a language switch, a reload - cannot take the
+     acknowledgement away again. A publication carries the row's own `ack`,
+     which is what lets an acknowledgement resolve into a refusal that says
+     why; where both exist the NEWER wins, which is the SHOWN stage.
      `kind` is machine vocabulary this template translates and `at` is the
-     epoch second of the click; only a refusal's `why` is prose the first mate
-     wrote, and so is the one field that is payload copy. An unknown kind
-     renders nothing rather than an unstyled pill under an unknown class.
-     The waiting state is derived HERE, from that stamp, rather than at
-     compose time: the case it exists for - a consequence that never arrived -
-     is exactly the case in which nothing republishes the board, so a row that
-     could only age on a republication could never report a miss. */
+     stamp it ages from; only a refusal's `why` is prose the first mate wrote,
+     and so is the one field that is payload copy. An unknown kind renders
+     nothing rather than an unstyled pill under an unknown class. */
   var ACK_KINDS = { acting: true, refused: true };
   /* The captain's own figure: the acknowledgement is immediate, the real
      consequence appears within about a minute. */

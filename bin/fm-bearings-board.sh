@@ -213,59 +213,55 @@
 # Every Underway row likewise carries a non-empty `name`: the durable task name
 # when known, otherwise its durable identifier.
 #
-# THE CLICK, ACKNOWLEDGED. A control that sets fleet work in motion - a
-# decision card's answer and the dispatch send button - must say so on the row
-# the captain clicked, immediately, without waiting for what the click set in
-# motion. The template owns the immediate half: the click appends the pill
-# itself. This script owns the durable half, so the acknowledgement survives
-# the next publication and can resolve into something other than success.
+# THE ACKNOWLEDGEMENT LIFECYCLE, AND THIS SCRIPT OWNS IT. A control that sets
+# fleet work in motion must say so on the row the captain clicked immediately,
+# without waiting for what the click set in motion. Two things draw that pill -
+# the page, the instant he clicks it, and a publication, from the durable
+# record - so the rule between them is stated HERE, once and whole. The
+# template, the capture seam in bin/fm-procevent.sh, the handler contract in
+# .agents/skills/bearings/SKILL.md and the ledger line in AGENTS.md each carry
+# out one part of it and point back at this block; none of them restates it,
+# because a lifecycle with four owners is how the seams between them get lost.
+#
+#   BORN at capture. The captain's answer, read back from the board, writes one
+#   `acting` record per key that answer named - no more, no fewer.
+#   bin/fm-procevent.sh feeds it beside the keyed-answer intake, through the
+#   `ack` command below, which is the carrier's ONLY writer.
+#
+#   SHOWN newest first. A key can carry two acknowledgements at once: the
+#   published record, and a click the page itself remembers. Both carry the
+#   second they happened, and the NEWER wins. A publication still carrying a
+#   ten-minute-old unsettled record must not bury a click made three seconds
+#   ago - telling the captain his click did not happen is the one thing this
+#   whole behaviour exists to stop. An equal stamp goes to the publication,
+#   because only a publication can carry a refusal's reason.
+#
+#   AGES against one threshold and one clock, measured from the `at` stamp it
+#   was born with. Compose hands that stamp to the renderer and derives nothing
+#   from it, because the state it feeds reports a consequence that never
+#   arrived - and that is exactly the case in which nothing republishes the
+#   board. A row that could only age on a republication would report a slow
+#   answer and stay silent about a missed one, which is the discrimination the
+#   captain asked for, backwards.
+#
+#   RETIRES two ways, and never on a clock. The handler settles it - a dispatch
+#   clears it (`ack <key> --clear`), a refusal replaces it (`ack <key>
+#   --refused`) - or its key leaves the board, at which point compose drops the
+#   record, because no row can ever render it again. Age retires nothing: a
+#   record whose row IS still on the board goes on reporting itself as still
+#   waiting however long it has been, which is the report the captain asked
+#   for, and is how "the first mate is busy" is told apart from "the first mate
+#   missed it".
 #
 # ONLY the two surfaces the captain clicks carry it: a Captain's Call item and
 # a Charted Next row. Every control he named lives on one of those, and an
-# Underway row has nothing on it he clicks - a dispatched row is settled the
-# moment the work starts, so a pill could only reach Underway when a record
-# was left unsettled, and a surface whose only job is to display that bug is
-# not a surface.
-#
-# Either of those MAY therefore carry `ack`: {kind, at, why?}. `kind` is
-# `acting` (received, being acted on) or `refused` (verified and not set in
-# motion); the template renders each one's words in the captain's language,
-# because a deterministic publication has no translator in the loop. `at` is
-# the epoch second of the click, so the page can say how long an answer has
-# been waiting, and so it can tell this acknowledgement apart in time from one
-# the page itself remembers: where a published record and a remembered click
-# both exist for a key, the NEWER wins. A publication still carrying a
-# ten-minute-old unsettled record must not bury a click made three seconds
-# ago - telling the captain his click did not happen is the one thing this
-# whole behaviour exists to stop. `why` is the refusal's reason and is the one
-# ack field that is captain-facing copy, because the first mate writes it.
-#
-# THE CARRIER IS state/board-acks/<key>.json, and `ack` above is its ONLY
-# writer. Two callers write it: the captain's own answer, captured from the
-# board, records `acting` for every key that answer names (bin/fm-procevent.sh
-# feeds it at capture, beside the keyed-answer intake); and the first mate
-# records `refused` with its reason whenever it verifies a picked item and
-# does not dispatch it. Nothing else writes an acknowledgement, and compose
-# never invents one - it reads the carrier and attaches what is there.
-#
-# The waiting state is never stored and never composed. Compose carries the
-# `acting` record's own stamp to the row and the TEMPLATE ages it, because the
-# case that state exists for is a consequence that never arrived - and that is
-# exactly the case in which nothing republishes the board. A row that could
-# only age on a republication would report a slow answer and stay silent about
-# a missed one, which is the discrimination the captain asked for, backwards.
-# The threshold is the captain's minute and lives with the renderer that
-# applies it.
-#
-# Retirement belongs to the handler, not to a timer, and it covers EVERY key
-# the captain's answer named: the first mate clears an acknowledgement it set
-# in motion (`ack <key> --clear`) and replaces one it declined (`ack <key>
-# --refused`). Nothing else retires a record, so a key left unsettled goes on
-# reporting itself as still waiting - which is the report the captain asked
-# for when the answer really is outstanding, and a lie on work already done.
-# A row that says how long it has been waiting is how "the first mate is busy"
-# is told apart from "the first mate missed it", and a signal that cries wolf
-# is worse than no signal.
+# Underway row has nothing on it he clicks. Either MAY therefore carry `ack`:
+# {kind, at, why?}. `kind` is `acting` (received, being acted on) or `refused`
+# (verified and not set in motion); the template renders each one's words in
+# the captain's language, because a deterministic publication has no translator
+# in the loop. `at` is the epoch second of the click. `why` is the refusal's
+# reason and is the one ack field that is captain-facing copy, because the
+# first mate writes it. The carrier is state/board-acks/<key>.json.
 #
 # A Charted Next row MAY carry `filed`, the durable filed date (YYYY-MM-DD, or
 # that date with a UTC timestamp) the template orders the section by, newest
@@ -374,7 +370,7 @@ command_ack() {
     case "$1" in
       --acting|--clear) [ -z "$mode" ] || { usage >&2; exit 2; }; mode=${1#--}; shift ;;
       --refused) [ -z "$mode" ] || { usage >&2; exit 2; }; mode=refused; shift ;;
-      --why-file) why_file=${2-}; shift 2 ;;
+      --why-file) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; why_file=$2; shift 2 ;;
       *) usage >&2; exit 2 ;;
     esac
   done
@@ -399,11 +395,10 @@ command_ack() {
 }
 
 # Every stored acknowledgement, resolved for one publication: {key: {kind, at,
-# why?}}. The record's own stamp is carried through untouched, because the
-# template - not this script - is what ages an unanswered acknowledgement into
-# "still waiting". A record that is unreadable or not this schema is skipped
-# rather than refusing the board: a malformed side-band file must never cost
-# the captain every other row. The merge lands in a scratch variable first,
+# why?}}. The stamp is carried through untouched - see AGES in the lifecycle
+# block above. A record that is unreadable or not this schema is skipped rather
+# than refusing the board: a malformed side-band file must never cost the
+# captain every other row. The merge lands in a scratch variable first,
 # because a failed command substitution assigns its empty output BEFORE the
 # `||` runs - accumulating in place would let one unmergeable record wipe the
 # map it had already built and fail the whole publication.
@@ -428,6 +423,22 @@ board_acks_map() {
     acc=$merged
   done
   printf '%s\n' "$acc"
+}
+
+# RETIRES, second way: a record whose key is on no row of the board just
+# composed can never be rendered again, so this is where it goes. Reachability
+# is the only reason a record is dropped here - a key still on the board keeps
+# its record however old it is.
+retire_unreachable_acks() {  # <skeleton.json>
+  local dir f key live
+  dir=$(acks_dir)
+  [ -d "$dir" ] || return 0
+  live=$(jq -r '[.captains_call[]?.key, .charted[]?.id] | .[]' "$1" 2>/dev/null) || return 0
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    key=${f##*/}; key=${key%.json}
+    printf '%s\n' "$live" | grep -Fqx -- "$key" || rm -f -- "$f"
+  done
 }
 
 validate_payload() {  # <data.json>
@@ -803,9 +814,9 @@ command_compose() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
-      --lang) lang=${2-}; shift 2 ;;
-      --out) out=${2-}; shift 2 ;;
-      --snapshot) snapshot_file=${2-}; shift 2 ;;
+      --lang) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; lang=$2; shift 2 ;;
+      --out) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; out=$2; shift 2 ;;
+      --snapshot) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; snapshot_file=$2; shift 2 ;;
       *) usage >&2; exit 2 ;;
     esac
   done
@@ -1033,6 +1044,7 @@ EOF
     rm -f -- "$tmp"
     fail "the composed skeleton does not satisfy $BOARD_SCHEMA"
   fi
+  retire_unreachable_acks "$tmp"
   if [ -n "$out" ]; then
     cat "$tmp" > "$out" || { rm -f -- "$tmp"; fail "cannot write the board skeleton: $out"; }
     printf 'skeleton: %s\n' "$out"
