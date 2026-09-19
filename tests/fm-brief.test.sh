@@ -376,6 +376,56 @@ test_no_mistakes_dod_wording() {
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
 }
 
+# The captain's standing ask is that a worker close a finding's whole class in one
+# round instead of stacking rounds, so the practices must reach the worker through
+# the only surface every no-mistakes worker reads: its own delivery contract. They
+# are scoped to no-mistakes, where fix rounds exist, and must not leak into the
+# faster paths.
+test_no_mistakes_dod_carries_the_fix_round_technique() {
+  local home id brief other_mode other_id other_brief
+  home="$TMP_ROOT/fix-round-home"
+  mkdir -p "$home/data"
+  id="brief-fix-round-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "brief was not scaffolded"
+
+  # Both surfaces the worker actually controls have to be named, or the practices
+  # read as advice to an agent that does not write the fix.
+  assert_grep "the implementation you commit before starting the run, and the \`--instructions\` you pass when you answer a Fix gate" "$brief" \
+    "no-mistakes DOD must name the two surfaces the fix-round technique applies to"
+
+  assert_grep "One site is a class" "$brief" \
+    "no-mistakes DOD lost the close-the-whole-class practice"
+  assert_grep "detect it at least two independent ways" "$brief" \
+    "no-mistakes DOD lost the two-detector requirement that keeps a sweep from reporting clean"
+  assert_grep "name any site you deliberately leave unfixed" "$brief" \
+    "no-mistakes DOD lost the stated-split requirement"
+  assert_grep "Your fix is the next candidate" "$brief" \
+    "no-mistakes DOD lost the review-your-own-diff practice"
+  assert_grep "revert the production fix, confirm the test goes red, restore it" "$brief" \
+    "no-mistakes DOD lost the test-vacuity practice"
+  assert_grep "Read the primary source before writing a check" "$brief" \
+    "no-mistakes DOD lost the primary-source practice"
+
+  # The long form stays in the external skill; this repo points at it.
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`greenlight` skill at `~/.claude/skills/greenlight`' "$brief" \
+    "no-mistakes DOD must point at the greenlight skill for the long form"
+
+  # Both faster paths, not just one: neither runs the pipeline whose rounds these
+  # practices bound.
+  for other_mode in direct-PR local-only; do
+    other_id="brief-fix-round-$other_mode"
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$other_id" some-proj --mode "$other_mode" >/dev/null 2>&1
+    other_brief="$home/data/$other_id/brief.md"
+    assert_present "$other_brief" "$other_mode: brief was not scaffolded"
+    assert_no_grep "One site is a class" "$other_brief" \
+      "$other_mode brief must not carry the no-mistakes fix-round technique"
+  done
+  pass "fm-brief.sh: no-mistakes DOD carries the fix-round technique and the faster paths do not"
+}
+
 test_ask_user_escalation_format() {
   local home id brief mode other_id other_brief
   home="$TMP_ROOT/ask-user-home"
@@ -960,6 +1010,7 @@ test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_no_mistakes_dod_carries_the_fix_round_technique
 test_ask_user_escalation_format
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete

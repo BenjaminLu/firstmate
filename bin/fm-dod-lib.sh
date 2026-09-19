@@ -10,6 +10,8 @@
 # mode is refused rather than silently rendered as the pipeline contract.
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
+# It is likewise the one owner of the fix-round technique a no-mistakes worker
+# applies to its own commit and to the instructions it passes at a Fix gate.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
 # brief's `## Captain's intent` subsection plus later captain words, never
 # `## Firstmate spec` and never the worker's own tradeoffs.
@@ -361,6 +363,14 @@ Two firstmate-specific rules layer on top of that guidance:
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
 - NEVER pass \`--yes\` (or \`-y\`) to \`no-mistakes axi run\` or \`no-mistakes axi respond\`. It is banned fleet-wide.
   It auto-resolves every gate including ask-user findings with no escalation, and answering your own ask-user finding is a hard rule violation.
+
+A fix round that lands only on the lines the reviewer named, or that introduces the next round's finding, buys another round, and the round count is what runs a task into its wall-clock limit.
+Two things decide that and both are yours: the implementation you commit before starting the run, and the \`--instructions\` you pass when you answer a Fix gate, because those are the only two places you decide what a round covers.
+Apply these four to both, and read the \`greenlight\` skill at \`~/.claude/skills/greenlight\` for the long form and the incident behind each when it is installed where you are running.
+- One site is a class: a finding names one instance, so close the whole class in the same round - code, tests, config, comments, documentation, and the PR body - detect it at least two independent ways so a sweep cannot report clean because its one pattern was wrong, and name any site you deliberately leave unfixed instead of leaving the next round to find it.
+- Your fix is the next candidate: put the new diff through the pass you would run over someone else's - every new conditional's unwritten branch, every new bound relative to where the value changes shape, every newly accepted value against its downstream consumers.
+- A behavioral test is not evidence until it has failed: revert the production fix, confirm the test goes red, restore it.
+- Read the primary source before writing a check - the script, spec, or contract itself, not a comment beside it or a paraphrase in a design document.
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF
