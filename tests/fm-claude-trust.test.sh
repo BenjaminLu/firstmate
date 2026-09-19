@@ -943,6 +943,28 @@ test_import_syntax_inside_a_code_fence_is_not_an_import() {
   pass "fm-claude-trust.sh: import syntax shown in code does not block a launch"
 }
 
+# The other markdown forms that mean "this is not an instruction". A four-space
+# indented example and an HTML comment are as much non-content as a fenced block,
+# so an @path in either must not refuse a dispatch - this repository's own
+# CLAUDE.md opens with a comment, and commenting out a stale outside import is
+# the ordinary way to retire one.
+test_import_syntax_in_an_indented_block_or_an_html_comment_is_not_an_import() {
+  local row out status
+  row=$(import_case imports-noncontent)
+  read_case "$row"
+  {
+    printf '<!-- retired: @%s/outside.md -->\n' "$CASE_DIR"
+    printf '# p\n\nExample:\n\n'
+    printf '    @%s/outside.md\n\n' "$CASE_DIR"
+    printf '<!--\n@%s/outside.md\n-->\n' "$CASE_DIR"
+  } > "$WT/CLAUDE.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 0 "$status" "an indented example or a commented-out import must not refuse a dispatch: $out"
+  assert_contains "$out" "external imports: clear" \
+    "markdown non-content was read as a loaded import"
+  pass "fm-claude-trust.sh: an indented example and an HTML comment are not read as imports"
+}
+
 test_a_transitive_import_out_of_the_worktree_blocks() {
   local row out status
   row=$(import_case imports-transitive)
@@ -991,43 +1013,49 @@ test_an_unresolvable_external_import_is_reported_as_undecided() {
 # chain that runs past it is REPORTED as unfollowed rather than called clean,
 # because a chain this stopped reading is exactly where a missed import would
 # put a worker back on the dialog with nobody warned.
-test_the_scan_follows_the_documented_import_depth() {
+# The depth was measured against the product hop by hop, and both sides of the
+# boundary are pinned here, because a bound that is right on one side and wrong
+# on the other is how the same hop ends up "never loaded" for an in-tree target
+# and "loads and shows the dialog" for an outside one. This side: the outside
+# file is the FIFTH file in the chain - the last one the product loads - and the
+# dialog renders there, so it must refuse the dispatch.
+test_an_external_import_at_the_last_loaded_file_still_blocks() {
   local row out status i
   row=$(import_case imports-depth)
   read_case "$row"
   printf '# p\n\n@link1.md\n' > "$WT/CLAUDE.md"
-  for i in 1 2 3 4; do
+  for i in 1 2; do
     printf '@link%s.md\n' "$((i + 1))" > "$WT/link$i.md"
   done
-  printf '@%s/outside.md\n' "$CASE_DIR" > "$WT/link5.md"
+  printf '@%s/outside.md\n' "$CASE_DIR" > "$WT/link3.md"
   out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
-  expect_code 3 "$status" "an external import within the documented depth must be caught: $out"
-  assert_contains "$out" "$WT/link5.md" \
-    "the refusal did not name the file at the end of the chain"
-  pass "fm-claude-trust.sh: the import scan follows a chain to the depth Claude Code documents"
+  expect_code 3 "$status" "an outside import at the last file the product loads must be caught: $out"
+  assert_contains "$out" "$WT/link3.md" \
+    "the refusal did not name the file that reaches outside the loaded chain"
+  pass "fm-claude-trust.sh: an external import at the last loaded memory file blocks the launch"
 }
 
-# Past that depth Claude Code stops loading too, so a further hop cannot raise
-# the dialog: that is a known limit, not an undecided result, and calling it
-# undecided would put every project with a long in-tree chain permanently on a
-# warning no operator could act on. The clear line has to name the depth it
-# followed, so "clear" never reads as an unbounded claim.
-test_a_chain_past_the_scanned_depth_is_cleared_naming_that_depth() {
+# The other side of the same measured boundary: an import written ONE file past
+# the last loaded one is not followed by the product, so an outside target there
+# raises no dialog and must not refuse a dispatch - and it is not `unknown`
+# either, because this is measured rather than assumed. The clear line has to
+# name the depth it followed, so "clear" never reads as an unbounded claim.
+test_an_external_import_one_file_past_the_loaded_chain_does_not_block() {
   local row out status i
   row=$(import_case imports-deeper)
   read_case "$row"
   printf '# p\n\n@link1.md\n' > "$WT/CLAUDE.md"
-  for i in 1 2 3 4 5 6; do
+  for i in 1 2 3; do
     printf '@link%s.md\n' "$((i + 1))" > "$WT/link$i.md"
   done
-  printf 'end\n' > "$WT/link7.md"
+  printf '@%s/outside.md\n' "$CASE_DIR" > "$WT/link4.md"
   out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
-  expect_code 0 "$status" "an in-tree chain running past the scanned depth must not hold up a launch: $out"
+  expect_code 0 "$status" "an import the product never loads must neither refuse nor warn: $out"
   assert_contains "$out" "external imports: clear" \
-    "a chain that never leaves the worktree was not cleared"
-  assert_contains "$out" "5-file import depth" \
+    "an edge past the measured depth was not cleared"
+  assert_contains "$out" "5 memory files Claude Code was measured to load" \
     "the clear verdict did not name the depth it followed the chain to"
-  pass "fm-claude-trust.sh: an in-tree chain past the scanned depth is cleared, naming that depth"
+  pass "fm-claude-trust.sh: an external import one file past the loaded chain does not block a launch"
 }
 
 # A clear verdict is a report of what was examined, not a blanket all-clear. The
@@ -1306,8 +1334,9 @@ test_import_syntax_inside_a_code_fence_is_not_an_import
 test_a_transitive_import_out_of_the_worktree_blocks
 test_claude_local_md_is_scanned_too
 test_an_unresolvable_external_import_is_reported_as_undecided
-test_the_scan_follows_the_documented_import_depth
-test_a_chain_past_the_scanned_depth_is_cleared_naming_that_depth
+test_an_external_import_at_the_last_loaded_file_still_blocks
+test_an_external_import_one_file_past_the_loaded_chain_does_not_block
+test_import_syntax_in_an_indented_block_or_an_html_comment_is_not_an_import
 test_the_clear_verdict_names_what_it_scanned_and_what_it_did_not
 test_an_external_import_ending_a_sentence_is_reported_not_refused
 test_a_parenthesised_in_tree_import_is_reported_unfollowed

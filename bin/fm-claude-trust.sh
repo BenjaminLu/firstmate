@@ -634,7 +634,12 @@ fi
 # the reading that cannot block a dispatch on a guess. A spec that names a file
 # only once its trailing sentence punctuation is stripped is REPORTED with both
 # spellings and not followed, because whether Claude Code strips that
-# punctuation was never measured either way.
+# punctuation was never measured either way. The same rule governs markdown
+# non-content: an @path inside a fenced or four-space-indented code block, an
+# inline code span, or an HTML comment is text its author marked as NOT an
+# instruction, so refusing a dispatch over it would refuse over something nobody
+# wrote as an import. The scan's own list of what it does and does not treat that
+# way lives beside the extractor below.
 #
 # WHAT `unknown` IS FOR, and what it is not. It is for a chain this could not
 # read to the end - a memory file it cannot read, a `~` it cannot expand, an
@@ -642,10 +647,13 @@ fi
 # spelling names a file nothing else in the chain reached, a memory path
 # resolving out of the tree - and for a launch whose consent entry could not be
 # identified at all, so the store lookup would answer about the wrong key. It is
-# NOT for the import depth: five files is where Claude Code itself stops
-# loading, so a hop past it cannot raise the dialog and is a known limit rather
-# than an undecided one. The clear line names that depth instead, so nobody has
-# to guess how far it looked.
+# NOT for the import depth: that bound was MEASURED against the product - the
+# launch directory's own memory file plus at most four imported ones, with an
+# import written in that fourth file not followed at all - so an edge past it
+# cannot raise the dialog and is a known limit rather than an undecided one. One
+# bound decides both an in-tree and an outside target, so the scan can never call
+# the same hop unloaded for one and loading for the other. The clear line names
+# the depth it followed, in those measured terms.
 #
 # THE VERDICT NEVER MANUFACTURES CONSENT. `blocks` refuses the launch and names
 # the one-time human approval; it never writes the approval, exactly as the
@@ -691,12 +699,17 @@ import_scan() {
 const fs = require("node:fs");
 const path = require("node:path");
 const [dir, home, store, entry] = process.argv.slice(2);
-// Claude Code documents five as the maximum import depth. This scan stops where
-// the product stops: a hop past that depth is not followed, and not reported as
-// something left undecided either, because the product would not load it and so
-// it cannot raise the dialog. The clear verdict below names the depth it
-// followed, so a reader can tell a scanned chain from an unbounded claim.
-const MAX_DEPTH = 5;
+// The import depth is MEASURED against the product, not read off its docs: the
+// hop-by-hop record is in docs/verification/claude-launch-dialogs.md. Claude Code
+// loads the launch directory's own memory file plus AT MOST FOUR imported files,
+// and an import written in that fourth imported file is not followed at all -
+// an outside import there raised no dialog. "Maximum import depth 5" turned out
+// to mean five files, not five hops. This is the ONE place that bound is
+// written; both classifications below consume it, so "the product never loads
+// this" can never mean one thing for an in-tree target and another for an
+// outside one. Past the bound is a known limit rather than an undecided case,
+// so it is not reported as `unknown` either.
+const MAX_IMPORT_DEPTH = 4;
 // The SCAN-DERIVED clear carries what this could not look at. Two dimensions are
 // deliberately never walked: the operator's own user-global chain
 // (~/.claude/CLAUDE.md and its @imports), and any CLAUDE.md or CLAUDE.local.md
@@ -740,23 +753,71 @@ const inside = (p) => p === dir || p.startsWith(dir + path.sep);
 const realOrNull = (p) => {
   try { return fs.realpathSync(p); } catch { return null; }
 };
-// An @import is only an import where Claude Code reads one: outside fenced code
-// and outside inline code spans. Scanning the raw text instead would turn every
-// documented example of the syntax into a false refusal.
+// An @import is only an import where a memory file MEANS one. Four markdown
+// forms exist to say "this text is not an instruction", and all four are
+// excluded, so a file that documents the import syntax can never refuse a
+// dispatch: the fenced code block, the inline code span, the four-space indented
+// code block, and the HTML comment (including one that runs across lines - this
+// repository's own CLAUDE.md opens with a comment).
+//
+// Three further forms are deliberately LEFT reading as imports, and this is the
+// whole list: a block quote, a YAML front-matter block, and a link reference
+// definition (`[label]: @path`). None of them marks its text as an example the
+// way a code span or a comment does - quoted and front-matter text is still text
+// the file means - and whether Claude Code skips any of them was not measured
+// either way. Leaving them in cannot manufacture a refusal on its own, because
+// every refusal still has the one measured source: a spec, as written, naming an
+// existing regular file outside the tree.
+//
+// The indented-code rule is CommonMark's own: four spaces open a code block only
+// where no paragraph is already open. One consequence is deliberate - an
+// indented continuation line inside a list item, after a blank line, reads as
+// code here and its @imports are skipped. That is the direction that cannot
+// refuse a dispatch over something nobody wrote as an import.
 const importsIn = (text) => {
   const found = [];
   let fence = null;
+  let inComment = false;
+  let paragraph = false;
   for (const raw of text.split("\n")) {
     const line = raw.replace(/\t/g, "    ");
-    const fenceHit = line.match(/^ {0,3}(`{3,}|~{3,})/);
-    if (fenceHit) {
-      const ch = fenceHit[1][0];
-      if (fence === null) fence = ch;
-      else if (fence === ch) fence = null;
-      continue;
+    if (!inComment) {
+      const fenceHit = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (fenceHit) {
+        const ch = fenceHit[1][0];
+        if (fence === null) fence = ch;
+        else if (fence === ch) fence = null;
+        paragraph = false;
+        continue;
+      }
     }
     if (fence !== null) continue;
-    const stripped = line.replace(/`[^`]*`/g, " ");
+    let body = "";
+    let rest = line;
+    while (rest.length > 0) {
+      if (inComment) {
+        const close = rest.indexOf("-->");
+        if (close === -1) break;
+        inComment = false;
+        rest = rest.slice(close + 3);
+        continue;
+      }
+      const open = rest.indexOf("<!--");
+      if (open === -1) {
+        body += rest;
+        break;
+      }
+      body += rest.slice(0, open);
+      inComment = true;
+      rest = rest.slice(open + 4);
+    }
+    if (body.trim() === "") {
+      paragraph = false;
+      continue;
+    }
+    if (!paragraph && /^ {4,}\S/.test(body)) continue;
+    paragraph = true;
+    const stripped = body.replace(/`[^`]*`/g, " ");
     const re = /(?:^|\s)@([^\s`]+)/g;
     let hit;
     while ((hit = re.exec(stripped)) !== null) found.push(hit[1]);
@@ -825,6 +886,10 @@ while (queue.length > 0) {
     undecidable.push(`${real} could not be read (${err.code || err.message})`);
     continue;
   }
+  // An import written in the last file the product loads is not followed by the
+  // product, so it is not followed here - for an in-tree target and an outside
+  // one alike, which is the whole point of there being one bound.
+  if (depth >= MAX_IMPORT_DEPTH) continue;
   const fromDir = path.dirname(real);
   for (const spec of importsIn(text)) {
     const target = resolveSpec(spec, fromDir);
@@ -855,14 +920,7 @@ while (queue.length > 0) {
       external.push(`${real} imports '${spec}'${where}`);
       continue;
     }
-    // Past the documented depth this scan stops where the product stops. That
-    // is a known limit rather than an undecided case - Claude Code does not
-    // load the hop either, so it cannot raise the dialog - and reporting it as
-    // undecided would put every project with a long in-tree chain permanently
-    // on a warning with nothing an operator could do about it.
-    if (depth + 1 <= MAX_DEPTH) {
-      queue.push({ file: targetReal, depth: depth + 1 });
-    }
+    queue.push({ file: targetReal, depth: depth + 1 });
   }
 }
 
@@ -884,11 +942,11 @@ const listOf = (items) => {
 if (external.length > 0) say("blocks", listOf(external));
 if (undecidable.length > 0) say("unknown", listOf(undecidable));
 // The clear line names what it examined - the PROJECT memory chain of the
-// launch directory, followed to the depth the product documents - alongside
-// what it did not.
+// launch directory, followed to the depth the product was measured to load -
+// alongside what it did not.
 say(
   "clear",
-  `no import in the project memory chain under ${dir} (CLAUDE.md, CLAUDE.local.md and their @imports, followed to Claude Code's documented ${MAX_DEPTH}-file import depth) reaches outside it; ${UNEXAMINED}`,
+  `no import in the project memory chain under ${dir} (CLAUDE.md, CLAUDE.local.md and their @imports, followed to the ${MAX_IMPORT_DEPTH + 1} memory files Claude Code was measured to load - this directory's own memory file plus at most ${MAX_IMPORT_DEPTH} imported ones) reaches outside it; ${UNEXAMINED}`,
 );
 NODE
 }
