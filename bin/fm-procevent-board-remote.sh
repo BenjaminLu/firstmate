@@ -11,6 +11,21 @@
 #   fm-procevent-board-remote.sh source-id
 #   fm-procevent-board-remote.sh retire
 #
+# WHAT IS VENDOR-BOUND HERE, AND WHAT IS NOT. Everything in this file is plain
+# shell and jq: arming, the timer, the cursor, the deduplication, the framing and
+# the feed into the one keyed-answer intake all run with no vendor's agent
+# present. The seam is deliberately a DIRECTORY OF ANSWER DOCUMENTS - `ingest`
+# is handed files and never fetches anything - so whatever can fetch the board's
+# answers can feed it, and moving the board to a neutral host would change
+# nothing in here.
+#
+# One step is bound today, and it is the fetch: the captain's board is published
+# as a claude.ai artifact, so reading its answer store needs a first-party Claude
+# session's own Artifact tool. A clone running another agent gets this whole
+# mechanism and must supply that one step - write the board's answer documents
+# into a directory and call `ingest`. It does not get the board itself, which is
+# that surface's own dependency rather than this adapter's.
+#
 # THE ONE THING THAT IS DIFFERENT FROM EVERY OTHER ADAPTER HERE. The remote
 # board's answers live in a claude.ai artifact database that only a first-party
 # Claude session's own Artifact tool can read, so - unlike Lavish or quota - the
@@ -535,7 +550,7 @@ cmd_ingest() {
     esac
   done
   [ -n "$dir" ] \
-    || die "ingest needs --documents <dir>: the directory the artifact read wrote the answer documents into, which is <out_dir>/answers for the answers collection"
+    || die "ingest needs --documents <dir>: a directory of answer documents, one JSON file each, however they were fetched; a Claude artifact read writes them to <out_dir>/answers"
   [ -d "$dir" ] && [ ! -L "$dir" ] || die "not a directory: $dir"
   command -v jq >/dev/null 2>&1 || die "jq is not installed"
   state_dir_ready || die "cannot prepare the adapter's state directory: $STATE_DIR"
