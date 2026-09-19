@@ -63,11 +63,17 @@ FM_CLAUDE_DOCTOR_TIMEOUT=${FM_CLAUDE_DOCTOR_TIMEOUT:-10}
 case $FM_CLAUDE_DOCTOR_TIMEOUT in '' | *[!0-9]* | 0) FM_CLAUDE_DOCTOR_TIMEOUT=10 ;; esac
 
 # fm_claude_permission_resolve <config-dir>
-# Sets FM_CLAUDE_PERMISSION_MODE, FM_CLAUDE_PERMISSION_FLAG and
-# FM_CLAUDE_PERMISSION_SOURCE (default|config). Returns 1 when the file is
-# present but unusable, with the operator-facing reason in
-# FM_CLAUDE_PERMISSION_ERROR - empty when the inspection itself failed and has
-# already reported its own diagnostic.
+# Sets FM_CLAUDE_PERMISSION_SOURCE to `default`, `config` or `unresolved`, and
+# with it FM_CLAUDE_PERMISSION_MODE and FM_CLAUDE_PERMISSION_FLAG. Returns 1 on
+# `unresolved`, with the operator-facing reason in FM_CLAUDE_PERMISSION_ERROR -
+# empty only when the inspection itself failed and has already printed its own
+# diagnostic.
+#
+# SOURCE is what every reader keys on, and that is the point rather than a
+# detail. The mode and the flag are cleared on every failure path, so a reader
+# that keyed on "is the error string populated" instead would read a cleared
+# mode back as the shipped default and state it confidently. A posture this
+# cannot resolve is its own answer, never the default one.
 fm_claude_permission_resolve() {
   local config=$1 present token path
   path="$config/$FM_CLAUDE_PERMISSION_FILE"
@@ -76,10 +82,14 @@ fm_claude_permission_resolve() {
   FM_CLAUDE_PERMISSION_FLAG=
   FM_CLAUDE_PERMISSION_ERROR=
   if ! present=$(fm_config_source_present "$path"); then
+    FM_CLAUDE_PERMISSION_MODE=
+    FM_CLAUDE_PERMISSION_SOURCE=unresolved
     return 1
   fi
   if [ "$present" = 1 ]; then
     if [ ! -f "$path" ] || [ ! -r "$path" ]; then
+      FM_CLAUDE_PERMISSION_MODE=
+      FM_CLAUDE_PERMISSION_SOURCE=unresolved
       FM_CLAUDE_PERMISSION_ERROR="config/$FM_CLAUDE_PERMISSION_FILE must be a readable regular file holding one of: auto, bypass"
       return 1
     fi
@@ -90,6 +100,8 @@ fm_claude_permission_resolve() {
       FM_CLAUDE_PERMISSION_SOURCE=config
       ;;
     *)
+      FM_CLAUDE_PERMISSION_MODE=
+      FM_CLAUDE_PERMISSION_SOURCE=unresolved
       FM_CLAUDE_PERMISSION_ERROR="config/$FM_CLAUDE_PERMISSION_FILE holds '$token'; accepted values are: auto (--permission-mode auto, and the default when the file is absent), bypass (--dangerously-skip-permissions)"
       return 1
       ;;
@@ -105,14 +117,22 @@ fm_claude_permission_resolve() {
 # fm_claude_permission_describe
 # One line naming the posture in force and what selected it, for a reader who
 # has run fm_claude_permission_resolve. Silence is what let an inverted default
-# stand unnoticed, so this line is printed whether or not anything is wrong.
+# stand unnoticed, so this line is printed whether or not anything is wrong -
+# and an unresolved posture gets its own line rather than being described as
+# the default, because a section that exists to end a silence must not replace
+# it with a confident sentence that is false.
+#
+# The unresolved branch is FIRST and is reached through SOURCE, never through
+# an empty-or-not test on the error string. One of the two unresolved paths
+# carries no reason of its own, and a presence test would send exactly that
+# path into the default branch.
 fm_claude_permission_describe() {
-  if [ -n "${FM_CLAUDE_PERMISSION_ERROR:-}" ]; then
-    printf 'UNRESOLVED - %s. Every Claude spawn from this home refuses until that file is fixed.\n' \
-      "$FM_CLAUDE_PERMISSION_ERROR"
+  case ${FM_CLAUDE_PERMISSION_SOURCE:-unresolved} in
+  unresolved)
+    printf 'UNRESOLVED - %s. Every Claude spawn from this home refuses until that is fixed.\n' \
+      "${FM_CLAUDE_PERMISSION_ERROR:-config/$FM_CLAUDE_PERMISSION_FILE could not be inspected, so the posture this home would launch with is unknown}"
     return 0
-  fi
-  case ${FM_CLAUDE_PERMISSION_SOURCE:-default} in
+    ;;
   config)
     printf 'Claude workers launch %s (%s), selected by config/%s.\n' \
       "$FM_CLAUDE_PERMISSION_FLAG" "$FM_CLAUDE_PERMISSION_MODE" "$FM_CLAUDE_PERMISSION_FILE"

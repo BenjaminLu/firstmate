@@ -509,7 +509,7 @@ fi
 # bin/fm-claude-launch-lib.sh is the one resolver, shared with the session-start
 # digest, so what a session reports and what a worker launches cannot diverge.
 if ! fm_claude_permission_resolve "$CONFIG"; then
-  [ -z "$FM_CLAUDE_PERMISSION_ERROR" ] || echo "error: $FM_CLAUDE_PERMISSION_ERROR" >&2
+  echo "error: ${FM_CLAUDE_PERMISSION_ERROR:-config/claude-permission-mode could not be inspected, so the permission posture for this launch is unknown}" >&2
   exit 1
 fi
 CLAUDE_PERM_FLAG=$FM_CLAUDE_PERMISSION_FLAG

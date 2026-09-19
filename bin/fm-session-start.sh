@@ -717,6 +717,11 @@ fi
 # bin/fm-spawn.sh resolves it the same way, so this line and the launch it
 # describes cannot drift apart.
 subsection "WORKER LAUNCH POSTURE"
+# The status is deliberately not what is read here: an unresolved posture is a
+# state the resolver RECORDS, in FM_CLAUDE_PERMISSION_SOURCE, so the line below
+# reports it whether or not this digest could act on a non-zero return. Letting
+# a failure fall through to the default branch is what made this section print
+# a confident sentence about a posture no spawn from that home could reach.
 fm_claude_permission_resolve "$CONFIG" || true
 fm_claude_permission_describe
 

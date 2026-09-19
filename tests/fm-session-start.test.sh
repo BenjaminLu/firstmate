@@ -1055,7 +1055,27 @@ EOF
   printf 'yolo\n' > "$home/config/claude-permission-mode"
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "UNRESOLVED" "an unusable permission file must be reported, not passed over in silence"
-  assert_contains "$out" "refuses until that file is fixed" "the digest did not say what an unusable posture file costs"
+  assert_contains "$out" "refuses until that is fixed" "the digest did not say what an unusable posture file costs"
+
+  # The second failure mode, which carries no reason of its own: the resolver
+  # cannot even inspect the path. A home whose config is a regular file reaches
+  # it, and the posture is unknown rather than the default - a digest that said
+  # "the shipped default" here would be stating a posture no spawn from this
+  # home can reach, which is the silence this section exists to end.
+  rec=$(new_world posture-uninspectable)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  rm -rf "$home/config"
+  printf 'not a directory\n' > "$home/config"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  assert_contains "$out" "WORKER LAUNCH POSTURE" "the posture section must still be printed when the posture cannot be resolved"
+  assert_contains "$out" "UNRESOLVED" "an uninspectable config must be reported as unresolved"
+  assert_not_contains "$out" "the shipped default" "an uninspectable config must never be described as the shipped default"
+  assert_not_contains "$out" "launch  (" "the digest must never print a posture sentence with an empty flag"
 
   pass "every session digest names the worker launch posture and what selected it"
 }
