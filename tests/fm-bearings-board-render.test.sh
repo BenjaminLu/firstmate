@@ -583,6 +583,11 @@ test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board() {
     '<rect style=\"position:fixed;top:0;left:0;width:100vw;height:100vh;opacity:0.01\"/>' \
     '<set attributeName=\"style\" to=\"position:fixed;width:100vw;height:100vh\"/>' \
     '<rect class=\"bb-decision__foot\"/>' \
+    '<rect style=\"position&#58;fixed;top&#58;0;width&#58;100vw;height&#58;100vh\"/>' \
+    '<rect style=\"position&#x3a;fixed;top&#x3A;0\"/>' \
+    '<rect style=\"pos&#105;tion:fixed\"/>' \
+    '<a href=\"javascript&colon;alert(1)\"></a>' \
+    '<set attributeName=\"style\" to=\"position&#58;fixed;width&#58;100vw\"/>' \
   ; do
     payload=$(packet_payload en "[$(packet_figure cmp quiet loud)]" \
       | jq --arg s "$shape" '.captains_call[0].packet.figures[0].svg |= sub("<text"; $s + "<text")')

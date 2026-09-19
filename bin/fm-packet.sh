@@ -12,7 +12,7 @@
 # Usage:
 #   fm-packet.sh scaffold <task-id> [--kind done|needs-decision] [--worktree <dir>] [--pr <url>] [--force]
 #   fm-packet.sh verify <task-id>
-#   fm-packet.sh svg-check <svg-file> [slug]
+#   fm-packet.sh svg-check <svg-file> <slug>
 #   fm-packet.sh card <task-id> [--repo <name>]
 #   fm-packet.sh render <task-id>
 #   fm-packet.sh serve <task-id>
@@ -249,7 +249,7 @@
 #            copy of a security boundary is one that can disagree with the
 #            first, and this one did - three times, over which spellings of an
 #            attribute separator it recognised. `fm-packet.sh svg-check <file>
-#            [slug]` is that same check, offered to a surface that inlines one
+#            <slug>` is that same check, offered to a surface that inlines one
 #            drawing without the packet around it: the bearings board runs it
 #            over every drawing in the payload it is handed, because a
 #            composing model edits that payload after `card` wrote it.
@@ -677,7 +677,8 @@ decision_jq='
 # `card` produced it, and that check has to be this check rather than a second
 # copy of it that can disagree.
 figures_python() {  # packet <packet> <kind> [option...] | svg <svg-file> [slug]
-  FM_NAME_RE="$NAME_RE" python3 - "$@" <<'PY'
+  FM_NAME_RE="$NAME_RE" FM_PACKET_SVG_LIB="$SCRIPT_DIR/fm-packet-svg-lib.py" \
+    python3 - "$@" <<'PY'
 import os, pathlib, re, sys
 
 # The headings render decides on, character for character, and the same one
@@ -828,94 +829,13 @@ def colour_advice(value):
                 % (m.group(1), m.group(1)))
     return ("the page binds no %s for a figure to draw against; the palette is %s"
             % (m.group(1), ", ".join("--" + name for name in PALETTE)))
-
-# Which bytes are a tag, and which are an attribute inside it, WALKED the way
-# the HTML tokenizer walks them rather than matched as a shape. Four times on
-# this branch a drawing slipped past a pattern the browser read differently -
-# an attribute after a solidus, one with no separator at all, a duplicate name,
-# and a bare "<" inside an unquoted value, which ends a regex and does not end
-# a value. A shape can always be spelled around; the state walk is what the
-# browser will actually do. Anything this cannot read comes back as None, and
-# the caller refuses the drawing rather than passing bytes nobody understood.
-#
-# The states are the spec ones: before-attribute-name, attribute-name,
-# after-attribute-name, before-attribute-value, the three attribute-value
-# states and after-attribute-value-quoted. A duplicate name keeps the FIRST,
-# as the tokenizer does. EOF anywhere inside a tag is eof-in-tag: unreadable.
-WHITESPACE = "\t\n\f\r "
-
-def scan_tags(svg):
-    """-> [(tag name, {attr: value})] in document order, or None if unreadable"""
-    out, i, n = [], 0, len(svg)
-    while i < n:
-        lt = svg.find("<", i)
-        if lt < 0:
-            return out
-        i = lt + 1
-        if svg.startswith("!--", i):
-            end = svg.find("-->", i + 3)
-            if end < 0:
-                return None
-            i = end + 3; continue
-        if svg.startswith("![CDATA[", i):
-            end = svg.find("]]>", i + 8)
-            if end < 0:
-                return None
-            i = end + 3; continue
-        if i < n and svg[i] in "!?":
-            end = svg.find(">", i)
-            if end < 0:
-                return None
-            i = end + 1; continue
-        closing = i < n and svg[i] == "/"
-        if closing:
-            i += 1
-        if i >= n or not svg[i].isalpha():
-            # a "<" the tokenizer keeps as text, not the start of a tag
-            continue
-        start = i
-        while i < n and svg[i] not in WHITESPACE and svg[i] not in "/>":
-            i += 1
-        name = svg[start:i].lower()
-        attrs, done = {}, False
-        while not done:
-            while i < n and (svg[i] in WHITESPACE or svg[i] == "/"):
-                i += 1
-            if i >= n:
-                return None
-            if svg[i] == ">":
-                i += 1; done = True; break
-            astart = i
-            while i < n and svg[i] not in WHITESPACE and svg[i] not in "/>=":
-                i += 1
-            attr = svg[astart:i].lower()
-            while i < n and svg[i] in WHITESPACE:
-                i += 1
-            if i >= n:
-                return None
-            value = ""
-            if svg[i] == "=":
-                i += 1
-                while i < n and svg[i] in WHITESPACE:
-                    i += 1
-                if i >= n:
-                    return None
-                if svg[i] in "\"'":
-                    quote = svg[i]; i += 1
-                    close = svg.find(quote, i)
-                    if close < 0:
-                        return None
-                    value = svg[i:close]; i = close + 1
-                else:
-                    vstart = i
-                    while i < n and svg[i] not in WHITESPACE and svg[i] != ">":
-                        i += 1
-                    value = svg[vstart:i]
-            if attr:
-                attrs.setdefault(attr, value)
-        if not closing:
-            out.append((name, attrs))
-    return out
+# The tag reader and the drawing splitter are ONE source, bin/fm-packet-svg-lib.py,
+# loaded by both of this file's python programs rather than written twice. Two
+# readers of one drawing is the failure this branch has already paid for twice:
+# a non-greedy closing-svg match, and a second data-node regex. A comment
+# asking two copies to stay identical is not a thing that keeps them identical.
+exec(compile(pathlib.Path(os.environ["FM_PACKET_SVG_LIB"]).read_text(encoding="utf-8"),
+             os.environ["FM_PACKET_SVG_LIB"], "exec"), globals())
 
 # One reading of an attribute value, wherever the value came from: written on
 # the element, or set by a SMIL animation. Two readings is how the animated
@@ -938,7 +858,11 @@ def value_problems(tag, k, v):
                        "#fragment, or the page fetches it and stops rendering offline" % (tag, k, v))
     if k == "style":
         for prop, val in style_decls(v):
-            if prop not in DRAWING_STYLE_PROPS:
+            if prop is None:
+                out.append("<%s> styles \"%s\", which is not a declaration this reader can "
+                           "parse; a drawing is refused rather than inlined on a reading "
+                           "nobody could check" % (tag, val))
+            elif prop not in DRAWING_STYLE_PROPS:
                 out.append("<%s> styles %s: %s; a drawing styles only what it paints, sets type "
                            "and clips with. A declaration that lays out, layers or escapes the "
                            "figure reaches the whole board it was inlined into" % (tag, prop, val))
@@ -946,35 +870,20 @@ def value_problems(tag, k, v):
                 out.append("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
     return out
 
+# A chunk that is not a declaration comes back with no property name, and the
+# caller refuses it: a reader that silently skipped what it could not parse is
+# a reader that passed the whole value when the browser read a declaration in
+# it. The value arrives already decoded, so there is nothing left to hide in.
 def style_decls(value):
     for decl in value.split(";"):
+        if not decl.strip():
+            continue
         if ":" in decl:
             k, v = decl.split(":", 1)
             yield k.strip().lower(), v.strip()
-
-# The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
-# elements inside the drawing, and a non-greedy match would stop at the first
-# </svg> and leave the rest of the figure unread. figures_html states this
-# same function, character for character - the two must agree on which bytes
-# are the drawing, or verify checks one thing and the page shows another.
-SVG_TAG = re.compile(r"""<\s*(/?)svg\b((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
-
-def top_level_svgs(text):
-    out, depth, start = [], 0, None
-    for m in SVG_TAG.finditer(text):
-        if m.group(1):
-            if depth > 0:
-                depth -= 1
-                if depth == 0:
-                    out.append(text[start:m.end()]); start = None
-        elif m.group(2).rstrip().endswith("/"):
-            if depth == 0:
-                out.append(m.group(0))
         else:
-            if depth == 0:
-                start = m.start()
-            depth += 1
-    return out
+            yield None, decl.strip()
+
 
 # The contract every drawing is held to, wherever it is read from: the packet
 # on its way to verify, or one drawing lifted out of a board payload on its way
@@ -1065,7 +974,7 @@ if sys.argv[1] == "svg":
              if len(only) != 1 else
              ([] if only[0].strip() == drawing.strip()
               else ["the drawing carries markup outside its one <svg> element"]))]
-    found, _nodes, _edges = svg_problems(drawing, sys.argv[3] if len(sys.argv) > 3 else "")
+    found, _nodes, _edges = svg_problems(drawing, sys.argv[3])
     for line in lone + found:
         print(line)
     sys.exit(1 if (lone or found) else 0)
@@ -1283,11 +1192,11 @@ figures_problems() {  # <packet> <kind> [option-value...] -> one problem per lin
 
 # One drawing, held to the same contract, for a surface that inlines it without
 # the packet around it. Prints one problem per line and exits 1 on any.
-command_svg_check() {  # <svg-file> [slug]
-  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+command_svg_check() {  # <svg-file> <slug>
+  [ "$#" -eq 2 ] || { usage >&2; exit 2; }
   [ -f "$1" ] || fail "no drawing at $1"
   command -v python3 >/dev/null 2>&1 || fail "python3 is required to check a drawing"
-  figures_python svg "$1" "${2-}"
+  figures_python svg "$1" "$2"
 }
 
 command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
@@ -1428,8 +1337,16 @@ page_path() { printf '%s/%s/packet.html\n' "$DATA" "$1"; }
 # and the same markdown converter, so the board card and the page can never
 # disagree about what the packet says.
 packet_python() {  # <packet.md> <out.html|-> <task-id> <mode>
-  python3 - "$1" "$2" "$3" "$4" <<'PY'
-import html, json, re, sys, pathlib
+  FM_PACKET_SVG_LIB="$SCRIPT_DIR/fm-packet-svg-lib.py" python3 - "$1" "$2" "$3" "$4" <<'PY'
+import html, json, os, re, sys, pathlib
+
+# The tag reader and the drawing splitter are ONE source, bin/fm-packet-svg-lib.py,
+# loaded by both of this file's python programs rather than written twice. Two
+# readers of one drawing is the failure this branch has already paid for twice:
+# a non-greedy closing-svg match, and a second data-node regex. A comment
+# asking two copies to stay identical is not a thing that keeps them identical.
+exec(compile(pathlib.Path(os.environ["FM_PACKET_SVG_LIB"]).read_text(encoding="utf-8"),
+             os.environ["FM_PACKET_SVG_LIB"], "exec"), globals())
 
 src, out, task = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 mode = sys.argv[4] if len(sys.argv) > 4 else "page"
@@ -1710,29 +1627,6 @@ def md(body):
 # do not render.
 FIG_ATTR = re.compile(r"^(figure|caption|caption\.hant|caption\.hans|heading\.hant"
                       r"|heading\.hans|option):\s*(\S.*?)\s*$")
-# The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
-# elements inside the drawing, and a non-greedy match would stop at the first
-# </svg> and leave the rest of the figure unread. figures_problems states this
-# same function, character for character - the two must agree on which bytes
-# are the drawing, or verify checks one thing and the page shows another.
-SVG_TAG = re.compile(r"""<\s*(/?)svg\b((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
-
-def top_level_svgs(text):
-    out, depth, start = [], 0, None
-    for m in SVG_TAG.finditer(text):
-        if m.group(1):
-            if depth > 0:
-                depth -= 1
-                if depth == 0:
-                    out.append(text[start:m.end()]); start = None
-        elif m.group(2).rstrip().endswith("/"):
-            if depth == 0:
-                out.append(m.group(0))
-        else:
-            if depth == 0:
-                start = m.start()
-            depth += 1
-    return out
 
 
 # The ONE reader of a Figures section, for both surfaces. The page and the card
@@ -1865,85 +1759,6 @@ def decision_card(d):
 # restyle or re-script the surface it is rendered on. So a section is a heading
 # plus its items, an item is a line of text with the links it named, and the
 # board decides what tags any of it becomes.
-# The identities a drawing names, read by the SAME state walk verify reads them
-# with - character for character, like top_level_svgs above, because the two
-# have to agree about what the markup says. A second reader answered
-# differently on an unquoted value and on a label that merely contained the
-# words, which put the comparison drawing in the wrong tab.
-WHITESPACE = "\t\n\f\r "
-
-def scan_tags(svg):
-    """-> [(tag name, {attr: value})] in document order, or None if unreadable"""
-    out, i, n = [], 0, len(svg)
-    while i < n:
-        lt = svg.find("<", i)
-        if lt < 0:
-            return out
-        i = lt + 1
-        if svg.startswith("!--", i):
-            end = svg.find("-->", i + 3)
-            if end < 0:
-                return None
-            i = end + 3; continue
-        if svg.startswith("![CDATA[", i):
-            end = svg.find("]]>", i + 8)
-            if end < 0:
-                return None
-            i = end + 3; continue
-        if i < n and svg[i] in "!?":
-            end = svg.find(">", i)
-            if end < 0:
-                return None
-            i = end + 1; continue
-        closing = i < n and svg[i] == "/"
-        if closing:
-            i += 1
-        if i >= n or not svg[i].isalpha():
-            # a "<" the tokenizer keeps as text, not the start of a tag
-            continue
-        start = i
-        while i < n and svg[i] not in WHITESPACE and svg[i] not in "/>":
-            i += 1
-        name = svg[start:i].lower()
-        attrs, done = {}, False
-        while not done:
-            while i < n and (svg[i] in WHITESPACE or svg[i] == "/"):
-                i += 1
-            if i >= n:
-                return None
-            if svg[i] == ">":
-                i += 1; done = True; break
-            astart = i
-            while i < n and svg[i] not in WHITESPACE and svg[i] not in "/>=":
-                i += 1
-            attr = svg[astart:i].lower()
-            while i < n and svg[i] in WHITESPACE:
-                i += 1
-            if i >= n:
-                return None
-            value = ""
-            if svg[i] == "=":
-                i += 1
-                while i < n and svg[i] in WHITESPACE:
-                    i += 1
-                if i >= n:
-                    return None
-                if svg[i] in "\"'":
-                    quote = svg[i]; i += 1
-                    close = svg.find(quote, i)
-                    if close < 0:
-                        return None
-                    value = svg[i:close]; i = close + 1
-                else:
-                    vstart = i
-                    while i < n and svg[i] not in WHITESPACE and svg[i] != ">":
-                        i += 1
-                    value = svg[vstart:i]
-            if attr:
-                attrs.setdefault(attr, value)
-        if not closing:
-            out.append((name, attrs))
-    return out
 LINK_MD = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 EMPHASIS = re.compile(r"\*\*(.+?)\*\*")
 CODE_SPAN = re.compile(r"`([^`]*)`")

@@ -438,6 +438,15 @@ test_verify_holds_a_figure_to_the_svg_contract() {
     '<set attributeName="style" to="position:fixed;top:0;width:100vw;height:100vh"/><rect id="opt-box-end"' \
     '<set attributeName="onclick" to="alert(1)"/><rect id="opt-box-end"' \
     '<animate attributeName="style" values="opacity:1;position:fixed"/><rect id="opt-box-end"' \
+    '<rect style="position&#58;fixed;top&#58;0;width&#58;100vw" id="opt-box-end"' \
+    '<rect style="position&#x3a;fixed;top&#x3A;0" id="opt-box-end"' \
+    '<rect style="pos&#105;tion:fixed" id="opt-box-end"' \
+    '<rect style="expression(alert(1))" id="opt-box-end"' \
+    '<a href="javascript&colon;alert(1)"></a><rect id="opt-box-end"' \
+    '<a href="javascript&#58;alert(1)"></a><rect id="opt-box-end"' \
+    '<rect onclick="&#97;lert(1)" id="opt-box-end"' \
+    '<set attributeName="style" to="position&#58;fixed;width&#58;100vw"/><rect id="opt-box-end"' \
+    '<rect fill="url(https&#58;//evil.example/f.svg#g)" id="opt-box-end"' \
   ; do
     svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$shape}
     fill_figures "$packet" "$(good_figures "$svg")"
@@ -1509,6 +1518,35 @@ MD
 # Difference tab, so verify and the card have to agree about what the markup
 # says. An unquoted value is an identity to a browser; it was invisible to the
 # second reader the card used to have.
+# A browser decodes character references inside an attribute value, so the
+# checker reads the decoded form or it is reading different bytes than the page
+# will act on. Decoding happens once, where the value is obtained, so no clause
+# can be the one that forgot - which is why an identity spelled with an entity
+# is the identity the board matches against the option it names.
+test_an_attribute_value_is_read_the_way_a_browser_decodes_it() {
+  local home out packet
+  home=$(make_home card-entities)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  set_figures_from_stdin "$packet" <<'MD'
+### Where the options part
+heading.hant: 選項在哪裡分岔
+heading.hans: 选项在哪里分岔
+figure: cmp
+caption: Both reach the gate; only one writes onto the data stream.
+caption.hant: 兩邊都會到 gate，只有一邊寫到資料輸出。
+caption.hans: 两边都会到 gate，只有一边写到数据输出。
+
+<svg viewBox="0 0 20 20"><rect data-node="bo&#117;nd" x="1" y="1" width="9" height="9" fill="var(--card)"/><rect data-node="qu&#x69;et" x="1" y="1" width="9" height="9" fill="var(--card)"/><text data-en="both" data-hant="兩個" data-hans="两个">both</text></svg>
+MD
+  out=$(run_packet "$home" card pk-1) || fail "verify read an identity differently from the browser: $out"
+  printf '%s' "$out" | jq -e '.packet.figures[0].nodes == ["bound", "quiet"]' >/dev/null \
+    || fail "the card shipped an identity the page would never see: $out"
+  pass "an attribute value is read the way a browser decodes it"
+}
+
 test_the_card_reads_identities_the_way_verify_does() {
   local home out packet
   home=$(make_home card-identities)
@@ -1880,5 +1918,6 @@ test_two_figures_may_share_a_heading
 test_a_figure_cannot_name_an_option_the_decision_never_offers
 test_a_drawing_that_could_run_code_never_produces_a_card
 test_a_figures_section_parses_the_same_without_a_blank_line_after_it
+test_an_attribute_value_is_read_the_way_a_browser_decodes_it
 test_the_card_reads_identities_the_way_verify_does
 test_a_drawing_that_nests_an_icon_is_read_whole
