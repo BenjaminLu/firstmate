@@ -272,6 +272,24 @@ test_missing_actionlint_fails_closed() {
   pass "missing actionlint fails closed"
 }
 
+test_missing_unrunnable_lib_is_not_findings() {
+  # The owner cannot run at all without the shared unrunnable library beside it.
+  # That is an internal failure (2), never 1: a gate reading only the status
+  # must not take a run that analysed nothing for "actionlint found problems".
+  local tmp out rc
+  tmp=$(fm_test_tmproot fm-lint-wf-nolib)
+  mkdir -p "$tmp/bin"
+  cp "$LINT_WF" "$tmp/bin/fm-lint-workflows.sh"
+  chmod +x "$tmp/bin/fm-lint-workflows.sh"
+  rc=0
+  out=$("$tmp/bin/fm-lint-workflows.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "missing unrunnable library expected the internal-failure exit 2, got $rc"$'\n'"$out"
+  assert_contains "$out" "missing bin/fm-lint-unrunnable-lib.sh" \
+    "missing unrunnable library did not name the file it needs"
+  pass "missing unrunnable library fails closed without reporting findings"
+}
+
 test_pins_an_explicit_version() {
   [ -n "$REQUIRED" ] || fail "fm-lint-workflows.sh --required-version printed nothing"
   assert_contains "$REQUIRED" "1.7.12" "fm-lint-workflows.sh must pin actionlint 1.7.12"
@@ -533,6 +551,7 @@ test_empty_workflows_dir_fails
 test_explicit_broken_path_fails
 test_non_mapping_root_fails
 test_missing_actionlint_fails_closed
+test_missing_unrunnable_lib_is_not_findings
 test_rejects_wrong_actionlint_version
 test_installer_retries_transient_download_failure
 test_installer_selects_platform_archive_url_and_checksum

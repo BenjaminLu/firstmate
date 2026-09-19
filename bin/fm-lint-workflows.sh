@@ -27,11 +27,15 @@ REQUIRED_ACTIONLINT=1.7.12
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$SELF_DIR/fm-lint-workflows.sh"
 ROOT="$(cd "$SELF_DIR/.." && pwd)"
-# shellcheck source=bin/fm-lint-unrunnable-lib.sh
-. "$SELF_DIR/fm-lint-unrunnable-lib.sh" || {
+# Tested before sourcing, not with `|| { ... }`: under `set -e` bash makes a
+# failed `.` of a missing file fatal at once, so the handler never runs and the
+# status would be 1 - the one status reserved for findings.
+[ -r "$SELF_DIR/fm-lint-unrunnable-lib.sh" ] || {
   printf 'fm-lint-workflows.sh: missing bin/fm-lint-unrunnable-lib.sh beside this script.\n' >&2
   exit 2
 }
+# shellcheck source=bin/fm-lint-unrunnable-lib.sh
+. "$SELF_DIR/fm-lint-unrunnable-lib.sh"
 
 if [ "${1:-}" = "--required-version" ]; then
   printf '%s\n' "$REQUIRED_ACTIONLINT"
