@@ -429,6 +429,94 @@ test_heading_in_ask_or_spec_refuses_before_any_record() {
   pass "an unfenced level-1 or level-2 heading or an unclosed fence in the ask or spec refuses before any record"
 }
 
+test_half_filled_brief_refuses_before_any_record() {
+  local case_dir id out status brief before after intent
+  id=dispatch-halffilled-n5
+  case_dir=$(make_case halffilled)
+  # Firstmate scaffolded and filled ## Captain's intent by hand, then reached
+  # for the one-call intake: splicing only {FIRSTMATE_SPEC} would leave the
+  # worker with the stale intent instead of this call's --ask.
+  FM_HOME="$case_dir/home" FM_DATA_OVERRIDE="$case_dir/home/data" FM_STATE_OVERRIDE="$case_dir/home/state" \
+    "$ROOT/bin/fm-brief.sh" "$id" project --mode no-mistakes >/dev/null || fail "could not scaffold the half-filled brief"
+  brief="$case_dir/home/data/$id/brief.md"
+  sed 's/^{TASK}$/an older ask nobody supplied today/' "$brief" > "$brief.tmp" && mv "$brief.tmp" "$brief"
+  before=$(cat "$brief")
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md")
+  status=$?
+  expect_code 1 "$status" "a half-filled brief should refuse: $out"
+  assert_contains "$out" "is half-filled" "refusal did not name the half-filled brief"
+  assert_contains "$out" "## Firstmate spec still carries {FIRSTMATE_SPEC} while ## Captain's intent is already written" "refusal did not name which subsection was already written"
+  after=$(cat "$brief")
+  assert_equals "$before" "$after" "a half-filled brief must not be touched"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "a half-filled brief must not file an item"
+  assert_absent "$case_dir/home/state/$id.meta" "a half-filled brief must not spawn"
+
+  # The mirror: the spec written by hand, the ask still a placeholder.
+  id=dispatch-halffilled-n5-spec
+  FM_HOME="$case_dir/home" FM_DATA_OVERRIDE="$case_dir/home/data" FM_STATE_OVERRIDE="$case_dir/home/state" \
+    "$ROOT/bin/fm-brief.sh" "$id" project --scout >/dev/null || fail "could not scaffold the mirrored half-filled brief"
+  brief="$case_dir/home/data/$id/brief.md"
+  sed 's/^{FIRSTMATE_SPEC}$/an older specification nobody supplied today/' "$brief" > "$brief.tmp" && mv "$brief.tmp" "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/ask.md" --spec "$case_dir/spec.md")
+  status=$?
+  expect_code 1 "$status" "the mirrored half-filled brief should refuse: $out"
+  assert_contains "$out" "## Captain's intent still carries {TASK} while ## Firstmate spec is already written" "mirrored refusal did not name which subsection was already written"
+
+  # A brief with both subsections written by hand is still reused whole.
+  id=dispatch-halffilled-n5-whole
+  FM_HOME="$case_dir/home" FM_DATA_OVERRIDE="$case_dir/home/data" FM_STATE_OVERRIDE="$case_dir/home/state" \
+    "$ROOT/bin/fm-brief.sh" "$id" project --mode no-mistakes >/dev/null || fail "could not scaffold the hand-filled brief"
+  brief="$case_dir/home/data/$id/brief.md"
+  sed -e 's/^{TASK}$/a hand-written ask/' -e 's/^{FIRSTMATE_SPEC}$/a hand-written specification/' \
+    "$brief" > "$brief.tmp" && mv "$brief.tmp" "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md")
+  status=$?
+  expect_code 0 "$status" "a fully hand-filled brief should be reused: $out"
+  assert_contains "$out" "brief: reused $brief" "a fully hand-filled brief was not reused"
+  intent=$(fm_brief_task_heading_body "$brief" "## Captain's intent")
+  assert_equals "a hand-written ask" "$intent" "a reused brief's intent was rewritten"
+  pass "a brief carrying exactly one placeholder refuses before any record"
+}
+
+test_bullet_led_ask_titles_the_item_without_its_marker() {
+  local case_dir id out status
+  id=dispatch-bullet-o6
+  case_dir=$(make_case bullet)
+  printf -- '- add a summary toggle to the report view\nkeep the existing layout\n' > "$case_dir/bullet-ask.md"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/bullet-ask.md" --spec "$case_dir/spec.md")
+  status=$?
+  expect_code 0 "$status" "a bullet-led ask should file and spawn: $out"
+  assert_equals "add a summary toggle to the report view" "$(row_field "$case_dir" "$id" title)" "the list marker was not dropped from the derived title"
+  assert_contains "$out" "spawned $id harness=claude kind=ship" "a bullet-led ask did not reach the spawn"
+  assert_grep '- add a summary toggle to the report view' "$case_dir/home/data/$id/brief.md" "the ask bytes must reach the brief with their marker intact"
+
+  # A title that still starts with a dash is refused before anything is written,
+  # because tasks-axi would read it as a flag.
+  id=dispatch-bullet-o6-flag
+  printf -- '--force should stop defaulting to on\nit surprised two people this week\n' > "$case_dir/flag-ask.md"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/flag-ask.md" --spec "$case_dir/spec.md")
+  status=$?
+  expect_code 1 "$status" "a dash-leading title should refuse: $out"
+  assert_contains "$out" "starts with a dash" "refusal did not explain the dash"
+  assert_contains "$out" "pass --title <text>" "refusal did not name --title"
+  assert_absent "$case_dir/home/data/$id" "a dash-leading title must not create the brief directory"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "a dash-leading title must not file an item"
+
+  # --title carries such an ask through in one call.
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/flag-ask.md" --spec "$case_dir/spec.md" \
+    --title "stop defaulting --force to on")
+  status=$?
+  expect_code 0 "$status" "--title should carry the dash-leading ask: $out"
+  assert_equals "stop defaulting --force to on" "$(row_field "$case_dir" "$id" title)" "--title did not reach the item"
+  pass "a bullet-led ask titles the item without its marker; a dash-leading title refuses naming --title"
+}
+
 test_resolver_clear_profile_reaches_the_spawn_unquoted() {
   local case_dir id out status
   id=dispatch-clear-j1
@@ -504,6 +592,8 @@ test_scout_call_files_and_spawns_a_scout
 test_explicit_profile_flags_reach_the_spawn
 test_projects_prefix_resolves_against_the_projects_dir
 test_heading_in_ask_or_spec_refuses_before_any_record
+test_half_filled_brief_refuses_before_any_record
+test_bullet_led_ask_titles_the_item_without_its_marker
 test_resolver_clear_profile_reaches_the_spawn_unquoted
 test_resolver_escalate_stops_before_filing
 test_resolver_off_with_rules_stops_before_filing

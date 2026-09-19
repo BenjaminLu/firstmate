@@ -74,15 +74,22 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id>
   esac
 }
 
+# Return 0 when one named Task subsection still consists only of its scaffold
+# placeholder. bin/fm-dispatch.sh asks per subsection, because a brief where
+# exactly one is still intact would take only one of its two files.
+fm_brief_task_placeholder_intact() {  # <file> <heading> <placeholder>
+  local file=$1 body
+  [ -f "$file" ] || return 1
+  body=$(fm_brief_task_heading_body "$file" "$2")
+  [ "$(printf '%s' "$body" | tr -d '[:space:]')" = "$3" ]
+}
+
 # Return 0 when a Task subsection still consists only of its scaffold
 # placeholder. A missing file and legacy briefs carry no such placeholders.
 fm_brief_task_placeholders_present() {  # <file>
-  local file=$1 intent spec
-  [ -f "$file" ] || return 1
-  intent=$(fm_brief_task_heading_body "$file" "## Captain's intent")
-  spec=$(fm_brief_task_heading_body "$file" "## Firstmate spec")
-  [ "$(printf '%s' "$intent" | tr -d '[:space:]')" = '{TASK}' ] && return 0
-  [ "$(printf '%s' "$spec" | tr -d '[:space:]')" = '{FIRSTMATE_SPEC}' ] && return 0
+  local file=$1
+  fm_brief_task_placeholder_intact "$file" "## Captain's intent" '{TASK}' && return 0
+  fm_brief_task_placeholder_intact "$file" "## Firstmate spec" '{FIRSTMATE_SPEC}' && return 0
   return 1
 }
 
@@ -243,6 +250,16 @@ fm_brief_task_content_valid() {  # <file>
   fi
   task=$(fm_brief_heading_body "$file" "# Task")
   [ -n "$(printf '%s' "$task" | tr -d '[:space:]')" ]
+}
+
+# Print a ship brief's recorded delivery mode: the value of the fixed
+# "Delivery contract: mode=<mode>" line fm_dod_block opens with. Prints nothing
+# for a brief that records none - a scout brief, or one scaffolded before the
+# line existed. This is the one owner of that read: bin/fm-spawn.sh checks it
+# against the spawn's own --mode and bin/fm-dispatch.sh checks it against the
+# dispatch's, and those two refusals must not drift.
+fm_brief_delivery_mode() {  # <file>
+  sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$1" | head -n 1
 }
 
 # Print the first line of the captain-intent text on stdin that opens with an

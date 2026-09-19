@@ -10,6 +10,13 @@
 # --project accepts the same forms as fm-spawn: a directory path, or
 # `projects/<name>` resolved against FM_PROJECTS_OVERRIDE, else $FM_HOME/projects.
 #
+# Which flags live here: a flag stays when it is an inert passthrough the script
+# it reaches validates itself (--title, and --backend, which carries the
+# per-task runtime authority AGENTS.md section 4 grants explicitly and which
+# fm-spawn refuses an invalid value for), and goes when it would let the filed
+# item and the spawned worker disagree, which is why --kind was removed and the
+# kind follows --scout alone.
+#
 # Mechanics, in order; each step is owned by the script it calls and every
 # refusal of that script is a refusal of this one, exit status and message
 # unchanged:
@@ -21,13 +28,19 @@
 #      end, because the brief parser ends `## Captain's intent` and
 #      `## Firstmate spec` at the next such heading and treats everything
 #      inside an open fence as fenced, so the spliced text would truncate or
-#      swallow sections for the worker and the reviewer. An existing brief is refused here, before any record is
+#      swallow sections for the worker and the reviewer. The backlog title -
+#      --title, else the first non-blank ask line with any list marker dropped -
+#      must carry text and must not start with a dash, which tasks-axi would
+#      read as a flag. An existing brief is refused here, before any record is
 #      made, when it disagrees with this call: its recorded "Delivery
-#      contract: mode=<mode>" line differs from --mode, it carries one under
-#      --scout, it carries none (a scout brief) under --mode, or its Herdr
-#      section (bin/fm-brief.sh writes `# Herdr isolation - HARD SAFETY
-#      CONTRACT` with --herdr-lab and `# Herdr lifecycle declaration - NOT
-#      ENABLED` without) disagrees with this call's --herdr-lab.
+#      contract: mode=<mode>" line (bin/fm-dod-lib.sh owns that read too, so
+#      this refusal and fm-spawn's cannot drift) differs from --mode, it
+#      carries one under --scout, it carries none (a scout brief) under --mode,
+#      its Herdr section (bin/fm-brief.sh writes `# Herdr isolation - HARD
+#      SAFETY CONTRACT` with --herdr-lab and `# Herdr lifecycle declaration -
+#      NOT ENABLED` without) disagrees with this call's --herdr-lab, or exactly
+#      one of its two Task placeholders is still intact, because filling such a
+#      half-filled brief would splice one file and silently drop the other.
 #   2. Brief: scaffold data/<id>/brief.md through bin/fm-brief.sh with the same
 #      --mode or --scout, and --herdr-lab when given (mandatory for a task that
 #      drives Herdr lifecycle commands; fm-brief.sh owns that contract), when
@@ -53,8 +66,8 @@
 #   4. Backlog item: when this home's automatic backlog transition gate applies
 #      (bin/fm-backlog-transition-lib.sh's fm_backlog_transition_applies, the
 #      same gate fm-spawn consults) and no item exists for the id, add one
-#      through bin/fm-tasks-axi.sh with the title from --title or the first
-#      non-blank line of --ask, kind ship (scout under --scout), --repo set to
+#      through bin/fm-tasks-axi.sh with the title validated in step 1,
+#      kind ship (scout under --scout), --repo set to
 #      the project's basename, and a note recording `mode=<mode> yolo=<yolo>`
 #      (`kind=scout` for a scout) plus a `reason: <text>` line when --reason is
 #      given, which is the deviation note AGENTS.md section 7 asks for. An
@@ -175,12 +188,28 @@ if HEADING_LINE=$(fm_brief_body_terminator_line_of_text "## Firstmate spec" < "$
   die "--spec $SPEC has a line that would break ## Firstmate spec: $HEADING_LINE; the brief parser stops the section at any unfenced level-1 or level-2 heading and an unclosed code fence swallows every section after it, so demote the heading to ### or deeper, or close the fence"
 fi
 
+# The item's title is a positional argument to tasks-axi, which reads a leading
+# dash as a flag, so it is settled before anything is written rather than after
+# the brief exists. A bullet-led ask is ordinary captain input: the list marker
+# is markup, not title text.
+if [ -z "$TITLE" ]; then
+  TITLE=$(grep -m 1 -v '^[[:space:]]*$' "$ASK" |
+    sed -e 's/^[[:space:]]*//' \
+      -e 's/^[-*+][[:space:]][[:space:]]*//' \
+      -e 's/^[0-9][0-9]*[.)][[:space:]][[:space:]]*//' \
+      -e 's/[[:space:]]*$//')
+fi
+case "$TITLE" in
+  '') die "no backlog title: the first non-blank line of --ask $ASK carries no text beyond its list marker; pass --title <text>" ;;
+  -*) die "backlog title '$TITLE' starts with a dash, which tasks-axi reads as a flag rather than the item's title; pass --title <text>" ;;
+esac
+
 BRIEF="$DATA/$ID/brief.md"
 BRIEF_EXISTS=0
 if [ -e "$BRIEF" ]; then
   [ -f "$BRIEF" ] && [ -r "$BRIEF" ] || die "$BRIEF exists but is not a readable regular file"
   BRIEF_EXISTS=1
-  BRIEF_MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
+  BRIEF_MODE=$(fm_brief_delivery_mode "$BRIEF")
   if [ "$SCOUT" -eq 1 ]; then
     [ -z "$BRIEF_MODE" ] || die "$BRIEF is a ship brief (Delivery contract: mode=$BRIEF_MODE) but this dispatch is --scout; move that brief aside or drop --scout"
   elif [ -z "$BRIEF_MODE" ]; then
@@ -192,6 +221,17 @@ if [ -e "$BRIEF" ]; then
     [ "$HERDR_LAB" -eq 1 ] || die "$BRIEF carries the Herdr isolation contract (scaffolded with --herdr-lab) but this dispatch omits --herdr-lab; pass the flag or re-scaffold the brief"
   else
     [ "$HERDR_LAB" -eq 0 ] || die "$BRIEF was scaffolded without --herdr-lab (Herdr lifecycle declaration - NOT ENABLED) but this dispatch passes --herdr-lab; re-scaffold the brief or drop the flag"
+  fi
+  INTENT_INTACT=0 SPEC_INTACT=0
+  fm_brief_task_placeholder_intact "$BRIEF" "## Captain's intent" '{TASK}' && INTENT_INTACT=1
+  fm_brief_task_placeholder_intact "$BRIEF" "## Firstmate spec" '{FIRSTMATE_SPEC}' && SPEC_INTACT=1
+  if [ "$INTENT_INTACT" -ne "$SPEC_INTACT" ]; then
+    if [ "$INTENT_INTACT" -eq 1 ]; then
+      HALF_FILLED="## Captain's intent still carries {TASK} while ## Firstmate spec is already written"
+    else
+      HALF_FILLED="## Firstmate spec still carries {FIRSTMATE_SPEC} while ## Captain's intent is already written"
+    fi
+    die "$BRIEF is half-filled: $HALF_FILLED; this call would splice only the placeholder that is left and silently drop the other file, so the worker and the reviewer would read text this dispatch never supplied. Move that brief aside to rebuild it from --ask and --spec, or fill the remaining subsection by hand so the brief is reused whole"
   fi
 fi
 
@@ -265,9 +305,6 @@ if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
   if fm_backlog_row_probe "$DATA" "$ID"; then
     echo "backlog: reused $ID (${FM_BACKLOG_ROW_STATE%% *})"
   elif [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
-    if [ -z "$TITLE" ]; then
-      TITLE=$(grep -m 1 -v '^[[:space:]]*$' "$ASK" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    fi
     "$SCRIPT_DIR/fm-tasks-axi.sh" add "$ID" "$TITLE" --kind "$KIND" --repo "$REPO" --body "$NOTE" >/dev/null || exit $?
     echo "backlog: added $ID (queued, kind=$KIND, repo=$REPO)"
   else
