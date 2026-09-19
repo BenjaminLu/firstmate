@@ -71,7 +71,7 @@
   };
   var TONE = {
     connecting: "neutral", live: "online", holding: "warn",
-    offline: "warn", stopped: "warn", unsendable: "danger"
+    offline: "warn", unsendable: "danger"
   };
 
   /* A quiet board is two different things - one that has never heard anything
@@ -160,6 +160,7 @@
   }
 
   function paint(payload) {
+    arrivedAt = new Date().getTime();
     document.body.innerHTML = PRISTINE;
     document.getElementById(SLOT_ID).textContent = JSON.stringify(payload);
     runBoard();
@@ -224,6 +225,10 @@
   document.addEventListener("click", function () {
     setTimeout(paintStatus, 0);
   }, true);
+  /* An age is only true at the moment it is written, and a page left open on a
+     dropped link is read long after that, so the line is rewritten as time
+     passes. It repaints what is already known; it never retries the store. */
+  setInterval(paintStatus, 60000);
 
   /* ---- answers out -------------------------------------------------------
    * The shipped board sends every answer - decision, merge, credential, and
@@ -293,7 +298,6 @@
            and saying so - a snapshot this page cannot render is not an update. */
         if (next && next.schema === "fm-bearings-board.v1") {
           receiving = true;
-          arrivedAt = new Date().getTime();
           accept(next);
         } else {
           receiving = false;

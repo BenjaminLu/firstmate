@@ -506,6 +506,40 @@ test_a_board_that_went_quiet_says_how_long_ago() {
   pass "a board that went quiet says how long ago"
 }
 
+test_the_reported_age_keeps_counting_after_the_link_drops() {
+  local d=$TMP_ROOT/drive-long-quiet out
+  transport_page "$d"
+  # An age written once at the moment of the drop says the board was healthy a
+  # minute ago however long it has been dead, which is the inversion of what
+  # the age is for. Read at the drop and again ninety minutes later.
+  out=$(drive "$d" long-quiet)
+  assert_contains "$(jq -r .badgeAtDrop <<<"$out")" "1 min" \
+    "at the drop the line must report the age it had then"
+  assert_contains "$(jq -r .badge <<<"$out")" " h ago" \
+    "ninety minutes later it must report hours, not the age it froze at"
+  assert_not_contains "$(jq -r .badge <<<"$out")" "1 min" \
+    "the age must not stay at its value from the moment of the drop"
+  pass "the reported age keeps counting after the link drops"
+}
+
+test_a_payload_never_shown_is_not_reported_as_the_last_update() {
+  local d=$TMP_ROOT/drive-never-shown out
+  transport_page "$d"
+  # Held mid-answer and never painted, then the link drops. What the captain
+  # is looking at is still the copy built into the page, so the line must say
+  # that rather than date the screen by a payload he has never seen.
+  out=$(drive "$d" never-shown)
+  assert_contains "$(jq -r .badge <<<"$out")" "built into this page" \
+    "a payload that was never painted must not be reported as the last update"
+  assert_not_contains "$(jq -r .badge <<<"$out")" "last update" \
+    "the age must describe what is on screen, not what was received"
+  assert_contains "$(jq -r .provenance <<<"$out")" "2026-09-19T06:53Z" \
+    "the built-in copy must still be what the page shows"
+  assert_equals "mid answer" "$(jq -r .note <<<"$out")" \
+    "and the answer in progress must still be intact"
+  pass "a payload never shown is not reported as the last update"
+}
+
 test_releasing_a_hold_does_not_claim_a_link_it_lost() {
   local d=$TMP_ROOT/drive-held-quiet out badge
   transport_page "$d"
@@ -631,6 +665,8 @@ if command -v node >/dev/null 2>&1; then
   test_a_snapshot_the_page_cannot_render_is_not_called_live
   test_a_board_that_went_quiet_says_how_long_ago
   test_releasing_a_hold_does_not_claim_a_link_it_lost
+  test_the_reported_age_keeps_counting_after_the_link_drops
+  test_a_payload_never_shown_is_not_reported_as_the_last_update
   test_an_answer_that_cannot_be_sent_is_named_on_the_page
   test_sending_and_updating_are_reported_apart
   test_an_unsent_dispatch_selection_survives_an_arriving_update

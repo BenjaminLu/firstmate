@@ -10,6 +10,8 @@
 //   live        a readable live payload arrives with no answer in progress
 //   unreadable  a snapshot arrives that this page cannot render, first thing
 //   went-quiet  a readable payload lands and then the page stops receiving
+//   long-quiet  the same, read again an hour and a half later
+//   never-shown a payload is held mid-answer, never painted, and the link drops
 //   held-quiet  a payload is held mid-answer, the page stops receiving, the
 //               answer is sent and the held payload is released
 //   hold        a live payload arrives while an answer is being written
@@ -23,7 +25,8 @@
 //   no-db       the artifact store never hands over a db capability
 //
 // Prints one JSON document:
-//   { badge, badgeHost, answers, answersHost, provenance, note, stack, picks, writes }
+//   { badge, badgeAtDrop, badgeHost, answers, answersHost, provenance, note,
+//     stack, picks, writes }
 import { readFileSync } from "node:fs";
 
 const [pagePath, scenario] = process.argv.slice(2);
@@ -36,9 +39,24 @@ const EMBEDDED = html
 // board prints, so "did this repaint" is answered by what the page shows.
 const LIVE = { ...JSON.parse(EMBEDDED), generated: "2099-01-01T00:00Z" };
 
-/* ---- timers: queued and flushed on demand, so a run is deterministic ---- */
+/* ---- time: a clock the run advances itself, and timers flushed on demand,
+       so what a page reports after an hour is observable in milliseconds ---- */
+let shift = 0;
+const RealDate = Date;
+globalThis.Date = class extends RealDate {
+  constructor(...args) {
+    super(...(args.length ? args : [RealDate.now() + shift]));
+  }
+  static now() { return RealDate.now() + shift; }
+};
 let timers = [];
+let intervals = [];
 globalThis.setTimeout = (fn) => timers.push(fn);
+globalThis.setInterval = (fn) => intervals.push(fn);
+function waitMinutes(n) {
+  shift += n * 60000;
+  intervals.forEach((fn) => fn());
+}
 function flushTimers() {
   for (let i = 0; i < 20 && timers.length; i++) {
     const due = timers;
@@ -277,7 +295,18 @@ if (scenario === "live") {
   push(LIVE);
 } else if (scenario === "unreadable") {
   push(null);
-} else if (scenario === "went-quiet") {
+} else if (scenario === "went-quiet" || scenario === "long-quiet") {
+  push(LIVE);
+  await tick();
+  push(null);
+} else if (scenario === "never-shown") {
+  // The page was opened before board/current existed, so nothing has ever been
+  // painted but the store is reachable; a payload then arrives mid-answer and
+  // is held, and the link drops before it is ever shown.
+  push(null);
+  await tick();
+  document.getElementById("bb-stack-next").onclick();
+  typeNote("mid answer");
   push(LIVE);
   await tick();
   push(null);
@@ -329,11 +358,19 @@ if (scenario === "live") {
 await tick();
 
 const shown = (id) => body.querySelector("#" + id);
+// What the line said when the link dropped, beside what it says after time has
+// passed, so a frozen age and a counting one cannot look the same.
+const badgeAtDrop = (shown("bb-remote-link") || {}).textContent || "";
+if (scenario === "long-quiet") {
+  await tick();
+  waitMinutes(90);
+}
 const hostOf = (node) => (node && node.parentNode ? node.parentNode.className : "");
 const linkNode = shown("bb-remote-link");
 const answerNode = shown("bb-remote-answers");
 process.stdout.write(JSON.stringify({
   badge: linkNode ? linkNode.textContent : "",
+  badgeAtDrop,
   badgeHost: hostOf(linkNode),
   answers: answerNode ? answerNode.textContent : "",
   answersHost: hostOf(answerNode),
