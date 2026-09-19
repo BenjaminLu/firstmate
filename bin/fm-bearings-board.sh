@@ -175,9 +175,13 @@
 #            Merge now control the captain opened the board to click. A merge
 #            card retires when its work lands - its PR or its task reaches the
 #            payload's own landed rows, which retires the stored copy too - or
-#            when a compose that DID discover PRs finds it no longer
-#            merge-ready, because a live PR view decides the merge cards by
-#            itself. No forge is read either way. It takes no
+#            when a compose holding a COMPLETE PR view finds it no longer
+#            merge-ready, because only a complete view decides the merge cards
+#            by itself. A view missing a repo that failed, a repo that was
+#            capped, a repo never queried, or a backlog it could not read is
+#            partial, and a partial view carries the stored cards forward
+#            instead of retiring them: absence of evidence is not evidence the
+#            PR is gone. No forge is read either way. It takes no
 #            language of its own: the board PAGE it is republishing already
 #            names the language the board was built in, and a refresh reads
 #            that back and carries it forward, so a republication can never
@@ -908,7 +912,8 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.in_flight[]? | select(.id | contains("/") | not) | .id')
 EOF
-  merge_cards=$(stored_merge_cards) || merge_cards='{}'
+  merge_cards=$(stored_merge_cards) \
+    || fail "cannot read the stored merge cards under $DATA"
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" \
@@ -1026,16 +1031,34 @@ EOF
       [ .candidate_prs[]?
         | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready) ];
     # PR discovery is an opt-in the first mate passes; a fleet event has no
-    # one to pass it, so a refresh sees no candidate_prs at all. When this
-    # snapshot carries no PR view, the merge cards the last publication stored
-    # are carried forward unchanged - otherwise the captain would open the
-    # board and find the Merge now control he asked for gone. When it DOES
-    # carry one, that view is authoritative and decides the merge cards alone:
-    # a PR no longer ready gets no card, and the publication retires its
-    # stored copy.
+    # one to pass it, so a refresh sees no candidate_prs at all. Without a
+    # COMPLETE PR view the merge cards the last publication stored are carried
+    # forward unchanged - otherwise the captain would open the board and find
+    # the Merge now control he asked for gone. Only a complete view is
+    # authoritative enough to decide the merge cards alone, and then a PR no
+    # longer ready gets no card and the publication retires its stored copy.
+    # Complete means every one of these, because each is a way the view can be
+    # PARTIAL while still reporting `checked`, and a partial view that dropped
+    # a card is indistinguishable from a full one that retired it:
+    #   - a repo whose `gh pr list` failed or timed out (prs says
+    #     "N repo(s) unavailable")
+    #   - a repo whose rows were capped (prs says "capped in N repo(s)")
+    #   - repos never queried at all, which prs does not mention: the snapshot
+    #     discloses that as an omitted surface instead
+    #   - an unreadable backlog, which suppresses EVERY merge card because
+    #     merge_ready_prs needs the task record - unknown ownership, not
+    #     absent ownership
     def prs_checked: (.prs | startswith("checked"));
+    def prs_complete:
+      prs_checked
+      and ((.prs | test("repo\\(s\\) unavailable")) | not)
+      and ((.prs | test("capped in ")) | not)
+      and (([.omitted[]? | .surface
+             | select(type == "string" and startswith("PR repositories showing"))]
+            | length) == 0)
+      and $readable;
     def carried_merge_cards:
-      if prs_checked then [] else [ $merge_cards[] ] end;
+      if prs_complete then [] else [ $merge_cards[] ] end;
     # A card key IS one intake address, so the board may never carry two cards
     # under it. A task held more than once consolidates into one card, and the
     # composer is told to answer every one of its questions there; two
@@ -1165,7 +1188,9 @@ EOF
 # or is simply no longer merge-ready - has to leave the store in the same
 # breath, or the very next fleet event carries the dead Merge now control
 # straight back onto the page. So every stored merge card the publication does
-# not carry is retired here. Decision cards are not swept: a call the payload
+# not carry is retired here. That is safe only because compose carries the
+# stored cards INTO any payload whose PR view was partial, so a card missing
+# here really was decided against rather than merely unseen. Decision cards are not swept: a call the payload
 # happens not to card this time is still open, and bin/fm-captain-hold.sh
 # retires its card when the hold is re-established.
 # Copy is read from the COMPOSED payload and membership from the PUBLISHED
@@ -1191,14 +1216,19 @@ persist_composed_cards() {  # <composed.json> <published.json>
   done < <(stored_merge_keys_absent_from "$published")
 }
 
-# Every stored merge card key the published payload does not carry.
+# Every stored merge card key the published payload PROVABLY does not carry.
+# A read that failed is not a key that is absent: only a definite `false` from
+# the payload retires anything, so an unreadable publication keeps every
+# stored card rather than sweeping the lot.
 stored_merge_keys_absent_from() {  # <published.json>
-  local dir key
+  local dir key carried
   for dir in "$DATA"/merge.*; do
     [ -f "$dir/board-card.json" ] || continue
     key=${dir##*/}
-    jq -e --arg key "$key" 'any(.captains_call[]?; .key == $key)' "$1" >/dev/null 2>&1 \
-      || printf '%s\n' "$key"
+    carried=$(jq -r --arg key "$key" 'any(.captains_call[]?; .key == $key)' "$1" 2>/dev/null) \
+      || continue
+    [ "$carried" = false ] || continue
+    printf '%s\n' "$key"
   done
 }
 
