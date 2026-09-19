@@ -418,6 +418,7 @@ test_heading_in_ask_or_spec_refuses_before_any_record() {
   assert_no_grep "$id" "$case_dir/home/data/backlog.md" "an unclosed fence must not file an item"
 
   # A fenced heading and a level-3 heading are ordinary content and reach the brief intact.
+  # shellcheck disable=SC2016  # the literal backticks are the fence the parser must ignore
   printf 'add the toggle\n\n```sh\n# not a heading\n```\n### Notes\nkeep the layout\n' > "$case_dir/fenced-ask.md"
   out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
     --mode no-mistakes --yolo off --ask "$case_dir/fenced-ask.md" --spec "$case_dir/spec.md")
