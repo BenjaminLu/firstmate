@@ -12,6 +12,8 @@
 //   went-quiet  a readable payload lands and then the page stops receiving
 //   long-quiet  the same, read again an hour and a half later
 //   never-shown a payload is held mid-answer, never painted, and the link drops
+//   bad-shape   a readable payload paints, then a schema-tagged one the board
+//               cannot render arrives
 //   held-quiet  a payload is held mid-answer, the page stops receiving, the
 //               answer is sent and the held payload is released
 //   hold        a live payload arrives while an answer is being written
@@ -160,27 +162,34 @@ class Node {
 }
 
 const PRISTINE_MARK = "[the body markup as parsed]";
-// Only the ids the published page's markup declares exist before the page's
-// own scripts run. Anything else - the transport's two badges among them - has
-// to be created and attached by the code under test, which is the behavior
-// worth proving.
-const TEMPLATE_IDS = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
+// The skeleton is the published page's own: which ids exist before any script
+// runs, and which of them sit inside <main class="bb-main"> - which matters,
+// because the board empties that element when it refuses a payload and its
+// sections really do leave the document. Anything not declared there - the
+// transport's two badges among them - has to be created and attached by the
+// code under test, which is the behavior worth proving.
+const idsIn = (text) => [...text.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+const TEMPLATE_IDS = idsIn(html);
+const MAIN_IDS = new Set(idsIn(html.slice(html.indexOf("<main"), html.indexOf("</main>"))));
 let body = new Node("body");
-let byId = new Map();
-// The two containers the template's static markup provides; everything else on
-// the page is rendered by the board script itself.
-const MARKUP_SELECTORS = [".bb-nav__inner", ".bb-main"];
-let bySelector = new Map();
+
+function attach(parent, node) {
+  node.parentNode = parent;
+  parent.children.push(node);
+  return node;
+}
 
 function reseed() {
-  byId = new Map();
-  bySelector = new Map();
-  const slot = new Node("script");
-  slot.id = "bearings-data";
-  slot.textContent = EMBEDDED;
-  byId.set("bearings-data", slot);
-  body.children.push(slot);
-  slot.parentNode = body;
+  body.children = [];
+  const nav = attach(body, new Node("div"));
+  nav.className = "bb-nav__inner";
+  const main = attach(body, new Node("main"));
+  main.className = "bb-main";
+  TEMPLATE_IDS.forEach((id) => {
+    const node = attach(MAIN_IDS.has(id) ? main : body, new Node(id === "bearings-data" ? "script" : "div"));
+    node.id = id;
+    if (id === "bearings-data") node.textContent = EMBEDDED;
+  });
 }
 
 globalThis.document = {
@@ -188,28 +197,8 @@ globalThis.document = {
   activeElement: null,
   body,
   createElement: (tag) => new Node(tag),
-  getElementById: (id) => {
-    const found = byId.get(id) || body.querySelector("#" + id);
-    if (found) return found;
-    if (!TEMPLATE_IDS.has(id)) return null;
-    const n = new Node("div");
-    n.id = id;
-    body.appendChild(n);
-    byId.set(id, n);
-    return n;
-  },
-  querySelector: (sel) => {
-    const found = body.querySelector(sel);
-    if (found) return found;
-    if (!MARKUP_SELECTORS.includes(sel)) return null;
-    if (!bySelector.has(sel)) {
-      const n = new Node("div");
-      n.className = sel.slice(1);
-      body.appendChild(n);
-      bySelector.set(sel, n);
-    }
-    return bySelector.get(sel);
-  },
+  getElementById: (id) => body.querySelector("#" + id),
+  querySelector: (sel) => body.querySelector(sel),
   querySelectorAll: (sel) => body.querySelectorAll(sel),
   addEventListener: (type, fn) => body.addEventListener("doc:" + type, fn),
 };
@@ -299,6 +288,12 @@ if (scenario === "live") {
   push(LIVE);
   await tick();
   push(null);
+} else if (scenario === "bad-shape") {
+  push(LIVE);
+  await tick();
+  // Schema-tagged and refused by the board's own structural check: the list it
+  // needs is not a list. Nothing between the publisher and this page checks it.
+  push({ ...LIVE, captains_call: {}, generated: "2100-01-01T00:00Z" });
 } else if (scenario === "never-shown") {
   // The page was opened before board/current existed, so nothing has ever been
   // painted but the store is reachable; a payload then arrives mid-answer and

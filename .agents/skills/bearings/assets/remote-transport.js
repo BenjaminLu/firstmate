@@ -17,6 +17,21 @@
  * he has not queued. The update is held and the page says so until that work
  * is sent or left behind.
  *
+ * A BOARD THAT RENDERS IS NEVER REPLACED BY ONE THAT DOES NOT. Nothing this
+ * page can reach validates what a publisher writes to the board's store, so an
+ * arriving payload is judged by the only authority on what this board can
+ * render - the shipped board itself. The payload is drawn, and the board's own
+ * verdict is read off the page afterwards: it builds its sections when it
+ * accepted the payload and replaces them with a single error card when it did
+ * not. A payload that does not render is undone - the last one that did is
+ * drawn again - and the page says the update was rejected. No rule of the
+ * board's is restated here, so this cannot drift from it.
+ * What that verdict covers is exactly what the shipped board checks: the
+ * schema tag, the required lists, and anything its render throws on. What it
+ * cannot cover fails closed the same way - a page whose sections are missing
+ * for any other reason is treated as not rendered, so the board already on
+ * screen stays and the link is never reported live.
+ *
  * bin/fm-remote-board.sh composes this file with the template; it is not
  * loaded on its own.
  */
@@ -63,6 +78,11 @@
       hant: "沒在更新 — 上次更新是 {age} 前",
       hans: "没在更新 — 上次更新是 {age} 前"
     },
+    rejected: {
+      en: "update rejected — this board cannot read it; showing the last one it could",
+      hant: "更新被拒 — 這塊板讀不了它，顯示上一份讀得到的",
+      hans: "更新被拒 — 这块板读不了它，显示上一份读得到的"
+    },
     unsendable: {
       en: "answers cannot be sent from here",
       hant: "這裡無法送出回答",
@@ -71,7 +91,7 @@
   };
   var TONE = {
     connecting: "neutral", live: "online", holding: "warn",
-    offline: "warn", unsendable: "danger"
+    offline: "warn", rejected: "danger", unsendable: "danger"
   };
 
   /* A quiet board is two different things - one that has never heard anything
@@ -159,12 +179,26 @@
     document.body.appendChild(s);
   }
 
-  function paint(payload) {
-    arrivedAt = new Date().getTime();
+  var showing = null;
+
+  function draw(payload) {
     document.body.innerHTML = PRISTINE;
-    document.getElementById(SLOT_ID).textContent = JSON.stringify(payload);
+    if (payload !== null) {
+      document.getElementById(SLOT_ID).textContent = JSON.stringify(payload);
+    }
     runBoard();
     paintStatus();
+    return !!document.getElementById("bb-stats") && !!document.getElementById("bb-call");
+  }
+
+  function paint(payload) {
+    if (!draw(payload)) {
+      draw(showing);
+      return false;
+    }
+    showing = payload;
+    arrivedAt = new Date().getTime();
+    return true;
   }
 
   /* ---- unsent work, as the page itself shows it -------------------------
@@ -203,8 +237,12 @@
       return;
     }
     held = null;
+    if (!paint(payload)) {
+      receiving = false;
+      setLink("rejected");
+      return;
+    }
     setLink(receiving ? "live" : "offline");
-    paint(payload);
   }
 
   /* Any touch of the page can be the moment an answer stops being in progress,
@@ -293,10 +331,10 @@
       while (pending.length) { var q = pending.shift(); send(q[0], q[1]); }
       handle.doc("board/current").onSnapshot(function (snap) {
         var next = snap && snap.exists ? snap.data() : null;
-        /* Only a payload the shipped board can read replaces the embedded one;
-           anything else leaves the page showing what it was published with,
-           and saying so - a snapshot this page cannot render is not an update. */
-        if (next && next.schema === "fm-bearings-board.v1") {
+        /* Whether this one can replace what is on screen is the shipped
+           board's call, not a rule restated here; an empty slot is the only
+           thing answered without asking it. */
+        if (next) {
           receiving = true;
           accept(next);
         } else {

@@ -557,6 +557,27 @@ test_releasing_a_hold_does_not_claim_a_link_it_lost() {
   pass "releasing a hold does not claim a link it lost"
 }
 
+test_a_payload_the_board_cannot_render_does_not_replace_the_board() {
+  local d=$TMP_ROOT/drive-bad-shape out
+  transport_page "$d"
+  # Writing board/current is the one step no shell on this branch can validate,
+  # so what may replace the board on screen is the board's own verdict: a
+  # payload carrying the right schema tag but a shape it refuses must leave
+  # the last one it could render in place.
+  out=$(drive "$d" bad-shape)
+  assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
+    "the payload the board could render must have painted and stayed"
+  assert_contains "$(jq -r .stack <<<"$out")" "card" \
+    "the board itself must still be on screen, not an error card"
+  assert_not_contains "$(jq -r .provenance <<<"$out")" "2100" \
+    "the payload the board refused must not reach the page"
+  assert_contains "$(jq -r .badge <<<"$out")" "rejected" \
+    "the page must say the update was rejected"
+  assert_not_contains "$(jq -r .badge <<<"$out")" "live" \
+    "and must not report a rejected update as live"
+  pass "a payload the board cannot render does not replace the board"
+}
+
 test_an_answer_that_cannot_be_sent_is_named_on_the_page() {
   local d=$TMP_ROOT/drive-nodb out
   transport_page "$d"
@@ -667,6 +688,7 @@ if command -v node >/dev/null 2>&1; then
   test_releasing_a_hold_does_not_claim_a_link_it_lost
   test_the_reported_age_keeps_counting_after_the_link_drops
   test_a_payload_never_shown_is_not_reported_as_the_last_update
+  test_a_payload_the_board_cannot_render_does_not_replace_the_board
   test_an_answer_that_cannot_be_sent_is_named_on_the_page
   test_sending_and_updating_are_reported_apart
   test_an_unsent_dispatch_selection_survives_an_arriving_update
