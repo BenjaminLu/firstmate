@@ -952,7 +952,7 @@ s = re.sub(r"- en: \{FILL: file:line.*?- hans: \{FILL[^}]*\}", lambda m: evidenc
 s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
 s = re.sub(r"```json fm-packet-decision.v1\n.*?\n```", "```json fm-packet-decision.v1\n" + sys.argv[2] + "\n```", s, flags=re.S)
 # A needs-decision packet owes one figure putting both options in one drawing;
-# the board only carries the packet's link, but the packet must still verify.
+# the board card carries the packet itself, and only a packet that verifies.
 figure = """### Where the two rollout orders differ
 heading.hant: 兩種上線順序差在哪
 heading.hans: 两种上线顺序差在哪

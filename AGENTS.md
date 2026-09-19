@@ -96,7 +96,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
   <id>/packet.md     the worker's decision packet behind a done or needs-decision event; bin/fm-packet.sh owns its format, verify, and board card; survives teardown
-  <id>/packet.html   the packet rendered as one self-contained page for the captain's browser, written by bin/fm-packet.sh render or serve; the board card links it as packet_url; survives teardown
+  <id>/packet.html   the packet rendered as one self-contained page for the captain's browser, written by bin/fm-packet.sh render or serve; the board card carries the packet itself, so this page exists only where serve was asked for explicitly; survives teardown
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
