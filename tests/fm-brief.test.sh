@@ -447,13 +447,16 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   assert_grep '`blocked: fix round {n} on this step, instruction still names a narrow remedy`' "$brief" \
     "no-mistakes DOD must raise the refusal as a status event firstmate can see"
   # Without a way out, the refusal loop never terminates and the step burns its
-  # wall clock with no round spent. The worker must be able to recognise the
-  # acknowledgement without opening another file.
-  assert_grep "One thing ends that refusal" "$brief" \
-    "no-mistakes DOD must give the refusal a termination condition"
+  # wall clock with no round spent. A quantifier naming one exit excludes the
+  # other, so both have to be named: the coherent change the refusal itself
+  # asked for is the happy path and must stay answerable.
+  assert_grep "Two answers end that refusal: the coherent-change instruction you asked for" "$brief" \
+    "no-mistakes DOD must leave the coherent-change instruction answerable at the gate"
+  # The worker must be able to recognise the acknowledgement without opening
+  # another file.
   assert_grep "a current, explicit firstmate instruction that names which round this step is on and states the narrow remedy is deliberate anyway" "$brief" \
     "no-mistakes DOD must state the acknowledgement test inline, not behind a pointer"
-  assert_grep "A resend that does neither is not one, and the refusal stands" "$brief" \
+  assert_grep "A resend that is neither is not one of them, and the refusal stands" "$brief" \
     "no-mistakes DOD must exclude a vague resend from the termination"
   # The pass-conditions ask has one owner, so the brief points at it rather than
   # restating what that instruction must contain.
@@ -470,8 +473,13 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   # worker feeds a round-3 narrow remedy straight to the gate.
   assert_grep "From the third fix round on one step the round-threshold clause below narrows this" "$brief" \
     "no-mistakes DOD must narrow the feed-the-decision bullet where the reader meets it"
-  assert_grep "goes back to firstmate instead of to the gate, unless it names which round this step is on" "$brief" \
+  assert_grep "goes back to firstmate instead of to the gate, and that clause is where the two answers you may give the gate instead are stated" "$brief" \
     "no-mistakes DOD must not leave the feed-the-decision bullet contradicting the termination clause"
+  # One statement, one home: a second copy of the acknowledgement test in the
+  # same brief is the drift nobody looks for.
+  assert_equals 1 \
+    "$(grep -Fc -- "names which round this step is on and states the narrow remedy is deliberate anyway" "$brief")" \
+    "no-mistakes DOD must state the acknowledgement test exactly once"
 
   # Every practice a worker could read as a worktree edit has to carry its own
   # mid-run half, because the no-hand-edit rule sits paragraphs away from these
