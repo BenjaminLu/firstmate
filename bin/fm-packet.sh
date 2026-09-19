@@ -1259,14 +1259,40 @@ def decision_card(d):
 # as-written part gets everything else, in one language, headings included, so
 # the block never moves by halves.
 FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
-FIG_SVG = re.compile(r"<svg\b.*?</svg\s*>", re.S)
 FIG_NODE = re.compile(r"""data-node\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 FIG_TAG = re.compile(r"""<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
-FIG_ON = re.compile(r"(?:^|\s)on[a-z]+\s*=", re.I)
+# An attribute name begins after whitespace OR after a solidus: the HTML
+# tokenizer reconsumes `/` in the before-attribute-name state, so `<a/href=...>`
+# carries an href the browser reads and a whitespace-only anchor would miss.
+FIG_ON = re.compile(r"(?:^|[\s/])on[a-z]+\s*=", re.I)
 FIG_STYLE = re.compile(r"<\s*style\b.*?</\s*style\s*>", re.S | re.I)
-FIG_URL = re.compile(r"""(?:^|\s)(?:xlink:)?(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))""", re.I)
+FIG_URL = re.compile(r"""(?:^|[\s/])(?:xlink:)?(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))""", re.I)
 FIG_URL_OK = re.compile(r"\A(?:#|https?://|mailto:)", re.I)
 FIG_BLANK = re.compile(r"[\s\x00-\x20]")
+
+# The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
+# elements inside the drawing, and a non-greedy match would stop at the first
+# </svg> and leave the rest of the figure unread. verify states this same
+# function, character for character - the two must agree on which bytes are the
+# drawing, or verify checks one thing and the card shows another.
+SVG_TAG = re.compile(r"""<\s*(/?)svg\b((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
+
+def top_level_svgs(text):
+    out, depth, start = [], 0, None
+    for m in SVG_TAG.finditer(text):
+        if m.group(1):
+            if depth > 0:
+                depth -= 1
+                if depth == 0:
+                    out.append(text[start:m.end()]); start = None
+        elif m.group(2).rstrip().endswith("/"):
+            if depth == 0:
+                out.append(m.group(0))
+        else:
+            if depth == 0:
+                start = m.start()
+            depth += 1
+    return out
 
 # The card inlines a drawing into the BOARD, a page the packet knows nothing
 # about, so what is safe to inline is decided here and never assumed from a
@@ -1311,13 +1337,13 @@ def figures_of(body):
             m = FIG_ATTR.match(line)
             if m and m.group(1) not in fields:
                 fields[m.group(1)] = m.group(2)
-        svg = FIG_SVG.search("\n".join(chunk_lines))
-        if not svg:
+        svgs = top_level_svgs("\n".join(chunk_lines))
+        if not svgs:
             continue
         # An unsafe drawing loses its drawing, not its place: what it SAYS is
         # still true and still reaches the card, so the reader keeps the figure
         # and drops only the markup the board cannot take.
-        drawing = FIG_STYLE.sub("", svg.group(0))
+        drawing = FIG_STYLE.sub("", svgs[0])
         drawing = None if figure_unsafe(drawing) else drawing
         nodes = sorted({(a or b) for a, b in FIG_NODE.findall(drawing) if (a or b)}) if drawing else []
         out_figs.append({"slug": fields.get("figure", ""), "heading": inline(heading),

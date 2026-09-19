@@ -875,6 +875,20 @@ caption: an inline link runs its href in the page that inlined it.
 
 <svg viewBox="0 0 20 20"><a xlink:href="javascript:alert(1)"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></a></svg>
 
+### A drawing that hides its handler behind a solidus
+
+figure: solidus-on
+caption: the browser starts an attribute after a slash, with or without a space.
+
+<svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/onclick="alert(1)"></rect></svg>
+
+### A drawing that hides its link behind a solidus
+
+figure: solidus-href
+caption: the same slash hides an href the board would still follow.
+
+<svg viewBox="0 0 20 20"><a/xlink:href="javascript:alert(1)"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></a></svg>
+
 ### A drawing whose style block is never closed
 
 figure: unclosed
@@ -901,6 +915,8 @@ MD
     # and every one of them still says in words what it was for
     and (.packet.body | test("an inline link runs its href"))
     and (.packet.body | test("removing the block cannot find its end"))
+    and (.packet.body | test("with or without a space"))
+    and (.packet.body | test("hides an href the board would still follow"))
   ' >/dev/null || fail "an unsafe drawing reached the card: $out"
   pass "a drawing that can run code, navigate or restyle the board never reaches the card as it was written"
 }
@@ -934,6 +950,40 @@ MD
     and (.packet.body | test("only one writes"))
   ' >/dev/null || fail "a Figures section with no blank line after it did not parse: $out"
   pass "a figure opening on the line after the section heading parses like any other"
+}
+
+test_a_drawing_that_nests_an_icon_is_read_whole() {
+  local home out packet
+  home=$(make_home card-packet-nested)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  # diagram-design nests icon <svg> elements inside a drawing, and verify counts
+  # depth to decide which bytes are the drawing. Stopping at the first </svg>
+  # would hand the board half a figure and a node set short of one option, so
+  # the comparison drawing would no longer name every option.
+  cat >> "$packet" <<'MD'
+
+## Figures
+
+### Where the options part
+
+figure: cmp
+caption: Both reach the gate; only one writes onto the data stream.
+
+<svg viewBox="0 0 40 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><svg x="12" y="1" width="6" height="6"><path d="M0 0 L6 6" stroke="var(--muted)"/></svg><rect data-node="quiet" x="20" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="one path" data-hant="一條路" data-hans="一条路">one path</text></svg>
+MD
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    (.packet.figures | length) == 1
+    # every identity the drawing names, including the ones drawn after the icon
+    and (.packet.figures[0].nodes == ["bound", "quiet"])
+    # and the drawing arrives closed, not cut off at the icon
+    and (.packet.figures[0].svg | endswith("</svg>"))
+    and (.packet.figures[0].svg | test("one path"))
+  ' >/dev/null || fail "a drawing with a nested icon was cut short: $out"
+  pass "a drawing that nests an icon svg is read whole, with every identity it names"
 }
 
 test_path_and_bad_ids_are_refused() {
@@ -1155,3 +1205,4 @@ test_a_packet_with_no_figures_still_cards
 test_the_packet_body_declares_the_one_language_it_is_in
 test_a_drawing_the_board_cannot_safely_inline_never_reaches_the_card
 test_a_figures_section_parses_the_same_without_a_blank_line_after_it
+test_a_drawing_that_nests_an_icon_is_read_whole
