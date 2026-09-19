@@ -696,40 +696,72 @@ __FM_BEARINGS_BOARD_DATA__
   }
   /* ---- the captain's click, acknowledged -------------------------------
      A control that sets fleet work in motion answers for itself twice. The
-     click appends an `acting` pill straight to the row, so the board never
-     looks as if nothing was heard while the answer is still in the queue.
-     Every publication after that renders the row's `ack` from the payload
-     instead, which is what lets an acknowledgement resolve into a refusal
-     that says why, or age into a waiting time when nothing arrived.
-     `kind` is machine vocabulary this template translates; `elapsed` is the
-     duration the composer measured, carried raw like every other duration in
-     the payload; only a refusal's `why` is prose the first mate wrote, and so
-     is the one field that is payload copy. An unknown kind renders nothing
-     rather than an unstyled pill under an unknown class. */
-  var ACK_KINDS = { acting: true, refused: true, late: true };
-  function ackLabel(a) {
-    if (a.kind === "refused") return t("ack_refused");
-    if (a.kind === "late") return t("ack_late", { t: a.elapsed || "" });
-    return t("ack_acting");
+     click paints an `acting` pill straight onto the row and remembers the key
+     it was clicked on, so the board never looks as if nothing was heard and a
+     re-render - a language switch, a reload - cannot take the acknowledgement
+     away again. Every publication after that renders the row's own `ack` from
+     the payload instead, which is what lets an acknowledgement resolve into a
+     refusal that says why.
+     `kind` is machine vocabulary this template translates and `at` is the
+     epoch second of the click; only a refusal's `why` is prose the first mate
+     wrote, and so is the one field that is payload copy. An unknown kind
+     renders nothing rather than an unstyled pill under an unknown class.
+     The waiting state is derived HERE, from that stamp, rather than at
+     compose time: the case it exists for - a consequence that never arrived -
+     is exactly the case in which nothing republishes the board, so a row that
+     could only age on a republication could never report a miss. */
+  var ACK_KINDS = { acting: true, refused: true };
+  /* The captain's own figure: the acknowledgement is immediate, the real
+     consequence appears within about a minute. */
+  var ACK_LATE_SECONDS = 60;
+  /* The one clock on this page, and it drives nothing but these pills. */
+  var ACK_TICK_MS = 15000;
+  var ackPills = [];
+  function nowSeconds() { return Math.floor(Date.now() / 1000); }
+  function ackAge(a) {
+    if (typeof a.at !== "number") return 0;
+    var age = nowSeconds() - a.at;
+    return age > 0 ? age : 0;
+  }
+  function ackElapsed(s) {
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h" + Math.floor((s % 3600) / 60) + "m";
+    return Math.floor(s / 86400) + "d" + Math.floor((s % 86400) / 3600) + "h";
+  }
+  function paintAck(pill, a) {
+    var age = a.kind === "acting" ? ackAge(a) : 0;
+    var late = age >= ACK_LATE_SECONDS;
+    pill.ack = a;
+    pill.className = "bb-ack bb-ack--" + (late ? "late" : a.kind);
+    pill.textContent = late ? t("ack_late", { t: ackElapsed(age) })
+      : (a.kind === "refused" ? t("ack_refused") : t("ack_acting"));
   }
   function appendAck(parent, a) {
     if (!a || !ACK_KINDS[a.kind]) return;
-    parent.appendChild(el("span", "bb-ack bb-ack--" + a.kind, ackLabel(a)));
+    var pill = el("span", "bb-ack");
+    paintAck(pill, a);
+    ackPills.push(pill);
+    parent.appendChild(pill);
     if (a.why) parent.appendChild(el("div", "bb-ack__why", pick(a.why)));
   }
-  /* The click's own half of that: no payload, no clock, no stored state -
-     just the pill, on the element the captain clicked, right now. A row
-     already carrying an acknowledgement is answered again rather than given a
-     second pill, and the reason a refusal brought with it is retired with the
-     refusal it explained. */
+  /* The click's own half of that: the pill, on the element the captain
+     clicked, right now. A row already carrying an acknowledgement is answered
+     again rather than given a second pill, and the reason a refusal brought
+     with it is retired with the refusal it explained. */
   function ackClicked(parent) {
     var pill = parent.querySelectorAll(".bb-ack")[0];
-    if (!pill) { appendAck(parent, { kind: "acting" }); return; }
-    pill.className = "bb-ack bb-ack--acting";
-    pill.textContent = t("ack_acting");
+    var a = { kind: "acting", at: nowSeconds() };
+    if (!pill) { appendAck(parent, a); return; }
+    if (ackPills.indexOf(pill) < 0) ackPills.push(pill);
+    paintAck(pill, a);
     Array.prototype.forEach.call(parent.querySelectorAll(".bb-ack__why"),
       function (w) { w.hidden = true; });
   }
+  /* How long an answered decision card holds before the deck deals the next
+     one. A human reading time: the acknowledgement the click just put on the
+     card must be readable before the card it sits on is dealt away. */
+  var CARD_DEAL_MS = 2400;
   function clear(n) { n.textContent = ""; }
   function setText(id, text) { document.getElementById(id).textContent = text; }
   /* Warnings ride the charted feed for layout only; they are alarms, not work,
@@ -753,10 +785,14 @@ __FM_BEARINGS_BOARD_DATA__
   var CHECK_SVG = '<svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var CHECK_ROW_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
-  /* Answered state survives a language switch and a reload: keyed by decision
-     key and scoped to this build's `generated` stamp, so a rebuilt board (which
-     drops acted-on cards) starts clean while a plain reload of the same board
-     still shows what was already queued. */
+  /* Answered state survives a language switch and a reload: keyed by whatever
+     the captain clicked - a decision key, or a Charted Next row id he picked
+     for dispatch - and scoped to this build's `generated` stamp, so a rebuilt
+     board (which drops acted-on cards and carries its own acknowledgements)
+     starts clean while a plain reload of the same board still shows what was
+     already queued. The stored value is the second the click happened, which
+     is what lets a remembered acknowledgement age exactly like a published
+     one. */
   var answeredStore = "fm-bearings-answered:" + String(data.generated || "");
   var queuedKeys = (function () {
     try {
@@ -766,14 +802,23 @@ __FM_BEARINGS_BOARD_DATA__
     } catch (e) { return {}; }
   })();
   function rememberAnswered(key) {
-    queuedKeys[key] = true;
+    queuedKeys[key] = nowSeconds();
     try { if (window.localStorage) window.localStorage.setItem(answeredStore, JSON.stringify(queuedKeys)); } catch (e) { /* private mode */ }
+  }
+  /* The acknowledgement a click left behind, for a key no publication has
+     carried one back for yet. */
+  function rememberedAck(key) {
+    var at = queuedKeys[key];
+    return at ? { kind: "acting", at: at } : null;
   }
   var dispatchQueued = false;
   var active = -1;
 
   function render() {
   try {
+    /* every pill on the page is rebuilt below, so the ageing list starts over
+       with it rather than holding elements no longer in the document */
+    ackPills = [];
     if (document.documentElement) {
       document.documentElement.lang = lang === "en" ? "en" : (lang === "hant" ? "zh-Hant" : "zh-Hans");
     }
@@ -1249,13 +1294,14 @@ __FM_BEARINGS_BOARD_DATA__
         rememberAnswered(item.key);
         card.classList.add("is-queued");
         ackClicked(pad);
-        /* deal the next card once this one is answered */
-        setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, 450);
+        /* deal the next card once this one is answered, and once its
+           acknowledgement has been on screen long enough to read */
+        setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, CARD_DEAL_MS);
       }
 
       if (queuedKeys[item.key]) card.classList.add("is-queued");
       pad.appendChild(form);
-      appendAck(pad, item.ack);
+      appendAck(pad, item.ack || rememberedAck(item.key));
       card.appendChild(pad);
       deck.appendChild(card);
     });
@@ -1269,7 +1315,7 @@ __FM_BEARINGS_BOARD_DATA__
     function showCard(i) {
       active = Math.max(0, Math.min(cards.length - 1, i));
       cards.forEach(function (c, j) { c.hidden = j !== active; });
-      var answered = Object.keys(queuedKeys).length;
+      var answered = data.captains_call.filter(function (c) { return queuedKeys[c.key]; }).length;
       stackCount.textContent = t("card_of", { i: active + 1, n: cards.length }) +
         (answered ? " · " + t("answered", { n: answered }) : "");
       stackPrev.disabled = active === 0;
@@ -1380,7 +1426,7 @@ __FM_BEARINGS_BOARD_DATA__
       var chSub = x.repo || x.id;
       var reason = pick(x.reason);
       main.appendChild(el("div", "bb-row__sub", reason ? reason + " · " + chSub : chSub));
-      appendAck(main, x.ack);
+      appendAck(main, x.ack || rememberedAck(x.id));
       row.appendChild(main);
       if (isWarning(x)) row.appendChild(badge("danger", t("needs_repair")));
       else if (reason) row.appendChild(badge("warn", t("waiting")));
@@ -1419,9 +1465,12 @@ __FM_BEARINGS_BOARD_DATA__
         dispatchQueued = true;
         bar.classList.add("is-queued");
         /* the answer is about the rows he picked, so that is where it is
-           acknowledged - the bar's own chip says only that something was sent */
+           acknowledged - the bar's own chip says only that something was sent.
+           Each id is remembered as well as painted, so the next re-render puts
+           the same pill back on the same row. */
         Array.prototype.forEach.call(ch.querySelectorAll(".bb-pick"), function (c) {
           if (!c.checked || !c.parentNode) return;
+          rememberAnswered(c.value);
           var rowMain = c.parentNode.querySelectorAll(".bb-row__main")[0];
           if (rowMain) ackClicked(rowMain);
         });
@@ -1444,6 +1493,12 @@ __FM_BEARINGS_BOARD_DATA__
     });
   });
   render();
+  /* An acknowledgement whose consequence never arrived has to be able to say
+     how long it has been waiting without the board being republished, because
+     a missed answer is exactly the case in which nothing republishes it. */
+  setInterval(function () {
+    ackPills.forEach(function (p) { paintAck(p, p.ack); });
+  }, ACK_TICK_MS);
 })();
 </script>
 </body>

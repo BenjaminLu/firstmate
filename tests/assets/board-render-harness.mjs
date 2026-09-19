@@ -2,7 +2,7 @@
 // shim and print what the renderer actually produced, so board behavior is
 // asserted through the real template rather than by reading its source.
 //
-// Usage: node board-render-harness.mjs <built-board.html> [click]
+// Usage: node board-render-harness.mjs <built-board.html> [click] [relang]
 // Prints one JSON document:
 //   { stats:[{n,label}], underway:[{title,sub,badges,ack}],
 //     charted:[{title,sub,badges,pickable,ack}], empty, more,
@@ -20,6 +20,8 @@
 // by reading the template's source:
 //   dispatch        check every pickable Charted Next row, then send
 //   answer          submit the dealt Captain's Call card
+// A third argument (en|hant|hans) then clicks that language button, so what
+// survives a re-render is asserted through the real control the captain has.
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(process.argv[2], "utf8");
@@ -101,21 +103,15 @@ globalThis.document = {
 // What the page handed to Lavish, in order: this is the answer channel, and
 // the only place the value a card actually sends can be observed.
 const queued = [];
+// The page remembers what the captain clicked so a re-render can put the
+// acknowledgement back; that memory is browser storage, so the shim has one.
+const storage = new Map();
 globalThis.window = {
   lavish: { queuePrompt: (text, opts) => queued.push({ text, data: opts && opts.data }) },
-};
-globalThis.FormData = class {
-  constructor(form) {
-    this._v = new Map();
-    const walk = (n) => n.children.forEach((c) => {
-      if (c.name && !(c.type === "radio" && !c.checked) && !this._v.has(c.name)) {
-        this._v.set(c.name, c.value);
-      }
-      walk(c);
-    });
-    walk(form);
-  }
-  get(k) { return this._v.has(k) ? this._v.get(k) : null; }
+  localStorage: {
+    getItem: (k) => (storage.has(k) ? storage.get(k) : null),
+    setItem: (k, v) => { storage.set(k, String(v)); },
+  },
 };
 globalThis.TextEncoder = TextEncoder;
 // The card's submit handler reads its own inputs; a radio is answered only
@@ -135,6 +131,10 @@ globalThis.FormData = class {
 // The deck deals the next card on a timer; the acknowledgement is not on it,
 // so the shim never runs one and the read below sees the click's own effect.
 globalThis.setTimeout = () => 0;
+// The pills age on an interval the page owns. Nothing here advances it: each
+// read below is one instant, and an aged acknowledgement is produced by an
+// older stamp rather than by winding a clock on.
+globalThis.setInterval = () => 0;
 
 const script = html.slice(html.indexOf("<script>") + "<script>".length, html.lastIndexOf("</script>"));
 new Function(script)();
@@ -161,6 +161,14 @@ if (click === "dispatch") {
   }
 } else if (click) {
   throw new Error("unknown click: " + click);
+}
+
+/* Then, optionally, the language switch - a control the captain keeps, and a
+   full re-render of every row. */
+const relang = process.argv[4] || "";
+if (relang) {
+  if (!["en", "hant", "hans"].includes(relang)) throw new Error("unknown language: " + relang);
+  document.getElementById("bb-lang-" + relang).dispatch("click");
 }
 
 const badgesOf = (row) =>

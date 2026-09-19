@@ -944,15 +944,22 @@ test_a_free_form_answer_never_counts_as_choosing_an_option() {
 
 # Render a payload that carries acknowledgements, optionally replaying one
 # captain click through the real handler first.
-render_click() {  # <home> <payload-json> [click]
+render_click() {  # <home> <payload-json> [click] [relang]
   local home=$1 data="$1/payload.json"
   printf '%s\n' "$2" > "$data"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
     "$BOARD" build "$data" >/dev/null || fail "the board did not build"
-  node "$HARNESS" "$home/.lavish/bearings-board.html" ${3:+"$3"} \
+  node "$HARNESS" "$home/.lavish/bearings-board.html" ${3:+"$3"} ${4:+"$4"} \
     || fail "the built board could not be rendered"
+}
+
+# An acknowledgement carries the second the captain clicked, because that stamp
+# is what the page ages into a waiting time; `clicked_at` puts the click that
+# many seconds in the past.
+clicked_at() {  # <seconds-ago>
+  printf '%s\n' "$(( $(date -u +%s) - $1 ))"
 }
 
 ack_payload() {  # <underway-ack-json>
@@ -963,10 +970,14 @@ ack_payload() {  # <underway-ack-json>
                kind:"ship", doing:"under way"} + (if $ack == null then {} else {ack:$ack} end)]}'
 }
 
+acting_ack() {  # <seconds-ago>
+  jq -nc --argjson at "$(clicked_at "$1")" '{kind:"acting", at:$at}'
+}
+
 test_an_acknowledged_row_says_it_is_being_acted_on() {
   local home out
   home=$(make_home ack-acting)
-  out=$(render_click "$home" "$(ack_payload '{"kind":"acting"}')")
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 2)")")
   printf '%s' "$out" | jq -e '
     .error == "" and (.underway[0].ack | .kind == "acting" and .label == "acting on it" and .why == null)
   ' >/dev/null || fail "an acting acknowledgement did not reach the row: $out"
@@ -976,8 +987,8 @@ test_an_acknowledged_row_says_it_is_being_acted_on() {
 test_a_refused_acknowledgement_says_so_with_its_reason() {
   local home out
   home=$(make_home ack-refused)
-  out=$(render_click "$home" \
-    "$(ack_payload '{"kind":"refused","why":"it is waiting on the board refresh, which is still in review"}')")
+  out=$(render_click "$home" "$(ack_payload "$(jq -nc --argjson at "$(clicked_at 5)" \
+    '{kind:"refused", at:$at, why:"it is waiting on the board refresh, which is still in review"}')")")
   printf '%s' "$out" | jq -e '
     .error == ""
       and (.underway[0].ack
@@ -987,14 +998,31 @@ test_a_refused_acknowledgement_says_so_with_its_reason() {
   pass "a refused acknowledgement says so on the row, with the reason"
 }
 
+# The page ages the pill itself, from the stamp the click left on the record.
+# The board is republished only when the first mate acts, so a row that could
+# age only on a republication would report a slow answer and stay silent about
+# a missed one - and a missed answer is the case the captain asked for this
+# for. Nothing here republishes: one build, one read, an older stamp.
 test_a_late_acknowledgement_says_how_long_it_has_waited() {
   local home out
   home=$(make_home ack-late)
-  out=$(render_click "$home" "$(ack_payload '{"kind":"late","elapsed":"3m"}')")
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 185)")")
   printf '%s' "$out" | jq -e '
     .error == "" and (.underway[0].ack | .kind == "late" and .label == "still waiting · 3m")
-  ' >/dev/null || fail "a late acknowledgement did not report its elapsed time: $out"
+  ' >/dev/null || fail "an unanswered acknowledgement did not age into a waiting time: $out"
   pass "a late acknowledgement says it is still waiting and for how long"
+}
+
+# Under the minute the captain settled, the same record still reads as being
+# acted on: the waiting report is the exception, not the resting state.
+test_a_fresh_acknowledgement_has_not_aged_into_waiting() {
+  local home out
+  home=$(make_home ack-fresh)
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 45)")")
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.underway[0].ack | .kind == "acting" and .label == "acting on it")
+  ' >/dev/null || fail "an acknowledgement inside the minute already reported itself late: $out"
+  pass "an acknowledgement inside the captain's minute still reads as being acted on"
 }
 
 test_a_row_with_no_acknowledgement_is_unchanged() {
@@ -1005,7 +1033,7 @@ test_a_row_with_no_acknowledgement_is_unchanged() {
     || fail "a row with no acknowledgement grew one: $without"
   # Everything else about that row reads exactly as it does with the field
   # absent, so the feature costs an unacknowledged board nothing.
-  with=$(render_click "$home" "$(ack_payload '{"kind":"acting"}')")
+  with=$(render_click "$home" "$(ack_payload "$(acting_ack 2)")")
   printf '%s' "$with" | jq --argjson bare "$(printf '%s' "$without" | jq -c '.underway[0]')" -e '
     (.underway[0] | del(.ack)) == ($bare | del(.ack))
   ' >/dev/null || fail "an acknowledgement changed the rest of the row: $with"
@@ -1015,7 +1043,7 @@ test_a_row_with_no_acknowledgement_is_unchanged() {
 test_an_unknown_acknowledgement_kind_renders_nothing() {
   local home board out
   home=$(make_home ack-unknown)
-  render_click "$home" "$(ack_payload '{"kind":"acting"}')" >/dev/null
+  render_click "$home" "$(ack_payload "$(acting_ack 2)")" >/dev/null
   board="$home/.lavish/bearings-board.html"
   # The payload contract refuses an unknown kind, so the only way to reach the
   # renderer with one is to rewrite what was already published. The renderer's
@@ -1057,11 +1085,39 @@ test_answering_a_decision_card_acknowledges_it_on_the_card() {
   pass "answering a decision card acknowledges it on the card"
 }
 
+# The captain was promised the language switch stays available, and he settled
+# that a click shows immediately it was received. A switch re-renders every
+# row from the payload, which carries no acknowledgement for a click made
+# seconds ago - so the page has to remember the keys it was clicked on, or the
+# switch takes the acknowledgement away again.
+test_a_dispatch_acknowledgement_survives_the_language_switch() {
+  local home out
+  home=$(make_home ack-dispatch-lang)
+  out=$(render_click "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true}]}')" \
+    dispatch hant)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.charted[0].ack | .kind == "acting" and .label == "處理中")
+  ' >/dev/null || fail "the language switch took the dispatch acknowledgement away: $out"
+  pass "a dispatch acknowledgement survives the language switch, in the new language"
+}
+
+test_a_card_acknowledgement_survives_the_language_switch() {
+  local home out
+  home=$(make_home ack-answer-lang)
+  out=$(render_click "$home" "$(five_question_payload en)" answer hant)
+  printf '%s' "$out" | jq -e '
+    .error == "" and (.cards[0].ack | .kind == "acting" and .label == "處理中")
+  ' >/dev/null || fail "the language switch took the card acknowledgement away: $out"
+  pass "an answered card keeps its acknowledgement across the language switch"
+}
+
 test_the_acknowledgement_speaks_the_captains_language() {
   local home out
   home=$(make_home ack-lang)
-  out=$(render_click "$home" "$(ack_payload '{"kind":"late","elapsed":"3m"}' \
-    | jq -c '.lang = "hant"')")
+  out=$(render_click "$home" "$(ack_payload "$(acting_ack 185)" | jq -c '.lang = "hant"')")
   printf '%s' "$out" | jq -e '
     .error == "" and (.underway[0].ack.label == "還在等處理 · 3m")
   ' >/dev/null || fail "the acknowledgement did not follow the board language: $out"
@@ -1098,8 +1154,11 @@ test_a_free_form_answer_never_counts_as_choosing_an_option
 test_an_acknowledged_row_says_it_is_being_acted_on
 test_a_refused_acknowledgement_says_so_with_its_reason
 test_a_late_acknowledgement_says_how_long_it_has_waited
+test_a_fresh_acknowledgement_has_not_aged_into_waiting
 test_a_row_with_no_acknowledgement_is_unchanged
 test_an_unknown_acknowledgement_kind_renders_nothing
 test_the_dispatch_send_acknowledges_every_row_it_picked
 test_answering_a_decision_card_acknowledges_it_on_the_card
+test_a_dispatch_acknowledgement_survives_the_language_switch
+test_a_card_acknowledgement_survives_the_language_switch
 test_the_acknowledgement_speaks_the_captains_language
