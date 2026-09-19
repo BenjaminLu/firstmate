@@ -408,6 +408,81 @@ drawing_with_marker() {  # <slug> <node...> -> a drawing that references its own
     nodes: $nodes, edges: []}'
 }
 
+# The board owns the drawing's BOX and nothing inside it: the figure contract
+# puts content in there the board did not write - diagram-design nests icon
+# <svg> elements, and the drawing carries its own text, shapes and markers.
+# A board rule written for "the drawing" whose selector reaches past it gives
+# a 6x6 icon the outer drawing's width and height, and nothing refuses that:
+# verify passes, svg-check passes, the card ships, and the captain just sees a
+# broken picture.
+#
+# The render harness has no CSS at all - no getComputedStyle, no stylesheet,
+# and innerHTML is a plain string it never parses - so the geometry itself
+# cannot be observed here. What this proves instead is the half each side can:
+# that the nested icon reaches the page with its own geometry intact, and that
+# the shipped stylesheet carries no rule that would then take it away.
+test_the_board_styles_a_drawings_box_and_never_its_insides() {
+  local home out board nested
+  home=$(make_home fig-scope)
+  # the same shape as the nested-icon drawing tests/fm-packet.test.sh drives
+  # through verify and the page: a 6x6 icon inside a 40x20 drawing
+  nested=$(jq -n '{
+    slug: "cmp", heading: "Figure cmp", caption: "what cmp proves",
+    svg: ("<svg viewBox=\"0 0 40 20\">"
+      + "<rect data-node=\"quiet\" x=\"1\" y=\"1\" width=\"9\" height=\"9\" fill=\"var(--card)\"/>"
+      + "<svg x=\"12\" y=\"1\" width=\"6\" height=\"6\"><path d=\"M0 0 L6 6\" stroke=\"var(--muted)\"/></svg>"
+      + "<rect data-node=\"loud\" x=\"20\" y=\"1\" width=\"9\" height=\"9\" fill=\"var(--card)\"/>"
+      + "<text data-en=\"one path\" data-hant=\"一條路\" data-hans=\"一条路\">one path</text></svg>"),
+    nodes: ["loud", "quiet"], edges: []}')
+  out=$(render_payload "$home" "$(packet_payload en "[$nested]")")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the card: $out"
+  # the icon reaches the page as its own element, with the geometry the
+  # contract gave it - the board neither strips nor rewrites what it does not own
+  printf '%s' "$out" | jq -e '
+    (.cards[0].panels[0].figures[0]) as $svg
+    | ($svg | test("<svg x=\"12\" y=\"1\" width=\"6\" height=\"6\">"))
+      and ($svg | test("data-node=\"loud\""))
+  ' >/dev/null || fail "the nested icon did not reach the board intact: $out"
+
+  # and no rule in the stylesheet the board actually shipped reaches into it
+  board="$home/.lavish/bearings-board.html"
+  python3 - "$board" <<'SCOPE'
+import pathlib, re, sys
+html = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+css = re.sub(r"/\*.*?\*/", "", html.split("<style>", 1)[1].split("</style>", 1)[0], flags=re.S)
+# the vocabulary a drawing is made of; bin/fm-packet-svg-lib.py is what enforces
+# that a drawing carries nothing else, so these are the names that can appear
+# inside one
+DRAWING = {"svg", "g", "defs", "symbol", "use", "a", "title", "desc", "path", "rect",
+           "circle", "ellipse", "line", "polyline", "polygon", "text", "marker",
+           "clippath", "mask", "lineargradient", "radialgradient", "stop", "animate",
+           "set", "animatetransform", "animatemotion", "mpath"}
+reaches, unscoped = [], []
+for rule in re.finditer(r"([^{}]+)\{[^{}]*\}", css):
+    for sel in rule.group(1).split(","):
+        sel = " ".join(sel.split())
+        if not sel or sel.startswith("@"):
+            continue
+        # what the rule EXCLUDES does not reach anything
+        positive = re.sub(r":not\([^)]*\)", "", sel).strip()
+        if not positive:
+            continue
+        if re.match(r"^\.bb-fig\s+(?![>+~])\S", positive):
+            reaches.append(sel)
+        key = re.sub(r"[:\[].*$", "", positive.split()[-1].split(">")[-1].strip())
+        if key.lower() in DRAWING and "." not in positive and "#" not in positive:
+            if ".bb-fig" not in sel:
+                unscoped.append(sel)
+if reaches:
+    print("rules reaching inside a drawing: %s" % ", ".join(reaches)); sys.exit(1)
+if unscoped:
+    print("rules styling a drawing element document-wide: %s" % ", ".join(unscoped)); sys.exit(1)
+SCOPE
+  [ "$?" -eq 0 ] || fail "the board stylesheet reaches inside a drawing"
+  pass "the board styles a drawing's box and never its insides"
+}
+
 test_two_cards_drawing_with_the_same_slug_do_not_share_ids() {
   local home out payload figure
   home=$(make_home packet-id-namespace)
@@ -784,6 +859,7 @@ test_a_decision_card_answers_the_five_questions_in_english_by_default
 test_the_payload_language_switches_every_visible_string
 test_a_packet_with_figures_opens_its_tabs_inside_the_card
 test_two_cards_drawing_with_the_same_slug_do_not_share_ids
+test_the_board_styles_a_drawings_box_and_never_its_insides
 test_a_packet_without_figures_still_renders_its_card
 test_the_packet_body_stays_in_the_language_it_was_written_in
 test_the_packet_block_renders_its_words_as_words

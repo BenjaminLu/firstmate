@@ -60,7 +60,8 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
-a { color: inherit; text-decoration: none; }
+/* the board's own links; a drawing paints its own, so the reset stops at it */
+a:not(.bb-fig a) { color: inherit; text-decoration: none; }
 
 /* ---- fm-badge (enamel sign-pin), verbatim contract ---- */
 .fm-badge {
@@ -322,7 +323,12 @@ a { color: inherit; text-decoration: none; }
 .bb-panel[hidden] { display: none; }
 .bb-fig { margin: 0; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
   background: var(--surface-card-warm); padding: 10px 12px; min-width: 0; overflow-x: auto; }
-.bb-fig svg { display: block; width: 100%; height: auto; max-width: 100%; }
+/* The board styles the drawing's own box and never reaches inside it. The
+   figure contract puts content in there the board does not own - diagram-design
+   nests icon <svg> elements, and a descendant selector would give a 6x6 icon
+   the outer drawing's width and height and lay it over everything behind it.
+   Every rule that starts at .bb-fig therefore takes the direct child. */
+.bb-fig > svg { display: block; width: 100%; height: auto; max-width: 100%; }
 .bb-panel__note { margin: 0; font-size: var(--fs-xs); color: var(--text-muted); }
 .bb-panel__cost { margin: 0; font-size: var(--fs-sm); color: var(--text-body); }
 .bb-panel__rows { display: grid; gap: 4px; margin: 0; }
@@ -335,7 +341,7 @@ a { color: inherit; text-decoration: none; }
 .bb-panel__label { font-size: var(--fs-sm); font-weight: 800; color: var(--text-strong); min-width: 0; }
 /* The drawings bind the figure palette the packet draws against to the board's
    own tokens, so a figure inherits this page instead of carrying its own. */
-.bb-fig svg {
+.bb-fig > svg {
   --fg: var(--text-strong); --muted: var(--text-muted); --soft: var(--text-faint);
   --card: var(--surface-card); --card-2: var(--surface-card-warm); --bg: var(--bg-page);
   --rule: var(--border-soft); --rule-strong: var(--border-default);
