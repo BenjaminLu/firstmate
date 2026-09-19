@@ -161,7 +161,7 @@ fm_claude_no_mistakes_data_root() {
 # the unresolved list is the half that has to be reported. Printing the grant
 # and reporting what is missing must not be separable.
 fm_claude_grant_resolve() {
-  local home=${1:-} list= missing= uid tmp_root data_root config_dir candidate kept
+  local home=${1:-} list='' missing='' uid tmp_root data_root config_dir candidate kept
   FM_CLAUDE_DIRS=
   FM_CLAUDE_DIRS_JSON='[]'
   FM_CLAUDE_DIRS_UNRESOLVED=
@@ -218,6 +218,7 @@ EOF
 
   FM_CLAUDE_DIRS=$(printf '%s' "$kept" | awk 'NF && !seen[$0]++')
   FM_CLAUDE_DIRS_UNRESOLVED=${missing# }
+  # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
   FM_CLAUDE_DIRS_JSON=$(printf '%s\n' "$FM_CLAUDE_DIRS" | awk '
     BEGIN { printf "[" ; first = 1 }
     {
