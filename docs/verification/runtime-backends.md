@@ -545,26 +545,50 @@ directories the worker is granted:
 
 The fourth entry is the load-bearing one: the sandbox carried its own `HOME`, and the data root came back pointed at that home because it was read out of `no-mistakes doctor` rather than assumed.
 `tests/fm-spawn-dispatch-profile.test.sh` and `tests/fm-session-start.test.sh` pin both halves portably with no harness; this record is what establishes that a real clone reproduces them.
+That capture was taken while the grant still rode a `permissions.additionalDirectories` key in the launch's inline `--settings`; the directories and the posture are unchanged since, and only the flag carrying them moved to `--add-dir` for the reason below.
 
-Claude 2.1.267 accepts a `permissions.additionalDirectories` entry naming a directory that does not exist, alongside a real one, and runs normally:
+### Why the grant rides --add-dir and not the inline settings
+
+Both carry the same four directories. The inline-settings route was tried first and refused, because whether Claude Code unions or REPLACES a `permissions` key supplied by a high-precedence source could not be measured here, and if it replaces, the operator's own `permissions.allow` rules stop reaching workers - the prompt stream this whole change exists to prevent.
+
+Four attempts to measure it, none of which discriminated, all on 2.1.267:
+
+- `--print` mode read an absolute path outside the working directory with the grant, without the grant, and under `--permission-mode default`, so print mode does not gate on this setting and cannot serve as the control arm.
+- `--debug` printed nothing naming directories.
+- `/context` reports token usage, not permissions.
+- The interactive arm, which is the shape a worker actually runs in, stopped on the workspace-trust dialog; once trust was pre-registered through `bin/fm-claude-trust.sh` against an isolated `CLAUDE_CONFIG_DIR`, it stopped again on `Not logged in`, because that isolated directory loses the operator's authentication.
+
+`--add-dir` writes no settings key at all, so the unmeasured question stops applying rather than being accepted as a risk.
+
+### The grant's position on the launch is load bearing
+
+`--add-dir` is variadic and the launch ends in a positional brief argument, so a grant with no flag after it consumes the brief. Observed directly:
 
 ```sh
-claude --permission-mode auto --model haiku \
-  --settings '{"permissions":{"additionalDirectories":["<real dir>","<missing dir>"]}}' \
-  -p 'Read <real dir>/secret.txt and reply with only its contents.'
+claude --permission-mode auto --model haiku --settings '{"feedbackDrafts":"off"}' --print --add-dir <dir> 'Reply with exactly SWALLOWED_OR_NOT and nothing else.'
 ```
 
 ```
-GRANTPROBE_TOKEN_7Q4
+Error: Input must be provided either through stdin or as a prompt argument when using --print
 ```
 
-That is why the grant deliberately does not filter on existence: a machine configured with nothing has not created its scratch root or its skills directory, and those are exactly the grants it needs.
+The same command with a flag after the grant answers normally:
+
+```sh
+claude --add-dir <dir1> <dir2> --permission-mode auto --model haiku --settings '{"feedbackDrafts":"off"}' -p 'Reply with exactly ADDDIR_PARSE_OK and nothing else.'
+```
+
+```
+ADDDIR_PARSE_OK
+```
+
+`bin/fm-spawn.sh` therefore places the grant immediately before the permission flag, which every claude launch carries whatever its kind, model or effort - unlike `--append-system-prompt`, which a secondmate launch omits, and the model and effort flags, which are empty by default.
+`tests/fm-spawn-dispatch-profile.test.sh` pins that a flag always follows the grant, so a future reordering fails in CI rather than in a worker's pane.
+
+Claude 2.1.267 also accepts a granted directory that does not exist, alongside a real one, and runs normally, which is why the grant deliberately does not filter on existence: a machine configured with nothing has not created its scratch root or its skills directory, and those are exactly the grants it needs.
 
 **Not established here, deliberately recorded as unverified.**
-That this grant is what suppresses the interactive permission prompt was not measured.
-`--print` mode read an absolute path outside the working directory with the grant, without it, and under `--permission-mode default` as well, so print mode does not gate on this setting and cannot serve as the control arm.
-The interactive arm, which is the shape a worker actually runs in, stopped on the workspace-trust dialog, and once trust was pre-registered against an isolated `CLAUDE_CONFIG_DIR` it stopped again on `Not logged in`, because that isolated directory loses the operator's authentication.
-The mechanism therefore rests on `permissions.additionalDirectories` being the settings form of `claude --add-dir` ("Additional directories to allow tool access to") and on this fleet's own working home already carrying that key for these paths, not on a measurement made here.
+That the grant is what suppresses the interactive permission prompt was not measured, for the same reason the union-versus-replace question could not be: print mode does not gate on it and the interactive arm could not be authenticated against an isolated config directory.
 Refreshing that claim needs an interactive live arm with a real login, in the `live-harness-optin` shape the arms above use.
 
 ## Codex hook trust

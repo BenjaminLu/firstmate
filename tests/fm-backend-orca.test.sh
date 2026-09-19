@@ -562,7 +562,7 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
     "spawn did not export GOTMPDIR through the Orca terminal"
   # The launch's own shape belongs to the spawn suite; what matters here is that
   # the whole constructed command, grant and all, travelled through Orca intact.
-  assert_contains "$(cat "$log")" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --permission-mode auto --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},\"permissions\":{\"additionalDirectories\":[" \
+  assert_contains "$(cat "$log")" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --add-dir " \
     "spawn did not send the selected harness launch command through Orca"
   rm -rf "/tmp/fm-$id"
   pass "fm-spawn.sh --backend orca: reuses implicit terminal, records metadata, launches harness"

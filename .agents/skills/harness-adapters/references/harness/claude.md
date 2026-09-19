@@ -12,7 +12,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Skill | `/<skill>`, for example `/no-mistakes`. |
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
-| Permissions | `--permission-mode auto` by default, or `--dangerously-skip-permissions` when `config/claude-permission-mode` is `bypass`; the `auto` shape verified on 2.1.269, and `../../../../../docs/configuration.md` "Claude permission mode" owns the file. Every launch also carries a generated `permissions.additionalDirectories` grant in its inline settings, derived per launch by `../../../bin/fm-claude-launch-lib.sh`. |
+| Permissions | `--permission-mode auto` by default, or `--dangerously-skip-permissions` when `config/claude-permission-mode` is `bypass`; the `auto` shape verified on 2.1.269, and `../../../../../docs/configuration.md` "Claude permission mode" owns the file. Every launch also carries a generated `--add-dir` grant of the directories a worker reads outside its worktree, derived per launch by `../../../bin/fm-claude-launch-lib.sh` and placed immediately before the permission flag, because it is variadic and the brief is positional. |
 
 ## Workspace trust
 

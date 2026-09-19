@@ -796,7 +796,7 @@ test_spawn_secondmate_harness_model_token() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-token: meta model not opus (got '$(meta_field "$meta" model)')"
   [ "$(meta_field "$meta" effort)" = default ] || fail "model-token: meta effort not default (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --permission-mode auto --settings '$(fm_test_claude_settings_json "$sm" "$w/home/user-home")' --model 'opus'" \
+  assert_contains "$launch" "claude $(fm_test_claude_add_dir "$sm" "$w/home/user-home")--permission-mode auto --settings '$FM_TEST_CLAUDE_SETTINGS_JSON' --model 'opus'" \
     "model-token: launch did not carry --model opus"
   assert_not_contains "$launch" "--effort" "model-token: launch must not carry an --effort flag"
   pass "C3 spawn: config/secondmate-harness's model token threads --model into the launch and meta"
@@ -818,7 +818,7 @@ test_spawn_secondmate_harness_model_and_effort_tokens() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-effort-tokens: meta model not opus"
   [ "$(meta_field "$meta" effort)" = high ] || fail "model-effort-tokens: meta effort not high (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --permission-mode auto --settings '$(fm_test_claude_settings_json "$sm" "$w/home/user-home")' --model 'opus' --effort 'high'" \
+  assert_contains "$launch" "claude $(fm_test_claude_add_dir "$sm" "$w/home/user-home")--permission-mode auto --settings '$FM_TEST_CLAUDE_SETTINGS_JSON' --model 'opus' --effort 'high'" \
     "model-effort-tokens: launch did not carry both --model opus and --effort high"
   pass "C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta"
 }
@@ -1437,7 +1437,7 @@ test_spawn_secondmate_claude_permission_mode_bypass() {
   meta="$w/home/state/sm.meta"
   [ "$(meta_field "$meta" harness)" = claude ] || fail "permmode: meta harness not claude"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '$(fm_test_claude_settings_json "$sm" "$w/home/user-home")' --model 'opus'" \
+  assert_contains "$launch" "claude $(fm_test_claude_add_dir "$sm" "$w/home/user-home")--dangerously-skip-permissions --settings '$FM_TEST_CLAUDE_SETTINGS_JSON' --model 'opus'" \
     "permmode: secondmate launch did not swap the permission flag while keeping --model"
   assert_not_contains "$launch" "--permission-mode auto" "permmode: an opted-in bypass launch must not also request auto mode"
   pass "C2b spawn: config/claude-permission-mode=bypass reaches a Claude secondmate launch"
@@ -1458,8 +1458,8 @@ test_spawn_secondmate_grant_names_its_own_home() {
   out=$(spawn_secondmate_capture "$w" sm "$sm" "$launchlog" 2>&1); status=$?
   expect_code 0 "$status" "claude secondmate spawn should succeed"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "\"additionalDirectories\":[\"$sm\"" "the grant did not name the secondmate's own home first"
-  assert_not_contains "$launch" "\"additionalDirectories\":[\"$w/home\"" "the grant must not hand a secondmate the launching home"
+  assert_contains "$launch" "--add-dir '$sm' " "the grant did not name the secondmate's own home first"
+  assert_not_contains "$launch" "--add-dir '$w/home' " "the grant must not hand a secondmate the launching home"
   pass "C2c spawn: a Claude secondmate is granted its own home, not the launching one"
 }
 

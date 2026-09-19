@@ -366,10 +366,11 @@ Any other value, or an unreadable file, refuses every spawn from that home, whic
 The file is a captain-wide safety preference, so it is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract; a secondmate's own Claude crewmates then launch on the same posture.
 The [Claude adapter reference](../.agents/skills/harness-adapters/references/harness/claude.md) records the verified shape of both launches and which once-per-machine dialog each one can meet.
 
-Under `auto` a worker would otherwise be prompted for each directory it reads outside its own worktree, so every Claude launch also carries a generated `permissions.additionalDirectories` grant in the inline settings it already passes.
+Under `auto` a worker would otherwise be prompted for each directory it reads outside its own worktree, so every Claude launch also carries a generated `--add-dir` grant of those directories.
 The grant is derived per launch from the worker's own Firstmate home, this user's Claude scratch root, the data root `no-mistakes doctor` reports, and the user skills directory, so nothing machine-specific is committed and an operator never has to discover and write those paths by hand.
 A directory whose source cannot be derived is left out of the grant and named on the spawn's own output, because a worker that will be prompted for a directory is a fact the fleet has to be told rather than a silence.
-[`bin/fm-claude-launch-lib.sh`](../bin/fm-claude-launch-lib.sh)'s header owns the derivation.
+It rides `--add-dir` rather than a `permissions.additionalDirectories` key in the launch's inline settings, which is where it started: `--settings` is a high-precedence settings source, and whether Claude Code unions or replaces a `permissions` key from lower scopes could not be measured, so that route risked dropping the operator's own `permissions.allow` rules for every worker - the same prompt stream by another path. `--add-dir` writes no settings key at all, so the question stops needing an answer.
+[`bin/fm-claude-launch-lib.sh`](../bin/fm-claude-launch-lib.sh)'s header owns the derivation, and [`fm-spawn.sh --help`](../bin/fm-spawn.sh) owns where the flag sits on the launch and why that position is load bearing.
 
 ## Worker launch environment (config/launch-env-allowlist)
 

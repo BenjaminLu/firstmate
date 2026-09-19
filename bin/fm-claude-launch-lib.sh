@@ -38,12 +38,23 @@
 # it will need; filtering on existence would drop them precisely on the fresh
 # clone this derivation exists for.
 #
+# THE GRANT RIDES `claude --add-dir`, NOT THE INLINE SETTINGS. The obvious place
+# for it is a permissions.additionalDirectories key in the --settings object the
+# launch already carries, and that was tried first. It was refused: --settings is
+# a high-precedence settings source, and whether Claude Code unions or REPLACES
+# a `permissions` key from lower scopes could not be measured here (the attempts
+# and why each failed are in docs/verification/runtime-backends.md). If it
+# replaces, the operator's own permissions.allow rules stop reaching workers,
+# which is the prompt storm this derivation exists to prevent. --add-dir carries
+# the same directories and writes no settings key at all, so the question stops
+# needing an answer rather than being accepted as a risk.
+#
 # WHAT CANNOT BE DERIVED IS NAMED, NEVER DROPPED SILENTLY. A directory whose
 # SOURCE does not resolve - no-mistakes absent or its doctor line unreadable,
-# neither CLAUDE_CONFIG_DIR nor HOME set, a path carrying a single quote that
-# cannot survive the launch command's quoting - is left out of the grant AND
-# listed in FM_CLAUDE_DIRS_UNRESOLVED, so the caller reports what the worker did
-# not get instead of launching a short list quietly.
+# neither CLAUDE_CONFIG_DIR nor HOME set, a path carrying a newline that this
+# line-separated list cannot represent - is left out of the grant AND listed in
+# FM_CLAUDE_DIRS_UNRESOLVED, so the caller reports what the worker did not get
+# instead of launching a short list quietly.
 set -u
 
 # shellcheck source=bin/fm-config-inherit-lib.sh
@@ -76,9 +87,18 @@ FM_CLAUDE_DOCTOR_TIMEOUT=10
 fm_claude_permission_resolve() {
   local config=$1 present token path
   path="$config/$FM_CLAUDE_PERMISSION_FILE"
+  # Every FM_CLAUDE_* name this file assigns is an OUTPUT GLOBAL, read by the
+  # scripts that source it rather than here. Whether ShellCheck happens to see a
+  # read inside this file depends on how the helpers are arranged today, and a
+  # rearrangement that removed one broke CI once; marking them all keeps that
+  # from being rediscovered one name at a time.
+  # shellcheck disable=SC2034
   FM_CLAUDE_PERMISSION_MODE=$FM_CLAUDE_PERMISSION_DEFAULT
+  # shellcheck disable=SC2034
   FM_CLAUDE_PERMISSION_SOURCE=default
+  # shellcheck disable=SC2034
   FM_CLAUDE_PERMISSION_FLAG=
+  # shellcheck disable=SC2034
   FM_CLAUDE_PERMISSION_ERROR=
   if ! present=$(fm_config_source_present "$path"); then
     FM_CLAUDE_PERMISSION_MODE=
@@ -171,41 +191,42 @@ fm_claude_no_mistakes_data_root() {
 
 # fm_claude_grant_resolve <fm-home>
 # Sets FM_CLAUDE_DIRS (one absolute directory per line, declaration order,
-# deduplicated), FM_CLAUDE_DIRS_JSON (the same grant as a JSON array, ready to
-# drop into the inline --settings object the launch already carries), and
-# FM_CLAUDE_DIRS_UNRESOLVED.
+# deduplicated) and FM_CLAUDE_DIRS_UNRESOLVED. The caller turns the first into
+# the launch's --add-dir arguments, quoting each for the shell itself.
 #
 # It SETS rather than prints, and that is load bearing: a caller that read the
 # grant through command substitution would fork away the unresolved list, and
 # the unresolved list is the half that has to be reported. Printing the grant
 # and reporting what is missing must not be separable.
 fm_claude_grant_resolve() {
-  local home=${1:-} list='' missing='' uid tmp_root data_root config_dir candidate kept
+  local home=${1:-} uid tmp_root data_root config_dir
+  # Output globals; see the note in fm_claude_permission_resolve above.
+  # shellcheck disable=SC2034
   FM_CLAUDE_DIRS=
-  FM_CLAUDE_DIRS_JSON='[]'
+  # shellcheck disable=SC2034
   FM_CLAUDE_DIRS_UNRESOLVED=
 
   if [ -n "$home" ]; then
-    list="$list$home"$'\n'
+    fm_claude_grant__add "$home"
   else
-    missing="$missing firstmate-home(no resolved FM_HOME)"
+    fm_claude_grant__miss "firstmate-home(no resolved FM_HOME)"
   fi
 
   uid=$(id -u 2>/dev/null || true)
   if [ -n "$uid" ]; then
-    list="$list/tmp/claude-$uid"$'\n'
+    fm_claude_grant__add "/tmp/claude-$uid"
     tmp_root=$(cd /tmp 2>/dev/null && pwd -P) || tmp_root=
     if [ -n "$tmp_root" ] && [ "$tmp_root" != /tmp ]; then
-      list="$list$tmp_root/claude-$uid"$'\n'
+      fm_claude_grant__add "$tmp_root/claude-$uid"
     fi
   else
-    missing="$missing claude-scratch-root(no user id)"
+    fm_claude_grant__miss "claude-scratch-root(no user id)"
   fi
 
   if data_root=$(fm_claude_no_mistakes_data_root); then
-    list="$list$data_root"$'\n'
+    fm_claude_grant__add "$data_root"
   else
-    missing="$missing no-mistakes-data-root(no absolute 'data directory' line from no-mistakes doctor)"
+    fm_claude_grant__miss 'no-mistakes-data-root(no absolute "data directory" line from no-mistakes doctor)'
   fi
 
   config_dir=${CLAUDE_CONFIG_DIR:-}
@@ -213,41 +234,42 @@ fm_claude_grant_resolve() {
     config_dir="$HOME/.claude"
   fi
   if [ -n "$config_dir" ]; then
-    list="$list$config_dir/skills"$'\n'
+    fm_claude_grant__add "$config_dir/skills"
   else
-    missing="$missing user-skills-dir(neither CLAUDE_CONFIG_DIR nor HOME is set)"
+    fm_claude_grant__miss "user-skills-dir(neither CLAUDE_CONFIG_DIR nor HOME is set)"
   fi
 
-  # A single quote cannot survive the single-quoted --settings argument the
-  # launch command carries, so such a path is refused rather than shipped in a
-  # command that would break at the shell.
-  kept=
-  while IFS= read -r candidate; do
-    [ -n "$candidate" ] || continue
-    case $candidate in
-    *\'*)
-      missing="$missing $candidate(path contains a single quote)"
-      continue
-      ;;
-    esac
-    kept="$kept$candidate"$'\n'
-  done <<EOF
-$list
-EOF
+  # shellcheck disable=SC2034
+  FM_CLAUDE_DIRS=${FM_CLAUDE_DIRS%$'\n'}
+  # shellcheck disable=SC2034
+  FM_CLAUDE_DIRS_UNRESOLVED=${FM_CLAUDE_DIRS_UNRESOLVED# }
+}
 
-  FM_CLAUDE_DIRS=$(printf '%s' "$kept" | awk 'NF && !seen[$0]++')
-  FM_CLAUDE_DIRS_UNRESOLVED=${missing# }
-  # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
-  FM_CLAUDE_DIRS_JSON=$(printf '%s\n' "$FM_CLAUDE_DIRS" | awk '
-    BEGIN { printf "[" ; first = 1 }
-    {
-      if (length($0) == 0) next
-      gsub(/\\/, "\\\\")
-      gsub(/"/, "\\\"")
-      if (!first) printf ","
-      printf "\"%s\"", $0
-      first = 0
-    }
-    END { printf "]" }
-  ')
+# fm_claude_grant__add <directory>
+# Append one directory to the grant, unless it is already there or cannot be
+# represented. FM_CLAUDE_DIRS is newline separated, so a path CONTAINING a
+# newline would silently become two directories the launch then grants; it is
+# refused by name instead. Every other character survives, because the caller
+# shell-quotes each path onto the launch command rather than embedding it in a
+# quoted JSON string.
+fm_claude_grant__add() {
+  local dir=$1 existing
+  case $dir in
+  *$'\n'*)
+    fm_claude_grant__miss "$(printf '%s' "$dir" | tr '\n' ' ')(path contains a newline)"
+    return 0
+    ;;
+  esac
+  while IFS= read -r existing; do
+    [ "$existing" = "$dir" ] && return 0
+  done <<EOF
+$FM_CLAUDE_DIRS
+EOF
+  FM_CLAUDE_DIRS="$FM_CLAUDE_DIRS$dir"$'\n'
+}
+
+# fm_claude_grant__miss <source(why)>
+# Record one directory the grant does not carry, so the caller can say which.
+fm_claude_grant__miss() {
+  FM_CLAUDE_DIRS_UNRESOLVED="$FM_CLAUDE_DIRS_UNRESOLVED $1"
 }

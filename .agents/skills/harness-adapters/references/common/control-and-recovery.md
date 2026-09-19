@@ -37,7 +37,7 @@ A worker legitimately reads four directories outside its own worktree, because i
 - the validation tool's data root, which `no-mistakes doctor` prints
 - the user skills directory `~/.claude/skills`, where the skills a brief names live
 
-On Claude these four are granted at launch rather than waited for: `../../../bin/fm-spawn.sh` derives them per spawn and passes them in the inline settings the launch already carries, so the prompts do not fire in the first place and nothing machine-specific has to be configured for them (`../../../bin/fm-claude-launch-lib.sh` owns the derivation).
+On Claude these four are granted at launch rather than waited for: `../../../bin/fm-spawn.sh` derives them per spawn and passes them as `--add-dir`, so the prompts do not fire in the first place and nothing machine-specific has to be configured for them (`../../../bin/fm-claude-launch-lib.sh` owns the derivation).
 A spawn that could not derive one says so on its own output, and that named directory is the one to expect a prompt for.
 Answering a prompt remains the fallback, for a directory outside those four, for a harness with no such grant, and for a spawn that reported a directory it could not derive: firstmate is the one who answers it, adding that directory in the worker's own pane, then inspecting the pane under the completion postcondition above to confirm the dialog cleared.
 Such a prompt reaching the captain is a firstmate failure, not his work.
