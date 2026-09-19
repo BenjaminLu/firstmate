@@ -678,11 +678,11 @@ test_a_merge_card_retires_on_an_explicit_verification_not_on_absence() {
   home=$(make_home merge-card-retire)
   key=merge.ship-task
   card="$home/merge-card.json"
-  jq -n --arg key "$key" '''{key:$key, type:"merge", repo:"sample",
+  jq -n --arg key "$key" '{key:$key, type:"merge", repo:"sample",
     title:"Merge: ship the thing", risk:"low",
     pr_url:"https://github.com/example/sample/pull/9",
     options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}],
-    allow_freeform:true}''' > "$card"
+    allow_freeform:true}' > "$card"
   run_captain "$home" card "$key" --store "$card" >/dev/null \
     || fail "storing the merge card failed"
   run_captain "$home" card "$key" >/dev/null \

@@ -531,24 +531,24 @@ test_a_refresh_keeps_the_translated_row_copy_it_cannot_recompose() {
   refresh "$home" >/dev/null || fail "the first refresh failed"
   # What a build leaves behind: one row translated, and one translated against
   # text that no longer matches what this compose produces.
-  set_page_payload "$home" '''
+  set_page_payload "$home" '
     .underway = [ .underway[] | if .id == "ship-task"
       then .name = {en: "Ship the thing", hant: "出貨", hans: "出货"}
       else . end ]
     | .landed = [ .landed[] | if .id == "done-a"
       then .what = {en: "Something else entirely", hant: "別的", hans: "别的"}
       else . end ]
-  ''' || fail "could not stage the published translations"
+  ' || fail "could not stage the published translations"
   refresh "$home" >/dev/null || fail "the second refresh failed"
   payload=$(injected_payload "$home")
-  printf '%s' "$payload" | jq -e '''
+  printf '%s' "$payload" | jq -e '
     ([.underway[] | select(.id == "ship-task") | .name]
        | .[0] == {en: "Ship the thing", hant: "出貨", hans: "出货"})
-  ''' >/dev/null \
+  ' >/dev/null \
     || fail "the refresh dropped a translation it could have carried: $payload"
-  printf '%s' "$payload" | jq -e '''
+  printf '%s' "$payload" | jq -e '
     ([.landed[] | select(.id == "done-a") | .what] | .[0] | type == "string")
-  ''' >/dev/null \
+  ' >/dev/null \
     || fail "the refresh carried a translation onto text it does not translate: $payload"
 }
 
