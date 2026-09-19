@@ -11,7 +11,8 @@
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
 # It is likewise the one owner of the fix-round technique a no-mistakes worker
-# applies to its own commit and to how it answers a Fix gate.
+# applies to its own commit, to how it answers a Fix gate, and to the
+# fourth-round refusal that returns a narrow-remedy instruction to firstmate.
 # This file is the one owner of the no-mistakes `--intent` contract: only the
 # brief's `## Captain's intent` subsection plus later captain words, never
 # `## Firstmate spec` and never the worker's own tradeoffs.
@@ -374,6 +375,10 @@ Apply these four to both, and when the \`greenlight\` skill is installed at \`~/
 - A behavioral test is not evidence until it has failed: before you start the run you prove that yourself, by reverting the production fix, confirming the test goes red, and restoring it.
   Once a run is active you never touch the worktree, so the proof is something you require in the \`--instructions\` you pass at the Fix gate instead of something you perform by hand.
 - Read the primary source before writing a check - the script, spec, or contract itself, not a comment beside it or a paraphrase in a design document.
+
+From the fourth fix round on one step, \`ask-user-authority\` requires firstmate to stop naming a narrow remedy and ask for the coherent change, and you are the party holding the round number when that instruction arrives.
+- Refuse an instruction that still names a narrow remedy: say which round this step is on and ask firstmate for the coherent-change instruction instead of answering the gate with it.
+- Ask the reviewer for the pass conditions in the same response you do answer that gate with: everything still wanted, stated as conditions to satisfy in one pass rather than as one more repair.
 
 After /no-mistakes reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), append \`done: PR {url} checks green\` and stop. You are finished.
 EOF

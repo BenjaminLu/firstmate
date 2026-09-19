@@ -429,6 +429,22 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   assert_grep "Read the primary source before writing a check" "$brief" \
     "no-mistakes DOD lost the primary-source practice"
 
+  # The firstmate-side rule fires on a party that is not reading at the moment it
+  # matters, so the round threshold has to reach the worker holding the round
+  # number: without these the instruction arrives and nothing in the contract
+  # lets the worker refuse it.
+  assert_grep "From the fourth fix round on one step" "$brief" \
+    "no-mistakes DOD lost the round threshold the worker enforces"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`ask-user-authority` requires firstmate to stop naming a narrow remedy' "$brief" \
+    "no-mistakes DOD must cross-reference the owner of the firstmate-side rule, not restate it"
+  assert_grep "Refuse an instruction that still names a narrow remedy: say which round this step is on" "$brief" \
+    "no-mistakes DOD lost the fourth-round refusal clause"
+  assert_grep "Ask the reviewer for the pass conditions in the same response" "$brief" \
+    "no-mistakes DOD lost the pass-conditions clause"
+  assert_grep "stated as conditions to satisfy in one pass rather than as one more repair" "$brief" \
+    "no-mistakes DOD must ask for conditions rather than one more repair"
+
   # Every practice a worker could read as a worktree edit has to carry its own
   # mid-run half, because the no-hand-edit rule sits paragraphs away from these
   # bullets and a worker who reads only the bullet must not reach an edit.
@@ -466,6 +482,8 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     assert_present "$other_brief" "$other_mode: brief was not scaffolded"
     assert_no_grep "One site is a class" "$other_brief" \
       "$other_mode brief must not carry the no-mistakes fix-round technique"
+    assert_no_grep "From the fourth fix round on one step" "$other_brief" \
+      "$other_mode brief must not carry the fourth-round refusal, which has no rounds to count"
   done
   pass "fm-brief.sh: no-mistakes DOD carries the fix-round technique and the faster paths do not"
 }
