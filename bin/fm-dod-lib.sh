@@ -297,7 +297,7 @@ fm_dod_packet_block() {  # <task-id>
   cat <<EOF
 Before the \`done:\` line, and before any \`needs-decision:\` line, leave the decision packet: run \`$FM_ROOT/bin/fm-packet.sh scaffold $id\` (add \`--kind needs-decision\` when you are asking for a decision), fill every \`{FILL}\` placeholder in the packet it writes - above all "What only this session knows": every path you tried and dropped and why, every assumption you could not verify - then run \`$FM_ROOT/bin/fm-packet.sh verify $id\` and fix what it reports until it prints \`packet: ok\`.
 The packet's figures are drawn through the diagram-design skill at \`~/.claude/skills/diagram-design\`, never hand-written SVG, against the contract \`$FM_ROOT/bin/fm-packet.sh --help\` states and verify enforces; a needs-decision packet owes one drawing that puts every option together.
-If that skill is not installed where you are running, say so in the packet with one \`no-figures: <why>\` line in its Figures section instead of hand-rolling an SVG.
+If that skill is not installed where you are running, that is a blocker you escalate to firstmate, not a line you write in the packet: verify has no path that excuses a needs-decision packet its figures.
 A status line is a wake, not an explanation; the packet is what firstmate and the captain read, so a \`done:\` or \`needs-decision:\` line without a verified packet is not accepted.
 EOF
 }

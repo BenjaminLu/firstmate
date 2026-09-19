@@ -59,9 +59,9 @@
 #   - edge <data-edge id>: <what proves this connector>
 #
 # The drawing is produced through the diagram-design skill, never hand-written
-# SVG; a worker whose environment has no such skill writes a single
-# `no-figures: <why>` line in the section instead, which stands in for the
-# figures a needs-decision packet would otherwise owe. That skill emits a
+# SVG. There is no line a worker can write to be excused the figures: an
+# environment that genuinely cannot draw is a blocker escalated to firstmate,
+# who can see whether the drawing was truly impossible. That skill emits a
 # standalone HTML file whose SVG carries its own hex palette and a web-font
 # link, so the figure is the `<svg>` lifted out of it and EDITED to the
 # contract below - a straight paste is refused, by design. The contract is
@@ -283,8 +283,7 @@ command_scaffold() {
       printf '\n## Figures\n\n'
       # shellcheck disable=SC2016  # markdown code spans in the packet, not shell expansions
       printf '%s\n' 'Drawn through the diagram-design skill, never hand-written SVG; `fm-packet.sh --help` owns the contract verify enforces.'
-      # shellcheck disable=SC2016  # markdown code spans in the packet, not shell expansions
-      printf '%s\n' 'If that skill is not installed where this task runs, replace everything below with one line: `no-figures: <why>`.'
+      printf '%s\n' 'If that skill is not installed where this task runs, that is a blocker to escalate to firstmate, not a line you write here.'
       printf '%s\n\n' 'verify checks the contract, not the picture: render the page and look at the drawing before you report.'
       printf '%s\n' '### {FILL: the heading - what this drawing shows}'
       printf '%s\n' 'figure: {FILL: slug, lowercase, used to prefix every id inside the svg}'
@@ -364,19 +363,14 @@ body = []
 if start is None:
     if kind == "needs-decision":
         problems.append("kind=needs-decision but there is no '## Figures' section; "
-                        "draw the options through the diagram-design skill, or say why you cannot "
-                        "with one 'no-figures: <why>' line in that section")
+                        "draw the options through the diagram-design skill. An environment that "
+                        "cannot draw is a blocker to escalate to firstmate, not something to "
+                        "declare here")
 else:
     for l in lines[start:]:
         if l.startswith("## "):
             break
         body.append(l)
-
-declared = None
-for l in body:
-    m = re.match(r"^no-figures:\s*(\S.*?)\s*$", l)
-    if m:
-        declared = m.group(1)
 
 # ---- split the section into figures at their ### headings -------------------
 figures, cur = [], None
@@ -388,25 +382,30 @@ for l in body:
     elif cur is not None:
         cur["lines"].append(l)
 
-if declared is not None and figures:
-    problems.append("the Figures section declares 'no-figures: %s' and still carries %d figure(s); "
-                    "it is one or the other" % (declared, len(figures)))
-if declared is None and start is not None and not figures and kind == "needs-decision":
-    problems.append("the Figures section carries no '### ' figure and no 'no-figures: <why>' line")
+if start is not None and not figures and kind == "needs-decision":
+    problems.append("the Figures section carries no '### ' figure; a needs-decision packet owes "
+                    "one drawing that puts every option together")
 
 # ---- per-figure checks ------------------------------------------------------
 COLOUR_ATTRS = ("fill", "stroke", "color", "stop-color", "flood-color", "lighting-color")
-COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--[A-Za-z0-9_-]+\)"
-                       r"|url\(#[A-Za-z0-9._:-]+\))$")
+# The palette the rendered page binds for a figure to draw against; this
+# script's header enumerates the same names. A var(--...) outside it resolves
+# to nothing and the shape falls back to black on --card, which no clause
+# would otherwise catch.
+PALETTE = ("fg", "muted", "soft", "card", "card-2", "bg", "rule", "rule-strong",
+           "accent", "accent-tint", "amber", "seal", "ok", "link")
+COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)\)"
+                       r"|url\(#[A-Za-z0-9._:-]+\))$" % "|".join(map(re.escape, PALETTE)))
 LITERAL = re.compile(r"#[0-9A-Fa-f]{3,8}\b|\brgba?\(|\bhsla?\(")
-ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*("([^"]*)"|'([^']*)')""")
+ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
 TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
 
 def attrs_of(text):
     out = {}
     for m in ATTR.finditer(text):
-        out[m.group(1).lower()] = m.group(3) if m.group(3) is not None else m.group(4)
+        value = next(g for g in m.groups()[1:] if g is not None)
+        out[m.group(1).lower()] = value
     return out
 
 def style_decls(value):
@@ -504,7 +503,7 @@ for n, fig in enumerate(figures, 1):
 # label says so, because a label would be a second declaration of something the
 # drawing already proves - and one a worker could type onto a drawing that
 # compares nothing.
-if kind == "needs-decision" and declared is None and figures and options:
+if kind == "needs-decision" and figure_nodes and options:
     best = max(figure_nodes, key=lambda c: len(set(options) & c[1]))
     missing = [o for o in options if o not in best[1]]
     if len(missing) == len(options):
@@ -561,10 +560,18 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
     if ! command -v python3 >/dev/null 2>&1; then
       echo "fm-packet: python3 is required to check the packet's figures" >&2; problems=$((problems + 1))
     else
+      # A checker that dies must never read as a clean packet: take its exit
+      # status, which a process substitution would discard.
+      local figs status=0
+      figs=$(figures_problems "$packet" "$kind" ${opts[@]+"${opts[@]}"}) || status=$?
+      if [ "$status" -ne 0 ]; then
+        echo "fm-packet: the figures check failed (exit $status); the packet is not verified" >&2
+        problems=$((problems + 1))
+      fi
       while IFS= read -r line; do
         [ -n "$line" ] || continue
         echo "fm-packet: figures: $line" >&2; problems=$((problems + 1))
-      done < <(figures_problems "$packet" "$kind" ${opts[@]+"${opts[@]}"})
+      done <<<"$figs"
     fi
   fi
   [ "$problems" -eq 0 ] || exit 1
@@ -821,13 +828,12 @@ FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
 FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 
 def figures_html(body):
-    text = "\n".join(body)
-    head, _, rest = text.partition("\n### ")
+    # Split exactly where verify splits, so a figure whose heading opens the
+    # section is a figure here too rather than prose with an escaped svg in it.
+    chunks = re.split(r"(?m)^###[ \t]+", "\n".join(body))
+    head = chunks[0]
     out = [md(head.splitlines())] if head.strip() else []
-    if not rest:
-        return "\n".join(out)
-    for chunk in ("### " + rest).split("\n### "):
-        chunk = chunk[4:] if chunk.startswith("### ") else chunk
+    for chunk in chunks[1:]:
         lines = chunk.splitlines()
         heading, lines = (lines[0].strip() if lines else ""), lines[1:] if lines else []
         fields, edges = {}, []

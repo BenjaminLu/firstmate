@@ -298,6 +298,19 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/style=\"font-family:var(--sans)\"/style=\"font-family:var(--sans);fill:rgb(20,20,20)\"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     'styles fill: rgb(20,20,20)' "an rgb() fill in a style attribute"
+  # A variable the page never binds resolves to nothing and the shape falls
+  # back to black on --card, so only the bound palette passes.
+  svg=${GOOD_SVG/fill=\"var(--accent-tint)\"/fill=\"var(--ink)\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'colours come from the page' "a variable outside the page's palette"
+  # Every attribute clause must see an unquoted value too, or it is one
+  # missing pair of quotes away from being unenforced.
+  svg=${GOOD_SVG/fill=\"var(--accent-tint)\"/fill=#f4d8c9}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'colours come from the page' "an unquoted hex fill"
+  svg=${GOOD_SVG/<rect id=\"opt-box-end\"/<rect onload=alert(1) id=\"opt-box-end\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "inline onload handler" "an unquoted event handler"
 
   # 3. every selectable shape carries its identity attribute
   svg=${GOOD_SVG/ data-node=\"wake\"/}
@@ -336,7 +349,7 @@ test_verify_holds_a_figure_to_the_svg_contract() {
 }
 
 test_a_needs_decision_packet_owes_one_figure_comparing_every_option() {
-  local home packet out body
+  local home packet out body rc
   home=$(make_home compare)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -355,13 +368,19 @@ test_a_needs_decision_packet_owes_one_figure_comparing_every_option() {
   assert_figure_refused "$home" "$packet" "$body" \
     'draws no shape with data-node="quiet"' "a comparison figure missing an option"
 
-  # The drawing skill may be absent where the worker runs; saying so is the
-  # one alternative to hand-rolling an SVG, and it cannot sit beside figures.
+  # There is no line that excuses the figures: a section that declares the
+  # drawing skill absent still owes the drawing.
   fill_figures "$packet" 'no-figures: the diagram-design skill is not installed in this worker environment'
-  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a declared absence: $out"
-  fill_figures "$packet" "$(printf '%s\n\n%s\n' 'no-figures: not installed here' "$(good_figures)")"
   set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
-  assert_contains "$out" "it is one or the other" "a declared absence beside figures was accepted: $out"
+  assert_contains "$out" "carries no '### ' figure" "a declared absence bought a pass: $out"
+
+  # A figure that carries no drawing at all is refused, not swallowed: the
+  # comparison rule must not crash past the problems the figure already has.
+  fill_figures "$packet" "$(good_figures '')"
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a needs-decision figure with no drawing in it: $out"
+  assert_contains "$out" "carries 0 inline <svg> block(s)" "the missing drawing was swallowed: $out"
+  case "$out" in *"packet: ok"*) fail "a crashed figures check read as a verified packet: $out" ;; esac
 
   # A needs-decision packet that simply drops the section is refused.
   python3 - "$packet" <<'PY'
@@ -543,6 +562,17 @@ test_render_decision_card_answers_the_five_questions() {
   assert_grep 'Both options end at the same place' "$page" "the figure lost its caption"
   assert_grep '<code>bound-to-quiet</code>' "$page" "the figure lost its per-connector evidence"
   assert_grep '--accent-tint: var(--rust-050)' "$page" "the page does not bind the palette figures draw against"
+
+  # A worker who drops the section's preamble leaves the '### ' heading on the
+  # first line of the body. verify reads that as a figure, so render must too.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("## Figures\n\n### ", "## Figures\n### "))
+PY
+  run_packet "$home" verify pk-1 >/dev/null || fail "verify refused a Figures section that opens on its heading"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed on a Figures section that opens on its heading"
+  assert_grep '<rect id="opt-box-a" data-node="bound"' "$page" "the first figure's svg was not inlined"
+  assert_no_grep '&lt;svg' "$page" "the first figure's svg was escaped into prose"
   pass "the rendered decision card answers all five questions and the recommendation"
 }
 
@@ -594,6 +624,7 @@ test_name_support_probe_never_lists_before_the_session_is_opened() {
   packet="$home/data/pk-1/packet.md"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
   run_packet_lavish "$home" serve pk-1 >/dev/null || fail "serve failed"
   # A listing is the read serve's open/reopen decision consumes, so nothing
   # serve asks before opening the session may be one. Pinning the FIRST call
