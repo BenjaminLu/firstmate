@@ -189,6 +189,13 @@ add_no_origin_projects() {
   done
 }
 
+# The line bootstrap prints for an experimental backend recorded in
+# config/backend. Kept in one place here so the cases below assert the contract
+# rather than each restating wording that lives in bin/fm-bootstrap.sh.
+backend_experimental_line() {  # <backend>
+  printf '%s' "BACKEND_EXPERIMENTAL: $1 (config: config/backend) - $1 is an EXPERIMENTAL backend; tmux is the verified reference. config/backend records this deliberately; write tmux there to opt out."
+}
+
 run_bootstrap_timeout_case() {
   local home=$1 fake_root=$2 fakebin=$3 override started_marker git_record wait_for_marker
   override=__unset__
@@ -537,8 +544,14 @@ SH
 }
 
 test_orca_backend_gates_orca_tool_only_when_selected() {
-  local case_dir fakebin out missing_orca
+  local case_dir fakebin out missing_orca orca_selected
   missing_orca="MISSING: orca (install: brew install orca  # or the platform's package manager)"
+  # Selecting orca also reports it as experimental now, whichever rung of the
+  # precedence chose it, so the exact-output expectation carries both lines. The
+  # missing-tool line comes first because tool detection runs before the
+  # configuration report.
+  orca_selected="$missing_orca
+$(backend_experimental_line orca)"
 
   case_dir="$TMP_ROOT/orca-backend-selected"
   mkdir -p "$case_dir/home/config"
@@ -547,7 +560,7 @@ test_orca_backend_gates_orca_tool_only_when_selected() {
   fakebin=$(make_fake_toolchain "$case_dir")
   out=$(PATH="$fakebin:$(fm_test_base_path_sans "$BASE_PATH" orca)" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  [ "$out" = "$missing_orca" ] || fail "backend=orca should require only the Orca-specific missing tool, got: $out"
+  [ "$out" = "$orca_selected" ] || fail "backend=orca should require only the Orca-specific missing tool and report the experimental backend, got: $out"
 
   case_dir="$TMP_ROOT/orca-backend-not-selected"
   mkdir -p "$case_dir/home/config"
@@ -587,7 +600,8 @@ test_session_provider_backends_do_not_require_tmux() {
     fakebin=$(make_fake_toolchain_no_tmux "$case_dir" "$cli")
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-    [ -z "$out" ] || fail "backend=$backend with tmux absent but its own deps present should be silent, got: $out"
+    [ "$out" = "$(backend_experimental_line "$backend")" ] \
+      || fail "backend=$backend with tmux absent but its own deps present should report only its experimental backend, got: $out"
   done <<'ROWS'
 herdr^herdr
 zellij^zellij
@@ -650,7 +664,8 @@ test_cmux_bundled_cli_satisfies_dependency() {
   bundle="$case_dir/bundle/cmux"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_BACKEND_CMUX_BUNDLE_BIN="$bundle" FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  [ -z "$out" ] || fail "a usable bundled cmux CLI should satisfy bootstrap without a PATH shim, got: $out"
+  [ "$out" = "$(backend_experimental_line cmux)" ] \
+    || fail "a usable bundled cmux CLI should satisfy bootstrap without a PATH shim, got: $out"
   pass "bootstrap: the bundled cmux CLI satisfies the active backend dependency"
 }
 
@@ -725,7 +740,8 @@ test_treehouse_lease_check_follows_resolved_backend() {
   # so it sits below the documented treehouse floor.
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     "$ROOT/bin/fm-bootstrap.sh")
-  [ -z "$out" ] || fail "backend=orca must not require treehouse (even lease-less) or tmux, got: $out"
+  [ "$out" = "$(backend_experimental_line orca)" ] \
+    || fail "backend=orca must not require treehouse (even lease-less) or tmux, got: $out"
 
   # ...but the same lease-less treehouse IS a problem for a session-provider
   # backend that relies on treehouse for worktrees.
@@ -1115,7 +1131,7 @@ test_crew_dispatch_active_rules_are_verbose_bootstrap_info() {
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_BOOTSTRAP_VERBOSE_FACTS=1 FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
 
-  expect=$'BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json\nBOOTSTRAP_INFO: crew dispatch rule: fresh news -> grok\nBOOTSTRAP_INFO: crew dispatch rule: big feature -> quota-balanced[claude/claude-sonnet-5/high, codex/gpt-5.5/high]\nBOOTSTRAP_INFO: crew dispatch rule: legacy feature -> quota-balanced[claude, codex]\nBOOTSTRAP_INFO: crew dispatch default: quota-balanced[pi/anthropic/claude-sonnet-5/high, grok/grok-4.5/high]'
+  expect=$'BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json\nBOOTSTRAP_INFO: crew dispatch rule: fresh news -> grok\nBOOTSTRAP_INFO: crew dispatch rule: big feature -> quota-balanced[claude/claude-sonnet-5/high, codex/gpt-5.5/high]\nBOOTSTRAP_INFO: crew dispatch rule: legacy feature -> quota-balanced[claude, codex]\nBOOTSTRAP_INFO: crew dispatch default: quota-balanced[pi/anthropic/claude-sonnet-5/high, grok/grok-4.5/high]\nBOOTSTRAP_INFO: runtime backend tmux (default)'
   [ "$out" = "$expect" ] || fail "active dispatch verbose info block mismatch"$'\n'"expected: $expect"$'\n'"actual:   $out"
   pass "bootstrap surfaces active crew-dispatch rules only as verbose BOOTSTRAP_INFO"
 }
