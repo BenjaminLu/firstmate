@@ -3,9 +3,10 @@
 #
 # The board is the captain-facing interactive surface of /bearings lavish: the
 # shipped template (.agents/skills/bearings/assets/board-template.html) plus one
-# injected fm-bearings-board.v1 JSON payload. This script owns the mechanics so
-# the invoking agent's per-run work stays "compose the JSON, run build" - the
-# agent never authors board UI at invocation time.
+# injected fm-bearings-board.v1 JSON payload. This script owns the mechanics AND
+# the deterministic payload skeleton, so the invoking agent's per-run work stays
+# "fill the skeleton's prose and translations, run build" - the agent never
+# hand-writes the whole payload and never authors board UI at invocation time.
 #
 # Usage:
 #   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
@@ -187,7 +188,10 @@
 # reversible, recommend_value, charted_more, charted_warning_more) also accept
 # a compose placeholder, so a skeleton validates as a skeleton; build refuses
 # every placeholder BEFORE it validates, so those slots are always real values
-# by the time a board is built. Every fleet row and
+# by the time a board is built. Every Captain's Call key is ONE keyed-intake
+# address, so the validator also refuses a payload carrying two cards under the
+# same key, hand-written or composed: `bin/fm-captain-hold.sh` would resolve
+# both answers to the one task. Every fleet row and
 # Captain's Call item explicitly carries `repo`; the composer fills it from the
 # snapshot and task records wherever known, and uses null or an empty string
 # only as the deliberate genuinely-no-repo marker. In that exceptional case
