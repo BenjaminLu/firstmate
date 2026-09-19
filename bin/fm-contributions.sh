@@ -70,7 +70,8 @@
 # API failure leaves error evidence; an expired or absent observation is not
 # silence. FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # A URL whose last good observation is merged or closed is final: it is
-# never re-read, stays fresh, and a stale error beside it is cleared once.
+# never re-read, stays fresh, and a stale error beside it is cleared once,
+# taking any cut_at with it.
 # A genuine failure prints its unavailable line only when it starts an episode
 # (no prior owner has an error); a successful read ends the episode.
 # FM_CONTRIBUTIONS_NOW supplies an ISO UTC clock for tests, otherwise UTC now.
