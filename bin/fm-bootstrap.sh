@@ -1886,10 +1886,16 @@ detect_lavish_named_session() {
 # CI until somebody opens the Actions tab. That is the worst failure shape a
 # fresh fork can have, so a session start asks.
 #
-# The repository is resolved from FM_ROOT's own origin remote, never from `gh`'s
-# ambient resolution: inside a fork, `gh repo view` answers with the UPSTREAM
-# slug, so asking it would confidently report the parent's healthy Actions while
-# this fork's sat dormant.
+# The repository is resolved from FM_ROOT's own origin remote rather than from
+# `gh`'s ambient resolution, which answers from local configuration that can be
+# changed without touching this code: on one checkout here it resolved to the
+# UPSTREAM slug and would have reported the parent's healthy Actions while the
+# fork's sat dormant, and on the same checkout after reconfiguration it resolves
+# to the fork. A check about THIS repository should not have a verdict that
+# moves when somebody edits a git config, so it reads the remote directly.
+# Note this does not settle which repository is the right one to ask about: a
+# contributor following CONTRIBUTING.md points origin at the parent and pushes
+# to a fork, and the open review finding on that is where that belongs.
 # Returns the owner/repo slug, and returns 2 - distinct from a parse failure -
 # when the origin is simply not on github.com. That distinction matters: a
 # GitHub repository whose slug cannot be read is a check that should have run
