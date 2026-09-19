@@ -267,7 +267,7 @@ test_verify_checks_the_decision_block_field_by_field() {
 }
 
 test_verify_holds_a_figure_to_the_svg_contract() {
-  local home packet out svg body styled foreign wrapped plain masked cursored
+  local home packet out svg body styled foreign wrapped plain masked cursored n
   home=$(make_home figures)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -320,6 +320,24 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/style=\"font-family:var(--sans)\"/"$cursored"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "a url() in a drawing points at a same-document #fragment" "a style that fetches off-origin"
+  # The presentation-attribute form of the same property fetches the same way.
+  filtered='filter="url(//evil.example/f.svg#blur)" id="opt-box-end"'
+  svg=${GOOD_SVG/id=\"opt-box-end\"/"$filtered"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a url() in a drawing points at a same-document #fragment" "a filter attribute that fetches off-origin"
+  # The same-document form every drawing already uses is untouched.
+  fill_figures "$packet"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused url(#opt-arrow): $out"
+
+  # A bound variable written with a fallback is refused for what is wrong with
+  # it, not for a palette it is already in.
+  svg=${GOOD_SVG/fill=\"var(--card-2)\"/fill=\"var(--card-2, #fff)\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'has to be exactly var(--card-2)' "a bound variable carrying a fallback"
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  case "$out" in
+    *"binds no --card-2"*) fail "the refusal called a bound variable unbound: $out" ;;
+  esac
   # Every attribute clause must see an unquoted value too, or it is one
   # missing pair of quotes away from being unenforced.
   svg=${GOOD_SVG/fill=\"var(--accent-tint)\"/fill=#f4d8c9}
@@ -403,7 +421,10 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   # it into source text rather than drawing it.
   body=$(printf '%s\n\n%s\n' "$GOOD_SVG" "$(good_figures)")
   assert_figure_refused "$home" "$packet" "$body" \
-    "sits above the first '### ' figure" "a drawing parked above the first figure"
+    "a drawing sits above the first '### ' figure" "a drawing parked above the first figure"
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  n=$(printf '%s\n' "$out" | grep -c "sits above the first" || true)
+  [ "$n" -eq 1 ] || fail "the parked drawing was reported $n times, once per line of its markup: $out"
   body=$(printf '%s\n\n%s\n' 'Drawn through the diagram-design skill; look before you report.' "$(good_figures)")
   assert_figure_refused "$home" "$packet" "$body" \
     "sits above the first '### ' figure" "prose parked above the first figure"

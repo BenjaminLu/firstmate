@@ -440,6 +440,19 @@ if not found and kind == "needs-decision":
                     "cannot draw is a blocker to escalate to firstmate, not something to "
                     "declare here")
 
+# The one rule for lines that belong to no drawing, which both the section and
+# the figure body report through: markup is one problem naming the drawing,
+# because a refusal per line of its markup buries the cause and a worker told
+# to fix what verify reports would delete the drawing line by line; prose is
+# reported line by line, because there each line is its own mistake.
+SVG_OPEN = re.compile(r"<\s*svg\b", re.I)
+
+def stray_problems(lines, where, advice):
+    offending = [l.strip() for l in lines if l.strip()]
+    if any(SVG_OPEN.search(l) for l in offending):
+        return ["a drawing %s; %s" % (where, advice)]
+    return ['the line "%s" %s; %s' % (l, where, advice) for l in offending]
+
 # ---- split the section into figures at their ### headings -------------------
 # Everything in the section belongs to a figure. A line above the first '### '
 # is read by no figure clause - so a drawing parked there would reach the page
@@ -456,12 +469,12 @@ for l in body:
     elif l.strip():
         preamble.append(l)
 
-for l in preamble:
-    problems.append("the line \"%s\" sits above the first '### ' figure, where no figure clause "
-                    "reads it; every line in the section belongs to a figure. A drawing needs "
-                    "its own '### ' heading, a sentence about one goes in that figure's "
-                    "caption, and anything longer goes in the packet section it belongs to"
-                    % l.strip())
+problems.extend(stray_problems(
+    preamble,
+    "sits above the first '### ' figure, where no figure clause reads it",
+    "every line in the section belongs to a figure: a drawing needs its own '### ' heading, "
+    "a sentence about one goes in that figure's caption, and anything longer goes in the "
+    "packet section it belongs to"))
 
 if found and not figures:
     problems.append("the Figures section carries no '### ' figure; a section is the drawings in "
@@ -485,7 +498,7 @@ FIG_FIELD = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
 FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 TEXT_ELEMENT = re.compile(r"""<\s*text\b(?:[^<>"']|"[^"]*"|'[^']*')*>(.*?)<\s*/\s*text\s*>""", re.S)
 REF_ATTRS = ("href", "xlink:href", "src")
-STYLE_URL = re.compile(r"url\(\s*([^)]*)\)", re.I)
+URL_REF = re.compile(r"url\(\s*([^)]*)\)", re.I)
 SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 LINK_SCHEMES = ("http", "https", "mailto")
 
@@ -494,10 +507,14 @@ VAR_REF = re.compile(r"^var\(\s*(--[A-Za-z0-9_-]+)")
 def colour_advice(value):
     """why this colour was refused, in the terms the value is already written in"""
     m = VAR_REF.match(value.strip())
-    if m:
-        return ("the page binds no %s for a figure to draw against; the palette is %s"
-                % (m.group(1), ", ".join("--" + name for name in PALETTE)))
-    return "colours come from the page's CSS variables, as var(--...)"
+    if m is None:
+        return "colours come from the page's CSS variables, as var(--...)"
+    if m.group(1)[2:] in PALETTE:
+        return ("%s is bound, but the value has to be exactly var(%s) - a fallback, a space "
+                "inside the parentheses or an !important is what the page cannot read"
+                % (m.group(1), m.group(1)))
+    return ("the page binds no %s for a figure to draw against; the palette is %s"
+            % (m.group(1), ", ".join("--" + name for name in PALETTE)))
 
 def attrs_of(text):
     out = {}
@@ -581,13 +598,15 @@ for n, fig in enumerate(figures, 1):
     opened = chunk.index(svg)
     first = chunk.count("\n", 0, opened)
     drawn = range(first, first + svg.count("\n") + 1)
-    for at, l in enumerate(fig["lines"]):
-        if at in drawn or not l.strip() or FIG_FIELD.match(l) or FIG_EDGE.match(l):
-            continue
-        bad("the line \"%s\" is not part of the figure, and nothing renders it; a figure body "
-            "carries figure:, caption:, one drawing and its '- edge' lines. A sentence about "
-            "the drawing goes in the caption; anything longer goes in the packet section it "
-            "belongs to" % l.strip())
+    rest = [l for at, l in enumerate(fig["lines"])
+            if at not in drawn and not FIG_FIELD.match(l) and not FIG_EDGE.match(l)]
+    for line in stray_problems(
+            rest,
+            "is not part of the figure, and nothing renders it",
+            "a figure body carries figure:, caption:, one drawing and its '- edge' lines: a "
+            "sentence about the drawing goes in the caption, and anything longer goes in the "
+            "packet section it belongs to"):
+        bad(line)
 
     if re.search(r"<\s*script\b", svg, re.I):
         bad("the svg carries a <script>; a figure is static markup")
@@ -631,15 +650,15 @@ for n, fig in enumerate(figures, 1):
                 if not ok_ref:
                     bad("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
                         "only an <a> may leave the page, with http, https or mailto" % (tag, k, ref))
+            for ref in URL_REF.findall(v):
+                if not ref.strip().strip("\"'").startswith("#"):
+                    bad("<%s> has %s=\"%s\"; a url() in a drawing points at a same-document "
+                        "#fragment, or the page fetches it and stops rendering offline"
+                        % (tag, k, v))
             if k == "style":
                 for prop, val in style_decls(v):
                     if prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
                         bad("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
-                    for ref in STYLE_URL.findall(val):
-                        if not ref.strip().strip("\"'").startswith("#"):
-                            bad("<%s> styles %s: %s; a url() in a drawing points at a "
-                                "same-document #fragment, or the page fetches it and stops "
-                                "rendering offline" % (tag, prop, val))
         if tag == "text":
             missing = [a for a in ("data-en", "data-hant", "data-hans") if not at.get(a)]
             if missing:
