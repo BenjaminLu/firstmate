@@ -665,6 +665,43 @@ test_a_stored_board_card_round_trips_and_survives_restating_the_same_hold() {
   pass "a stored board card round-trips and survives re-stating the same hold"
 }
 
+# A merge card is stored under its own `merge.<task-id>` key and no hold ever
+# covers it, so `hold` cannot retire it and landing is the only proof the
+# board itself can see. A pull request closed WITHOUT merging never reaches a
+# landed row, so its Merge now control would come back on every refresh for
+# ever - a button that refuses every time it is pressed. The second proof is
+# the firstmate verification the merge answer already performs, and `--retire`
+# is how it is recorded. Absence is still never proof: only this explicit call
+# drops the card.
+test_a_merge_card_retires_on_an_explicit_verification_not_on_absence() {
+  local home key card out
+  home=$(make_home merge-card-retire)
+  key=merge.ship-task
+  card="$home/merge-card.json"
+  jq -n --arg key "$key" '''{key:$key, type:"merge", repo:"sample",
+    title:"Merge: ship the thing", risk:"low",
+    pr_url:"https://github.com/example/sample/pull/9",
+    options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}],
+    allow_freeform:true}''' > "$card"
+  run_captain "$home" card "$key" --store "$card" >/dev/null \
+    || fail "storing the merge card failed"
+  run_captain "$home" card "$key" >/dev/null \
+    || fail "the stored merge card could not be read back"
+
+  out=$(run_captain "$home" card "$key" --retire) \
+    || fail "retiring the merge card failed: $out"
+  assert_contains "$out" "retired:" "retiring did not name the card it dropped: $out"
+  run_captain "$home" card "$key" >/dev/null 2>&1 \
+    && fail "the merge card survived an explicit retirement"
+
+  # Retiring one that is already gone is not an error: the verification proved
+  # the same thing either way, and a merge answer must not fail on a card a
+  # landed row already dropped.
+  run_captain "$home" card "$key" --retire >/dev/null \
+    || fail "retiring an already-retired card failed"
+  pass "a merge card retires on an explicit verification and nothing else drops it"
+}
+
 test_holding_a_task_again_retires_the_previous_holds_card() {
   local home id stored out rc=0
   home=$(make_home card-rehold)
@@ -4141,3 +4178,4 @@ test_captain_hold_mutations_address_the_beads_backend
 test_a_stored_board_card_round_trips_and_survives_restating_the_same_hold
 test_holding_a_task_again_retires_the_previous_holds_card
 test_a_stored_card_must_address_the_task_that_holds_it
+test_a_merge_card_retires_on_an_explicit_verification_not_on_absence

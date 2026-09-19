@@ -35,7 +35,7 @@
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
 #   fm-captain-hold.sh reconcile note <task-id> --note-file <path>
-#   fm-captain-hold.sh card <task-id> [--store <path>]
+#   fm-captain-hold.sh card <task-id> [--store <path> | --retire]
 #
 # THE STORED BOARD CARD.
 # A captain call reaches the captain as one board card, and the board is
@@ -54,6 +54,16 @@
 # and keeps the copy he has already been shown. A task with no stored card is
 # carded from its verified packet, or degraded to its title and hold reason,
 # by the board's own composing rules.
+#
+# A MERGE card is stored under its own `merge.<task-id>` key and no hold ever
+# covers it, so `hold` cannot retire it. It retires on proof its pull request
+# reached a terminal state: landing, which the board sees in its own landed
+# rows, or a firstmate verification at answer time that finds the pull request
+# closed rather than open. `card <key> --retire` is how that second proof is
+# recorded, and it is the only other way a stored card is dropped. Absence is
+# never proof - a failed, capped or narrowed pull-request view returns the same
+# nothing as a pull request that stopped being merge-ready - so a verification
+# that could not complete retires nothing and leaves the card alone.
 #
 # `hold` places an existing task under an active captain hold, or creates the
 # task first when no work item exists to hold (--title required to create; the
@@ -860,19 +870,26 @@ retire_board_card() {  # <task-id>
 }
 
 command_card() {
-  local id=${1:-} src='' card
+  local id=${1:-} src='' retire=0 card
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --store) shift; [ "$#" -ge 1 ] || { usage >&2; exit 2; }; src=$1 ;;
+      --retire) retire=1 ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
   done
   validate_slug task-id "$id"
-  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  [ "$retire" -eq 0 ] || [ -z "$src" ] || { usage >&2; exit 2; }
   card=$(board_card_path "$id")
+  if [ "$retire" -eq 1 ]; then
+    retire_board_card "$id"
+    printf 'retired: %s\n' "$card"
+    return 0
+  fi
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
   if [ -n "$src" ]; then
     [ -f "$src" ] || fail "board card source does not exist: $src"
     store_board_card "$id" "$src"
