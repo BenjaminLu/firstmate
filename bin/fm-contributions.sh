@@ -31,25 +31,12 @@
 # an eligible merge remains a captain call, never an automatic forge action.
 #
 # poll consumes fm-fleet-snapshot.sh --contribution-input, a local-only read,
-# and spends at most FM_CONTRIBUTIONS_BUDGET seconds on forge reads (default 25,
-# 1..25 - exactly what the watcher bound below can grant, so the number it
-# advertises is the number it uses). Each gh call is bounded by the remaining
-# budget and by twelve seconds. That bound comes from measured GitHub latency on
-# a slow repository: 0.9 to 4.4 seconds per call, samples 4.35, 2.83 and 3.39,
-# with one read per URL regularly past five seconds. Twelve sits well above the
-# slowest measured call, so a merely slow forge finishes its read instead of
-# being killed.
-#
-# The whole poll must finish inside the watcher's per-check bound, because a
-# poll the watcher kills prints nothing and writes no record and would repeat
-# that silence forever. That coupling is enforced rather than assumed, the way
-# bin/fm-mail-check.sh and bin/fm-tool-update-check.sh already enforce it: a
-# budget larger than FM_CHECK_TIMEOUT (default 30, read from this check's own
-# environment because the watcher runs the check as a direct child) allows is
-# cut down to what fits, and the forge deadline is then clamped to the time the
-# local snapshot and record read actually left, so local work that runs long
-# shortens the reads instead of overrunning the bound. At the default bound the
-# reads get 25 seconds, less whatever that local work really cost.
+# and spends at most FM_CONTRIBUTIONS_BUDGET seconds on forge reads (default 20,
+# 1..25). Each gh call is bounded by the remaining budget and by twelve seconds.
+# That bound comes from measured GitHub latency on a slow repository: 0.9 to 4.4
+# seconds per call, samples 4.35, 2.83 and 3.39, with one read per URL regularly
+# past five seconds. Twelve sits well above the slowest measured call, so a
+# merely slow forge finishes its read instead of being killed.
 #
 # What that closes is the forge whose calls are merely slower than the old
 # five-second bound. What it does not close is a forge slow enough that a whole
@@ -113,31 +100,11 @@ command -v jq >/dev/null 2>&1 || fail 'jq is required to measure contribution co
 NOW=${FM_CONTRIBUTIONS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 EPOCH=$(jq -nr --arg now "$NOW" '$now | fromdateiso8601') || fail 'invalid observation clock'
 MAX_AGE=${FM_CONTRIBUTIONS_MAX_AGE:-900}
-BUDGET=${FM_CONTRIBUTIONS_BUDGET:-25}
+BUDGET=${FM_CONTRIBUTIONS_BUDGET:-20}
 case "$MAX_AGE" in ''|*[!0-9]*) fail 'invalid freshness bound' ;; esac
 case "$BUDGET" in ''|*[!0-9]*) fail 'invalid poll budget' ;; esac
 [ "$BUDGET" -ge 1 ] && [ "$BUDGET" -le 25 ] || fail 'poll budget must be 1..25 seconds'
 CALL_BOUND=12
-# The watcher's per-check bound, read from this check's own environment: the
-# watcher runs the check as a direct child, so an operator who raised it is seen
-# here too, and when it is unset both sides resolve the same default.
-CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}
-case "$CHECK_TIMEOUT" in ''|*[!0-9]*|0) CHECK_TIMEOUT=30 ;; esac
-# The forge budget has to leave the watcher's bound the local work around the
-# reads - the fleet snapshot and durable records read before the first call, the
-# record writes and wake publication after the last - plus what fm_run_timed
-# adds to a bounded call: it counts a whole second before it alarms and asks its
-# runner for -k 1. The work before the reads is not estimated here at all: the
-# deadline clamp below charges exactly what it really cost.
-POST_WORK_SECS=3
-CLOCK_ROUNDING_SECS=1
-KILL_GRACE_SECS=1
-START_EPOCH=$(date +%s)
-BUDGET_MAX=$((CHECK_TIMEOUT - POST_WORK_SECS - CLOCK_ROUNDING_SECS - KILL_GRACE_SECS))
-[ "$BUDGET_MAX" -ge 1 ] || BUDGET_MAX=1
-# Cut rather than refuse: a poll that refuses to run leaves the contributions
-# unmeasured, which is the silence this bound exists to prevent.
-[ "$BUDGET" -le "$BUDGET_MAX" ] || BUDGET=$BUDGET_MAX
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-contributions.XXXXXX")
 LOCK_HELD=0
 cleanup() {
@@ -343,7 +310,7 @@ settle_final() { # canonical-url task... : copy the URL's final observation to e
 }
 
 poll() {
-  local task url old kind error observed now
+  local task url old kind error observed
   local -a row
   acquire
   get_input
@@ -354,15 +321,7 @@ poll() {
     known($input[0];$saved[0]) | map(. as $k | . + {at:([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url) | .checked_at] | first // "")})
     | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),tasks:(map(.task) | unique)})
     | sort_by(.at,.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
-  now=$(date +%s)
-  DEADLINE=$((now + BUDGET))
-  # Whatever the local work before this really cost comes out of the reads, not
-  # out of the margin the watcher's kill leaves - down to the same one-second
-  # floor the budget itself keeps, because a poll that reads nothing at all is
-  # the permanent silence this bound exists to prevent.
-  HARD_DEADLINE=$((START_EPOCH + BUDGET_MAX))
-  [ "$HARD_DEADLINE" -gt "$now" ] || HARD_DEADLINE=$((now + 1))
-  [ "$DEADLINE" -le "$HARD_DEADLINE" ] || DEADLINE=$HARD_DEADLINE
+  DEADLINE=$(( $(date +%s) + BUDGET ))
   BUDGET_EXHAUSTED=0
   while IFS=$'\t' read -r -a row; do
     [ "${#row[@]}" -ge 2 ] || continue
