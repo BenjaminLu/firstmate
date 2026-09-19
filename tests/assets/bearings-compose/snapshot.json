@@ -1,0 +1,175 @@
+{
+  "schema": "fm-bearings.v1",
+  "home": "scratchpad/fixhome",
+  "generated": "2026-09-18T14:55:52Z",
+  "prs": "checked (1 repos, 2 open)",
+  "contributions": {
+    "scope": "owned contributions per home",
+    "known": 2,
+    "checked": 0,
+    "counts": {
+      "captain": 0,
+      "fleet": 2,
+      "maintainer": 0,
+      "nobody": 0
+    },
+    "complete": false,
+    "proven_clear": false,
+    "unmeasured_homes": 0,
+    "unreadable_records": 0,
+    "unmeasured": 0,
+    "stale_verdicts": 0,
+    "missing_verdicts": 0,
+    "captain_omitted": 0,
+    "captain": []
+  },
+  "in_flight": [
+    {
+      "id": "ship-task",
+      "kind": "ship",
+      "state": "unknown",
+      "repo": "firstmate",
+      "name": "Ship the thing",
+      "doing": "backend unreachable (tmux endpoint state: unreadable)"
+    }
+  ],
+  "secondmates": [],
+  "secondmate_reconcile": [],
+  "decisions_open": [
+    {
+      "id": "gated-work",
+      "key": "gated-work",
+      "verb": "captain-hold",
+      "summary": "Gated work item: choose the rollout order",
+      "owner": "(main)"
+    },
+    {
+      "id": "pick-route",
+      "key": "pick-route",
+      "verb": "captain-hold",
+      "summary": "Pick the route: route choice pending",
+      "owner": "(main)"
+    }
+  ],
+  "landed": [
+    {
+      "id": "done-a",
+      "what": "Landed thing",
+      "artifact": "https://github.com/example/firstmate/pull/7",
+      "owner": "(main)"
+    },
+    {
+      "id": "scout-b",
+      "what": "Investigated the thing",
+      "artifact": "data/scout-b/report.md",
+      "owner": "(main)"
+    }
+  ],
+  "gates": [
+    {
+      "id": "plain-queued",
+      "title": "Plain queued work",
+      "blocked_by": "-",
+      "reason": "-",
+      "owner": "(main)",
+      "filed": "2026-09-16"
+    },
+    {
+      "id": "live-gate",
+      "title": "Real queued work",
+      "blocked_by": "ship-task",
+      "reason": "-",
+      "owner": "(main)",
+      "filed": "2026-09-15"
+    },
+    {
+      "id": "later-call",
+      "title": "Deferred captain call",
+      "blocked_by": "-",
+      "reason": "until 2030-01-01: revisit later",
+      "owner": "(main)",
+      "filed": "2026-09-13"
+    },
+    {
+      "id": "(main-inventory)",
+      "title": "in-flight backlog item has no child metadata",
+      "blocked_by": "-",
+      "reason": "main inventory",
+      "owner": "(main)",
+      "filed": null
+    }
+  ],
+  "reports": [],
+  "recorded_prs": [
+    {
+      "id": "ship-task",
+      "url": "https://github.com/example/firstmate/pull/9"
+    }
+  ],
+  "unhealthy_endpoints": [
+    {
+      "id": "gated-work",
+      "backend": "tmux",
+      "target": "firstmate:fm-gated-work",
+      "exists": false,
+      "agent": "not_checked"
+    },
+    {
+      "id": "ship-task",
+      "backend": "tmux",
+      "target": "firstmate:fm-ship-task",
+      "exists": false,
+      "agent": "not_checked"
+    }
+  ],
+  "candidate_prs": [
+    {
+      "num": "9",
+      "repo": "example/firstmate",
+      "task": "ship-task",
+      "url": "https://github.com/example/firstmate/pull/9",
+      "review": "APPROVED",
+      "mergeable": "MERGEABLE",
+      "checks": "passing"
+    },
+    {
+      "num": "11",
+      "repo": "example/firstmate",
+      "task": "red-task",
+      "url": "https://github.com/example/firstmate/pull/11",
+      "review": "none",
+      "mergeable": "MERGEABLE",
+      "checks": "failing"
+    }
+  ],
+  "omitted": [
+    {
+      "surface": "backlog item bodies",
+      "reveal": "--fields bodies"
+    },
+    {
+      "surface": "task paths",
+      "reveal": "--fields paths"
+    },
+    {
+      "surface": "watch/steer actions",
+      "reveal": "--fields actions"
+    },
+    {
+      "surface": "healthy endpoint detail",
+      "reveal": "--fields endpoints"
+    },
+    {
+      "surface": "full scout-report inventory",
+      "reveal": "--all-reports"
+    },
+    {
+      "surface": "main in-flight backlog item(s) have no child metadata: 1",
+      "reveal": "inspect main data/backlog.md In flight vs state/*.meta"
+    },
+    {
+      "surface": "captain holds bucketed blocked, dated, or aged: 1",
+      "reveal": "--all-decisions"
+    }
+  ]
+}

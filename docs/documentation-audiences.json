@@ -517,6 +517,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "tests/assets/bearings-compose/backlog.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/proposals/2026-09-18-fleet-v2/plan.md",
       "audience": "maintainer-architecture"
     },

@@ -378,7 +378,7 @@ Apart from that single supported abort, do not hand-edit, commit, restart, or st
 Once ownership is settled, validate exactly once against that final head so no obsolete or intermediate head is ever treated as authoritative.
 
 An ask-user finding returns as `needs-decision`; firstmate loads `ask-user-authority` and either decides or escalates per that skill.
-When the escalation reaches the captain through the bearings board, compose its card from `bin/fm-packet.sh card <id>` so the five questions and the recommendation come from the worker's packet rather than a summary.
+When the escalation reaches the captain through the bearings board, the `bearings` skill's compose step seeds its card from `bin/fm-packet.sh card <id>`; keep the five questions and the recommendation from the worker's packet rather than a summary.
 Send the same worker one exact decision naming the decision key, step, action, affected finding IDs, instructions where needed, and exact response command, passing `--resolve-key` so the worker's open decision record closes at answer time.
 Require the matching `resolved` event, forbid `--yes`, and require the worker to process every synchronous return until completion or a genuinely new escalation.
 Resume fleet supervision immediately after the decision lands.

@@ -3,17 +3,21 @@
 #
 # The board is the captain-facing interactive surface of /bearings lavish: the
 # shipped template (.agents/skills/bearings/assets/board-template.html) plus one
-# injected fm-bearings-board.v1 JSON payload. This script owns the mechanics so
-# the invoking agent's per-run work stays "compose the JSON, run build" - the
-# agent never authors board UI at invocation time.
+# injected fm-bearings-board.v1 JSON payload. This script owns the mechanics AND
+# the deterministic payload skeleton, so the invoking agent's per-run work stays
+# "fill the skeleton's prose and translations, run build" - the agent never
+# hand-writes the whole payload and never authors board UI at invocation time.
 #
 # Usage:
+#   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
+#   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh url
 #   fm-bearings-board.sh open
 #
-# build      Validate the payload, drop the Captain's Call cards whose subject
+# build      Refuse any leftover compose placeholder (naming every one), then
+#            validate the payload, drop the Captain's Call cards whose subject
 #            already landed, give every surviving decision card the standard
 #            reconcile choice, and inject the result into a fresh copy of the
 #            shipped template at the stable board path. Establish the Lavish
@@ -35,6 +39,95 @@
 #            Every dropped card is named on stderr as a `dropped-landed-card:`
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
+# compose    Print an fm-bearings-board.v1 payload SKELETON mapped
+#            deterministically from `bin/fm-bearings-snapshot.sh --json`
+#            (or the recorded snapshot named by --snapshot), so the composer
+#            fills prose and translations instead of hand-writing the whole
+#            payload. Structured state maps as follows: every in_flight row
+#            becomes an Underway row (name from the snapshot's durable label,
+#            doing from its run detail, or its state word when the detail is
+#            blank); every landed row becomes a Landed row
+#            (pr_url when its artifact is an https link); every gate becomes
+#            a Charted Next row, `warning` and non-dispatchable for the
+#            action-free integrity notices (the parenthesised synthesized
+#            gates) and `queued` otherwise, with dispatchable true only when
+#            the gate is this home's own, its real id is already a routable
+#            key, and it names no blocker and no hold reason, and with a
+#            reason naming the blocker when the gate has one but no hold
+#            reason; a row whose real id is not a routable key keeps its place
+#            on the board under a display slug but is never offered for
+#            dispatch, because the `dispatch.charted` intake resolves the id
+#            against the backlog and could not resolve a rewritten one; every
+#            unavailable or externally held secondmate home and every
+#            secondmate inventory-mismatch notice becomes a non-dispatchable
+#            `warning` Charted Next row, so a repair notice can never go
+#            missing from the board; every live
+#            captain hold THIS HOME OWNS whose task id is already a routable
+#            key becomes exactly one decision card keyed by that id, while one
+#            whose id is not becomes a non-dispatchable `warning` Charted Next
+#            row naming it, because a card the keyed intake could not address
+#            is unanswerable; every merge-ready candidate PR (checks
+#            passing, mergeable, review not CHANGES_REQUESTED, present only
+#            under the snapshot's --include-prs) that a task in THIS home's
+#            backlog claims becomes a merge card keyed merge.<task-id> with
+#            pr_url set and risk left for the composer. A card key is ONE
+#            intake address, so the skeleton never carries two cards under it:
+#            a task held more than once consolidates into one card whose
+#            decide slot says how many questions it must answer, and two
+#            merge-ready PRs claiming one task get no card at all plus a
+#            non-dispatchable `warning` Charted Next row naming both, because
+#            either click would act on whichever PR the task record names. Nothing this home
+#            cannot route back to one of its own tasks is dispatched or keyed:
+#            a PR gets a card only when this home's backlog record for its
+#            task can be read and the resulting key satisfies the payload
+#            contract, so a mate's `fm/<their-task>` branch, a stale branch,
+#            and a nested or otherwise unkeyable branch name all get no card
+#            instead of a card the keyed intake cannot resolve or a key that
+#            refuses the whole skeleton. An unreadable backlog is unknown
+#            ownership, not absent ownership: it suppresses every merge card
+#            AND adds one non-dispatchable `warning` Charted Next row saying
+#            so, so it can never look like a clean board. A secondmate-owned
+#            hold gets no card
+#            (its snapshot key is the mate's bare local task id, which
+#            `bin/fm-captain-hold.sh` would resolve against this home's
+#            backlog), a secondmate-owned gate is emitted owner-qualified,
+#            repo-less, and never dispatchable, and a secondmate-owned landed
+#            row is owner-qualified and repo-less too, so a mate's bare local
+#            id can never label itself with this home's repo or drop this
+#            home's live decision card as already landed. Every captain-facing
+#            string passes through one guard that substitutes the row's own
+#            durable identity when the snapshot value is empty or absent -
+#            including a packet copy object whose own en or hant is blank - so
+#            a blank title degrades that row instead of refusing the whole
+#            skeleton, and a gate's `filed` is normalized to null unless it
+#            matches the accepted date shapes, and a pr_url or packet_url is
+#            emitted only when it satisfies the same link rule the validator
+#            applies, so one hand-written `since` word or one malformed link
+#            cannot refuse the board either. A held task's title,
+#            repo, and kind come from this home's backlog record when
+#            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
+#            than captain) gets `close: release`, a question omits close. When
+#            `bin/fm-packet.sh verify` accepts the held task's packet, the card
+#            is seeded from `bin/fm-packet.sh card <id>` instead of
+#            placeholders. Every captain-facing copy field is emitted as
+#            {"en": <english>, "hant": "{TRANSLATE: <english>}"} so hant (and
+#            optionally hans) is filled without re-typing the English; the
+#            fixed merge choices carry their known translations. A card's
+#            decide, about, if_nothing, options[].consequence, recommend_why,
+#            risk, reversible, and recommend_value are {FILL: ...}
+#            placeholders; a packet-seeded card keeps the worker's risk,
+#            reversible, and recommend_value and gets a placeholder only for
+#            the ones the packet left out. charted_more and
+#            charted_warning_more appear only when the snapshot actually
+#            omitted gate rows, and then as {FILL: ...} placeholders that each
+#            name the SAME omitted total as a figure to divide with the other
+#            count, because the snapshot reports one total and never splits it
+#            into queued and warning rows. The top-level lang comes
+#            from --lang (default hant). The skeleton satisfies the payload
+#            validator as-is, but build refuses it until every placeholder is
+#            gone.
+#            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
+#            placeholder as `<path>: <value>` and exits 1 while any remain.
 # path       Print the stable board path for this home.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
@@ -90,7 +183,15 @@
 #
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
-# the fm-bearings-board.v1 types and item invariants below. Every fleet row and
+# the fm-bearings-board.v1 types and item invariants below, and no string may
+# still carry a compose placeholder. The enum and count slots (risk,
+# reversible, recommend_value, charted_more, charted_warning_more) also accept
+# a compose placeholder, so a skeleton validates as a skeleton; build refuses
+# every placeholder BEFORE it validates, so those slots are always real values
+# by the time a board is built. Every Captain's Call key is ONE keyed-intake
+# address, so the validator also refuses a payload carrying two cards under the
+# same key, hand-written or composed: `bin/fm-captain-hold.sh` would resolve
+# both answers to the one task. Every fleet row and
 # Captain's Call item explicitly carries `repo`; the composer fills it from the
 # snapshot and task records wherever known, and uses null or an empty string
 # only as the deliberate genuinely-no-repo marker. In that exceptional case
@@ -121,6 +222,29 @@ TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/a
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
 BOARD_SCHEMA=fm-bearings-board.v1
+PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
+# The one definition of a routable key, an acceptable captain-facing link, and
+# an acceptable Charted Next `filed` date, shared by the payload validator and
+# the compose projection so the projection can never emit a value the validator
+# then refuses.
+# shellcheck disable=SC2016  # a jq program: the $ names are jq's variables, not the shell's
+BOARD_JQ_DEFS='
+def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
+def https_url:
+  type == "string"
+  and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$");
+def link_url:
+  https_url
+  or (type == "string" and test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
+def valid_filed:
+  . as $filed
+  | type == "string"
+  and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?$")
+  and (if test("T")
+    then try ((fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")) == $filed) catch false
+    else try (((. + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) == $filed) catch false
+    end);
+'
 
 usage() {
   awk '
@@ -138,8 +262,13 @@ fail() {
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
 validate_payload() {  # <data.json>
-  jq -e --arg schema "$BOARD_SCHEMA" '
+  jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     def nonempty_string: type == "string" and length > 0;
+    # A compose placeholder stands in for a value the composer still owes. The
+    # enum and count slots accept one so the skeleton validates as a skeleton;
+    # build refuses every placeholder before it validates, so a payload that
+    # reaches the captain still satisfies the enums below.
+    def placeholder: type == "string" and test($ph);
     # Captain-facing copy is a plain string or an {en, hant, hans?} object; the
     # renderer resolves it for the language the captain chose.
     def i18n: type == "object" and (.en | nonempty_string) and (.hant | nonempty_string)
@@ -147,27 +276,11 @@ validate_payload() {  # <data.json>
     def copy: nonempty_string or i18n;
     def copy_or_empty: (type == "string") or i18n;
     def optional_copy($name): (has($name) | not) or (.[$name] | copy);
-    def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
     def repo_marker: has("repo") and (.repo == null or (.repo | type == "string"));
     def name_marker: has("name") and (.name | copy);
-    def valid_filed:
-      . as $filed
-      | type == "string"
-      and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)?$")
-      and (if test("T")
-        then try ((fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")) == $filed) catch false
-        else try (((. + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) == $filed) catch false
-        end);
     def optional_filed:
       (has("filed") | not) or (.filed == null) or (.filed | valid_filed);
     def optional_string($name): (has($name) | not) or (.[$name] | type == "string");
-    def https_url:
-      type == "string"
-      and test("^https://[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$");
-    # A served page (packet_url, evidence) may also live on the local Lavish server.
-    def link_url:
-      https_url
-      or (type == "string" and test("^http://(127\\.0\\.0\\.1|localhost)(?::[0-9]{1,5})?(?:[/?#][^[:space:]]*)?$"));
     def optional_https_url($name): (has($name) | not) or (.[$name] | https_url);
     def optional_link_url($name): (has($name) | not) or (.[$name] | link_url);
     def version: type == "string" and test("^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$");
@@ -199,9 +312,11 @@ validate_payload() {  # <data.json>
       and (optional_copy("if_nothing"))
       and (optional_copy("recommend_why"))
       and (optional_copy("reversible_note"))
-      and ((has("reversible") | not) or (.reversible == "yes" or .reversible == "no" or .reversible == "partly"))
+      and ((has("reversible") | not) or (.reversible | placeholder)
+        or (.reversible == "yes" or .reversible == "no" or .reversible == "partly"))
       and (if .type == "merge" then true
-        else ((has("risk") | not) or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
+        else ((has("risk") | not) or (.risk | placeholder)
+          or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
       and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
       and (optional_link_url("packet_url"))
       and (optional_https_url("pr_url"))
@@ -211,6 +326,7 @@ validate_payload() {  # <data.json>
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
       and ((has("recommend_value") | not)
+        or (.recommend_value | placeholder)
         or ((.recommend_value | slug(128))
           and (.recommend_value as $recommend
             | ([.options[].value] | index($recommend) != null))))
@@ -238,12 +354,15 @@ validate_payload() {  # <data.json>
     and (.prs_live | type == "boolean")
     and ((has("lang") | not) or (.lang == "en" or .lang == "hant" or .lang == "hans"))
     and (.captains_call | type == "array")
+    # One card per keyed-intake address: two cards under one key are two
+    # answers `bin/fm-captain-hold.sh` would resolve to the same single task.
+    and ([.captains_call[].key] | length == (unique | length))
     and (.underway | type == "array")
     and (.landed | type == "array")
     and (.charted | type == "array")
-    and ((has("charted_more") | not)
+    and ((has("charted_more") | not) or (.charted_more | placeholder)
       or ((.charted_more | type == "number") and (.charted_more >= 0) and (.charted_more | floor == .)))
-    and ((has("charted_warning_more") | not)
+    and ((has("charted_warning_more") | not) or (.charted_warning_more | placeholder)
       or ((.charted_warning_more | type == "number") and (.charted_warning_more >= 0) and (.charted_warning_more | floor == .)))
     and ([.captains_call[] | call_item] | all)
     and ([.underway[] | underway_item] | all)
@@ -423,12 +542,327 @@ await_source_owner() {  # <source-id>
   printf '%s\n' "${owner:-none}"
 }
 
+# --- compose -----------------------------------------------------------------
+# The skeleton is a deterministic projection of the snapshot; the composer's
+# judgment (ranking, prose, translations, risk, reversibility) is written into
+# it afterwards, and build refuses the payload while any placeholder remains.
+# The placeholder shapes are owned by PLACEHOLDER_RE above: `{FILL: ...}` marks
+# prose or a value the composer writes, and `{TRANSLATE: <english>}` marks a
+# translation of the English beside it.
+
+# A scalar from `tasks-axi show`: a value that needed quoting is JSON-quoted
+# (\" and \\ inside), so it is decoded as a JSON string.
+show_value() {  # <show output> <field>
+  local raw
+  raw=$(printf '%s\n' "$1" | sed -n "s/^  $2: //p" | head -1)
+  case "$raw" in
+    \"*\") printf '%s\n' "$raw" | jq -r . 2>/dev/null || printf '%s\n' "$raw" ;;
+    *) printf '%s\n' "$raw" ;;
+  esac
+}
+
+# Whether this home's backlog can be read at all. `bin/fm-tasks-axi.sh` refuses
+# with exit 2 when tasks-axi is missing or the backlog cannot be addressed,
+# while a task that is merely absent from a readable backlog exits 1 - so an
+# unreadable backlog is unknown ownership, never absent ownership.
+backlog_readable() {
+  "$SCRIPT_DIR/fm-tasks-axi.sh" >/dev/null 2>&1
+}
+
+# This home's backlog record for a task: {title, kind, repo} or null when the
+# backlog cannot be read or the task is not there.
+task_record() {  # <task-id>
+  local show title kind repo
+  command -v tasks-axi >/dev/null 2>&1 || { printf 'null\n'; return 0; }
+  show=$("$SCRIPT_DIR/fm-tasks-axi.sh" show "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
+  title=$(show_value "$show" title)
+  kind=$(show_value "$show" kind)
+  repo=$(show_value "$show" repo)
+  [ "$repo" != - ] || repo=''
+  [ "$kind" != - ] || kind=''
+  jq -n --arg title "$title" --arg kind "$kind" --arg repo "$repo" \
+    '{title: (if $title == "" then null else $title end),
+      kind: (if $kind == "" then null else $kind end),
+      repo: (if $repo == "" then null else $repo end)}'
+}
+
+# The verified packet's board card for a held task, or null when the task has
+# no packet, its packet does not verify, or it is a done packet.
+packet_card() {  # <task-id>
+  local card
+  card=$("$SCRIPT_DIR/fm-packet.sh" card "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
+  printf '%s\n' "$card" | jq -c . 2>/dev/null || printf 'null\n'
+}
+
+list_placeholders() {  # <data.json> -> "<path>: <value>" lines
+  jq -r --arg re "$PLACEHOLDER_RE" '
+    . as $doc
+    | [paths(type == "string" and test($re))] | .[]
+    | . as $p | ($p | map(tostring) | join(".")) + ": " + ($doc | getpath($p))
+  ' "$1"
+}
+
+command_compose_check() {  # <data.json>
+  local data=$1 found
+  [ -f "$data" ] || fail "board data does not exist: $data"
+  jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
+  found=$(list_placeholders "$data") || fail "cannot scan the board data: $data"
+  if [ -z "$found" ]; then
+    printf 'placeholders: none\n'
+    return 0
+  fi
+  printf '%s\n' "$found"
+  printf 'placeholders: %s\n' "$(printf '%s\n' "$found" | wc -l | tr -d ' ')"
+  return 1
+}
+
+command_compose() {
+  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
+      --lang) lang=${2-}; shift 2 ;;
+      --out) out=${2-}; shift 2 ;;
+      --snapshot) snapshot_file=${2-}; shift 2 ;;
+      *) usage >&2; exit 2 ;;
+    esac
+  done
+  case "$lang" in en|hant|hans) ;; *) fail "--lang must be en, hant, or hans" ;; esac
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  if [ -n "$snapshot_file" ]; then
+    [ -f "$snapshot_file" ] || fail "snapshot does not exist: $snapshot_file"
+    snapshot=$(cat "$snapshot_file")
+  else
+    snapshot=$("$SCRIPT_DIR/fm-bearings-snapshot.sh" --json) || fail "cannot read the bearings snapshot"
+  fi
+  printf '%s\n' "$snapshot" | jq -e '.schema == "fm-bearings.v1"' >/dev/null 2>&1 \
+    || fail "the snapshot is not an fm-bearings.v1 projection"
+  backlog_readable || readable=false
+  # Main-home rows are enriched from this home's own records; secondmate rows
+  # keep the snapshot's projection because their books live elsewhere.
+  ids=$(printf '%s\n' "$snapshot" | jq -r '
+    [ (.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id),
+      (.landed[]? | select(.owner == "(main)") | .id),
+      (.gates[]? | select(.owner == "(main)" and (.id | startswith("(") | not)) | .id),
+      (.candidate_prs[]? | select(.task != "-") | .task) ]
+    | unique | .[]')
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    record=$(task_record "$id")
+    records=$(jq -n --argjson acc "$records" --arg id "$id" --argjson record "$record" '$acc + {($id): $record}')
+  done <<EOF
+$ids
+EOF
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    card=$(packet_card "$id")
+    cards=$(jq -n --argjson acc "$cards" --arg id "$id" --argjson card "$card" '$acc + {($id): $card}')
+  done <<EOF
+$(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
+EOF
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
+  printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
+    --argjson records "$records" --argjson cards "$cards" \
+    --argjson readable "$readable" "$BOARD_JQ_DEFS"'
+    . as $snap |
+    # Every captain-facing string goes through this one guard: the validator
+    # refuses an empty en, and an ordinary metadata-only backlog row parses to
+    # an empty title, so each projection names the durable value that stands in
+    # for its row rather than letting one blank field refuse the whole board.
+    def t($s; $fallback):
+      ([$s, $fallback] | map(select(type == "string" and length > 0)) | .[0] // "(untitled)") as $v
+      | {en: $v, hant: ("{TRANSLATE: " + $v + "}")};
+    def fillv($what): "{FILL: " + $what + "}";
+    def fill($what): {en: fillv($what), hant: fillv($what)};
+    def risk_slot: fillv("low | medium | high");
+    def reversible_slot: fillv("yes | no | partly");
+    def recommend_slot($values): fillv("recommend one of " + ($values | join(" | ")));
+    def i18n($fallback):
+      if type != "object" then t(.; $fallback)
+      elif (.en | type == "string" and length > 0) and (.hant | type == "string" and length > 0) then .
+      else . + t(.en; $fallback) end;
+    def slugify:
+      gsub("[^A-Za-z0-9._-]"; "-") | .[0:128] | gsub("^-+|-+$"; "")
+      | if length == 0 then "row" else . end;
+    def record($id): $records[$id] // null;
+    def repo_of($id): record($id) | if . == null then null else .repo end;
+    def owned: .owner == "(main)";
+    # The Charted Next id IS the dispatch.charted routing channel, so a row
+    # keeps its real backlog id whenever that id is already a routable key; a
+    # row whose id is not stays visible under a display slug and is never
+    # offered for dispatch, because the intake could not resolve the slug.
+    def charted_id: if owned then .id else (.owner + "/" + .id) end;
+    def routable_id: charted_id | slug(128);
+    # A card key IS the bin/fm-captain-hold.sh intake address, so a hold this
+    # home owns is carded only when its task id is already a routable key; one
+    # that is not becomes a warning row naming it, because an unanswerable hold
+    # must be visible rather than refusing every other row.
+    def held_here: .verb == "captain-hold" and owned;
+    def warning_gate: .id | startswith("(");
+    def hold_title: (record(.id) | if . == null then null else .title end)
+      // (.summary | split(": ") | .[0]);
+    def hold_close: record(.id) as $r
+      | if $r != null and $r.kind != null and $r.kind != "captain" then {close: "release"} else {} end;
+    def placeholder_card:
+      {key: .key, type: "decision", repo: repo_of(.id), title: t(hold_title; .key),
+       about: fill("about"), decide: fill("decide"), if_nothing: fill("if_nothing"),
+       options: [
+         {value: "option-a", label: fill("option A label"), consequence: fill("option A consequence")},
+         {value: "option-b", label: fill("option B label"), consequence: fill("option B consequence")}],
+       recommend_why: fill("recommend_why"),
+       recommend_value: recommend_slot(["option-a", "option-b"]),
+       reversible: reversible_slot, risk: risk_slot, allow_freeform: true}
+      + hold_close;
+    def packet_seeded($card): . as $row
+      | $card
+      + {repo: ($card.repo | if . == null or . == "" then repo_of($row.id) else . end),
+         title: ($card.title | i18n($card.key)), decide: ($card.decide | i18n($card.key)),
+         if_nothing: ($card.if_nothing | i18n($card.key)),
+         about: fill("about"),
+         options: [$card.options[] | . as $o
+           | .label |= i18n($o.value) | .consequence |= i18n($o.value)]}
+      + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n($card.key))} else {} end)
+      + ({recommend_value: recommend_slot([$card.options[].value]),
+          reversible: reversible_slot, risk: risk_slot}
+         | with_entries(select($card[.key] == null)))
+      + (if $card.close != null then {close: $card.close} else hold_close end)
+      | if (.packet_url | link_url) then . else del(.packet_url) end;
+    def decision_card: . as $row | ($cards[$row.id] // null) as $card
+      | if $card == null then placeholder_card else packet_seeded($card) end;
+    def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
+    def merge_card: .task as $task
+      | ((record($task) | if . == null then null else .title end)
+         // ([$snap.in_flight[]? | select(.id == $task) | .name] | .[0])) as $title
+      | {key: ("merge." + $task), type: "merge",
+         repo: (.repo | split("/") | last),
+         title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo)); $task),
+         detail: t("checks " + .checks + ", review " + .review; $task),
+         risk: risk_slot,
+         options: [
+           {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
+           {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
+         allow_freeform: true}
+      + (if (.url | https_url) then {pr_url: .url} else {} end);
+    def merge_ready_prs:
+      [ .candidate_prs[]?
+        | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready) ];
+    # A card key IS one intake address, so the board may never carry two cards
+    # under it. A task held more than once consolidates into one card whose
+    # decide slot names how many questions it must answer; two merge-ready PRs
+    # claiming one task get no card at all, because either click would act on
+    # whichever PR the task record names, and a wrong merge is worse than an
+    # absent card.
+    def held_rows: [ .decisions_open[]? | select(held_here and (.key | slug(128))) ];
+    def consolidated($n):
+      if $n > 1 then {decide: fill("decide: this task is held " + ($n | tostring)
+        + " times; consolidate every one of its questions into this card")} else {} end;
+    def first_per_key: reduce .[] as $card
+      ([]; if ([.[].key] | index($card.key)) == null then . + [$card] else . end);
+    # The snapshot reports ONE omitted-gates total and never splits it into
+    # queued and warning rows, so each slot names that one total as a shared
+    # figure to divide, and points at the sibling count that takes the rest.
+    def gates_omitted:
+      [ .omitted[]? | .surface | capture("^gates showing (?<shown>[0-9]+) of (?<total>[0-9]+)") ]
+      | if length == 0 then 0 else ((.[0].total | tonumber) - (.[0].shown | tonumber)) end;
+    def more_slot($kind; $sibling): gates_omitted as $n
+      | fillv($kind + " Charted Next rows not shown: your share of the " + ($n | tostring)
+        + " gate rows the snapshot omitted, the rest of that same total belonging to "
+        + $sibling + ", plus any " + $kind + " rows you cut");
+    {
+      schema: $schema, home: .home, generated: .generated, lang: $lang,
+      prs_live: (.prs | startswith("checked")),
+      captains_call: (
+        [ held_rows as $rows | $rows[] | . as $row
+          | decision_card + consolidated([$rows[] | select(.key == $row.key)] | length) ]
+        + [ merge_ready_prs as $prs | $prs[] | . as $pr
+          | select([$prs[] | select(.task == $pr.task)] | length == 1)
+          | merge_card ]
+        | first_per_key),
+      underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
+        doing: t(.doing; .state)} ],
+      landed: [ .landed[]?
+        | {id: (if owned then .id else (.owner + "/" + .id) end),
+           repo: (if owned then repo_of(.id) else null end),
+           what: t(.what; .id), owner}
+        + (if (.artifact | https_url) then {pr_url: .artifact} else {} end) ],
+      charted: (
+        [ .gates[]?
+          | {id: (charted_id | if slug(128) then . else slugify end),
+             repo: (if owned then repo_of(.id) else null end),
+             title: t(.title; .id),
+             reason: (if (.reason // "-") | . != "-" and . != "" then t(.reason; .id)
+               elif .blocked_by != "-" then t("waiting on " + (.blocked_by | gsub(","; ", ")); .id)
+               else "" end),
+             dispatchable: (owned and routable_id and (warning_gate | not)
+               and .blocked_by == "-" and .reason == "-"),
+             kind: (if warning_gate then "warning" else "queued" end),
+             filed: (.filed | if valid_filed then . else null end)} ]
+        + [ .secondmates[]?
+          | select(.state == "unknown" or .state == "externally_held")
+          | {id: (("secondmate/" + .id) | slugify), repo: null,
+             title: t("Secondmate home " + .id + " is "
+               + (if .state == "unknown" then "unavailable" else "held outside this home" end); .id),
+             reason: ((if (.doing // "") != "" then .doing else (.reason // "-") end)
+               | if . == "-" or . == "" then null else . end
+               | t(.; "its current state is unreadable from here")),
+             dispatchable: false, kind: "warning", filed: null} ]
+        + [ .secondmate_reconcile[]?
+          | {id: (("reconcile/" + .id) | slugify), repo: null,
+             title: t("Secondmate home " + .id + " reports an inventory mismatch"; .id),
+             reason: t((.kind // "inventory mismatch")
+               + (if ((.ids // []) | length) > 0 then ": " + ((.ids // []) | join(", ")) else "" end); .id),
+             dispatchable: false, kind: "warning", filed: null} ]
+        + [ .decisions_open[]?
+          | select(held_here and ((.key | slug(128)) | not))
+          | {id: (("unkeyable-hold/" + .id) | slugify), repo: null,
+             title: t("The captain hold on " + .id + " cannot be answered from the board"; "unkeyable-hold"),
+             reason: t("its task id is not a routable key, so no card can carry an answer back to it";
+               "unkeyable-hold"),
+             dispatchable: false, kind: "warning", filed: null} ]
+        + [ merge_ready_prs | group_by(.task)[] | select(length > 1)
+          | {id: (("merge-collision/" + .[0].task) | slugify), repo: null,
+             title: t("Two open pull requests claim the task " + .[0].task; "merge-collision"),
+             reason: t("no merge card is offered, because a merge answer keyed to that task names only "
+               + "one pull request: " + ([.[] | .url] | join(", ")); "merge-collision"),
+             dispatchable: false, kind: "warning", filed: null} ]
+        + (if $readable then [] else
+          [{id: "backlog-unreadable", repo: null,
+            title: t("This home cannot read its own backlog"; "backlog-unreadable"),
+            reason: t("merge cards are suppressed: no task record can be read to key or route a merge answer";
+              "backlog-unreadable"),
+            dispatchable: false, kind: "warning", filed: null}] end))
+    }
+    + (if gates_omitted > 0 then {
+        charted_more: more_slot("queued"; "charted_warning_more"),
+        charted_warning_more: more_slot("warning"; "charted_more")}
+      else {} end)' > "$tmp" || { rm -f -- "$tmp"; fail "cannot compose the board skeleton"; }
+  if ! validate_payload "$tmp"; then
+    rm -f -- "$tmp"
+    fail "the composed skeleton does not satisfy $BOARD_SCHEMA"
+  fi
+  if [ -n "$out" ]; then
+    cat "$tmp" > "$out" || { rm -f -- "$tmp"; fail "cannot write the board skeleton: $out"; }
+    printf 'skeleton: %s\n' "$out"
+  else
+    cat "$tmp"
+  fi
+  rm -f -- "$tmp"
+}
+
 command_build() {
-  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner
+  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner leftover
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
+  # The placeholder refusal runs FIRST, so an unfilled enum or recommendation
+  # fails with the slot that is still empty rather than with a validator enum or
+  # option-reference error that names nothing the composer can act on.
+  leftover=$(list_placeholders "$data") || fail "cannot scan the board data: $data"
+  if [ -n "$leftover" ]; then
+    printf '%s\n' "$leftover" >&2
+    fail "board data still carries compose placeholders (run: fm-bearings-board.sh compose --check $data)"
+  fi
   validate_payload "$data" || fail "board data does not satisfy $BOARD_SCHEMA: $data"
   [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "board template is missing: $TEMPLATE"
   [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \
@@ -543,6 +977,7 @@ command_open() {
 }
 
 case "${1-}" in
+  compose) shift; command_compose "$@" ;;
   build) shift; command_build "$@" ;;
   path) board_path ;;
   url) command_url ;;
