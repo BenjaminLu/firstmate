@@ -104,7 +104,7 @@ A hold whose task id is not a routable key gets the same treatment: no card, and
 Two merge-ready PRs claiming the same task get the same treatment too: no merge card, and one warning row naming both PRs, because a merge answer keyed to that task resolves to only one of them.
 Pass the snapshot's live-PR opt-in to the snapshot command yourself when the captain asked for PRs; compose reads a fresh snapshot without it unless you hand it one with `--snapshot`.
 The board then refreshes itself on fleet events with no model in the loop, so write each card's copy ONCE.
-A captain call the board has already shown carries a stored card (`bin/fm-captain-hold.sh card <task-id>`), seeded from its verified packet when the hold was created and replaced by whatever `build` last published; a task held AGAIN after its last hold was resolved drops that card, because its question is not the new call's question; compose reuses that stored card as-is, so only a NEW captain hold with no stored card still needs copy written.
+A captain call the board has already shown carries a stored card (`bin/fm-captain-hold.sh card <task-id>`), written by whatever `build` last published; a task held AGAIN after its last hold was resolved drops that card, because its question is not the new call's question; compose reuses a stored card as-is, so only a captain hold with no stored card still needs copy written - and where that task has a verified packet the skeleton already seeds the card from it.
 Everything below is about that one writing.
 
 Then apply your judgment to the skeleton and nothing else:

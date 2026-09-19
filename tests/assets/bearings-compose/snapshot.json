@@ -48,7 +48,8 @@
       "key": "pick-route",
       "verb": "captain-hold",
       "summary": "Pick the route: route choice pending",
-      "owner": "(main)"
+      "owner": "(main)",
+      "reason": "we must choose before the region freeze"
     }
   ],
   "landed": [

@@ -154,16 +154,20 @@ SEP=' · '
 # contract owns, so a caller that needs the same run's detail reuses that work
 # instead of running one more selection of its own. Written only when a run
 # was actually attributed from full TOON, so an unattributed or coarse read
-# hands over nothing - the absence IS the answer. The rename makes the file
-# whole or absent, never torn, for a caller that bounded this read and killed
-# it mid-write.
+# hands over nothing - the absence IS the answer. A refusal below clears
+# RUN_OUT before it emits, because HAVE_RUN is set before the accept decision
+# is finished and a run this read declined to identify must never be reshaped
+# into a ladder elsewhere. The rename makes the file whole or absent, never
+# torn, for a caller that bounded this read and killed it mid-write, and the
+# write keeps the caller's own 0600 intent rather than the inherited umask.
 publish_attributed_run() {
   local dest=${FM_CREW_STATE_RUN_OUT_FILE:-} tmp
   [ -n "$dest" ] || return 0
   [ "${HAVE_RUN:-0}" = 1 ] && [ "${RUN_SOURCE:-}" = full ] || return 0
   [ -n "${RUN_OUT:-}" ] || return 0
   tmp="$dest.tmp.${BASHPID:-$$}"
-  printf '%s\n' "$RUN_OUT" > "$tmp" 2>/dev/null || { rm -f -- "$tmp" 2>/dev/null; return 0; }
+  (umask 077; printf '%s\n' "$RUN_OUT" > "$tmp") 2>/dev/null \
+    || { rm -f -- "$tmp" 2>/dev/null; return 0; }
   mv -f -- "$tmp" "$dest" 2>/dev/null || rm -f -- "$tmp" 2>/dev/null || true
 }
 
@@ -783,11 +787,15 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
         ledger_status=$(fm_nm_runs_status_for_worktree "$WT" "$CREW_BRANCH" "$(nm_runs_list)")
         if fm_nm_run_is_active "$RUN_OUT"; then
           if [ "$(fm_nm_run_status_class "$ledger_status")" = terminal ]; then
-            emit unknown run-step "run records disagree; run ids: $(strip_quotes "$(nm_field id)"), competing identity unavailable"
+            refusal_detail="run records disagree; run ids: $(strip_quotes "$(nm_field id)"), competing identity unavailable"
+            RUN_OUT=""
+            emit unknown run-step "$refusal_detail"
           fi
         else
           if [ "$(fm_nm_run_status_class "$ledger_status")" = live ]; then
-            emit unknown run-step "replacement run identity unavailable; run ids: $(strip_quotes "$(nm_field id)"), replacement unavailable"
+            refusal_detail="replacement run identity unavailable; run ids: $(strip_quotes "$(nm_field id)"), replacement unavailable"
+            RUN_OUT=""
+            emit unknown run-step "$refusal_detail"
           elif [ -n "$ledger_status" ] \
             && [ "$ledger_status" != "$(strip_quotes "$(nm_field status)")" ] \
             && [ "$ledger_status" != "$(strip_quotes "$(nm_field outcome)")" ]; then

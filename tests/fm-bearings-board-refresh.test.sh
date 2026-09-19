@@ -267,16 +267,26 @@ test_refresh_carries_no_placeholder_to_the_captain() {
   injected_payload "$home" \
     | jq -e '[paths(type == "string" and test("\\{(FILL|TRANSLATE)"))] | length == 0' >/dev/null \
     || fail "the refreshed payload still carries composer placeholders: $(injected_payload "$home")"
+  # A degraded card must ASK something. The fixture's pick-route hold carries
+  # its own reason, and that reason - not the task title, which is already the
+  # card's title - is the only text saying what the captain must decide.
   injected_payload "$home" | jq -e '
     (.captains_call | length) >= 2
-    and ([.captains_call[] | select(.type == "decision")] | length) >= 1
     and ([.captains_call[] | select(.type == "merge")][0].risk == "unassessed")
-    and ([.captains_call[] | select(.type == "decision")][0]
-      | (.title | type == "string") and (.decide | type == "string")
+    and ([.captains_call[] | select(.key == "pick-route")][0]
+      | .title == "Pick the route"
+        and .decide == "we must choose before the region freeze"
         and ([.options[].value] == ["reconcile"]) and .allow_freeform == true)
   ' >/dev/null \
     || fail "a card with no written copy did not degrade to an answerable one: $(injected_payload "$home")"
-  pass "refresh degrades unwritten copy instead of publishing a placeholder"
+  # A hold whose row records no reason still gets an answerable question
+  # rather than an empty one.
+  injected_payload "$home" | jq -e '
+    [.captains_call[] | select(.key == "gated-work")][0]
+      | .decide == "Gated work item: choose the rollout order"
+  ' >/dev/null \
+    || fail "a hold with no recorded reason lost its fallback question: $(injected_payload "$home")"
+  pass "refresh degrades unwritten copy to the hold's own question, never a placeholder"
 }
 
 test_refresh_reuses_the_stored_card_verbatim() {
@@ -397,6 +407,84 @@ test_progress_reads_the_ladder_from_the_attributed_run() {
     and (.run.activity == "starting")
   ' >/dev/null || fail "the projection did not read the recorded run ladder: $doc"
   pass "the progress projection reads phase, ladder, timing, and activity from structured state"
+}
+
+# An older no-mistakes CLI whose `axi` surface has no run-inventory table, so
+# run selection is `unavailable` and bin/fm-crew-state.sh falls back to the
+# bare `axi status` answer plus the coarse `no-mistakes runs` ledger. <status>
+# is what the bare answer reports; <ledger-status> is what the newest
+# same-branch ledger row reports. When those two disagree, crew-state cannot
+# name the run that is actually current and says so.
+make_legacy_run_home() {  # <name> <status> <ledger-status>
+  local home head short outcome=''
+  home=$(make_home "$1")
+  mkdir -p "$home/wt"
+  git -C "$home/wt" init -q
+  git -C "$home/wt" checkout -q -b fm/ship-task
+  git -C "$home/wt" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  head=$(git -C "$home/wt" rev-parse HEAD)
+  short=$(git -C "$home/wt" rev-parse --short=8 HEAD)
+  [ "$2" = running ] || outcome="outcome: passed"
+  fm_write_meta "$home/state/ship-task.meta" "worktree=$home/wt" "kind=ship" "project=firstmate"
+  cat > "$home/axi-status.toon" <<EOF
+run:
+  id: "01LEGACY"
+  branch: fm/ship-task
+  status: $2
+  head: $head
+  head_sha: $head
+  pr: ""
+  findings: none
+  steps[3]{step,status,findings,duration_ms}:
+    intent,completed,0,20
+    review,completed,0,120
+    test,completed,0,300
+$outcome
+EOF
+  cat > "$home/fakebin/no-mistakes" <<SH
+#!/usr/bin/env bash
+set -u
+if [ "\${1-}" = axi ] && [ "\${2-}" = status ]; then
+  cat "$home/axi-status.toon"
+  exit 0
+fi
+if [ "\${1-}" = axi ]; then
+  printf 'active run: 01LEGACY on fm/ship-task\n'
+  exit 0
+fi
+if [ "\${1-}" = runs ]; then
+  printf '$3 fm/ship-task $short 2026-09-19 09:00\n'
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$home/fakebin/no-mistakes"
+  printf '%s\n' "$home"
+}
+
+test_a_superseded_run_crew_state_cannot_identify_carries_no_ladder() {
+  local home doc
+  # The bare answer reports a finished run; the ledger reports a newer live
+  # one whose id this CLI surface cannot hand over. crew-state refuses to name
+  # either as current, so the board must not render the finished one's fully
+  # green ladder beside that refusal.
+  home=$(make_legacy_run_home progress-superseded completed running)
+  doc=$(run_progress "$home" ship-task) || fail "the progress read failed"
+  printf '%s' "$doc" | jq -e '.run == null' >/dev/null \
+    || fail "a run crew-state could not identify was published as the ladder: $doc"
+  pass "a run superseded by one crew-state cannot name carries no ladder"
+}
+
+test_a_run_whose_records_disagree_carries_no_ladder() {
+  local home doc
+  # The mirror: the bare answer reports a live run while the ledger reports
+  # the branch's newest run as finished. Neither record can answer for the
+  # other, and an unidentified run must not become a ladder.
+  home=$(make_legacy_run_home progress-disagree running completed)
+  doc=$(run_progress "$home" ship-task) || fail "the progress read failed"
+  printf '%s' "$doc" | jq -e '.run == null' >/dev/null \
+    || fail "a run whose records disagree was published as the ladder: $doc"
+  pass "a run whose records disagree carries no ladder"
 }
 
 test_a_run_that_is_not_this_worktrees_code_carries_no_ladder() {
@@ -671,6 +759,8 @@ test_progress_reads_the_ladder_from_the_attributed_run
 test_progress_carries_the_pipelines_whole_last_activity_message
 test_a_last_activity_carrying_quotes_and_commas_stays_one_field
 test_a_run_that_is_not_this_worktrees_code_carries_no_ladder
+test_a_superseded_run_crew_state_cannot_identify_carries_no_ladder
+test_a_run_whose_records_disagree_carries_no_ladder
 test_progress_reads_a_gate_that_is_waiting_on_the_captain
 test_progress_reports_no_ladder_without_an_attributable_run
 test_progress_never_reads_a_workers_terminal

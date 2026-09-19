@@ -908,7 +908,7 @@ EOF
     # writes real copy once.
     def degraded_card:
       {key: .key, type: "decision", repo: repo_of(.id), title: t(hold_title; .key),
-       decide: t(.summary; .key), allow_freeform: true, options: []}
+       decide: t(.reason; .summary), allow_freeform: true, options: []}
       + hold_close;
     def unseeded_card: if $deterministic then degraded_card else placeholder_card end;
     def decision_card: . as $row | ($cards[$row.id] // null) as $card
@@ -1091,12 +1091,12 @@ command_build() {
     fail "cannot reconcile the board payload against landed work"
   fi
   board=$(board_path)
-  # The page, the payload beside it and the per-task stored cards are one
-  # publication, and a fleet-triggered refresh writes the same three. Taking
-  # the shared lock across all three keeps a refresh that started before this
-  # build - and therefore composed degraded copy for a card written here -
-  # from landing on top of it afterwards. A refresh can hold the lock for at
-  # most its own deadline, so that is how long a build waits for it.
+  # The page and the per-task stored cards are one publication, and a
+  # fleet-triggered refresh rewrites that same page. Taking the shared lock
+  # across both keeps a refresh that started before this build - and therefore
+  # composed degraded copy for a card written here - from landing on top of it
+  # afterwards. A refresh can hold the lock for at most its own deadline, so
+  # that is how long a build waits for it.
   mkdir -p "$STATE" 2>/dev/null || fail "the state directory is unavailable: $STATE"
   board_require_libs
   lock=$(board_lock_path)
@@ -1210,9 +1210,9 @@ REFRESH_BEST_EFFORT=0
 BOARD_LOCK=
 
 # ONE board publication is one exclusive critical section, whichever command
-# performs it: a build and a fleet-triggered refresh both write the page and
-# the payload beside it, so they take the same home-local lock rather than
-# racing to be last writer.
+# performs it: a build writes the page and the per-task stored cards, a
+# fleet-triggered refresh rewrites that page, so both take the same home-local
+# lock rather than racing to be last writer.
 board_lock_path() { printf '%s/.bearings-board-refresh.lock\n' "$STATE"; }
 
 # The lock and the deadline owner are loaded only for a publication: no other
@@ -1246,9 +1246,9 @@ refresh_fail() {  # <message>
 }
 
 # The payload a board page is carrying, read back out of its data block. The
-# page is the board's own published artifact and outlives every rebuild of this
-# script, so it - not the sidecar beside it - is the authority on what was last
-# published here.
+# page is the board's ONE published artifact, so it is the authority on what
+# was last published here - there is nothing else to ask and nothing to keep
+# in step with it.
 injected_payload() {  # <board>
   sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$1" | sed '1d;$d'
 }
