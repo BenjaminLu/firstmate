@@ -466,6 +466,18 @@ fm_touch_epoch() {
     || fail "fm_touch_epoch: touch -t $stamp failed for $*"
 }
 
+# fm_install_wake_lib <bin-dir>: copy bin/fm-wake-lib.sh and everything it
+# sources unconditionally into a fixture's minimal bin/. Several fixtures build
+# a deliberately small bin/ by hand; without one owner for this set, splitting a
+# library off fm-wake-lib.sh breaks each of them separately and only at run
+# time, with a "No such file or directory" from inside the sourced file.
+fm_install_wake_lib() {  # <bin-dir>
+  local bindir=$1 f
+  for f in fm-wake-lib.sh fm-clock-lib.sh; do
+    cp "$ROOT/bin/$f" "$bindir/$f" || fail "fm_install_wake_lib: could not install $f"
+  done
+}
+
 # --- deterministic git identity and fixtures --------------------------------
 
 # fm_git_identity [name] [email]: export a fixed author/committer identity so

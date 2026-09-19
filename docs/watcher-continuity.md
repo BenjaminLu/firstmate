@@ -109,7 +109,8 @@ The file is size-capped through `FM_WATCH_CYCLE_LOG_MAX_BYTES` and `FM_WATCH_CYC
 `state/.watch-triage.log` remains only the watcher's bounded absorbed-wake debug log and carries no lifecycle semantics.
 
 The default 300-second grace is unchanged.
-Only the watcher process touches `state/.last-watcher-beat`; no helper process can make a wedged watcher appear healthy.
+Only the watcher process writes `state/.last-watcher-beat`; no helper process can make a wedged watcher appear healthy.
+Its content is that watcher's `<pid> <cycle>` and is observational only - liveness is still judged from the mtime, exactly as before.
 
 ## Regression coverage
 
