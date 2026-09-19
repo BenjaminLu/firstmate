@@ -19,8 +19,8 @@
 # This script owns fm-contributions.v1: one atomic file per durable task with
 # task and records[]. Each record contains url, kind, checked_at, cut_at, error,
 # observation, verdict, seen event tokens, pending events, and notified tokens.
-# checked_at dates the last attempt; cut_at dates the last attempt the poll
-# budget cut short, and equals checked_at only while that is the newest attempt.
+# checked_at dates the last COMPLETED read; cut_at dates the last attempt the
+# poll budget cut short, and only the newest attempt may carry it.
 # observation is one coherent forge read (a PR head is rechecked after fetching
 # checks/reviews). Checks are normalized by name, id, started_at, status and
 # conclusion; projection picks the newest attempt per distinct name. The last
@@ -50,24 +50,20 @@
 #
 # Such a URL must not stop the rest of the corpus, so a cut-short attempt is
 # recorded instead of discarded. The poll still breaks where the budget ran out,
-# but first stamps that URL's checked_at and records the cut in cut_at, leaving
-# error, observation, verdict and every signal field exactly as it found them.
-# Two jobs, two fields: cut_at says the budget stopped an attempt, error still
-# says there is no usable observation. Stamping rotates the URL out of the
-# oldest-first queue head instead of pinning it there for every later poll, and
-# writing no error leaves the projection reading the last good observation, so a
-# recent success keeps its freshness, its captain row and its place in the
-# checked and complete counts. The ordering tiebreak below reads cut_at: within
-# one stamp a row whose cut_at equals its checked_at sorts ahead of one that
-# completed, so a cut URL is retried before an already-observed row is re-read.
+# but first stamps that URL's cut_at, leaving checked_at, error, observation,
+# verdict and every signal field exactly as it found them. Two fields, two jobs:
+# cut_at says the budget stopped an attempt, checked_at still says when a read
+# last completed. The queue is ordered by the later of the two, so a cut row -
+# and a URL never once observed, whose completed-read key is empty - rotates out
+# of the oldest-first head instead of pinning it there for every later poll,
+# while freshness reads the completed one alone. Writing no error leaves the
+# projection reading the last good observation, so a recent success keeps its
+# freshness, its captain row and its place in the checked and complete counts,
+# and an observation that stops being re-read ages out under the ordinary
+# freshness rule below: none is ever shown as freshly checked when it was not.
 # A successful observation clears cut_at as it clears error, and so does a
 # recorded failure: only the newest attempt may carry the marker.
-# The trade is that checked_at now dates the last attempt rather than the last
-# completed read, so a URL whose observation never fits the budget keeps a good
-# but ageing observation readable past FM_CONTRIBUTIONS_MAX_AGE. That is the
-# deliberate price of not dropping a two-minute-old success off the board, and
-# cut_at is where an operator sees which rows are paying it.
-# Oldest observations go first, so a large corpus progresses across polls.
+# Oldest reads go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. Only a
 # genuine forge failure or head change records an error.
@@ -337,16 +333,16 @@ poll() {
   get_input
   read_saved
   [ "$ERRORS" -eq 0 ] || printf 'contributions: %s unreadable durable record(s)\n' "$ERRORS"
-  # One line per distinct URL: the URL, then every owning task.
-  # Oldest stamp first; within one stamp, a row the budget cut short carries no
-  # observation of its own, so retry it before re-reading one that completed.
+  # One line per distinct URL: the URL, then every owning task. Each owner is
+  # keyed by the later of its completed read and the attempt the budget cut
+  # short, so a cut row - and one never observed at all - leaves the head.
   jq_lib -nr --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" '
     known($input[0];$saved[0])
     | map(. as $k
       | ([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url)] | first) as $record
-      | . + {at:($record.checked_at // ""),cut:($record.cut_at != null and $record.cut_at == $record.checked_at)})
-    | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),cut:any(.[]; .cut),tasks:(map(.task) | unique)})
-    | sort_by(.at,(if .cut then 0 else 1 end),.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
+      | . + {at:([$record.checked_at,$record.cut_at] | map(select(. != null)) | max // "")})
+    | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),tasks:(map(.task) | unique)})
+    | sort_by(.at,.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
   DEADLINE=$(( $(date +%s) + BUDGET ))
   BUDGET_EXHAUSTED=0
   while IFS=$'\t' read -r -a row; do
@@ -363,15 +359,15 @@ poll() {
     case "$url" in */issues/*) kind=issue ;; *) kind="pr" ;; esac
     observed=0
     observe "$url" || observed=$?
-    # An observation the budget cut short is unmeasured, not unavailable. Stamp
-    # the attempt and mark the cut in its own field so the URL leaves the queue
-    # head, and leave every field the projection reads as it was found, so a
-    # good recent observation keeps its freshness instead of becoming an error.
+    # An observation the budget cut short is unmeasured, not unavailable. Record
+    # the attempt in cut_at alone so the URL leaves the queue head, and leave
+    # checked_at and every field the projection reads as they were found, so a
+    # good recent observation keeps its freshness and an old one still ages out.
     if [ "$BUDGET_EXHAUSTED" -ne 0 ]; then
       for task in "${row[@]:1}"; do
         fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
         load_old "$task" "$url" "$kind"
-        jq --arg now "$NOW" '.checked_at=$now | .cut_at=.checked_at' "$TMP/old.json" > "$TMP/row.json"
+        jq --arg now "$NOW" '.cut_at=$now' "$TMP/old.json" > "$TMP/row.json"
         write_record "$task" "$TMP/row.json"
       done
       break
