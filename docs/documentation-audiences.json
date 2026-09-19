@@ -445,6 +445,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/claude-launch-dialogs.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/dispatch-auth.md",
       "audience": "maintainer-verification"
     },

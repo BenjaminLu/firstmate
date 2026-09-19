@@ -813,12 +813,313 @@ test_secondmate_spawn_fails_closed_when_home_trust_cannot_be_recorded() {
   pass "fm-spawn.sh: a claude secondmate spawn refuses when home trust cannot be recorded"
 }
 
+# --- the external-imports gate ----------------------------------------------
+#
+# Registering trust removes the FIRST dialog a claude launch meets. The second -
+# "Allow external CLAUDE.md file imports?" - is deliberately not answered here,
+# and before this gate existed nothing said so: the spawn went ahead and the
+# worker stopped at a modal firstmate cannot answer, reaching supervision as an
+# ordinary stale wake with nothing naming the cause. These cases pin both halves
+# of the replacement: a launch that WOULD meet it is refused with the imports and
+# the one-time human approval named, and a launch that would not is never held up
+# by a scan guessing wrongly.
+#
+# The trigger these cases encode was reproduced against the real Claude Code
+# (2.1.267) rather than assumed; the script's own header records that
+# reproduction and what it deliberately does not claim.
+
+# import_case <name>: a project, a worktree, and an isolated store, plus a file
+# OUTSIDE the worktree that a memory chain can reach for. Echoes the make_case
+# row so the existing readers work unchanged.
+import_case() {
+  local row
+  row=$(make_case "$1")
+  read_case "$row"
+  printf 'outside\n' > "$CASE_DIR/outside.md"
+  printf '%s\n' "$row"
+}
+
+# commit_project_memory <project> <content>: land a CLAUDE.md as real committed
+# project content. fm-spawn.sh refuses a pooled worktree holding uncommitted
+# work and then refreshes that worktree onto the fetched default branch, so a
+# file written into the worktree by hand is either a refusal or discarded before
+# the trust step ever runs. It has to reach the fixture's origin to survive.
+commit_project_memory() {
+  printf '%s' "$2" > "$1/CLAUDE.md"
+  git -C "$1" add -A >/dev/null 2>&1
+  git -C "$1" -c user.email=t@t -c user.name=t commit -qm "memory" >/dev/null 2>&1
+  git -C "$1" push -q origin HEAD >/dev/null 2>&1
+}
+
+# seed_import_approval <store> <project>: the record Claude Code writes when the
+# human answered "Yes, allow external imports" for that project once.
+seed_import_approval() {
+  node -e '
+    const fs=require("node:fs");
+    const [store,key]=process.argv.slice(1);
+    const j=fs.existsSync(store)?JSON.parse(fs.readFileSync(store,"utf8")):{};
+    j.projects=j.projects||{};
+    j.projects[key]={...(j.projects[key]||{}),hasClaudeMdExternalIncludesApproved:true,hasClaudeMdExternalIncludesWarningShown:true};
+    fs.writeFileSync(store,JSON.stringify(j,null,2)+"\n");
+  ' "$1" "$2"
+}
+
+test_external_import_with_no_consent_blocks_the_launch() {
+  local row out status
+  row=$(import_case imports-block)
+  read_case "$row"
+  printf '# p\n\n@%s/outside.md\n' "$CASE_DIR" > "$WT/CLAUDE.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 3 "$status" "an unapproved external import must block the launch: $out"
+  assert_contains "$out" "Allow external CLAUDE.md file imports?" \
+    "the refusal did not name the dialog the worker would stop at"
+  assert_contains "$out" "$CASE_DIR/outside.md" \
+    "the refusal did not name the import that raises the dialog"
+  assert_contains "$out" "$PROJ" \
+    "the refusal did not name the project whose one-time approval clears it"
+  # The registration itself still happened: the trust dialog is a separate gate
+  # and leaving it unregistered would only add a second wedge behind this one.
+  assert_trusted "$CONFIG/.claude.json" "$WT" \
+    "a blocked launch must still leave the worktree's workspace trust registered"
+  # And it must NOT have manufactured the consent it just refused to assume.
+  assert_trust_only_no_import_consent "$CONFIG/.claude.json" "$PROJ" \
+    "the gate wrote the external-import consent instead of asking for it"
+  pass "fm-claude-trust.sh: an unapproved external CLAUDE.md import blocks the launch and names the one-time approval"
+}
+
+test_external_import_with_standing_consent_is_cleared() {
+  local row out status
+  row=$(import_case imports-approved)
+  read_case "$row"
+  printf '# p\n\n@%s/outside.md\n' "$CASE_DIR" > "$WT/CLAUDE.md"
+  seed_import_approval "$CONFIG/.claude.json" "$PROJ"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 0 "$status" "a project the human already approved must launch: $out"
+  assert_contains "$out" "external imports: clear" \
+    "the gate did not report the standing approval as clear"
+  assert_all_flags "$CONFIG/.claude.json" "$PROJ" \
+    "the standing approval was not carried forward onto the project entry"
+  pass "fm-claude-trust.sh: a project carrying the human's standing approval launches with the imports cleared"
+}
+
+test_imports_that_stay_inside_the_worktree_do_not_block() {
+  local row out status
+  row=$(import_case imports-inside)
+  read_case "$row"
+  printf '# p\n\n@AGENTS.md\n' > "$WT/CLAUDE.md"
+  printf '@nested/deep.md\n' > "$WT/AGENTS.md"
+  mkdir -p "$WT/nested"
+  printf 'deep\n' > "$WT/nested/deep.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 0 "$status" "a chain that stays inside the worktree must not block: $out"
+  assert_contains "$out" "external imports: clear" \
+    "the gate did not clear a chain that never leaves the worktree"
+  pass "fm-claude-trust.sh: a memory chain that stays inside the worktree never blocks a launch"
+}
+
+# The dialog fires on what Claude Code LOADS, so a documented example of the
+# import syntax must not read as an import. A scan that cannot tell the two apart
+# would refuse dispatch on any project whose CLAUDE.md explains the syntax.
+test_import_syntax_inside_a_code_fence_is_not_an_import() {
+  local row out status tick fence
+  row=$(import_case imports-fenced)
+  read_case "$row"
+  tick=$(printf '\140')
+  fence="$tick$tick$tick"
+  {
+    printf '# p\n\n'
+    printf 'Write an import like this:\n\n'
+    printf '%s\n@%s/outside.md\n%s\n\n' "$fence" "$CASE_DIR" "$fence"
+    printf 'or inline as %s@%s/outside.md%s.\n' "$tick" "$CASE_DIR" "$tick"
+  } > "$WT/CLAUDE.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 0 "$status" "an example of the syntax must not read as an import: $out"
+  pass "fm-claude-trust.sh: import syntax shown in code does not block a launch"
+}
+
+test_a_transitive_import_out_of_the_worktree_blocks() {
+  local row out status
+  row=$(import_case imports-transitive)
+  read_case "$row"
+  printf '# p\n\n@AGENTS.md\n' > "$WT/CLAUDE.md"
+  printf '@%s/outside.md\n' "$CASE_DIR" > "$WT/AGENTS.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 3 "$status" "an import reached through another file must block: $out"
+  assert_contains "$out" "$WT/AGENTS.md" \
+    "the refusal did not name the file that reaches outside the worktree"
+  pass "fm-claude-trust.sh: an external import reached through another memory file blocks the launch"
+}
+
+test_claude_local_md_is_scanned_too() {
+  local row out status
+  row=$(import_case imports-local)
+  read_case "$row"
+  printf '@%s/outside.md\n' "$CASE_DIR" > "$WT/CLAUDE.local.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 3 "$status" "CLAUDE.local.md is a memory file too and must be scanned: $out"
+  assert_contains "$out" "$WT/CLAUDE.local.md" \
+    "the refusal did not name CLAUDE.local.md as the source of the import"
+  pass "fm-claude-trust.sh: CLAUDE.local.md is scanned for external imports like CLAUDE.md"
+}
+
+# What the scan cannot resolve it must SAY it cannot resolve. An import pointing
+# outside the worktree at a file that is not there was never measured against the
+# real product, so calling it clear would be exactly the silent pass this gate
+# exists to remove - and calling it blocking would veto dispatch on a guess.
+test_an_unresolvable_external_import_is_reported_as_undecided() {
+  local row out status
+  row=$(import_case imports-unknown)
+  read_case "$row"
+  printf '# p\n\n@%s/not-there.md\n' "$CASE_DIR" > "$WT/CLAUDE.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 4 "$status" "an unresolvable external import must be reported as undecided: $out"
+  assert_contains "$out" "external imports: unknown" \
+    "the gate did not report that it could not decide"
+  assert_contains "$out" "not-there.md" \
+    "the undecided report did not name the import it could not resolve"
+  pass "fm-claude-trust.sh: an import it cannot resolve is reported as undecided, not passed in silence"
+}
+
+# The scan follows as far as Claude Code documents it loads, and no further. What
+# matters is both halves: an external import inside that depth is caught, and a
+# chain that runs past it is REPORTED as unfollowed rather than called clean,
+# because a chain this stopped reading is exactly where a missed import would
+# put a worker back on the dialog with nobody warned.
+test_the_scan_follows_the_documented_import_depth() {
+  local row out status i
+  row=$(import_case imports-depth)
+  read_case "$row"
+  printf '# p\n\n@link1.md\n' > "$WT/CLAUDE.md"
+  for i in 1 2 3 4; do
+    printf '@link%s.md\n' "$((i + 1))" > "$WT/link$i.md"
+  done
+  printf '@%s/outside.md\n' "$CASE_DIR" > "$WT/link5.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 3 "$status" "an external import within the documented depth must be caught: $out"
+  assert_contains "$out" "$WT/link5.md" \
+    "the refusal did not name the file at the end of the chain"
+  pass "fm-claude-trust.sh: the import scan follows a chain to the depth Claude Code documents"
+}
+
+test_a_chain_past_the_scanned_depth_is_reported_unfollowed() {
+  local row out status i
+  row=$(import_case imports-deeper)
+  read_case "$row"
+  printf '# p\n\n@link1.md\n' > "$WT/CLAUDE.md"
+  for i in 1 2 3 4 5 6; do
+    printf '@link%s.md\n' "$((i + 1))" > "$WT/link$i.md"
+  done
+  printf 'end\n' > "$WT/link7.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 4 "$status" "a chain running past the scanned depth must be reported, not called clean: $out"
+  assert_contains "$out" "import depth this scan follows" \
+    "the report did not say the chain was left unfollowed"
+  pass "fm-claude-trust.sh: a memory chain deeper than the scan follows is reported as unfollowed"
+}
+
+# A CLAUDE.md that sits in the worktree but resolves out of it is a loaded file
+# outside the tree without being an import of one. That was never measured
+# against the product, so it must be reported rather than decided either way.
+test_a_memory_file_symlinked_out_of_the_worktree_is_reported() {
+  local row out status
+  row=$(import_case imports-symlink)
+  read_case "$row"
+  printf '# shared\n' > "$CASE_DIR/shared-CLAUDE.md"
+  ln -s "$CASE_DIR/shared-CLAUDE.md" "$WT/CLAUDE.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 4 "$status" "a memory file resolving out of the worktree must be reported: $out"
+  assert_contains "$out" "$CASE_DIR/shared-CLAUDE.md" \
+    "the report did not name the file the memory path resolves to"
+  pass "fm-claude-trust.sh: a memory file resolving outside the worktree is reported, not assumed"
+}
+
+# A secondmate home is the other directory a claude launch starts in, and its own
+# memory chain raises the same dialog.
+test_secondmate_home_external_import_blocks_the_launch() {
+  local case_dir home config out status
+  case_dir="$TMP_ROOT/imports-secondmate"
+  home="$case_dir/home"
+  config="$case_dir/claude-config"
+  mkdir -p "$case_dir" "$config"
+  seed_secondmate_home "$home" smimports
+  printf 'outside\n' > "$case_dir/outside.md"
+  printf '@%s/outside.md\n' "$case_dir" > "$home/CLAUDE.md"
+  out=$(CLAUDE_CONFIG_DIR="$config" HOME="$config" \
+    "$TRUST" --secondmate-home "$home" smimports 2>&1) && status=0 || status=$?
+  expect_code 3 "$status" "a secondmate home reaching outside itself must block: $out"
+  assert_trusted "$config/.claude.json" "$home" \
+    "a blocked secondmate launch must still leave the home's workspace trust registered"
+  pass "fm-claude-trust.sh: a secondmate home whose memory chain reaches outside it blocks the launch"
+}
+
+# The spawn half. A launch the gate can see coming must be refused before any
+# per-task state exists, the same way a refused registration is, so the captain
+# gets one concrete thing to do instead of a pane that looks alive and is not.
+test_spawn_refuses_a_launch_that_would_meet_the_imports_dialog() {
+  local case_dir home proj wt config fakebin out id
+  case_dir="$TMP_ROOT/imports-spawn"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  config="$case_dir/claude-config"
+  id="importspawn$$"
+  mkdir -p "$config"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
+  fm_test_spawn_home "$home" claude
+  fm_git_worktree "$proj" "$wt" wt-imports
+  printf 'outside\n' > "$case_dir/outside.md"
+  commit_project_memory "$proj" "$(printf '# p\n\n@%s/outside.md\n' "$case_dir")"
+  fm_test_spawn_brief "$home" "$id"
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$config" \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode no-mistakes --yolo off)
+  expect_code 1 $? "a spawn into a launch that meets the imports dialog must fail: $out"
+  assert_contains "$out" "external CLAUDE.md imports dialog" \
+    "the spawn did not report which dialog it refused over"
+  assert_contains "$out" "Yes, allow external imports" \
+    "the spawn did not carry through the one-time approval that clears it"
+  [ ! -e "$home/state/$id.busy-state" ] \
+    || fail "a refused spawn stranded a busy record nothing can clear"
+  [ ! -e "/tmp/fm-$id" ] \
+    || { rm -rf "/tmp/fm-$id"; fail "a refused spawn stranded a temp root no teardown can find"; }
+  pass "fm-spawn.sh: a claude spawn that would meet the external-imports dialog is refused before any task state exists"
+}
+
+# The undecided case must not veto dispatch: a check that cannot answer says so
+# and steps aside, because holding the fleet on an unresolvable scan would be a
+# worse failure than the dialog it was looking for.
+test_spawn_launches_and_warns_when_the_imports_verdict_is_undecided() {
+  local case_dir home proj wt config fakebin launch_log out id
+  case_dir="$TMP_ROOT/imports-spawn-unknown"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  config="$case_dir/claude-config"
+  launch_log="$case_dir/launch.log"
+  id="importwarn$$"
+  mkdir -p "$config"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake" claude)
+  fm_test_spawn_home "$home" claude
+  fm_git_worktree "$proj" "$wt" wt-imports-unknown
+  commit_project_memory "$proj" "$(printf '# p\n\n@%s/not-there.md\n' "$case_dir")"
+  fm_test_spawn_brief "$home" "$id"
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$config" FM_FAKE_LAUNCH_LOG="$launch_log" \
+    fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode no-mistakes --yolo off)
+  expect_code 0 $? "an undecided imports verdict must not veto the spawn: $out"
+  assert_contains "$out" "without having decided" \
+    "the spawn launched without saying what it could not decide"
+  assert_present "$launch_log" "the spawn sent no launch command"
+  pass "fm-spawn.sh: an undecided external-imports verdict warns and still launches"
+}
+
 test_fresh_worktree_is_trusted
 test_fresh_worktree_also_trusts_the_project_root_without_import_consent
 test_registration_carries_forward_existing_import_consent
 test_project_root_entry_preserves_other_keys
 test_project_root_entry_declined_external_imports_is_not_overridden
 test_project_root_entry_default_import_flags_are_not_a_decline
+
 test_registration_is_idempotent
 test_primary_checkout_is_refused
 test_cdpath_cannot_defeat_the_primary_checkout_refusal
@@ -844,3 +1145,16 @@ test_secondmate_leased_worktree_home_is_trusted
 test_secondmate_home_trust_refuses_everything_unseeded
 test_worktree_mode_still_refuses_a_secondmate_home
 test_secondmate_spawn_fails_closed_when_home_trust_cannot_be_recorded
+test_external_import_with_no_consent_blocks_the_launch
+test_external_import_with_standing_consent_is_cleared
+test_imports_that_stay_inside_the_worktree_do_not_block
+test_import_syntax_inside_a_code_fence_is_not_an_import
+test_a_transitive_import_out_of_the_worktree_blocks
+test_claude_local_md_is_scanned_too
+test_an_unresolvable_external_import_is_reported_as_undecided
+test_the_scan_follows_the_documented_import_depth
+test_a_chain_past_the_scanned_depth_is_reported_unfollowed
+test_a_memory_file_symlinked_out_of_the_worktree_is_reported
+test_secondmate_home_external_import_blocks_the_launch
+test_spawn_refuses_a_launch_that_would_meet_the_imports_dialog
+test_spawn_launches_and_warns_when_the_imports_verdict_is_undecided

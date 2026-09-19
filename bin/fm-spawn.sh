@@ -3848,10 +3848,31 @@ claude*)
   else
     spawn_trust_args=("$WT" "$PROJ_ABS")
   fi
-  if ! "$FM_ROOT/bin/fm-claude-trust.sh" "${spawn_trust_args[@]}" >/dev/null; then
+  CLAUDE_TRUST_STATUS=0
+  "$FM_ROOT/bin/fm-claude-trust.sh" "${spawn_trust_args[@]}" >/dev/null || CLAUDE_TRUST_STATUS=$?
+  # 3 and 4 mean the registration itself succeeded and the launch is still
+  # blocked, or may be, by the OTHER dialog firstmate cannot answer - the
+  # external CLAUDE.md imports one, which this spawn must never answer on the
+  # human's behalf. fm-claude-trust.sh has already printed the imports it found
+  # and the one-time interactive approval that clears them for every later
+  # worktree of that project, so refusing here turns a silent wedged pane into
+  # one concrete thing to do. 4 is the case it could not decide: the launch
+  # proceeds, because a check that cannot answer must not veto dispatch, but it
+  # says so rather than passing in silence.
+  case "$CLAUDE_TRUST_STATUS" in
+  0) ;;
+  3)
+    echo "error: refusing to launch a claude worker in $WT that would stop at Claude Code's external CLAUDE.md imports dialog; the imports and the one-time approval that clears them are named above; inspect window $T" >&2
+    exit 1
+    ;;
+  4)
+    echo "warning: launching a claude worker in $WT without having decided whether it meets Claude Code's external CLAUDE.md imports dialog; if the pane stops at a dialog instead of reading its brief, that is the reason" >&2
+    ;;
+  *)
     echo "error: could not pre-register Claude workspace trust for $WT; refusing to launch a claude worker that would wedge on the trust dialog; inspect window $T" >&2
     exit 1
-  fi
+    ;;
+  esac
   ;;
 agy)
   if [ "$KIND" != secondmate ]; then
