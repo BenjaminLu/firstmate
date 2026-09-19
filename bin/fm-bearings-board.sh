@@ -12,7 +12,7 @@
 #   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
 #   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
-#   fm-bearings-board.sh ack <key> [--acting | --refused --why-file <path> | --clear]
+#   fm-bearings-board.sh ack <key> (--acting | --refused --why-file <path> | --clear)
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh url
 #   fm-bearings-board.sh open
@@ -129,17 +129,17 @@
 #            gone.
 #            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
 #            placeholder as `<path>: <value>` and exits 1 while any remain.
-# ack        Read or write the acknowledgement the board shows on the row the
-#            captain clicked. <key> is the board's own routing key - a
-#            Captain's Call card key, or a Charted Next or Underway row id -
-#            because that is what the captain clicked and what the payload
-#            keys the row by. With no flag it prints the stored record and
-#            exits 1 when there is none. --acting records that the answer was
-#            received and is being acted on. --refused records that the picked
-#            item was verified and NOT set in motion, with the captain-facing
-#            reason read from --why-file (a file, never argv, so a reason may
-#            be prose of any length and any shape). --clear removes the
-#            record. Output is `ack: <path>` or `cleared: <path>`.
+# ack        Write the acknowledgement the board shows on the row the captain
+#            clicked. <key> is the board's own routing key - a Captain's Call
+#            card key, or a Charted Next or Underway row id - because that is
+#            what the captain clicked and what the payload keys the row by.
+#            Exactly one mode is required. --acting records that the answer
+#            was received and is being acted on. --refused records that the
+#            picked item was verified and NOT set in motion, with the
+#            captain-facing reason read from --why-file (a file, never argv,
+#            so a reason may be prose of any length and any shape). --clear
+#            removes the record. Output is `ack: <path>` or
+#            `cleared: <path>`.
 # path       Print the stable board path for this home.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
@@ -221,14 +221,13 @@
 # the next publication and can resolve into something other than success.
 #
 # Any Captain's Call item and any Underway or Charted Next row MAY therefore
-# carry `ack`: {kind, elapsed?, why?}. `kind` is `acting` (received, being
-# acted on), `refused` (verified and not set in motion), or `late` (still
-# acting, and the consequence has not arrived); the template renders each
+# carry `ack`: {kind, at, why?}. `kind` is `acting` (received, being acted on)
+# or `refused` (verified and not set in motion); the template renders each
 # one's words in the captain's language, because a deterministic publication
-# has no translator in the loop. `elapsed` is how long a `late` row has been
-# waiting, carried raw like every other duration in the payload. `why` is the
-# refusal's reason and is the one ack field that is captain-facing copy,
-# because the first mate writes it.
+# has no translator in the loop. `at` is the epoch second of the click, so the
+# page can say how long an answer has been waiting. `why` is the refusal's
+# reason and is the one ack field that is captain-facing copy, because the
+# first mate writes it.
 #
 # THE CARRIER IS state/board-acks/<key>.json, and `ack` above is its ONLY
 # writer. Two callers write it: the captain's own answer, captured from the
@@ -238,19 +237,25 @@
 # does not dispatch it. Nothing else writes an acknowledgement, and compose
 # never invents one - it reads the carrier and attaches what is there.
 #
-# `late` is never stored. It is derived here, at compose time, from the
-# `acting` record's own stamp: an acknowledgement still acting after
-# FM_BOARD_ACK_LATE_SECONDS (default 60) composes as `late` carrying the
-# elapsed time. That is the same clock every other publication runs on - the
-# stamp is read when the board is published - so the page needs no timer of
-# its own and a row cannot age without the board being republished.
+# The waiting state is never stored and never composed. Compose carries the
+# `acting` record's own stamp to the row and the TEMPLATE ages it, because the
+# case that state exists for is a consequence that never arrived - and that is
+# exactly the case in which nothing republishes the board. A row that could
+# only age on a republication would report a slow answer and stay silent about
+# a missed one, which is the discrimination the captain asked for, backwards.
+# The threshold is the captain's minute and lives with the renderer that
+# applies it.
 #
-# Retirement belongs to the handler, not to a timer: the first mate clears an
-# acknowledgement it dispatched (`ack <key> --clear`) and replaces one it
-# declined (`ack <key> --refused`). An `acting` record nobody retires keeps
-# counting, which is exactly the report the captain asked for - a row that
-# says how long it has been waiting is how "the first mate is busy" is told
-# apart from "the first mate missed it".
+# Retirement belongs to the handler, not to a timer, and it covers EVERY key
+# the captain's answer named: the first mate clears an acknowledgement it set
+# in motion (`ack <key> --clear`) and replaces one it declined (`ack <key>
+# --refused`). Nothing else retires a record, so a key left unsettled goes on
+# reporting itself as still waiting - which is the report the captain asked
+# for when the answer really is outstanding, and a lie on work already done.
+# A row that says how long it has been waiting is how "the first mate is busy"
+# is told apart from "the first mate missed it", and a signal that cries wolf
+# is worse than no signal.
+#
 # A Charted Next row MAY carry `filed`, the durable filed date (YYYY-MM-DD, or
 # that date with a UTC timestamp) the template orders the section by, newest
 # first; a row with no comparable date keeps its payload order after every dated
@@ -269,11 +274,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-# How long an acknowledgement may stay `acting` before a publication reports it
-# as still waiting. The captain's own figure: the consequence is expected
-# within about a minute.
-ACK_LATE_SECONDS=${FM_BOARD_ACK_LATE_SECONDS:-60}
-case "$ACK_LATE_SECONDS" in ''|*[!0-9]*) ACK_LATE_SECONDS=60 ;; esac
 
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
@@ -368,6 +368,7 @@ command_ack() {
     esac
   done
   validate_ack_key "$key"
+  [ -n "$mode" ] || { usage >&2; exit 2; }
   [ -z "$why_file" ] || [ "$mode" = refused ] \
     || fail "--why-file explains a refusal and means nothing without --refused"
   command -v jq >/dev/null 2>&1 || fail "jq is required"
@@ -383,20 +384,15 @@ command_ack() {
       rm -f -- "$(ack_path "$key")" || fail "cannot clear the acknowledgement for $key"
       printf 'cleared: %s\n' "$(ack_path "$key")"
       ;;
-    '')
-      [ -f "$(ack_path "$key")" ] \
-        || { printf 'fm-bearings-board: no acknowledgement for %s\n' "$key" >&2; exit 1; }
-      cat "$(ack_path "$key")"
-      ;;
   esac
 }
 
-# Every stored acknowledgement, resolved for one publication: {key: {kind,
-# elapsed?, why?}}. This is where `acting` ages into `late` - read at
-# publication time from the record's own stamp, so the page carries no clock.
-# A record that is unreadable or not this schema is skipped rather than
-# refusing the board: a malformed side-band file must never cost the captain
-# every other row.
+# Every stored acknowledgement, resolved for one publication: {key: {kind, at,
+# why?}}. The record's own stamp is carried through untouched, because the
+# template - not this script - is what ages an unanswered acknowledgement into
+# "still waiting". A record that is unreadable or not this schema is skipped
+# rather than refusing the board: a malformed side-band file must never cost
+# the captain every other row.
 board_acks_map() {
   local dir f key acc='{}' resolved
   dir=$(acks_dir)
@@ -404,21 +400,11 @@ board_acks_map() {
   for f in "$dir"/*.json; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     key=${f##*/}; key=${key%.json}
-    resolved=$(jq -c --arg now "$(date -u +%s)" --arg late "$ACK_LATE_SECONDS" '
-      def duration($s):
-        if $s < 60 then ($s | tostring) + "s"
-        elif $s < 3600 then (($s / 60) | floor | tostring) + "m"
-        elif $s < 86400 then ((($s / 3600) | floor | tostring) + "h"
-          + ((($s % 3600) / 60) | floor | tostring) + "m")
-        else ((($s / 86400) | floor | tostring) + "d"
-          + ((($s % 86400) / 3600) | floor | tostring) + "h") end;
+    resolved=$(jq -c '
       select(type == "object" and .schema == "fm-board-ack.v1")
       | select(.kind == "acting" or .kind == "refused")
-      | ((($now | tonumber) - ((.at // 0) | if type == "number" then . else 0 end))
-         | if . < 0 then 0 else . end) as $age
-      | (.kind == "acting" and $age >= ($late | tonumber)) as $overdue
-      | {kind: (if $overdue then "late" else .kind end)}
-        + (if $overdue then {elapsed: duration($age)} else {} end)
+      | select(.at | type == "number")
+      | {kind, at}
         + (if (.why | type == "string") and (.why | length) > 0 then {why: .why} else {} end)
       ' "$f" 2>/dev/null) || continue
     [ -n "$resolved" ] || continue
@@ -460,12 +446,13 @@ validate_payload() {  # <data.json>
           and (.version | version));
     def evidence_item: type == "object" and (.label | copy) and (.url | link_url);
     # The acknowledgement the board shows on the row the captain clicked.
-    # `kind` is a closed vocabulary the template translates, `elapsed` a raw
-    # duration word, and `why` the only captain-facing copy in it.
+    # `kind` is a closed vocabulary the template translates, `at` the epoch
+    # second of the click it ages from, and `why` the only captain-facing copy
+    # in it.
     def ack_item:
       type == "object"
-      and (.kind == "acting" or .kind == "refused" or .kind == "late")
-      and ((has("elapsed") | not) or (.elapsed | nonempty_string))
+      and (.kind == "acting" or .kind == "refused")
+      and (.at | type == "number")
       and ((has("why") | not) or (.why | copy));
     def optional_ack: (has("ack") | not) or (.ack == null) or (.ack | ack_item);
     def call_item:
