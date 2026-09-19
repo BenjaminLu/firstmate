@@ -19,6 +19,13 @@ set -u
 
 LINT="$ROOT/bin/fm-lint.sh"
 INSTALLER="$ROOT/bin/fm-install-shellcheck.sh"
+# The shared owner of the unrunnable exit status and message shape. fm-lint.sh
+# sources it, so every temp-repo copy of fm-lint.sh has to carry it too.
+UNRUNNABLE_LIB="$ROOT/bin/fm-lint-unrunnable-lib.sh"
+# The unrunnable exit status is a published contract a gate reads, so it is
+# pinned here deliberately: it must stay distinct from 0, 1 (findings), and 2
+# (usage or internal failure), and moving it is a breaking change.
+UNRUNNABLE_STATUS=69
 # The pinned version, read from the single source (the one owner itself).
 REQUIRED=$("$LINT" --required-version)
 
@@ -987,6 +994,10 @@ test_installer_rejects_unsupported_platform() {
 }
 
 test_missing_shellcheck_fails_closed() {
+  # Regression origin: a validation environment with no linters on PATH made
+  # this path exit 1, the same status ShellCheck uses for real findings, so the
+  # gate reported "linter found issues" for a run that analysed nothing - and a
+  # genuine finding was indistinguishable from missing tooling.
   local tmp fakebin out rc tool
   tmp=$(fm_test_tmproot fm-lint-noshellcheck)
   fakebin=$(fm_fakebin "$tmp")
@@ -995,14 +1006,174 @@ test_missing_shellcheck_fails_closed() {
   done
   rc=0
   out=$(PATH="$fakebin" CI=true GITHUB_ACTIONS=true "$LINT" 2>&1) || rc=$?
-  [ "$rc" -eq 1 ] || fail "missing ShellCheck expected exit 1, got $rc"$'\n'"$out"
+  [ "$rc" -eq "$UNRUNNABLE_STATUS" ] \
+    || fail "missing ShellCheck expected the unrunnable exit $UNRUNNABLE_STATUS, got $rc"$'\n'"$out"
   assert_contains "$out" "ShellCheck not found" \
     "missing ShellCheck did not name the required linter"
   assert_contains "$out" "$REQUIRED" \
     "missing ShellCheck did not name the pinned version"
   assert_contains "$out" "fm-install-shellcheck.sh" \
     "missing ShellCheck did not name the pinned installer"
-  pass "missing ShellCheck fails closed"
+  assert_contains "$out" "LINT NOT RUN" \
+    "missing ShellCheck did not report that no lint ran"
+  assert_contains "$out" "not a lint finding" \
+    "missing ShellCheck did not separate missing tooling from a lint finding"
+  pass "missing ShellCheck reports the unrunnable status and names the tool"
+}
+
+test_missing_shellcheck_does_not_look_like_a_lint_failure() {
+  # The two halves of the distinction, asserted against each other: the status
+  # is neither ShellCheck's findings status nor a usage error, and the message
+  # carries no finding vocabulary a reader could mistake for a result.
+  local tmp fakebin out err rc tool
+  tmp=$(fm_test_tmproot fm-lint-noshellcheck-shape)
+  fakebin=$(fm_fakebin "$tmp")
+  for tool in bash dirname; do
+    ln -s "$(command -v "$tool")" "$fakebin/$tool"
+  done
+  rc=0
+  out=$(PATH="$fakebin" CI=true GITHUB_ACTIONS=true "$LINT" 2>&1) || rc=$?
+  [ "$rc" -ne 1 ] || fail "missing ShellCheck reported findings status 1"$'\n'"$out"
+  [ "$rc" -ne 2 ] || fail "missing ShellCheck reported usage-error status 2"$'\n'"$out"
+  [ "$rc" -ne 0 ] || fail "missing ShellCheck passed"$'\n'"$out"
+  assert_not_contains "$out" "SC2" \
+    "missing ShellCheck emitted something shaped like a ShellCheck finding code"
+
+  # The message is a diagnostic, so it goes where every other diagnostic of this
+  # owner goes: stderr alone, leaving stdout carrying only lint data.
+  rc=0
+  err=$(PATH="$fakebin" CI=true GITHUB_ACTIONS=true "$LINT" 2>&1 >"$tmp/stdout") || rc=$?
+  [ "$rc" -eq "$UNRUNNABLE_STATUS" ] \
+    || fail "missing ShellCheck expected the unrunnable exit $UNRUNNABLE_STATUS, got $rc"$'\n'"$err"
+  assert_contains "$err" "ShellCheck not found" \
+    "missing ShellCheck did not name the tool on stderr"
+  assert_contains "$err" "fm-install-shellcheck.sh" \
+    "missing ShellCheck did not name the installer on stderr"
+  [ ! -s "$tmp/stdout" ] \
+    || fail "the unrunnable diagnostic leaked onto the data stream"$'\n'"$(cat "$tmp/stdout")"
+  pass "missing ShellCheck reports on stderr and does not look like a lint failure"
+}
+
+test_a_real_finding_still_reports_as_a_finding() {
+  if ! pinned_ready; then
+    pass "SKIP (ShellCheck $REQUIRED not resolved): finding-versus-unrunnable separation"
+    return
+  fi
+  # The other half of the regression: a genuine finding that used to sit behind
+  # the missing-tool message must still arrive as findings, with the findings
+  # status and no unrunnable wording. SC2016 is the exact code that was hidden -
+  # a deliberately single-quoted printf whose $ does not expand.
+  local tmp bad out rc
+  tmp=$(fm_test_tmproot fm-lint-finding-visible)
+  mkdir -p "$tmp"
+  bad="$tmp/bad.sh"
+  cat > "$bad" <<'SH'
+#!/usr/bin/env bash
+name=world
+printf 'hello $name\n'
+SH
+  rc=0
+  out=$("$LINT" "$bad" 2>&1) || rc=$?
+  [ "$rc" -eq 1 ] || fail "a real ShellCheck finding expected exit 1, got $rc"$'\n'"$out"
+  assert_contains "$out" "SC2016" "fm-lint.sh did not report the expected finding"
+  assert_not_contains "$out" "LINT NOT RUN" \
+    "a real finding was reported as unrunnable tooling"
+  pass "a real finding still reports as a finding when the linters are present"
+}
+
+test_unrunnable_workflow_lint_reaches_the_exit_status() {
+  # fm-lint.sh owns propagation: when the workflow lint owner reports that it
+  # could not run, that status has to survive to fm-lint.sh's own exit instead
+  # of being flattened into an ordinary failure.
+  local tmp fakebin log lint_copy out rc
+  tmp=$(fm_test_tmproot fm-lint-workflows-unrunnable)
+  fakebin=$(fm_fakebin "$tmp")
+  log="$tmp/shellcheck.log"
+  mkdir -p "$tmp/repo/bin/backends" "$tmp/repo/tests"
+  lint_copy="$tmp/repo/bin/fm-lint.sh"
+  cp "$LINT" "$lint_copy"
+  cp "$UNRUNNABLE_LIB" "$tmp/repo/bin/"
+  cat > "$tmp/repo/bin/fm-lint-workflows.sh" <<SH
+#!/usr/bin/env bash
+printf 'fm-lint-workflows.sh: LINT NOT RUN (exit $UNRUNNABLE_STATUS): actionlint not found on PATH\n'
+exit $UNRUNNABLE_STATUS
+SH
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/backends/noop.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/tests/noop.test.sh"
+  chmod +x "$lint_copy" "$tmp/repo/bin/fm-lint-workflows.sh"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+
+  rc=0
+  out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" "$lint_copy" 2>&1) || rc=$?
+  [ "$rc" -eq "$UNRUNNABLE_STATUS" ] \
+    || fail "unrunnable workflow lint expected exit $UNRUNNABLE_STATUS, got $rc"$'\n'"$out"
+  assert_contains "$out" "actionlint not found" \
+    "fm-lint.sh dropped the workflow linter's missing-tool message"
+  pass "an unrunnable workflow lint reaches fm-lint.sh's exit status"
+}
+
+test_findings_outrank_an_unrunnable_workflow_lint() {
+  # The unrunnable status must never hide a problem that was actually found, so
+  # real findings keep the findings status even when a later linter is missing.
+  local tmp fakebin lint_copy out rc
+  tmp=$(fm_test_tmproot fm-lint-findings-outrank)
+  fakebin=$(fm_fakebin "$tmp")
+  mkdir -p "$tmp/repo/bin/backends" "$tmp/repo/tests"
+  lint_copy="$tmp/repo/bin/fm-lint.sh"
+  cp "$LINT" "$lint_copy"
+  cp "$UNRUNNABLE_LIB" "$tmp/repo/bin/"
+  cat > "$tmp/repo/bin/fm-lint-workflows.sh" <<SH
+#!/usr/bin/env bash
+printf 'fm-lint-workflows.sh: LINT NOT RUN (exit $UNRUNNABLE_STATUS): actionlint not found on PATH\n'
+exit $UNRUNNABLE_STATUS
+SH
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/backends/noop.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/tests/noop.test.sh"
+  chmod +x "$lint_copy" "$tmp/repo/bin/fm-lint-workflows.sh"
+  # A stub ShellCheck that reports a finding, so the run really does have one.
+  cat > "$fakebin/shellcheck" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = --version ]; then
+  printf 'ShellCheck - shell script analysis tool\nversion: 0.11.0\n'
+  exit 0
+fi
+printf 'In bin/example.sh line 3:\nSC2016 (info): Expressions do not expand in single quotes.\n'
+exit 1
+SH
+  chmod +x "$fakebin/shellcheck"
+
+  rc=0
+  out=$(cd "$tmp/repo" && CI=true PATH="$fakebin:$PATH" "$lint_copy" 2>&1) || rc=$?
+  [ "$rc" -eq 1 ] \
+    || fail "findings must outrank an unrunnable workflow lint, got exit $rc"$'\n'"$out"
+  assert_contains "$out" "SC2016" "the reported findings were lost"
+  pass "real findings outrank an unrunnable workflow lint"
+}
+
+test_internal_failure_is_not_reported_as_findings() {
+  # The other status a run that analysed nothing must never borrow: an internal
+  # failure before any file is examined. An unusable TMPDIR makes the scratch
+  # directory impossible, which used to exit 1 and read at the gate as findings.
+  local tmp fakebin log lint_copy out rc
+  tmp=$(fm_test_tmproot fm-lint-internal-failure)
+  fakebin=$(fm_fakebin "$tmp")
+  log="$tmp/shellcheck.log"
+  mkdir -p "$tmp/repo/bin/backends" "$tmp/repo/tests"
+  lint_copy="$tmp/repo/bin/fm-lint.sh"
+  cp "$LINT" "$lint_copy"
+  cp "$UNRUNNABLE_LIB" "$tmp/repo/bin/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/fm-lint-workflows.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/bin/backends/noop.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/repo/tests/noop.test.sh"
+  chmod +x "$lint_copy" "$tmp/repo/bin/fm-lint-workflows.sh"
+  fm_lint_stub_shellcheck "$fakebin" "$log"
+
+  rc=0
+  out=$(cd "$tmp/repo" && CI=true TMPDIR="$tmp/no-such-dir" PATH="$fakebin:$PATH" \
+    "$lint_copy" 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "an unusable TMPDIR expected the internal-failure exit 2, got $rc"$'\n'"$out"
+  pass "an internal failure before analysis does not report the findings status"
 }
 
 test_rejects_wrong_shellcheck_version() {
@@ -1022,7 +1193,10 @@ SH
   chmod +x "$fakebin/shellcheck"
   rc=0
   out=$(PATH="$fakebin:$PATH" "$LINT" 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail "fm-lint.sh accepted a shellcheck version other than the pin"$'\n'"$out"
+  [ "$rc" -eq "$UNRUNNABLE_STATUS" ] \
+    || fail "a mispinned shellcheck expected the unrunnable exit $UNRUNNABLE_STATUS, got $rc"$'\n'"$out"
+  assert_contains "$out" "LINT NOT RUN" \
+    "a mispinned shellcheck was not reported as an unrunnable lint"
   assert_contains "$out" "$REQUIRED" "fm-lint.sh did not name the required version on mismatch"
   assert_contains "$out" "0.9.9" "fm-lint.sh did not report the resolved (wrong) version"
   pass "fm-lint.sh refuses to lint under a non-pinned ShellCheck version"
@@ -1067,6 +1241,7 @@ test_rejects_direct_beads_cli_invocations() {
   mkdir -p "$tmp/repo/bin/backends" "$tmp/repo/tests"
   lint_copy="$tmp/repo/bin/fm-lint.sh"
   cp "$LINT" "$lint_copy"
+  cp "$UNRUNNABLE_LIB" "$tmp/repo/bin/"
   cat > "$tmp/repo/bin/fm-lint-workflows.sh" <<'SH'
 #!/usr/bin/env bash
 exit 0
@@ -1119,6 +1294,7 @@ test_rejects_direct_beads_cli_in_explicit_core_path() {
   lint_copy="$tmp/repo/bin/fm-lint.sh"
   target="$tmp/repo/bin/direct-beads.sh"
   cp "$LINT" "$lint_copy"
+  cp "$UNRUNNABLE_LIB" "$tmp/repo/bin/"
   printf '#!/usr/bin/env bash\nbd close fm-example\n' > "$target"
   chmod +x "$lint_copy"
   fm_lint_stub_shellcheck "$fakebin" "$log"
@@ -1419,6 +1595,11 @@ test_installer_falls_back_to_shasum
 test_installer_prefers_sha256sum_over_shasum
 test_installer_rejects_unsupported_platform
 test_missing_shellcheck_fails_closed
+test_missing_shellcheck_does_not_look_like_a_lint_failure
+test_a_real_finding_still_reports_as_a_finding
+test_unrunnable_workflow_lint_reaches_the_exit_status
+test_findings_outrank_an_unrunnable_workflow_lint
+test_internal_failure_is_not_reported_as_findings
 test_rejects_wrong_shellcheck_version
 test_catches_a_real_lint_defect
 test_rejects_direct_beads_cli_invocations

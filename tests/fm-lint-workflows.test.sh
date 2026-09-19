@@ -210,10 +210,13 @@ test_empty_workflows_dir_fails() {
   mkdir -p "$tmp/.github/workflows"
   rc=0
   out=$("$LINT_WF" --root "$tmp" 2>&1) || rc=$?
-  [ "$rc" -ne 0 ] || fail "empty workflows dir unexpectedly passed"$'\n'"$out"
+  # Fails closed, but not as findings: nothing was analysed, so exit 1 - the one
+  # status a gate reads as "actionlint reported problems" - is wrong here.
+  [ "$rc" -eq 2 ] \
+    || fail "empty workflows dir expected the usage exit 2, got $rc"$'\n'"$out"
   assert_contains "$out" "no GitHub workflow files found" \
     "empty workflows dir did not report the missing files"
-  pass "empty workflows directory fails closed"
+  pass "empty workflows directory fails closed without reporting findings"
 }
 
 test_explicit_broken_path_fails() {
@@ -253,14 +256,38 @@ test_missing_actionlint_fails_closed() {
   done
   rc=0
   out=$(PATH="$fakebin" "$LINT_WF" --root "$tmp" 2>&1) || rc=$?
-  [ "$rc" -eq 1 ] || fail "missing actionlint expected exit 1, got $rc"$'\n'"$out"
+  # Exit 69 (not 1) is the published "the lint could not run" status: a gate
+  # reading only the status must never take missing tooling for findings.
+  [ "$rc" -eq 69 ] || fail "missing actionlint expected the unrunnable exit 69, got $rc"$'\n'"$out"
   assert_contains "$out" "actionlint not found" \
     "missing actionlint did not name the required linter"
+  assert_contains "$out" "LINT NOT RUN" \
+    "missing actionlint did not report that no workflow lint ran"
+  assert_contains "$out" "not a lint finding" \
+    "missing actionlint did not separate missing tooling from a lint finding"
   assert_contains "$out" "$REQUIRED" \
     "missing actionlint did not name the pinned version"
   assert_contains "$out" "fm-install-actionlint.sh" \
     "missing actionlint did not name the pinned installer"
   pass "missing actionlint fails closed"
+}
+
+test_missing_unrunnable_lib_is_not_findings() {
+  # The owner cannot run at all without the shared unrunnable library beside it.
+  # That is an internal failure (2), never 1: a gate reading only the status
+  # must not take a run that analysed nothing for "actionlint found problems".
+  local tmp out rc
+  tmp=$(fm_test_tmproot fm-lint-wf-nolib)
+  mkdir -p "$tmp/bin"
+  cp "$LINT_WF" "$tmp/bin/fm-lint-workflows.sh"
+  chmod +x "$tmp/bin/fm-lint-workflows.sh"
+  rc=0
+  out=$("$tmp/bin/fm-lint-workflows.sh" 2>&1) || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "missing unrunnable library expected the internal-failure exit 2, got $rc"$'\n'"$out"
+  assert_contains "$out" "missing bin/fm-lint-unrunnable-lib.sh" \
+    "missing unrunnable library did not name the file it needs"
+  pass "missing unrunnable library fails closed without reporting findings"
 }
 
 test_pins_an_explicit_version() {
@@ -468,6 +495,8 @@ test_fm_lint_default_path_catches_broken_ci_yml() {
   mkdir -p "$tmp/bin" "$tmp/.github/workflows"
   cp "$LINT" "$tmp/bin/fm-lint.sh"
   cp "$LINT_WF" "$tmp/bin/fm-lint-workflows.sh"
+  # Both owners source the shared unrunnable-outcome library from bin/.
+  cp "$ROOT/bin/fm-lint-unrunnable-lib.sh" "$tmp/bin/"
   chmod +x "$tmp/bin/fm-lint.sh" "$tmp/bin/fm-lint-workflows.sh"
   write_col0_heredoc_workflow "$tmp/.github/workflows/ci.yml"
 
@@ -522,6 +551,7 @@ test_empty_workflows_dir_fails
 test_explicit_broken_path_fails
 test_non_mapping_root_fails
 test_missing_actionlint_fails_closed
+test_missing_unrunnable_lib_is_not_findings
 test_rejects_wrong_actionlint_version
 test_installer_retries_transient_download_failure
 test_installer_selects_platform_archive_url_and_checksum

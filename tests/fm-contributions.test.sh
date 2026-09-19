@@ -584,7 +584,9 @@ test_budget_exhaustion_keeps_prior_record() { # exhaust|hang
   wrap_forge "$home"
   mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
   cp "$home/data/delivery/contributions.json" "$home/prior.json"
-  if [ "$mode" = exhaust ]; then /bin/date +%s > "$home/forge/clock"; fi
+  # Both modes run on the fixture clock: on a real one the 1s budget can expire
+  # before the first forge call, leaving the observation unstarted.
+  /bin/date +%s > "$home/forge/clock"
   printf '%s\n' "$mode" > "$home/forge/fault"
   out=$(with_home "$home" env FM_CONTRIBUTIONS_BUDGET=1 "$ROOT/bin/fm-contributions.sh" poll) \
     || fail "poll failed when its budget ran out ($mode)"

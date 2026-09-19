@@ -54,6 +54,21 @@
 # Optional quiet telemetry writes one bounded TSV snapshot of content and source
 # graph identity, wall/CPU/RSS, shard load, and competing ShellCheck processes.
 #
+# Exit status:
+#   0   nothing to report
+#   1   the lint ran and found problems
+#   2   usage error, an internal lint failure, or a workflow lint that found no
+#       workflow file to analyse: statuses for a run that reports no finding
+#   69  the lint could NOT run: a pinned linter is missing from PATH or off its
+#       pin, so no file was analysed. Distinct from 1 so a gate reading only the
+#       status never reports missing tooling as findings, and never hides a real
+#       finding behind a tooling message. bin/fm-lint-unrunnable-lib.sh owns that
+#       status and its message shape, and bin/fm-lint-workflows.sh reports
+#       missing or mispinned actionlint the same way. Real findings outrank it:
+#       when ShellCheck or the backend-purity check already failed, that status
+#       is what this owner exits with even if workflow lint could not run.
+#   127 perl is missing, which this owner needs for bounded worker cleanup.
+#
 # Usage:
 #   fm-lint.sh                         lint the context-selected file set (see above)
 #   fm-lint.sh --fast [path]...       local lint with extended analysis disabled
@@ -73,7 +88,12 @@ LOCAL_NOX_EXCLUDE=SC1091,SC2034,SC2153,SC2329
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SELF="$SELF_DIR/fm-lint.sh"
 ROOT="$(cd "$SELF_DIR/.." && pwd -P)"
-cd "$ROOT" || exit 1
+cd "$ROOT" || exit 2
+# shellcheck source=bin/fm-lint-unrunnable-lib.sh
+. "$SELF_DIR/fm-lint-unrunnable-lib.sh" || {
+  printf 'fm-lint.sh: missing bin/fm-lint-unrunnable-lib.sh beside this script.\n' >&2
+  exit 2
+}
 
 FM_LINT_WORKER_SHELLCHECK_PID=
 # shellcheck disable=SC2329 # Registered by the private worker's signal traps.
@@ -598,9 +618,9 @@ if [ "$LIST_FILES" -eq 1 ]; then
 fi
 
 if ! command -v shellcheck >/dev/null 2>&1; then
-  printf 'fm-lint.sh: ShellCheck not found; install ShellCheck %s with bin/fm-install-shellcheck.sh <destination-directory> and put that directory on PATH.\n' \
-    "$REQUIRED_SHELLCHECK" >&2
-  exit 1
+  fm_lint_unrunnable \
+    "ShellCheck not found on PATH (this repository pins ShellCheck $REQUIRED_SHELLCHECK)" \
+    "bin/fm-install-shellcheck.sh <destination-directory>, then put <destination-directory> on PATH"
 fi
 unset SHELLCHECK_OPTS
 SHELLCHECK_BIN=$(command -v shellcheck)
@@ -611,9 +631,9 @@ fi
 resolved=$("$SHELLCHECK_BIN" --version | awk '/^version:/ {print $2; exit}')
 printf 'fm-lint.sh: ShellCheck %s (pinned %s)\n' "$resolved" "$REQUIRED_SHELLCHECK" >&2
 if [ "$resolved" != "$REQUIRED_SHELLCHECK" ]; then
-  printf 'fm-lint.sh: ShellCheck %s required for CI parity, found %s. Install %s with bin/fm-install-shellcheck.sh <destination-directory>.\n' \
-    "$REQUIRED_SHELLCHECK" "$resolved" "$REQUIRED_SHELLCHECK" >&2
-  exit 1
+  fm_lint_unrunnable \
+    "ShellCheck $REQUIRED_SHELLCHECK required for CI parity, found $resolved on PATH" \
+    "bin/fm-install-shellcheck.sh <destination-directory>, then put <destination-directory> first on PATH"
 fi
 if [ "$FAST" -eq 1 ]; then
   printf 'fm-lint.sh: fast local mode; ShellCheck extended analysis disabled\n' >&2
@@ -626,8 +646,12 @@ fi
 if [ "$CHANGED_MODE" -eq 1 ] && [ "$ROOT_COUNT" -eq 0 ]; then
   printf 'fm-lint.sh: no changed lint targets\n'
   overall_rc=0
+  workflows_rc=0
   fm_lint_run_backend_purity || overall_rc=$?
-  fm_lint_run_workflows || overall_rc=$?
+  fm_lint_run_workflows || workflows_rc=$?
+  # First nonzero wins, matching the full path below, so an unrunnable workflow
+  # lint never replaces a backend-purity finding that was actually found.
+  [ "$overall_rc" -ne 0 ] || overall_rc=$workflows_rc
   exit "$overall_rc"
 fi
 
@@ -639,7 +663,7 @@ if [ -n "$TELEMETRY" ]; then
   }
 fi
 
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-lint.XXXXXX") || exit 1
+TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-lint.XXXXXX") || exit 2
 ACTIVE_PIDS=()
 # shellcheck disable=SC2329 # Registered by the EXIT and signal traps below.
 fm_lint_cleanup() {
