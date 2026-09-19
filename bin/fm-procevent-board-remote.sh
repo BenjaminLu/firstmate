@@ -224,7 +224,7 @@ positive_number() {
 }
 
 cmd_arm() {
-  local dir='' staged pre_arm
+  local dir='' staged pre_arm pre_ingest
   local -a keys=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -253,7 +253,21 @@ cmd_arm() {
   require_usable_records
   # Everything the captain has already answered reaches the intake before the
   # round that would make it unanswerable is opened over it.
-  cmd_ingest --documents "$dir"
+  #
+  # That nested report is relabelled rather than printed raw. It answers for the
+  # round being CLOSED, while this command's own lines answer for the one being
+  # opened, and emitting both unmarked made one `arm` state two different
+  # `awaiting:` counts and report a source retired directly above arming it. The
+  # reader is an agent following a skill, and it has no way to tell which of two
+  # identical labels is the live one.
+  # Captured rather than piped: a pipeline runs the ingest in a subshell, where
+  # its own refusal would exit that subshell and let arming carry on over
+  # answers it never delivered.
+  pre_ingest=$(cmd_ingest --documents "$dir") \
+    || die "the answers already given could not be delivered, so nothing was armed over them"
+  printf '%s\n' "$pre_ingest" | sed -e 's/^board-remote: ingest$/pre-arm ingest: settling the previous round/' \
+    -e 's/^awaiting: /pre-arm awaiting: /' \
+    -e 's/^retired: /pre-arm retired: /' 
   # The pre-arm set is published BEFORE the cards that rely on it, so a crash in
   # between leaves the previous cards guarded by a newer set - they stay awaited
   # and keep waking firstmate - rather than leaving new cards a stale answer

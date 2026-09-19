@@ -422,6 +422,40 @@ test_another_cards_answer_does_not_settle_a_card() {
   pass "one card's answer never settles another card that its value happens to name"
 }
 
+# One `arm` answers for two rounds: the one it settles and the one it opens. Both
+# reports carry the same labels, so the reader needs them told apart, and a
+# pre-arm ingest that refuses must stop the arming rather than be swallowed.
+test_arm_does_not_report_two_rounds_under_one_label() {
+  local home dir out rc=0
+  home=$(make_home arm-report)
+  dir=$(answers_dir "$home")
+  write_answer "$home" first_call first-call yes "" 2026-09-19T07:00:00.000Z
+  run_adapter "$home" arm --documents "$dir" --key first-call >/dev/null \
+    || fail "could not arm the first round"
+  write_answer "$home" first_call first-call changed "" 2026-09-19T07:30:00.000Z
+
+  out=$(run_adapter "$home" arm --documents "$dir" --key second-call 2>/dev/null) \
+    || fail "could not arm the second round"
+  assert_equals "1" "$(printf '%s\n' "$out" | grep -c '^awaiting: ')" \
+    "one arm reported two different awaited counts under the same label: $out"
+  assert_contains "$out" "pre-arm ingest:" "the settled round's report was not marked as the previous round's"
+  assert_equals "0" "$(printf '%s\n' "$out" | grep -c '^retired: ')" \
+    "one arm reported the source retired directly above arming it: $out"
+  run_adapter "$home" retire >/dev/null || fail "could not retire the armed source"
+
+  # A pre-arm ingest that cannot deliver must stop the arming, not be swallowed.
+  # The store holds an answer this home has not recorded, and the record cannot
+  # be written, so the ingest refuses and nothing may be armed over it.
+  write_answer "$home" third_call third-call yes "" 2026-09-19T08:00:00.000Z
+  chmod 500 "$home/state/board-remote"
+  run_adapter "$home" arm --documents "$dir" --key third-call >/dev/null 2>&1 && rc=0 || rc=$?
+  chmod 700 "$home/state/board-remote"
+  [ "$rc" -ne 0 ] || fail "arming continued over answers the pre-arm ingest could not deliver"
+  assert_no_grep "third-call" "$home/state/board-remote/awaiting" \
+    "a card was armed over an answer that was never delivered"
+  pass "one arm tells its two rounds apart, and a failed pre-arm ingest stops it"
+}
+
 test_an_unarmed_ingest_claims_no_retirement() {
   local home dir out
   home=$(make_home unarmed-ingest)
@@ -600,6 +634,7 @@ test_another_cards_answer_does_not_settle_a_card
 test_an_earlier_rounds_answer_does_not_settle_a_freshly_armed_card
 test_a_board_rebuild_delivers_a_pending_answer_instead_of_stepping_over_it
 test_the_first_arm_delivers_a_full_store_without_settling_its_own_cards
+test_arm_does_not_report_two_rounds_under_one_label
 test_an_unarmed_ingest_claims_no_retirement
 test_answers_close_their_captain_held_tasks
 
