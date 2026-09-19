@@ -135,12 +135,13 @@ fail() { printf 'fm-contributions: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,/^set -eu$/s/^# \{0,1\}//p' "$0"; }
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 command -v jq >/dev/null 2>&1 || fail 'jq is required to measure contribution coverage'
-NOW=${FM_CONTRIBUTIONS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
-EPOCH=$(jq -nr --arg now "$NOW" '$now | fromdateiso8601') || fail 'invalid observation clock'
-# Elapsed time is measured from here, the instant NOW names, not from the later
-# point the poll loop starts: the input gathering between them is real elapsed
-# time and belongs in a completed read's stamp.
+# One clock read, so NOW and the instant elapsed time is measured from are the
+# same instant rather than two that can straddle a second boundary. Elapsed time
+# runs from here, not from the later point the poll loop starts: the input
+# gathering between them belongs in a completed read's stamp.
 EPOCH_CLOCK=$(date +%s)
+NOW=${FM_CONTRIBUTIONS_NOW:-$(jq -nr --argjson at "$EPOCH_CLOCK" '$at | todateiso8601')}
+EPOCH=$(jq -nr --arg now "$NOW" '$now | fromdateiso8601') || fail 'invalid observation clock'
 MAX_AGE=${FM_CONTRIBUTIONS_MAX_AGE:-900}
 BUDGET=${FM_CONTRIBUTIONS_BUDGET:-20}
 case "$MAX_AGE" in ''|*[!0-9]*) fail 'invalid freshness bound' ;; esac
