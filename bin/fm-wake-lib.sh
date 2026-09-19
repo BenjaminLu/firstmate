@@ -9,10 +9,11 @@ STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
 FM_WAKE_QUEUE="${FM_WAKE_QUEUE:-$STATE/.wake-queue}"
 FM_WAKE_QUEUE_LOCK="${FM_WAKE_QUEUE_LOCK:-$STATE/.wake-queue.lock}"
 FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
-# Resolved once at source time: fm_pid_identity and fm_path_mtime run inside 0.2s
-# confirm and 0.5s attach polls, and forking uname per call is a measurable cost on
-# the platform (Git Bash/MSYS) that already pays the highest fork price.
-_FM_UNAME=$(uname 2>/dev/null || echo unknown)
+# Reading the clock, a file's mtime, and its age is fm-clock-lib.sh's alone;
+# source it rather than re-deriving any of them here. It also resolves the
+# platform probe $_FM_UNAME that fm_pid_identity reads below.
+# shellcheck source=bin/fm-clock-lib.sh disable=SC1091
+. "$FM_WAKE_LIB_DIR/fm-clock-lib.sh"
 mkdir -p "$STATE"
 
 # Most wake-library consumers need only queue and lock primitives, including
@@ -88,20 +89,6 @@ fm_pid_identity() {
   out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
-}
-
-fm_path_mtime() {
-  if [ "$_FM_UNAME" = Darwin ]; then
-    /usr/bin/stat -f %m "$1" 2>/dev/null
-  else
-    stat -c %Y "$1" 2>/dev/null
-  fi
-}
-
-fm_path_age() {
-  local path=$1 m
-  m=$(fm_path_mtime "$path") || { echo 999999; return; }
-  echo $(( $(date +%s) - m ))
 }
 
 # fm_poll_derived_grace [poll-seconds]
@@ -631,11 +618,14 @@ _fm_atomic_replace() {
 }
 
 _fm_recovery_marker_write_locked() {
-  local marker=$1 kind=$2 generation=${3:-} status=${4:-pending} tmp
+  local marker=$1 kind=$2 generation=${3:-} status=${4:-pending} tmp now
   case "$kind" in handling|downtime) ;; *) return 1 ;; esac
   case "$status" in pending|announced) ;; *) return 1 ;; esac
   tmp=$(mktemp "${marker}.tmp.XXXXXX") || return 1
-  [ -n "$generation" ] || generation="$(fm_current_pid).$(date +%s).${tmp##*.}"
+  if [ -z "$generation" ]; then
+    fm_now now
+    generation="$(fm_current_pid).$now.${tmp##*.}"
+  fi
   if ! printf '%s:%s:%s\n' "$status" "$kind" "$generation" > "$tmp" \
     || ! chmod 0600 "$tmp" \
     || ! _fm_atomic_replace "$tmp" "$marker"; then
@@ -1569,7 +1559,7 @@ fm_autoarm_midturn_healthy() {  # <state-dir> [grace]
 # 1 when the micro-mutex is contended, the mandatory identity cannot be
 # computed, or the write failed.
 fm_autoarm_claim_next() {  # <state-dir> [grace]
-  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock epoch pid gen identity tmp
+  local state=$1 grace=${2:-${FM_GUARD_GRACE:-300}} lock epoch pid gen identity tmp now
   lock="$state/.claude-autoarm.lock"
   epoch="$state/.claude-autoarm-epoch"
   FM_AUTOARM_MY_GEN=
@@ -1590,8 +1580,9 @@ fm_autoarm_claim_next() {  # <state-dir> [grace]
   esac
   gen=$((gen + 1))
   tmp="$epoch.tmp.$pid"
+  fm_now now
   if ! printf 'epoch=%s owner_pid=%s outcome=arming updated_at=%s\n%s\n' \
-      "$gen" "$pid" "$(date +%s)" "$identity" > "$tmp" 2>/dev/null \
+      "$gen" "$pid" "$now" "$identity" > "$tmp" 2>/dev/null \
     || ! mv -f "$tmp" "$epoch" 2>/dev/null; then
     rm -f "$tmp" 2>/dev/null || true
     fm_lock_release "$lock"
@@ -1612,7 +1603,7 @@ fm_autoarm_claim_next() {  # <state-dir> [grace]
 # Returns 0 committed, 2 refused (superseded or required-marker failure), and 1
 # unable (bounded contention or ledger-write failure).
 fm_autoarm_write_owned() {  # <state-dir> <gen> <outcome> [marker-file] [session-pid] [recovery-generation]
-  local state=$1 gen=$2 outcome=$3 marker=${4:-} session=${5:-} recovery=${6:-} lock epoch pid identity tmp i
+  local state=$1 gen=$2 outcome=$3 marker=${4:-} session=${5:-} recovery=${6:-} lock epoch pid identity tmp i now
   lock="$state/.claude-autoarm.lock"
   epoch="$state/.claude-autoarm-epoch"
   pid=${BASHPID:-$$}
@@ -1629,9 +1620,10 @@ fm_autoarm_write_owned() {  # <state-dir> <gen> <outcome> [marker-file] [session
   fi
   identity=$FM_AUTOARM_IDENTITY
   tmp="$epoch.tmp.$pid"
+  fm_now now
   if ! {
       printf 'epoch=%s owner_pid=%s outcome=%s updated_at=%s' \
-        "$gen" "$pid" "$outcome" "$(date +%s)"
+        "$gen" "$pid" "$outcome" "$now"
       [ -z "$session" ] || printf ' session_pid=%s' "$session"
       [ -z "$recovery" ] || printf ' recovery_generation=%s' "$recovery"
       printf '\n'
@@ -1826,7 +1818,7 @@ fm_wake_append_locked() {
 
   clean_key=$(printf '%s' "$key" | fm_wake_clean_field)
   clean_payload=$(printf '%s' "$payload" | fm_wake_clean_field)
-  epoch=$(date +%s)
+  fm_now epoch
   seq_file="$STATE/.wake-queue.seq"
   recovery_marker="$STATE/.watcher-down"
   status=0
