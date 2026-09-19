@@ -50,9 +50,13 @@
 #            a Charted Next row, `warning` and non-dispatchable for the
 #            action-free integrity notices (the parenthesised synthesized
 #            gates) and `queued` otherwise, with dispatchable true only when
-#            the gate is this home's own and names no blocker and no hold
-#            reason, and with a reason naming the blocker when the gate has
-#            one but no hold reason; every unavailable or externally held
+#            the gate is this home's own, its real id is already a routable
+#            key, and it names no blocker and no hold reason, and with a
+#            reason naming the blocker when the gate has one but no hold
+#            reason; a row whose real id is not a routable key keeps its place
+#            on the board under a display slug but is never offered for
+#            dispatch, because the `dispatch.charted` intake resolves the id
+#            against the backlog and could not resolve a rewritten one; every unavailable or externally held
 #            secondmate home and every secondmate inventory-mismatch notice
 #            becomes a non-dispatchable `warning` Charted Next row, so a
 #            repair notice can never go missing from the board; every live
@@ -81,8 +85,9 @@
 #            id can never label itself with this home's repo or drop this
 #            home's live decision card as already landed. Every captain-facing
 #            string passes through one guard that substitutes the row's own
-#            durable identity when the snapshot value is empty or absent, so a
-#            blank title degrades that row instead of refusing the whole
+#            durable identity when the snapshot value is empty or absent -
+#            including a packet copy object whose own en or hant is blank - so
+#            a blank title degrades that row instead of refusing the whole
 #            skeleton, and a gate's `filed` is normalized to null unless it
 #            matches the accepted date shapes, so one hand-written `since`
 #            word cannot refuse the board either. A held task's title,
@@ -633,8 +638,9 @@ $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "capta
 EOF
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
-    --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" \
+    --argjson records "$records" --argjson cards "$cards" \
     --argjson readable "$readable" "$BOARD_JQ_DEFS"'
+    . as $snap |
     # Every captain-facing string goes through this one guard: the validator
     # refuses an empty en, and an ordinary metadata-only backlog row parses to
     # an empty title, so each projection names the durable value that stands in
@@ -647,12 +653,23 @@ EOF
     def risk_slot: fillv("low | medium | high");
     def reversible_slot: fillv("yes | no | partly");
     def recommend_slot($values): fillv("recommend one of " + ($values | join(" | ")));
-    def i18n($fallback): if type == "object" then . else t(.; $fallback) end;
-    def slugify: gsub("[^A-Za-z0-9._-]"; "-") | gsub("^-+|-+$"; "") | if length == 0 then "row" else . end;
+    def i18n($fallback):
+      if type != "object" then t(.; $fallback)
+      elif (.en | type == "string" and length > 0) and (.hant | type == "string" and length > 0) then .
+      else . + t(.en; $fallback) end;
+    def slugify:
+      gsub("[^A-Za-z0-9._-]"; "-") | .[0:128] | gsub("^-+|-+$"; "")
+      | if length == 0 then "row" else . end;
     def record($id): $records[$id] // null;
     def repo_of($id): record($id) | if . == null then null else .repo end;
     def https: type == "string" and test("^https://");
     def owned: .owner == "(main)";
+    # The Charted Next id IS the dispatch.charted routing channel, so a row
+    # keeps its real backlog id whenever that id is already a routable key; a
+    # row whose id is not stays visible under a display slug and is never
+    # offered for dispatch, because the intake could not resolve the slug.
+    def charted_id: if owned then .id else (.owner + "/" + .id) end;
+    def routable_id: charted_id | slug(128);
     def warning_gate: .id | startswith("(");
     def hold_title: (record(.id) | if . == null then null else .title end)
       // (.summary | split(": ") | .[0]);
@@ -723,13 +740,14 @@ EOF
         + (if (.artifact | https) then {pr_url: .artifact} else {} end) ],
       charted: (
         [ .gates[]?
-          | {id: (if owned then (.id | slugify) else ((.owner + "/" + .id) | slugify) end),
+          | {id: (charted_id | if slug(128) then . else slugify end),
              repo: (if owned then repo_of(.id) else null end),
              title: t(.title; .id),
              reason: (if (.reason // "-") | . != "-" and . != "" then t(.reason; .id)
                elif .blocked_by != "-" then t("waiting on " + (.blocked_by | gsub(","; ", ")); .id)
                else "" end),
-             dispatchable: (owned and (warning_gate | not) and .blocked_by == "-" and .reason == "-"),
+             dispatchable: (owned and routable_id and (warning_gate | not)
+               and .blocked_by == "-" and .reason == "-"),
              kind: (if warning_gate then "warning" else "queued" end),
              filed: (.filed | if valid_filed then . else null end)} ]
         + [ .secondmates[]?

@@ -1349,6 +1349,59 @@ test_compose_suppresses_merge_cards_and_warns_when_the_backlog_is_unreadable() {
   pass "an unreadable backlog suppresses merge cards and says so on the board"
 }
 
+test_compose_degrades_a_packet_copy_object_with_a_blank_member() {
+  local home skeleton decision
+  # fm-packet.sh verify accepts {"en": "...", "hant": ""} and its card keeps the
+  # object, so a worker who types an empty 繁體 string must degrade that one
+  # field rather than refuse the whole board.
+  decision=$(printf '%s' "$COMPOSE_DECISION" | jq -c '
+    .title = {en: "Rollout order", hant: ""}
+    | .options[0].label = {en: "Canary first", hant: "", hans: "金丝雀优先"}')
+  home=$(make_compose_home compose-packet-blank-hant "$decision")
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a verified packet whose copy object has a blank member"
+  jq -e '.captains_call[0]
+    | .key == "gated-work"
+    and .title == {en: "Rollout order", hant: "{TRANSLATE: Rollout order}"}
+    and (.options[0].label | .en == "Canary first" and .hant == "{TRANSLATE: Canary first}"
+      and .hans == "金丝雀优先")
+  ' "$skeleton" >/dev/null || fail "a blank packet translation was not degraded: $(cat "$skeleton")"
+  pass "compose degrades a packet copy object whose translation is blank"
+}
+
+test_compose_never_dispatches_a_charted_row_under_a_rewritten_id() {
+  local home skeleton long
+  home=$(make_compose_home compose-charted-id)
+  long=$(printf 'b%.0s' $(seq 1 140))
+  # A hand-written backlog row may carry any non-space id, and that id IS the
+  # dispatch channel, so an id the intake could not resolve must not be offered
+  # under a rewritten one - and must not refuse the board either.
+  jq --arg long "$long" '.gates += [
+        {id: "feat/login", title: "Add login", blocked_by: "-", reason: "-",
+         owner: "(main)", filed: "2026-09-16"},
+        {id: "修復登入", title: "Fix the login", blocked_by: "-", reason: "-",
+         owner: "(main)", filed: "2026-09-16"},
+        {id: "送出報告", title: "Send the report", blocked_by: "-", reason: "-",
+         owner: "(main)", filed: "2026-09-16"},
+        {id: $long, title: "A very long id", blocked_by: "-", reason: "-",
+         owner: "(main)", filed: "2026-09-16"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying unkeyable gate ids"
+  jq -e '
+    # Only the row whose real id is already a key may be dispatched, and it
+    # keeps that exact id.
+    ([.charted[] | select(.dispatchable) | .id] == ["plain-queued"])
+    # Every other row is still on the board, under a title the captain can read.
+    and ([.charted[] | select(.title.en == "Add login" or .title.en == "Fix the login"
+      or .title.en == "Send the report" or .title.en == "A very long id")] | length == 4)
+    and ([.charted[].id] | map(select(test("^[A-Za-z0-9._-]{1,128}$") | not)) | length == 0)
+  ' "$skeleton" >/dev/null || fail "a rewritten gate id was offered for dispatch: $(cat "$skeleton")"
+  pass "compose never offers a Charted Next row for dispatch under a rewritten id"
+}
+
 test_compose_validates_the_skeleton_on_stdout_too() {
   local home out rc
   home=$(make_compose_home compose-stdout-validate)
@@ -1456,6 +1509,8 @@ test_compose_seeds_a_packet_card_without_a_recorded_project
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
+test_compose_degrades_a_packet_copy_object_with_a_blank_member
+test_compose_never_dispatches_a_charted_row_under_a_rewritten_id
 test_compose_cards_a_merge_only_for_a_pr_this_backlog_claims
 test_compose_suppresses_merge_cards_and_warns_when_the_backlog_is_unreadable
 test_compose_drops_a_filed_date_the_payload_contract_refuses

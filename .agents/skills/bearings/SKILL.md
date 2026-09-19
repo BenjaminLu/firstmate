@@ -146,7 +146,7 @@ A remote-secondmate card whose task is absent from the main backlog remains on t
 Route the non-decision keys yourself:
 
 - `merge.<task-id>` is the captain's explicit merge order; follow the merge ruling below.
-- `dispatch.charted` carries comma-separated task ids the captain picked to start now; verify each id against the current backlog - still queued, blocker and time gate actually clear - then dispatch through the normal lifecycle, and report any id that no longer qualifies instead of forcing it.
+- `dispatch.charted` carries comma-separated task ids the captain picked to start now; the skeleton offers a row for dispatch only when its real backlog id is already a routable key, so an id the intake could not resolve arrives non-dispatchable rather than rewritten; verify each id against the current backlog - still queued, blocker and time gate actually clear - then dispatch through the normal lifecycle, and report any id that no longer qualifies instead of forcing it.
 
 After handling, rebuild the board from a fresh snapshot so acted-on items leave Captain's Call, and echo every action taken in chat so the board and chat never diverge silently.
 
