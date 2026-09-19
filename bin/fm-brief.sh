@@ -411,6 +411,13 @@ if [ "$KIND" = review ]; then
 # (tests/fm-brief.test.sh guards the class).
 PR_NUMBER=$FM_PR_NUMBER
 PR_URL=$FM_PR_URL
+# Every gh-axi call carries -R explicitly. A project clone can hold more than
+# one GitHub remote (an `upstream` fork parent beside `origin` is ordinary), and
+# gh-axi then resolves a repository that is not the one this pull request lives
+# in, so a bare `gh-axi pr view <n>` reads the wrong repository or fails. The
+# repository is taken from the reviewed URL itself, which is the only authority
+# on where this pull request is.
+PR_REPO_FLAG="-R $FM_PR_OWNER/$FM_PR_REPO"
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
@@ -424,11 +431,14 @@ This is a REVIEW task. You review one pull request that already exists: $PR_URL
 Your deliverable is a review POSTED on that pull request. A review that exists only in this session is a failed review.
 You deliver no change of your own: never commit, never push, never open a PR, never merge, never edit a file in this worktree except to read it.
 
-1. Read the pull request and its conversation: \`gh-axi pr view $PR_NUMBER --full --comments\`.
-2. Read the diff: \`gh-axi pr diff $PR_NUMBER --full\`.
-3. Check the head out so you can read primary sources at the exact revision under review:
-   \`git fetch origin refs/pull/$PR_NUMBER/head && git checkout --detach FETCH_HEAD\`
-4. Read the checks: \`gh-axi pr checks $PR_NUMBER\`. Report a red check as a finding; do not fix it.
+Every \`gh-axi\` command below names the repository with \`$PR_REPO_FLAG\`. Keep it on every call you make, including any you invent.
+This is not a formality. A project clone commonly has an \`upstream\` remote beside \`origin\`, and gh-axi may resolve that one. A read that omits the repository then returns a DIFFERENT repository's pull request of the same number, with no error and entirely plausible output, and you would review the wrong change and post findings on the wrong repository.
+
+1. Read the pull request and its conversation: \`gh-axi pr view $PR_NUMBER $PR_REPO_FLAG --full --comments\`.
+2. Read the diff: \`gh-axi pr diff $PR_NUMBER $PR_REPO_FLAG --full\`.
+3. Check the head out so you can read primary sources at the exact revision under review: \`gh-axi pr checkout $PR_NUMBER $PR_REPO_FLAG\`.
+   The diff alone is not enough for either of the first two disciplines below: judging a class needs the code around the change, and reading a primary source means opening the file.
+4. Read the checks: \`gh-axi pr checks $PR_NUMBER $PR_REPO_FLAG\`. Report a red check as a finding; do not fix it.
 
 # What a review owes
 These four are the contract. A review that skips one is incomplete, and saying so is better than implying you did it.
@@ -459,9 +469,9 @@ Widens scope: <no | yes - what acting on it would commit the project to>
 - <what you could not check, and why>
 \`\`\`
 
-Post it with \`gh-axi pr review $PR_NUMBER --comment --body-file <your file>\`.
-Use \`--comment\`. Do not use \`--approve\` or \`--request-changes\`: the verdict belongs in the body text, and GitHub refuses an approve or request-changes review on a pull request opened by the same account.
-Then read it back with \`gh-axi pr view $PR_NUMBER --reviews\` and confirm your review is there. An unverified post is not a posted review.
+Post it with \`gh-axi pr review $PR_NUMBER $PR_REPO_FLAG --comment --body-file <your file>\`.
+Use \`--comment\`. Do not use \`--approve\` or \`--request-changes\`: GitHub refuses both on a pull request opened by the same account (\`Review Can not approve your own pull request\`), and one fleet account opens and reviews these, so the verdict lives in the body text instead.
+Then read it back with \`gh-axi pr view $PR_NUMBER $PR_REPO_FLAG --reviews\` and confirm your review is there. An unverified post is not a posted review.
 If the post fails, append \`blocked: {the exact forge error}\` and stop. Never fall back to leaving the review only in your terminal or only in the local record below.
 
 # Rules

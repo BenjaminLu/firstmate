@@ -62,8 +62,12 @@ It is filed and spawned as a scout, so it is supervised, torn down, and reported
 Read them off the pull request, not out of the reviewer's pane:
 
 ```
-gh-axi pr view <number> --reviews
+gh-axi pr view <number> -R <owner>/<repo> --reviews
 ```
+
+Name the repository with `-R` on every `gh-axi` call against a task's pull request, here and when you post the ruling below.
+A project clone commonly has an `upstream` fork parent beside `origin`, and gh-axi may resolve that one: a bare read then returns a different repository's pull request of the same number, with no error and plausible output ([`docs/verification/pr-review.md`](../../../docs/verification/pr-review.md) records the observed case).
+Take the owner and repository from the recorded `pr=` URL, which is the only authority on where that pull request is.
 
 That is the point of the path - the findings are on the pull request where the captain can read them too.
 The reviewer's local record at `data/<review-task-id>/report.md` is a pointer to the posted review, useful for teardown and for finding the review again; it is never the authoritative copy.
@@ -91,7 +95,7 @@ The rulings available to you are:
 Post it to the same pull request, naming the finding by its `R<n>` id so a reader can line the two up:
 
 ```
-gh-axi pr comment <number> --body-file <file>
+gh-axi pr comment <number> -R <owner>/<repo> --body-file <file>
 ```
 
 The captain's words go up **verbatim** when the ruling is the captain's.

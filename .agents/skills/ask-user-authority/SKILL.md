@@ -12,13 +12,15 @@ metadata:
 
 # ask-user-authority
 
-This skill is the single owner of the decision policy for no-mistakes ask-user findings.
-`AGENTS.md` section 7 points here and does not restate this procedure.
+This skill is the single owner of the decision policy for a finding firstmate must rule on: a no-mistakes ask-user finding, and a finding a reviewer posted on a pull request under the `pr-review` path.
+Finding authority does not depend on which of those produced the finding, so both use the criteria below unchanged.
+`AGENTS.md` section 7 and the `pr-review` skill point here and do not restate this procedure.
 Finding authority is determined by the criteria below, not by `yolo`.
 Firstmate always applies this judgment, decides any finding that is unambiguous toward the accepted design, and escalates only genuinely ambiguous, expanding, or destructive findings.
 
-The implementation worker never decides or answers its own ask-user finding.
-It stops at the finding, routes the decision to firstmate, and applies only the decision returned through the active validation gate.
+The implementation worker never decides or answers its own finding.
+It stops at the finding, routes the decision to firstmate, and applies only the decision returned to it - through the active validation gate for a no-mistakes run, and as firstmate's steer naming the finding ids under the `pr-review` path.
+A reviewer likewise never rules on its own finding; `bin/fm-brief.sh`'s reviewer contract owns that boundary on the reviewer's side.
 
 ## Decide
 
