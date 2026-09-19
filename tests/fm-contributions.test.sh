@@ -168,7 +168,12 @@ case "$*" in
   *) printf 'unexpected gh fixture call: %s\n' "$*" >&2; exit 1 ;;
 esac
 SH
-  chmod +x "$home/fakebin/gh"
+  cat > "$home/fakebin/date" <<'SH'
+#!/bin/sh
+if [ "$*" = +%s ] && [ -f "$FORGE/clock" ]; then cat "$FORGE/clock"; else exec /bin/date "$@"; fi
+SH
+  /bin/date +%s > "$home/forge/clock"
+  chmod +x "$home/fakebin/gh" "$home/fakebin/date"
 }
 
 with_home() {
@@ -588,6 +593,11 @@ case "$fault:$*" in
     printf '%s\n' "$(( $(cat "$FORGE/clock") + 100 ))" > "$FORGE/clock" ;;
   exhaust-issue:'api repos/o/r/issues/9/comments?'*)
     printf '%s\n' "$(( $(cat "$FORGE/clock") + 100 ))" > "$FORGE/clock" ;;
+  tail-cut:'api repos/o/r/issues/21/comments?'*)
+    printf '%s\n' "$(( $(cat "$FORGE/clock") + 100 ))" > "$FORGE/clock" ;;
+  tail-cut:'api graphql '*)
+    # A real read takes time; let the clock show it so each one stamps its own end.
+    printf '%s\n' "$(( $(cat "$FORGE/clock") + 1 ))" > "$FORGE/clock" ;;
   fail-late:'api repos/o/r/pulls/8/reviews?'*)
     printf '%s\n' "$(( $(cat "$FORGE/clock") + 100 ))" > "$FORGE/clock"
     printf 'HTTP 502\n' >&2; exit 1 ;;
@@ -758,10 +768,14 @@ test_genuine_failure_near_deadline_is_unavailable() {
   out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) || fail 'poll failed on a genuine forge failure'
   [ "$out" = 'contributions: observation unavailable for https://github.com/o/r/pull/8' ] \
     || fail "a genuine forge failure past the deadline was swallowed: $out"
-  jq -e --arg now "$NOW" '.records[0].checked_at == $now
+  # This fixture spends 100 seconds before failing, so the attempt's own end is
+  # the honest stamp: a completed attempt dates when it finished, not when the
+  # poll began, which is what keeps it sorted after a cut from the same poll.
+  jq -e --arg started "$NOW" '.records[0].checked_at > $started
+    and (.records[0].checked_at | fromdateiso8601) - ($started | fromdateiso8601) == 100
     and .records[0].error == "forge observation unavailable or changed during read"' \
-    "$home/data/delivery/contributions.json" >/dev/null || fail 'a genuine forge failure left no error evidence'
-  pass 'a genuine forge failure inside the budget still records the error and wakes'
+    "$home/data/delivery/contributions.json" >/dev/null || fail "a genuine forge failure left no error evidence: $(cat "$home/data/delivery/contributions.json")"
+  pass 'a genuine forge failure inside the budget records the error at the instant the attempt ended'
 }
 
 test_shared_url_observed_once() {
@@ -1035,8 +1049,44 @@ test_numeric_repository_name_is_observed() {
   pass 'a repository whose name is all digits is still observed'
 }
 
+test_cut_row_is_observed_first_next_poll() {
+  local home cut_at_line other n
+  home=$(new_home budget-cut-three-urls)
+  forge_home "$home"
+  wrap_forge "$home"
+  # Three owned pull requests, none yet observed, read in task order: the last
+  # one reached is the one the budget cuts short.
+  rm -f "$home/data/delivery/contributions.json"
+  printf -- '- [ ] aaa - First https://github.com/o/r/pull/20 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
+  printf -- '- [ ] zzz - Last https://github.com/o/r/pull/21 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
+  printf 'tail-cut\n' > "$home/forge/fault"
+  /bin/date +%s > "$home/forge/clock"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null \
+    || fail 'the three-URL poll failed'
+  jq -e '.records[0] | .checked_at != null and .cut_at == null' "$home/data/aaa/contributions.json" >/dev/null \
+    || fail 'the first URL was not read successfully'
+  jq -e '.records[0] | .checked_at != null and .cut_at == null' "$home/data/delivery/contributions.json" >/dev/null \
+    || fail 'the second URL was not read successfully'
+  jq -e '.records[0] | .checked_at == null and .cut_at != null' "$home/data/zzz/contributions.json" >/dev/null \
+    || fail "the third URL was not cut short: $(cat "$home/data/zzz/contributions.json")"
+  # The next poll is what proves the order, not the stamps it sorted on.
+  : > "$home/forge/calls"
+  : > "$home/forge/fault"
+  /bin/date +%s > "$home/forge/clock"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'the poll after the cut failed'
+  cut_at_line=$(grep -nF -- '-F n=21' "$home/forge/calls" | head -1 | cut -d: -f1)
+  [ -n "$cut_at_line" ] || fail 'the poll after the cut never re-read the cut contribution'
+  for n in 20 8; do
+    other=$(grep -nF -- "-F n=$n" "$home/forge/calls" | head -1 | cut -d: -f1)
+    [ -n "$other" ] || fail "the poll after the cut never reached the contribution numbered $n"
+    [ "$cut_at_line" -lt "$other" ] \
+      || fail "the cut contribution was read after the one numbered $n instead of before it"
+  done
+  pass 'a cut row is observed before the rows read in its own poll'
+}
+
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_one_read_cannot_spend_the_whole_budget test_observation_call_budget test_paged_check_contexts_keep_every_lane test_expected_context_is_no_lane test_numeric_repository_name_is_observed test_slow_forge_straddles_the_shipped_call_bound test_budget_cut_keeps_the_last_good_observation test_budget_cut_row_ages_out test_never_observed_url_rotates_after_a_cut; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_one_read_cannot_spend_the_whole_budget test_observation_call_budget test_paged_check_contexts_keep_every_lane test_expected_context_is_no_lane test_numeric_repository_name_is_observed test_slow_forge_straddles_the_shipped_call_bound test_budget_cut_keeps_the_last_good_observation test_budget_cut_row_ages_out test_never_observed_url_rotates_after_a_cut test_cut_row_is_observed_first_next_poll; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

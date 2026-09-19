@@ -19,8 +19,10 @@
 # This script owns fm-contributions.v1: one atomic file per durable task with
 # task and records[]. Each record contains url, kind, checked_at, cut_at, error,
 # observation, verdict, seen event tokens, pending events, and notified tokens.
-# checked_at dates the last COMPLETED read; cut_at dates the last attempt the
-# poll budget cut short, and only the newest attempt may carry it.
+# checked_at dates the instant the last completed read finished; cut_at dates
+# the poll start of the last attempt the budget cut short, and only the newest
+# attempt may carry it. The two differ so the ordering key below needs no
+# tiebreak: a cut lands at its poll's start, every read of that poll after it.
 # observation is one coherent forge read. Observing one pull request costs four
 # forge calls, and that count is load-bearing: a slow forge answers each call in
 # 0.9-4.4 seconds, so four fit the default 20s budget while the eight a per-lane
@@ -78,7 +80,7 @@
 # but first stamps that URL's cut_at, leaving checked_at, error, observation,
 # verdict and every signal field exactly as it found them. Two fields, two jobs:
 # cut_at says the budget stopped an attempt, checked_at still says when a read
-# last completed. The queue is ordered by the later of the two, so a cut row -
+# last finished. The queue is ordered by the later of the two, so a cut row -
 # and a URL never once observed, whose completed-read key is empty - rotates out
 # of the oldest-first head instead of pinning it there for every later poll,
 # while freshness reads the completed one alone. Writing no error leaves the
@@ -364,6 +366,11 @@ load_old() { # task canonical-url kind -> this owner's stored row, or a blank on
     // {url:$url,kind:$kind,checked_at:null,cut_at:null,observation:null,verdict:null,seen:[],pending:[],notified:[]}' > "$TMP/old.json"
 }
 
+read_stamp() { # the instant the attempt that just finished completed
+  jq -nr --argjson base "$EPOCH" --argjson start "$POLL_START" --argjson now "$(date +%s)" \
+    '($base + ($now - $start)) | todateiso8601'
+}
+
 publish_pending() { # task canonical-url record-file
   local task=$1 url=$2 record=$3 token key count emitted status
   count=$(jq '.pending | length' "$record")
@@ -426,7 +433,8 @@ poll() {
       | . + {at:([$record.checked_at,$record.cut_at] | map(select(. != null)) | max // "")})
     | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),tasks:(map(.task) | unique)})
     | sort_by(.at,.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
-  DEADLINE=$(( $(date +%s) + BUDGET ))
+  POLL_START=$(date +%s)
+  DEADLINE=$(( POLL_START + BUDGET ))
   while IFS=$'\t' read -r -a row; do
     [ "${#row[@]}" -ge 2 ] || continue
     [ "$(date +%s)" -lt "$DEADLINE" ] || break
@@ -466,7 +474,7 @@ poll() {
       load_old "$task" "$url" "$kind"
       old="$TMP/old.json"
       if [ "$observed" -eq 0 ]; then
-        jq -n --arg now "$NOW" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
+        jq -n --arg now "$(read_stamp)" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
           $old[0] as $old | $observation[0] as $o
           | ($o.events + (if $o.ready == true and $old.observation.ready != true and (any($o.events[]; .type == "ready-for-pr") | not) then
               [{token:("ready-for-pr:" + $now),type:"ready-for-pr",source:$old.url,head:null,body:"filed issue reached ready-for-pr"}]
@@ -477,7 +485,7 @@ poll() {
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
         error='forge observation unavailable or changed during read'
-        jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error | .cut_at=null' "$old" > "$TMP/row.json"
+        jq --arg now "$(read_stamp)" --arg error "$error" '.checked_at=$now | .error=$error | .cut_at=null' "$old" > "$TMP/row.json"
       fi
       write_record "$task" "$TMP/row.json"
       publish_pending "$task" "$url" "$TMP/row.json"
