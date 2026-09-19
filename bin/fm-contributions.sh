@@ -137,6 +137,10 @@ case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 command -v jq >/dev/null 2>&1 || fail 'jq is required to measure contribution coverage'
 NOW=${FM_CONTRIBUTIONS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 EPOCH=$(jq -nr --arg now "$NOW" '$now | fromdateiso8601') || fail 'invalid observation clock'
+# Elapsed time is measured from here, the instant NOW names, not from the later
+# point the poll loop starts: the input gathering between them is real elapsed
+# time and belongs in a completed read's stamp.
+EPOCH_CLOCK=$(date +%s)
 MAX_AGE=${FM_CONTRIBUTIONS_MAX_AGE:-900}
 BUDGET=${FM_CONTRIBUTIONS_BUDGET:-20}
 case "$MAX_AGE" in ''|*[!0-9]*) fail 'invalid freshness bound' ;; esac
@@ -367,7 +371,7 @@ load_old() { # task canonical-url kind -> this owner's stored row, or a blank on
 }
 
 read_stamp() { # the instant the attempt that just finished completed
-  jq -nr --argjson base "$EPOCH" --argjson start "$POLL_START" --argjson now "$(date +%s)" \
+  jq -nr --argjson base "$EPOCH" --argjson start "$EPOCH_CLOCK" --argjson now "$(date +%s)" \
     '($base + ($now - $start)) | todateiso8601'
 }
 
