@@ -263,14 +263,14 @@
 #   answer and stay silent about a missed one, which is the discrimination the
 #   captain asked for, backwards.
 #
-#   RETIRES two ways, and never on a clock. The handler settles it - a dispatch
-#   clears it (`ack <key> --clear`), a refusal replaces it (`ack <key>
-#   --refused`) - or its key leaves the board, at which point compose drops the
-#   record, because no row can ever render it again. Age retires nothing: a
-#   record whose row IS still on the board goes on reporting itself as still
-#   waiting however long it has been, which is the report the captain asked
-#   for, and is how "the first mate is busy" is told apart from "the first mate
-#   missed it".
+#   RETIRES only when the handler settles it - a dispatch clears it (`ack <key>
+#   --clear`), a refusal replaces it (`ack <key> --refused`). Nothing else
+#   retires a record. Not compose: a publication enumerates what the snapshot's
+#   options and caps gave it, not every live row, so a key missing from one
+#   board says nothing about whether its row still exists. Not a clock either -
+#   an unsettled record goes on reporting itself as still waiting however long
+#   it has been, which is the report the captain asked for, and is how "the
+#   first mate is busy" is told apart from "the first mate missed it".
 #
 # ONLY the two surfaces the captain clicks carry it: a Captain's Call item and
 # a Charted Next row. Every control he named lives on one of those, and an
@@ -452,7 +452,8 @@ command_ack() {
     refused)
       [ -n "$why_file" ] || fail "--refused needs --why-file: a refusal the captain cannot read is not a refusal"
       [ -f "$why_file" ] && [ ! -L "$why_file" ] || fail "refusal reason does not exist: $why_file"
-      [ -s "$why_file" ] || fail "refusal reason is empty: $why_file"
+      [ -n "$(LC_ALL=C tr -d '[:space:]' < "$why_file")" ] \
+        || fail "refusal reason is empty: $why_file"
       write_ack "$key" refused "$why_file"
       ;;
     acting) write_ack "$key" acting '' ;;
@@ -492,22 +493,6 @@ board_acks_map() {
     acc=$merged
   done
   printf '%s\n' "$acc"
-}
-
-# RETIRES, second way: a record whose key is on no row of the board just
-# composed can never be rendered again, so this is where it goes. Reachability
-# is the only reason a record is dropped here - a key still on the board keeps
-# its record however old it is.
-retire_unreachable_acks() {  # <skeleton.json>
-  local dir f key live
-  dir=$(acks_dir)
-  [ -d "$dir" ] || return 0
-  live=$(jq -r '[.captains_call[]?.key, .charted[]?.id] | .[]' "$1" 2>/dev/null) || return 0
-  for f in "$dir"/*.json; do
-    [ -f "$f" ] && [ ! -L "$f" ] || continue
-    key=${f##*/}; key=${key%.json}
-    printf '%s\n' "$live" | grep -Fqx -- "$key" || rm -f -- "$f"
-  done
 }
 
 validate_payload() {  # <data.json>
@@ -1177,7 +1162,6 @@ EOF
     rm -f -- "$tmp"
     fail "the composed skeleton does not satisfy $BOARD_SCHEMA"
   fi
-  retire_unreachable_acks "$tmp"
   if [ -n "$out" ]; then
     cat "$tmp" > "$out" || { rm -f -- "$tmp"; fail "cannot write the board skeleton: $out"; }
     printf 'skeleton: %s\n' "$out"
