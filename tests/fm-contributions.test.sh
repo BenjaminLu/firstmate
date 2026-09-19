@@ -851,123 +851,46 @@ test_whole_observation_of_a_slow_forge_fits_the_shipped_budget() {
   pass 'a whole eight-call observation of a slow forge fits the shipped budget'
 }
 
-test_budget_cut_to_the_watcher_bound_reports_once() {
-  local home out started elapsed
-  local line='contributions: the poll budget did not reach https://github.com/o/r/pull/8'
-  home=$(new_home budget-cut-unreached)
+test_observation_past_the_budget_leaves_the_row_stale() {
+  local home out before
+  home=$(new_home observation-past-budget)
   forge_home "$home"
   wrap_forge "$home"
-  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
-  cp "$home/data/delivery/contributions.json" "$home/prior.json"
+  # Already older than the freshness bound, so only an observation this poll
+  # completes could make the board call the row checked again.
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-16T07:00:00Z"'
+  before=$(cat "$home/data/delivery/contributions.json")
+  # Six seconds a call: past the bound this poll used to impose, and far past
+  # what a whole eight-call observation can fit in this budget.
   printf 'latency\n' > "$home/forge/fault"
-  printf '3\n' > "$home/forge/latency"
-  # A watcher bound of twelve seconds leaves a five-second forge budget, which
-  # no whole observation of this forge fits in.
-  poll_at() { with_home "$home" env FM_CHECK_TIMEOUT=12 FM_CONTRIBUTIONS_NOW="$1" \
-    "$ROOT/bin/fm-contributions.sh" poll || fail "poll at $1 failed"; }
-  started=$(/bin/date +%s)
-  out=$(poll_at 2026-09-16T09:00:00Z)
-  elapsed=$(( $(/bin/date +%s) - started ))
-  [ "$out" = "$line" ] || fail "a contribution the budget could not reach was left silent: $out"
-  [ "$elapsed" -lt 12 ] || fail "the poll did not cut its budget to the watcher bound: ${elapsed}s"
-  cmp -s "$home/prior.json" "$home/data/delivery/contributions.json" \
-    || fail 'an observation the budget cut short rewrote the prior record'
-  out=$(poll_at 2026-09-16T09:05:00Z)
-  [ -z "$out" ] || fail "the same unreached contribution was reported again: $out"
-  # A forge fast enough to fit clears the condition, and it is news again after.
-  printf '0\n' > "$home/forge/latency"
-  out=$(poll_at 2026-09-16T09:10:00Z)
-  [ -z "$out" ] || fail "a completed observation printed: $out"
-  jq -e '.records[0] | .error == null and .checked_at == "2026-09-16T09:10:00Z"' \
-    "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'a forge inside the cut budget was not observed'
-  printf '3\n' > "$home/forge/latency"
-  out=$(poll_at 2026-09-16T10:00:00Z)
-  [ "$out" = "$line" ] || fail "an unreached contribution was not reported again after it recovered: $out"
-  pass 'a budget cut to the watcher bound names an unreached contribution once per onset'
-}
-
-test_unreached_condition_reports_once_while_membership_rotates() {
-  local home out poll refreshed unread at
-  local line='contributions: the poll budget did not reach https://github.com/o/r/pull/13'
-  home=$(new_home unreached-rotation)
-  forge_home "$home"
-  wrap_forge "$home"
-  rm -rf "$home/data/delivery"
-  printf '# Backlog\n\n## Queued\n' > "$home/data/backlog.md"
-  record "$home" one 11 open mergeable
-  record "$home" two 12 open mergeable
-  record "$home" three 13 open mergeable
-  record "$home" four 14 open mergeable
-  # Staggered so exactly one contribution is past the freshness bound behind the
-  # one the budget reaches, and a different one each poll.
-  mutate_record "$home" one '.records[0].checked_at="2026-09-16T07:53:20Z"'
-  mutate_record "$home" two '.records[0].checked_at="2026-09-16T07:46:40Z"'
-  mutate_record "$home" three '.records[0].checked_at="2026-09-16T07:40:00Z"'
-  mutate_record "$home" four '.records[0].checked_at="2026-09-16T07:33:20Z"'
-  # Half a second per forge call: one whole eight-call observation fits the
-  # seven-second budget this watcher bound leaves, and a second one cannot.
-  printf 'latency\n' > "$home/forge/fault"
-  printf '0.5\n' > "$home/forge/latency"
-  while read -r poll refreshed unread; do
-    out=$(with_home "$home" env FM_CHECK_TIMEOUT=12 FM_CONTRIBUTIONS_NOW="$poll" \
-      "$ROOT/bin/fm-contributions.sh" poll) || fail "poll at $poll failed"
-    if [ "$poll" = 2026-09-16T08:00:00Z ]; then
-      [ "$out" = "$line" ] || fail "the onset of the unreached condition was not reported: $out"
-    else
-      [ -z "$out" ] || fail "a rotating unreached contribution was reported again at $poll: $out"
-    fi
-    jq -e --arg at "$poll" '.records[0].checked_at == $at' \
-      "$home/data/$refreshed/contributions.json" >/dev/null \
-      || fail "the oldest contribution was not the one observed at $poll"
-    at=$(jq -r '.records[0].checked_at' "$home/data/$unread/contributions.json")
-    [ "$at" != "$poll" ] || fail "the contribution behind the budget was observed at $poll"
-  done <<'POLLS'
-2026-09-16T08:00:00Z four three
-2026-09-16T08:05:10Z three two
-2026-09-16T08:10:20Z two one
-2026-09-16T08:15:30Z one four
-POLLS
-  pass 'a rotating set of unreached contributions is reported once, not once per poll'
-}
-
-test_unreached_line_names_only_what_the_budget_owed() {
-  local home out
-  local line='contributions: the poll budget did not reach https://github.com/o/r/pull/8'
-  home=$(new_home unreached-owed)
-  forge_home "$home"
-  wrap_forge "$home"
-  # A newly registered contribution with no observation yet, beside two merged
-  # ones whose checked_at settle_final froze long ago.
-  rm "$home/data/delivery/contributions.json"
-  record "$home" landed 21 merged mergeable
-  record "$home" earlier 22 merged mergeable
-  mutate_record "$home" landed '.records[0].checked_at="2026-09-10T08:00:00Z"'
-  mutate_record "$home" earlier '.records[0].checked_at="2026-09-09T08:00:00Z"'
-  # A late owner of an already merged contribution holds no record of its own,
-  # and a legacy error can still sit beside a terminal observation. Neither
-  # costs a forge call: settle_final answers both from the record already held.
-  printf -- '- [ ] zulu - Filed https://github.com/o/r/pull/21 (repo: sample) (kind: ship)\n' \
-    >> "$home/data/backlog.md"
-  mutate_record "$home" earlier '.records[0].error="forge observation unavailable or changed during read"'
-  # An unsupported forge costs no forge call at all, so no budget can fail to
-  # reach it - the board calls its coverage unmeasured, never unchecked.
-  mkdir -p "$home/data/unsupported"
-  jq -n --arg at "$NOW" '{schema:"fm-contributions.v1",task:"unsupported",records:[{
-    url:"https://gitlab.com/o/r/-/merge_requests/2",kind:"pr",checked_at:$at,
-    error:"forge observation unavailable or changed during read",
-    observation:null,verdict:null,pending:[],seen:[],notified:[]}]}' \
-    > "$home/data/unsupported/contributions.json"
-  printf 'latency\n' > "$home/forge/fault"
-  printf '3\n' > "$home/forge/latency"
+  printf '6\n' > "$home/forge/latency"
   out=$(with_home "$home" env FM_CHECK_TIMEOUT=12 "$ROOT/bin/fm-contributions.sh" poll) \
-    || fail 'poll failed with settled and unsupported contributions behind an unreachable one'
-  [ "$out" = "$line" ] || fail "the budget was blamed for a contribution it never owed a read: $out"
-  pass 'only a contribution the poll budget owed a read is named as one it did not reach'
+    || fail 'poll failed against a forge one observation cannot fit'
+  [ -z "$out" ] || fail "an observation the budget could not fit woke the supervisor: $out"
+  [ "$before" = "$(cat "$home/data/delivery/contributions.json")" ] \
+    || fail 'an observation the budget cut short rewrote the durable record'
+  out=$(bearings "$home") || fail 'Bearings could not read the record after a cut-short poll'
+  printf '%s' "$out" | jq -e '.contributions.known == 1 and .contributions.checked == 0
+    and .contributions.complete == false' >/dev/null \
+    || fail "a row this poll never observed was not left unchecked: $out"
+  pass 'an observation that does not fit the budget leaves the row stale, never freshly checked'
+}
+
+test_tiny_watcher_bound_still_reads_the_forge() {
+  local home
+  home=$(new_home tiny-watcher-bound)
+  forge_home "$home"
+  wrap_forge "$home"
+  # A watcher bound smaller than the margin the poll reserves around its reads:
+  # the deadline still has to leave one bounded call rather than none at all.
+  with_home "$home" env FM_CHECK_TIMEOUT=5 "$ROOT/bin/fm-contributions.sh" poll >/dev/null \
+    || fail 'poll failed under a watcher bound smaller than its own margins'
+  [ -s "$home/forge/calls" ] || fail 'a watcher bound this small left the forge unread'
+  pass 'a watcher bound below the poll margins still buys one bounded forge call'
 }
 
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_slow_forge_straddles_the_shipped_call_bound test_whole_observation_of_a_slow_forge_fits_the_shipped_budget test_budget_cut_to_the_watcher_bound_reports_once test_unreached_condition_reports_once_while_membership_rotates test_unreached_line_names_only_what_the_budget_owed; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_slow_forge_straddles_the_shipped_call_bound test_whole_observation_of_a_slow_forge_fits_the_shipped_budget test_observation_past_the_budget_leaves_the_row_stale test_tiny_watcher_bound_still_reads_the_forge; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"
