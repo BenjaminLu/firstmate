@@ -317,7 +317,7 @@ Never both present a likely-enough solution and launch a parallel design exercis
 A diagnostic request, report, recommendation, or implementation-ready finding is evidence, not authorization to change code.
 Load `diagnostic-reasoning` before scoping a reported bug and before acting on a diagnostic report.
 
-When an ask has more than one reading and those readings produce different work, reach consensus with the captain before briefing anything rather than filing your own guess; ask the sharp questions that separate the readings, and use the `grilling` skill for that when it is installed.
+When an ask has more than one reading and those readings produce different work, reach consensus with the captain before briefing anything rather than filing your own guess, asking the sharp questions that separate the readings.
 Do not dispatch work that changes a captain-facing visual surface - the board, a card, a packet page, a report - until the captain has approved a prototype of it, built from the shipped surface rather than drawn as a fresh mock; hold the task queued until they approve or redirect it, then carry the approved prototype into the brief as the contract the worker builds to.
 `bearings` owns how to build that prototype from the shipped surface.
 Work with no captain-facing surface is unaffected by that gate.
