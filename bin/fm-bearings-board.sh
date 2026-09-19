@@ -10,9 +10,13 @@
 #
 # Usage:
 #   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
+#                                [--deterministic] [--progress-map <file>] [--no-progress]
 #   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
+#   fm-bearings-board.sh refresh [--lang ...] [--snapshot <file>] [--progress-map <file>]
+#                                [--no-progress] [--payload-out <file>] [--best-effort]
 #   fm-bearings-board.sh path
+#   fm-bearings-board.sh payload-path
 #   fm-bearings-board.sh url
 #   fm-bearings-board.sh open
 #
@@ -107,8 +111,13 @@
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
-#            `bin/fm-packet.sh verify` accepts the held task's packet, the card
-#            is seeded from `bin/fm-packet.sh card <id>` instead of
+#            `bin/fm-captain-hold.sh card <id>` returns a STORED card, that card
+#            is used as-is: a captain call's copy is written once, when the hold
+#            is created, and every later compose and refresh reuses it rather
+#            than asking the first mate for prose again. Only a NEW captain hold
+#            with no stored card still needs copy written once. Failing that,
+#            when `bin/fm-packet.sh verify` accepts the held task's packet, the
+#            card is seeded from `bin/fm-packet.sh card <id>` instead of
 #            placeholders. Every captain-facing copy field is emitted as
 #            {"en": <english>, "hant": "{TRANSLATE: <english>}"} so hant (and
 #            optionally hans) is filled without re-typing the English; the
@@ -128,7 +137,46 @@
 #            gone.
 #            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
 #            placeholder as `<path>: <value>` and exits 1 while any remain.
+#            --deterministic emits NO placeholder at all, which is what lets a
+#            refresh publish with no model in the loop. Every slot a composer
+#            would fill is resolved from structured state instead: a decision
+#            card with no stored or packet-seeded copy degrades to its durable
+#            title plus the hold's own reason as the question to decide and no
+#            invented options, an optional enum or recommendation the evidence
+#            does not supply is omitted rather than guessed, a merge card's
+#            risk reads `unassessed`, and the omitted-gate total the snapshot
+#            reports goes wholly to charted_more with charted_warning_more 0,
+#            because the snapshot never splits that one total. A degraded card
+#            is still answerable: the captain can always reconcile it or answer
+#            in free form, and the next full build writes real copy once.
+#            Copy carries no translation slot either: with no translator in the
+#            loop, a string the snapshot supplied is emitted as the plain string
+#            the payload contract already accepts, which the board shows in
+#            every language, while copy that arrived already translated (a
+#            stored or packet-seeded card) keeps its own translations.
+#            --progress-map <file> supplies the Underway progress projection as
+#            a JSON object keyed by task id, instead of reading it here;
+#            --no-progress omits the projection entirely.
+# refresh    Recompose the board deterministically and inject it in place at
+#            the stable path, WITHOUT establishing, reopening, binding, or
+#            arming anything. It is the no-model-in-the-loop republication: it
+#            composes with --deterministic, reconciles the payload exactly as
+#            build does, injects it into the board file, and writes the same
+#            payload beside the board as a plain JSON file (see payload-path),
+#            so a consumer other than the local page can pick it up without
+#            recomposing. Safe to run on every fleet event: it touches no Lavish
+#            session, so the board's URL, its process-event source, and its
+#            keyed-answer binding all survive untouched, and a home-local lock
+#            makes a concurrent trigger a no-op rather than a race. It refuses
+#            when no board has been built yet; with --best-effort that refusal,
+#            and every other failure, becomes a silent exit 0 with the reason
+#            appended to the bounded state/.bearings-board-refresh.log, so a
+#            supervision trigger can never be changed by this side-band
+#            publication. Output is `refreshed: <board>` and `payload: <path>`.
 # path       Print the stable board path for this home.
+# payload-path
+#            Print the stable path of the payload file refresh writes beside
+#            the board.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
 #            open session exists. The URL never changes while the board keeps
@@ -199,7 +247,18 @@
 # existing board is touched.
 #
 # Every Underway row likewise carries a non-empty `name`: the durable task name
-# when known, otherwise its durable identifier.
+# when known, otherwise its durable identifier. It MAY also carry `progress`,
+# the row's own structured progress projection, so the captain reads how far
+# along each worker is without asking: {state, detail, step, steps[{step,
+# status}], active_for, last_activity, quiet, activity, refreshed}. It comes
+# from `bin/fm-task-progress.sh`, which reads structured state only - never a
+# worker's terminal - and is emitted for this home's own rows alone, because a
+# secondmate's runs are readable in its own home rather than here. The step
+# names and state words are the pipeline's own stable vocabulary, so the
+# template renders the ladder trilingually from a fixed label map instead of
+# carrying translated prose in the payload; `detail` stays the raw evidence
+# line. `refreshed` is that row's own read time, which is what makes a stale
+# row visible as stale rather than silently old.
 # A Charted Next row MAY carry `filed`, the durable filed date (YYYY-MM-DD, or
 # that date with a UTC timestamp) the template orders the section by, newest
 # first; a row with no comparable date keeps its payload order after every dated
@@ -217,6 +276,9 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+REFRESH_LOG_MAX_BYTES=${FM_BEARINGS_REFRESH_LOG_MAX_BYTES:-65536}
+case "$REFRESH_LOG_MAX_BYTES" in ''|*[!0-9]*|0) REFRESH_LOG_MAX_BYTES=65536 ;; esac
 
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
@@ -332,9 +394,28 @@ validate_payload() {  # <data.json>
             | ([.options[].value] | index($recommend) != null))))
       and ([.options[].value] | index("reconcile") == null)
       and (if .type == "merge" then (.risk | nonempty_string) else true end);
+    def optional_null_string($name):
+      (has($name) | not) or (.[$name] == null) or (.[$name] | type == "string");
+    # The structured progress projection an Underway row carries
+    # (bin/fm-task-progress.sh). Every field is machine vocabulary the template
+    # translates, never composed prose, so none of it is copy.
+    def progress_step: type == "object" and (.step | nonempty_string)
+      and (.status | type == "string");
+    def progress_item:
+      type == "object"
+      and (.state | nonempty_string)
+      and (.detail | type == "string")
+      and (.quiet | type == "boolean")
+      and (.refreshed | nonempty_string)
+      and ((.step == null) or (.step | nonempty_string))
+      and (.steps | type == "array") and ([.steps[] | progress_step] | all)
+      and optional_null_string("active_for")
+      and optional_null_string("last_activity")
+      and optional_null_string("activity");
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
-      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string);
+      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string)
+      and ((has("progress") | not) or (.progress == null) or (.progress | progress_item));
     def landed_item:
       type == "object" and repo_marker and (.id | nonempty_string)
       and (.what | copy) and (.owner | nonempty_string)
@@ -594,6 +675,37 @@ packet_card() {  # <task-id>
   printf '%s\n' "$card" | jq -c . 2>/dev/null || printf 'null\n'
 }
 
+# The durable card written once when the hold was created, or null. Only a
+# card the validator would accept is used, so a corrupt stored card degrades
+# that one row to the packet or placeholder path instead of refusing the board.
+stored_card() {  # <task-id>
+  local card
+  card=$("$SCRIPT_DIR/fm-captain-hold.sh" card "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
+  printf '%s\n' "$card" \
+    | jq -c --arg id "$1" '
+      if type == "object" and .key == $id
+      then .options = [(.options // [])[] | select(.value != "reconcile")]
+      else null end' 2>/dev/null \
+    || printf 'null\n'
+}
+
+# One task's structured progress projection, reduced to the payload shape.
+# bin/fm-task-progress.sh owns every read; this maps its document onto the row.
+task_progress() {  # <task-id>
+  local doc
+  doc=$("$SCRIPT_DIR/fm-task-progress.sh" "$1" 2>/dev/null) || return 1
+  printf '%s\n' "$doc" | jq -c '
+    select(type == "object" and .schema == "fm-task-progress.v1")
+    | {state: .state, detail: (.detail // ""),
+       step: (.run.step // null),
+       steps: [(.run.steps // [])[] | {step: .step, status: .status}],
+       active_for: (.run.active_for // null),
+       last_activity: (.run.last_activity // null),
+       quiet: (.run.quiet // false),
+       activity: (.run.activity // null),
+       refreshed: .generated}' 2>/dev/null | head -1
+}
+
 list_placeholders() {  # <data.json> -> "<path>: <value>" lines
   jq -r --arg re "$PLACEHOLDER_RE" '
     . as $doc
@@ -618,12 +730,16 @@ command_compose_check() {  # <data.json>
 
 command_compose() {
   local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
+  local deterministic=false progress_map='' progress='{}' no_progress=0 row
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
       --lang) lang=${2-}; shift 2 ;;
       --out) out=${2-}; shift 2 ;;
       --snapshot) snapshot_file=${2-}; shift 2 ;;
+      --deterministic) deterministic=true; shift ;;
+      --progress-map) progress_map=${2-}; shift 2 ;;
+      --no-progress) no_progress=1; shift ;;
       *) usage >&2; exit 2 ;;
     esac
   done
@@ -660,18 +776,49 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
+  # The stored card is the durable copy written once when the hold was created
+  # (bin/fm-captain-hold.sh owns it), so a refresh never needs prose from the
+  # first mate for a call the captain has already been shown.
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    card=$(stored_card "$id")
+    cards=$(jq -n --argjson acc "$cards" --arg id "$id" --argjson card "$card" \
+      '$acc + (if $card == null then {} else {($id): $card} end)')
+  done <<EOF
+$(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
+EOF
+  if [ -n "$progress_map" ]; then
+    [ -f "$progress_map" ] || fail "progress map does not exist: $progress_map"
+    progress=$(jq -e 'type == "object"' "$progress_map" >/dev/null 2>&1 \
+      && jq -c . "$progress_map") || fail "progress map is not a JSON object: $progress_map"
+  elif [ "$no_progress" -eq 0 ]; then
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      card=$(task_progress "$row") || continue
+      [ -n "$card" ] || continue
+      progress=$(jq -n --argjson acc "$progress" --arg id "$row" --argjson p "$card" \
+        '$acc + {($id): $p}')
+    done <<EOF
+$(printf '%s\n' "$snapshot" | jq -r '.in_flight[]? | select(.id | contains("/") | not) | .id')
+EOF
+  fi
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" \
+    --argjson progress "$progress" --argjson deterministic "$deterministic" \
     --argjson readable "$readable" "$BOARD_JQ_DEFS"'
     . as $snap |
     # Every captain-facing string goes through this one guard: the validator
     # refuses an empty en, and an ordinary metadata-only backlog row parses to
     # an empty title, so each projection names the durable value that stands in
     # for its row rather than letting one blank field refuse the whole board.
-    def t($s; $fallback):
-      ([$s, $fallback] | map(select(type == "string" and length > 0)) | .[0] // "(untitled)") as $v
-      | {en: $v, hant: ("{TRANSLATE: " + $v + "}")};
+    def tv($s; $fallback):
+      [$s, $fallback] | map(select(type == "string" and length > 0)) | .[0] // "(untitled)";
+    # A deterministic compose has no translator in the loop, so it emits the
+    # plain string the payload contract already accepts as copy - the same text
+    # in every language - instead of a translation slot nobody will fill.
+    def t($s; $fallback): tv($s; $fallback) as $v
+      | if $deterministic then $v else {en: $v, hant: ("{TRANSLATE: " + $v + "}")} end;
     def fillv($what): "{FILL: " + $what + "}";
     def fill($what): {en: fillv($what), hant: fillv($what)};
     def risk_slot: fillv("low | medium | high");
@@ -680,7 +827,9 @@ EOF
     def i18n($fallback):
       if type != "object" then t(.; $fallback)
       elif (.en | type == "string" and length > 0) and (.hant | type == "string" and length > 0) then .
-      else . + t(.en; $fallback) end;
+      else tv(.en; $fallback) as $v
+        | . + (if $deterministic then {en: $v, hant: $v}
+               else {en: $v, hant: ("{TRANSLATE: " + $v + "}")} end) end;
     def slugify:
       gsub("[^A-Za-z0-9._-]"; "-") | .[0:128] | gsub("^-+|-+$"; "")
       | if length == 0 then "row" else . end;
@@ -718,17 +867,30 @@ EOF
       + {repo: ($card.repo | if . == null or . == "" then repo_of($row.id) else . end),
          title: ($card.title | i18n($card.key)), decide: ($card.decide | i18n($card.key)),
          if_nothing: ($card.if_nothing | i18n($card.key)),
-         about: fill("about"),
          options: [$card.options[] | . as $o
            | .label |= i18n($o.value) | .consequence |= i18n($o.value)]}
+      + (if $card.about != null then {about: ($card.about | i18n($card.key))}
+          elif $deterministic then {} else {about: fill("about")} end)
       + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n($card.key))} else {} end)
-      + ({recommend_value: recommend_slot([$card.options[].value]),
-          reversible: reversible_slot, risk: risk_slot}
-         | with_entries(select($card[.key] == null)))
+      + (if $deterministic then {} else
+          ({recommend_value: recommend_slot([$card.options[].value]),
+            reversible: reversible_slot, risk: risk_slot}
+           | with_entries(select($card[.key] == null))) end)
       + (if $card.close != null then {close: $card.close} else hold_close end)
       | if (.packet_url | link_url) then . else del(.packet_url) end;
+    # With no stored and no packet-seeded copy, a deterministic compose still
+    # owes the captain a visible, answerable card. It degrades to what
+    # structured state actually knows - the durable title and the hold reason
+    # itself as the question - and offers no invented options; the reconcile
+    # choice and free form still carry an answer back, and the next full build
+    # writes real copy once.
+    def degraded_card:
+      {key: .key, type: "decision", repo: repo_of(.id), title: t(hold_title; .key),
+       decide: t(.summary; .key), allow_freeform: true, options: []}
+      + hold_close;
+    def unseeded_card: if $deterministic then degraded_card else placeholder_card end;
     def decision_card: . as $row | ($cards[$row.id] // null) as $card
-      | if $card == null then placeholder_card else packet_seeded($card) end;
+      | if $card == null then unseeded_card else packet_seeded($card) end;
     def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
     def merge_card: .task as $task
       | ((record($task) | if . == null then null else .title end)
@@ -737,7 +899,7 @@ EOF
          repo: (.repo | split("/") | last),
          title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo)); $task),
          detail: t("checks " + .checks + ", review " + .review; $task),
-         risk: risk_slot,
+         risk: (if $deterministic then "unassessed" else risk_slot end),
          options: [
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
            {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
@@ -754,8 +916,11 @@ EOF
     # absent card.
     def held_rows: [ .decisions_open[]? | select(held_here and (.key | slug(128))) ];
     def consolidated($n):
-      if $n > 1 then {decide: fill("decide: this task is held " + ($n | tostring)
-        + " times; consolidate every one of its questions into this card")} else {} end;
+      if $n <= 1 then {}
+      elif $deterministic then {detail: t("this task is held " + ($n | tostring)
+        + " times; one card carries every one of its questions"; "consolidated")}
+      else {decide: fill("decide: this task is held " + ($n | tostring)
+        + " times; consolidate every one of its questions into this card")} end;
     def first_per_key: reduce .[] as $card
       ([]; if ([.[].key] | index($card.key)) == null then . + [$card] else . end);
     # The snapshot reports ONE omitted-gates total and never splits it into
@@ -765,9 +930,10 @@ EOF
       [ .omitted[]? | .surface | capture("^gates showing (?<shown>[0-9]+) of (?<total>[0-9]+)") ]
       | if length == 0 then 0 else ((.[0].total | tonumber) - (.[0].shown | tonumber)) end;
     def more_slot($kind; $sibling): gates_omitted as $n
-      | fillv($kind + " Charted Next rows not shown: your share of the " + ($n | tostring)
+      | if $deterministic then (if $kind == "queued" then $n else 0 end) else
+      fillv($kind + " Charted Next rows not shown: your share of the " + ($n | tostring)
         + " gate rows the snapshot omitted, the rest of that same total belonging to "
-        + $sibling + ", plus any " + $kind + " rows you cut");
+        + $sibling + ", plus any " + $kind + " rows you cut") end;
     {
       schema: $schema, home: .home, generated: .generated, lang: $lang,
       prs_live: (.prs | startswith("checked")),
@@ -778,8 +944,10 @@ EOF
           | select([$prs[] | select(.task == $pr.task)] | length == 1)
           | merge_card ]
         | first_per_key),
-      underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
-        doing: t(.doing; .state)} ],
+      underway: [ .in_flight[]? | . as $row
+        | {id, repo, name: t(.name; .id), state, kind, doing: t(.doing; .state)}
+        + (($progress[$row.id] // null) as $p
+          | if $p == null then {} else {progress: $p} end) ],
       landed: [ .landed[]?
         | {id: (if owned then .id else (.owner + "/" + .id) end),
            repo: (if owned then repo_of(.id) else null end),
@@ -849,8 +1017,27 @@ EOF
   rm -f -- "$tmp"
 }
 
+# Store every composed decision card on its own task, so the copy the captain
+# is about to see becomes the durable card a later refresh reuses.
+# bin/fm-captain-hold.sh owns the store; a task that cannot take one - a merge
+# card, or a call whose row is gone - simply keeps none.
+# This reads the COMPOSED payload, never the reconciled one: the reconcile
+# choice is injected per publication and the validator refuses a card that
+# already carries it, so storing a card with it would poison every later
+# compose.
+persist_composed_cards() {  # <payload.json>
+  local key tmp
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-card.XXXXXX") || return 0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    jq -c --arg key "$key" '.captains_call[] | select(.key == $key)' "$1" > "$tmp" 2>/dev/null || continue
+    "$SCRIPT_DIR/fm-captain-hold.sh" card "$key" --store "$tmp" >/dev/null 2>&1 || true
+  done < <(jq -r '.captains_call[]? | select(.type == "decision") | .key' "$1" 2>/dev/null)
+  rm -f -- "$tmp"
+}
+
 command_build() {
-  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner leftover
+  local data=${1-} board sid effective owner version pre_reopen_owner leftover
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
@@ -874,35 +1061,18 @@ command_build() {
     rm -f -- "$effective"
     fail "cannot reconcile the board payload against landed work"
   fi
-  json=$(jq -c . "$effective") || { rm -f -- "$effective"; fail "cannot compact the board data"; }
-  rm -f -- "$effective"
-  # `<` never appears in JSON syntax outside strings, so escaping every
-  # occurrence keeps the payload valid JSON while making </script> inert.
-  json=${json//</\\u003c}
-
   board=$(board_path)
-  (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
-  tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || fail "cannot stage the board"
-  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
-    rm -f -- "$tmp"
-    fail "cannot inject the board data"
+  if ! inject_board "$effective" "$board"; then
+    rm -f -- "$effective"
+    fail "cannot inject the board data into $TEMPLATE"
   fi
-  if grep -qxF "$PLACEHOLDER" "$tmp"; then
-    rm -f -- "$tmp"
-    fail "the board data slot survived injection"
-  fi
-  # Round-trip the injected payload back out of the built page, so a board that
-  # would fail to parse in the browser fails here instead.
-  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" \
-    | sed '1d;$d')
-  if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
-    rm -f -- "$tmp"
-    fail "the built board does not carry a readable $BOARD_SCHEMA payload"
-  fi
-  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$board"; }; then
-    rm -f -- "$tmp"
-    fail "cannot publish the board"
-  fi
+  # The same payload beside the board, for a consumer that is not the local
+  # page, and the composed decision cards stored per task, so every later
+  # refresh reuses the copy written here instead of asking for prose again.
+  publish_payload_file "$effective" "$(payload_path)" \
+    || fail "cannot publish the board payload file: $(payload_path)"
+  persist_composed_cards "$data"
+  rm -f -- "$effective"
   printf 'board: %s\n' "$board"
 
   command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
@@ -951,6 +1121,158 @@ command_build() {
   fi
 }
 
+# --- refresh -----------------------------------------------------------------
+# Inject a freshly composed payload into the board in place. No Lavish call, no
+# procevent call: the session, its URL, its source and its keyed-answer binding
+# are exactly as they were, which is what makes this safe to run on every fleet
+# event. Concurrency is a no-op rather than a race - a trigger that finds the
+# lock held simply leaves the board to the refresh already under way.
+
+payload_path() { printf '%s/.lavish/bearings-board.json\n' "$FM_HOME"; }
+
+refresh_log() {  # <message>
+  local log="$STATE/.bearings-board-refresh.log" size tmp
+  mkdir -p "$STATE" 2>/dev/null || true
+  printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >> "$log" 2>/dev/null || {
+    printf 'fm-bearings-board: %s\n' "$1" >&2
+    return 0
+  }
+  size=$(wc -c < "$log" 2>/dev/null | tr -d '[:space:]')
+  case "$size" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$size" -ge "$REFRESH_LOG_MAX_BYTES" ]; then
+    tmp="$log.tmp.${BASHPID:-$$}"
+    tail -n 200 "$log" > "$tmp" 2>/dev/null && mv -f -- "$tmp" "$log" 2>/dev/null
+    rm -f -- "$tmp" 2>/dev/null || true
+  fi
+}
+
+REFRESH_BEST_EFFORT=0
+REFRESH_LOCK=
+# shellcheck disable=SC2329 # Invoked by the EXIT trap below.
+refresh_unlock() {
+  [ -n "$REFRESH_LOCK" ] || return 0
+  rmdir "$REFRESH_LOCK" 2>/dev/null || true
+  REFRESH_LOCK=
+}
+
+refresh_fail() {  # <message>
+  if [ "$REFRESH_BEST_EFFORT" -eq 1 ]; then
+    refresh_log "$1"
+    exit 0
+  fi
+  fail "$1"
+}
+
+# Inject <payload.json> into a fresh copy of the template and publish it
+# atomically at <board>. Shared by build and refresh so one injection contract,
+# including the </script> escape and the round-trip read-back, serves both.
+inject_board() {  # <payload.json> <board>
+  local data=$1 board=$2 json tmp extracted
+  [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || return 1
+  [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] || return 1
+  json=$(jq -c . "$data") || return 1
+  # `<` never appears in JSON syntax outside strings, so escaping every
+  # occurrence keeps the payload valid JSON while making </script> inert.
+  json=${json//</\\u003c}
+  (umask 077; mkdir -p "${board%/*}") || return 1
+  tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || return 1
+  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
+    rm -f -- "$tmp"; return 1
+  fi
+  if grep -qxF "$PLACEHOLDER" "$tmp"; then rm -f -- "$tmp"; return 1; fi
+  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" | sed '1d;$d')
+  if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
+    rm -f -- "$tmp"; return 1
+  fi
+  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$board"; }; then
+    rm -f -- "$tmp"; return 1
+  fi
+}
+
+publish_payload_file() {  # <payload.json> <dest>
+  local data=$1 dest=$2 tmp
+  (umask 077; mkdir -p "${dest%/*}") || return 1
+  tmp=$(umask 077; mktemp "${dest%/*}/.board-payload.XXXXXX") || return 1
+  if ! jq . "$data" > "$tmp"; then rm -f -- "$tmp"; return 1; fi
+  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; }; then
+    rm -f -- "$tmp"; return 1
+  fi
+}
+
+command_refresh() {
+  local board payload_out='' lock='' skeleton effective leftover
+  local -a compose_args=(--deterministic)
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --lang) compose_args+=(--lang "${2-}"); shift 2 ;;
+      --snapshot) compose_args+=(--snapshot "${2-}"); shift 2 ;;
+      --progress-map) compose_args+=(--progress-map "${2-}"); shift 2 ;;
+      --no-progress) compose_args+=(--no-progress); shift ;;
+      --payload-out) payload_out=${2-}; shift 2 ;;
+      --best-effort) REFRESH_BEST_EFFORT=1; shift ;;
+      *) usage >&2; exit 2 ;;
+    esac
+  done
+  command -v jq >/dev/null 2>&1 || refresh_fail "jq is required"
+  board=$(board_path)
+  [ -n "$payload_out" ] || payload_out=$(payload_path)
+  # Refreshing means refreshing a board that exists. A home that never asked
+  # for one is left alone rather than quietly given a page nobody armed.
+  [ -f "$board" ] && [ ! -L "$board" ] \
+    || refresh_fail "no board has been built yet at $board (run /bearings lavish)"
+  lock="$STATE/.bearings-board-refresh.lock"
+  mkdir -p "$STATE" 2>/dev/null || true
+  if ! mkdir "$lock" 2>/dev/null; then
+    # Another trigger is already publishing a payload at least as fresh.
+    printf 'refresh: busy\n'
+    return 0
+  fi
+  REFRESH_LOCK=$lock
+  trap refresh_unlock EXIT
+  skeleton=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-refresh.XXXXXX") \
+    || refresh_fail "cannot stage the refreshed payload"
+  effective=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-refresh-eff.XXXXXX") \
+    || { rm -f -- "$skeleton"; refresh_fail "cannot stage the refreshed payload"; }
+  # Composed in a child on purpose: a compose refusal is one of the failures
+  # --best-effort must absorb, and the shared fail path exits the process.
+  if ! "$SCRIPT_DIR/fm-bearings-board.sh" compose "${compose_args[@]}" --out "$skeleton" >/dev/null 2>&1; then
+    rm -f -- "$skeleton" "$effective"
+    refresh_fail "cannot compose the board payload"
+  fi
+  # A deterministic compose owes no placeholder; refusing here keeps that a
+  # checked property rather than an assumption about the projection above.
+  leftover=$(list_placeholders "$skeleton") || leftover=''
+  if [ -n "$leftover" ]; then
+    rm -f -- "$skeleton" "$effective"
+    refresh_fail "the deterministic payload still carries placeholders: $(printf '%s' "$leftover" | tr '\n' ' ')"
+  fi
+  # Validation runs on the composed payload, exactly where build runs it: the
+  # reconcile choice the reconciliation below injects is a value the validator
+  # deliberately reserves, so a payload is only ever checked before it.
+  if ! validate_payload "$skeleton"; then
+    rm -f -- "$skeleton" "$effective"
+    refresh_fail "the refreshed payload does not satisfy $BOARD_SCHEMA"
+  fi
+  if ! effective_payload "$skeleton" "$effective" 2>/dev/null; then
+    rm -f -- "$skeleton" "$effective"
+    refresh_fail "cannot reconcile the board payload against landed work"
+  fi
+  rm -f -- "$skeleton"
+  if ! inject_board "$effective" "$board"; then
+    rm -f -- "$effective"
+    refresh_fail "cannot inject the refreshed board payload"
+  fi
+  if ! publish_payload_file "$effective" "$payload_out"; then
+    rm -f -- "$effective"
+    refresh_fail "cannot publish the board payload file: $payload_out"
+  fi
+  rm -f -- "$effective"
+  refresh_unlock
+  trap - EXIT
+  printf 'refreshed: %s\n' "$board"
+  printf 'payload: %s\n' "$payload_out"
+}
+
 command_url() {
   local board real listing url
   board=$(board_path)
@@ -979,7 +1301,9 @@ command_open() {
 case "${1-}" in
   compose) shift; command_compose "$@" ;;
   build) shift; command_build "$@" ;;
+  refresh) shift; command_refresh "$@" ;;
   path) board_path ;;
+  payload-path) payload_path ;;
   url) command_url ;;
   open) command_open ;;
   -h|--help|help) usage ;;

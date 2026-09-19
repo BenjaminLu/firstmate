@@ -2016,6 +2016,26 @@ home_summary_refresh_detached() {
   HOME_SUMMARY_PID=$!
 }
 
+# The captain's board rides the same two triggers as the summary above - the
+# status-change signal and the recurring cadence - for the same reason and on
+# the same terms: detached, best effort, never waited on, and never allowed to
+# put a publication deadline between two beacon touches. A refresh touches no
+# Lavish session, so republishing this often costs the board nothing: it
+# rewrites the page in place at its stable path, leaving the session, its URL,
+# and its answer binding exactly as they were.
+BOARD_REFRESH_PID=
+board_refresh_detached() {
+  if [ -n "$BOARD_REFRESH_PID" ]; then
+    if kill -0 "$BOARD_REFRESH_PID" 2>/dev/null; then
+      return 0
+    fi
+    wait "$BOARD_REFRESH_PID" 2>/dev/null || true
+    BOARD_REFRESH_PID=
+  fi
+  "$SCRIPT_DIR/fm-bearings-board.sh" refresh --best-effort </dev/null >/dev/null 2>&1 &
+  BOARD_REFRESH_PID=$!
+}
+
 RECONCILE_REQUEST_PID=
 reconcile_requests_pending() {
   local request
@@ -2171,6 +2191,7 @@ while :; do
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
+    board_refresh_detached
   fi
 
   # Bearings publishes reconcile asks as local one-shot request files and
@@ -2361,6 +2382,7 @@ EOF
     # home_summary_refresh_detached for why publication stays off the beacon's
     # path. Publication failure stays side-band.
     home_summary_refresh_detached
+    board_refresh_detached
     files=""
     while IFS=$(printf '\t') read -r sf sig f; do
       [ -n "$sf" ] || continue

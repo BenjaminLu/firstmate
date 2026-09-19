@@ -103,6 +103,10 @@ When this home cannot read its own backlog at all, compose suppresses every merg
 A hold whose task id is not a routable key gets the same treatment: no card, and one non-dispatchable warning row naming it, because `bin/fm-captain-hold.sh` could not address an answer to it.
 Two merge-ready PRs claiming the same task get the same treatment too: no merge card, and one warning row naming both PRs, because a merge answer keyed to that task resolves to only one of them.
 Pass the snapshot's live-PR opt-in to the snapshot command yourself when the captain asked for PRs; compose reads a fresh snapshot without it unless you hand it one with `--snapshot`.
+The board then refreshes itself on fleet events with no model in the loop, so write each card's copy ONCE.
+A captain call the board has already shown carries a stored card (`bin/fm-captain-hold.sh card <task-id>`), seeded from its verified packet when the hold was created and replaced by whatever `build` last published; compose reuses that stored card as-is, so only a NEW captain hold with no stored card still needs copy written.
+Everything below is about that one writing.
+
 Then apply your judgment to the skeleton and nothing else:
 
 - Fill every `{TRANSLATE: <english>}` slot with the 繁體 translation of the English beside it, and add `hans` (简体) alongside each `hant` you write, so the board's language switch has all three; never re-type or reword the English the skeleton carried over.
@@ -134,6 +138,14 @@ Run `build` once after the filled skeleton passes `compose --check`.
 Its serve-first sequence publishes the board, establishes and verifies its Lavish session with `lavish-axi`, reopens an ended session when necessary, and only then binds the answer source and proves a live polling listener; use the session URL it prints in the chat digest.
 Never bind or arm the board before its session is listed open.
 Never run `lavish-axi poll` for the board yourself: the armed source's supervised runner owns the blocking poll, and both the build and the watcher's ordinary reconcile repair a missing listener, so no conversational turn ever blocks on the board.
+
+### The board stays fresh by itself
+
+After a build, the board republishes on every fleet event this home already republishes its structured summary on - a locked session start, a watcher-observed status change, a spawn, a teardown, and the watcher's recurring cadence - through `bin/fm-bearings-board.sh refresh`, detached and best effort.
+That refresh recomposes deterministically and injects in place: it never re-establishes, rebinds, or re-arms anything, so the session URL, the armed source, and the answer binding all survive it, and the page is never more than one supervision poll behind.
+Do not run it yourself as part of a digest, and do not treat a refreshed board as a rebuild: a NEW captain hold whose copy has never been written shows as a degraded card (its durable title, the hold reason as the question, reconcile and free-form answers) until the next `/bearings lavish` writes that copy once.
+Each Underway row also carries its own progress - the phase, the validation step it is on with the steps already passed, how long that step has run, its last activity and age, and the row's own refreshed-at time - from `bin/fm-task-progress.sh`, which reads structured state only.
+The same payload is written beside the board as a plain JSON file (`bin/fm-bearings-board.sh payload-path`), so a consumer other than the local page reads exactly what the captain sees without recomposing it.
 
 ### Handling a board wake
 

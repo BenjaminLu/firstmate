@@ -626,6 +626,117 @@ SH
   pass "captain-hold mutations address the beads backend without a markdown override"
 }
 
+# --- the stored board card --------------------------------------------------
+# The captain reads a call as one board card, and the board republishes on
+# fleet events with no model in the loop, so the card's copy has to be durable
+# rather than re-composed prose every time.
+
+# Turn a scaffolded needs-decision packet into one that verifies, with a real
+# decision block, so a hold can seed its board card from it.
+fill_packet() {  # <packet.md> <task-id>
+  python3 - "$1" "$2" <<'PY2'
+import sys, re, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+decision = ('{"key":"%s","title":{"en":"Rollout order","hant":"\u4e0a\u7dda\u9806\u5e8f"},'
+            '"decide":"Which rollout order ships first?","if_nothing":"the release waits",'
+            '"reversible":"partly","risk":"medium",'
+            '"options":[{"value":"canary","label":"Canary first","consequence":"slower, safer"},'
+            '{"value":"all","label":"All at once","consequence":"faster, riskier"}],'
+            '"recommend_value":"canary","recommend_why":"the canary caught the last regression"}'
+            % sys.argv[2])
+s = re.sub(r"\{FILL: every path you tried.*?\}",
+           "- tried a flag; dropped it\n- the bound is unverified\n- the order assumes one region",
+           s, flags=re.S)
+s = re.sub(r"\{FILL: file:line.*?\}", "- bin/example.sh:1 the change", s, flags=re.S)
+s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
+s = re.sub(r"```json fm-packet-decision.v1\n.*?\n```",
+           "```json fm-packet-decision.v1\n" + decision + "\n```", s, flags=re.S)
+p.write_text(s)
+PY2
+}
+
+test_hold_seeds_the_board_card_from_a_verified_packet() {
+  local home id card
+  home=$(make_home card-seed)
+  id=packet-call
+  tasks_in "$home" add "$id" "Rollout order" --kind captain --repo sample >/dev/null \
+    || fail "could not create the held task"
+  fm_write_meta "$home/state/$id.meta" "worktree=$home" "project=sample" "kind=ship"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$ROOT/bin/fm-packet.sh" scaffold "$id" \
+    --kind needs-decision --worktree "$home" >/dev/null \
+    || fail "could not scaffold the packet"
+  fill_packet "$home/data/$id/packet.md" "$id"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$ROOT/bin/fm-packet.sh" verify "$id" >/dev/null \
+    || fail "the fixture packet does not verify"
+
+  run_captain "$home" hold "$id" --reason "captain must pick the rollout order" >/dev/null \
+    || fail "holding the task failed"
+  card=$(run_captain "$home" card "$id") || fail "the hold stored no board card"
+  printf '%s' "$card" | jq -e --arg id "$id" '
+    .key == $id and .type == "decision"
+    and (.title | type == "object" or type == "string")
+    and ((.options | length) >= 2)' >/dev/null \
+    || fail "the stored card is not the packet's own card: $card"
+  pass "a hold seeds its board card from the verified packet"
+}
+
+test_a_stored_board_card_round_trips_and_is_never_overwritten_by_a_rehold() {
+  local home id first second stored
+  home=$(make_home card-roundtrip)
+  id=written-call
+  tasks_in "$home" add "$id" "Route choice" --kind captain --repo sample >/dev/null \
+    || fail "could not create the held task"
+  run_captain "$home" hold "$id" --reason "captain must pick the route" >/dev/null \
+    || fail "holding the task failed"
+  # No packet, so nothing is seeded: this is the one case whose copy is still
+  # written once, by the board build.
+  run_captain "$home" card "$id" >/dev/null 2>&1 \
+    && fail "a hold with no packet stored a card anyway"
+
+  first="$home/composed.json"
+  jq -n --arg id "$id" '{key:$id, type:"decision", repo:"sample",
+    title:{en:"Route choice", hant:"路線選擇"},
+    decide:{en:"Which route ships?", hant:"要走哪條路線？"},
+    options:[{value:"north", label:{en:"North", hant:"北"}},
+             {value:"south", label:{en:"South", hant:"南"}}],
+    allow_freeform:true}' > "$first"
+  run_captain "$home" card "$id" --store "$first" >/dev/null \
+    || fail "storing a composed card failed"
+  stored=$(run_captain "$home" card "$id") || fail "the stored card could not be read back"
+  printf '%s' "$stored" | jq -e '.title.hant == "路線選擇" and (.options | length) == 2' >/dev/null \
+    || fail "the stored card did not round-trip: $stored"
+
+  # Re-holding the same call must not silently replace the copy the captain has
+  # already been shown.
+  printf 'Take the north route.\n' > "$home/answer.txt"
+  run_captain "$home" answer "$id" --decision-file "$home/answer.txt" --release >/dev/null \
+    || fail "answering the call failed"
+  run_captain "$home" hold "$id" --reason "captain must pick the route again" >/dev/null \
+    || fail "re-holding the task failed"
+  second=$(run_captain "$home" card "$id") || fail "the re-held call lost its stored card"
+  [ "$second" = "$stored" ] || fail "a re-hold rewrote the stored card: $second"
+  pass "a stored board card round-trips and survives a re-hold"
+}
+
+test_a_stored_card_must_address_the_task_that_holds_it() {
+  local home id out rc=0
+  home=$(make_home card-key)
+  id=keyed-call
+  tasks_in "$home" add "$id" "Keyed" --kind captain --repo sample >/dev/null \
+    || fail "could not create the held task"
+  jq -n '{key:"some-other-task", type:"decision", repo:"sample", title:"Wrong",
+    options:[], allow_freeform:true}' > "$home/wrong.json"
+  set +e
+  out=$(run_captain "$home" card "$id" --store "$home/wrong.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a card keyed to another task was stored anyway"
+  assert_contains "$out" "$id" "the refusal did not name the task it must address: $out"
+  pass "a stored card keyed to another task is refused"
+}
+
 # Reproduces the loss exactly with privacy-safe synthetic names: the investigation
 # and visual review have ended, the only genuine unresolved captain call is report
 # prose, no held backlog item or open status exists, and the authoritative
@@ -4042,3 +4153,6 @@ test_complete_accepts_a_migrated_inventory_on_beads
 test_verify_names_the_unresolvable_legacy_id_once
 test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
 test_captain_hold_mutations_address_the_beads_backend
+test_hold_seeds_the_board_card_from_a_verified_packet
+test_a_stored_board_card_round_trips_and_is_never_overwritten_by_a_rehold
+test_a_stored_card_must_address_the_task_that_holds_it

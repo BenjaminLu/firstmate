@@ -97,6 +97,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
   <id>/packet.md     the worker's decision packet behind a done or needs-decision event; bin/fm-packet.sh owns its format, verify, and board card; survives teardown
   <id>/packet.html   the packet rendered as one self-contained page for the captain's browser, written by bin/fm-packet.sh render or serve; the board card links it as packet_url; survives teardown
+  <id>/board-card.json  the durable Captain's Call card for a task held for the captain, written once when the hold is created and replaced by what the board last published; bin/fm-captain-hold.sh owns it, and it is what lets the board refresh itself with no model in the loop
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth

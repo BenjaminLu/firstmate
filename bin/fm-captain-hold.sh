@@ -35,6 +35,24 @@
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
 #   fm-captain-hold.sh reconcile note <task-id> --note-file <path>
+#   fm-captain-hold.sh card <task-id> [--store <path>]
+#
+# THE STORED BOARD CARD.
+# A captain call reaches the captain as one board card, and the board is
+# refreshed on fleet events with no model in the loop, so the card's own
+# captain-facing copy must be durable rather than re-composed prose. `hold`
+# therefore writes the call's composed card to data/<task-id>/board-card.json
+# ONCE, seeded from `bin/fm-packet.sh card <task-id>` when the task carries a
+# verified needs-decision packet. A stored card is never overwritten by a later
+# hold: the copy the captain has already been shown stays put, and a re-held
+# task keeps the card its question was written for. Seeding is best effort -
+# a task with no verified packet simply has no stored card yet, and the board's
+# composing rules own who writes that copy once.
+# `card <task-id>` prints the stored card, exiting 1 when there is none;
+# `card <task-id> --store <path>` stores one (replacing any stored card), which
+# is how a board build persists the copy its composer wrote so every later
+# refresh reuses it. A stored card must be a JSON object whose `key` is exactly
+# the task id, because the key IS the keyed-answer intake address.
 #
 # `hold` places an existing task under an active captain hold, or creates the
 # task first when no work item exists to hold (--title required to create; the
@@ -804,6 +822,73 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
   verify_hold_durable "${resolved%% *}"
 }
 
+# --- the stored board card ---------------------------------------------------
+
+board_card_path() {  # <task-id>
+  printf '%s/%s/board-card.json\n' "$DATA" "$1"
+}
+
+# Write <file> as the task's stored card, atomically. The key check is the same
+# rule the board validator applies: one card key is one intake address, so a
+# card stored under the wrong task could answer the wrong call.
+store_board_card() {  # <task-id> <source-file>
+  local id=$1 src=$2 card tmp
+  card=$(board_card_path "$id")
+  jq -e --arg id "$id" 'type == "object" and .key == $id' "$src" >/dev/null 2>&1 \
+    || fail "a stored board card must be a JSON object whose key is exactly $id"
+  (umask 077; mkdir -p "${card%/*}") || fail "cannot create ${card%/*}"
+  tmp=$(umask 077; mktemp "${card%/*}/.board-card.XXXXXX") \
+    || fail "cannot stage the board card for $id"
+  if ! jq -c . "$src" > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot stage the board card for $id"
+  fi
+  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$card"; }; then
+    rm -f -- "$tmp"
+    fail "cannot publish the board card for $id"
+  fi
+}
+
+# Seed the stored card from a verified needs-decision packet, once. Every
+# failure here is silent by design: a call with no packet yet is the ordinary
+# case, and a hold must never fail because its card could not be pre-written.
+seed_board_card() {  # <task-id>
+  local id=$1 card tmp
+  command -v jq >/dev/null 2>&1 || return 0
+  card=$(board_card_path "$id")
+  [ ! -e "$card" ] || return 0
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-card.XXXXXX") || return 0
+  if "$SCRIPT_DIR/fm-packet.sh" card "$id" > "$tmp" 2>/dev/null \
+    && jq -e --arg id "$id" 'type == "object" and .key == $id' "$tmp" >/dev/null 2>&1; then
+    store_board_card "$id" "$tmp" 2>/dev/null || true
+  fi
+  rm -f -- "$tmp"
+}
+
+command_card() {
+  local id=${1:-} src='' card
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --store) shift; src=${1:-} ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  validate_slug task-id "$id"
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  card=$(board_card_path "$id")
+  if [ -n "$src" ]; then
+    [ -f "$src" ] || fail "board card source does not exist: $src"
+    store_board_card "$id" "$src"
+    printf 'card: %s\n' "$card"
+    return 0
+  fi
+  [ -f "$card" ] || { printf 'fm-captain-hold: no stored board card for %s\n' "$id" >&2; exit 1; }
+  cat "$card"
+}
+
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0
@@ -895,6 +980,8 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
+  # The board card is written once per call and never re-composed by a refresh.
+  seed_board_card "$id"
   printf '%s\n' "$id"
 }
 
@@ -1925,6 +2012,7 @@ case "${1:-}" in
   open) shift; command_open "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   reconcile) shift; command_reconcile "$@" ;;
+  card) shift; command_card "$@" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

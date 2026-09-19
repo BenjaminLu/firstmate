@@ -4,7 +4,7 @@
 //
 // Usage: node board-render-harness.mjs <built-board.html>
 // Prints one JSON document:
-//   { stats:[{n,label}], underway:[{title,sub,badges}],
+//   { stats:[{n,label}], underway:[{title,sub,badges,progress}],
 //     charted:[{title,sub,badges,pickable}], empty, more,
 //     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips}],
 //     headings:[call,charted,underway,landed], error }
@@ -97,6 +97,23 @@ const stats = strip.children.map((t) => ({
   label: t.children.find((c) => c.className.includes("bb-stat__label"))?.textContent,
 }));
 
+/* An Underway row's progress block: the step ladder as rendered chips (text
+   plus the tone class the template chose), the timing line, and the raw
+   evidence detail. null when the row carries no progress at all. */
+const progressOf = (main) => {
+  const box = main?.children.find((c) => c.className.split(/\s+/).includes("bb-prog"));
+  if (!box) return null;
+  const ladder = box.children.find((c) => c.className.includes("bb-prog__ladder"));
+  const partText = (cls) =>
+    box.children.find((c) => c.className.includes(cls))?.textContent ?? "";
+  return {
+    steps: ladder ? ladder.children.map((c) => ({ text: c.textContent, cls: c.className })) : [],
+    meta: partText("bb-prog__meta"),
+    quiet: box.children.some((c) => c.className.includes("bb-prog__meta--quiet")),
+    detail: partText("bb-prog__detail"),
+  };
+};
+
 const rowsOf = (container) =>
   container.children
     .filter((r) => r.className.split(/\s+/).includes("bb-row"))
@@ -107,6 +124,7 @@ const rowsOf = (container) =>
         sub: main?.children.find((c) => c.className.includes("bb-row__sub"))?.textContent ?? "",
         badges: badgesOf(row),
         pickable: row.children.some((c) => c.className.includes("bb-pick") && !c.className.includes("spacer")),
+        progress: progressOf(main),
       };
     });
 

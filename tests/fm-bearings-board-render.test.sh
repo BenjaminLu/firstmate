@@ -311,6 +311,62 @@ test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order() 
   pass "charted rows with no filed date follow the dated rows in payload order"
 }
 
+
+test_an_underway_row_renders_its_step_ladder_trilingually() {
+  local home out payload
+  home=$(make_home progress-ladder)
+  payload=$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"en", captains_call:[], landed:[], charted:[],
+    underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
+      name:"Ship the thing", doing:"validating",
+      progress:{state:"working", detail:"validating (fixing)", step:"review",
+        steps:[{step:"intent",status:"completed"},{step:"review",status:"fixing"},
+               {step:"test",status:"pending"}],
+        active_for:"12m3s", last_activity:"31m2s", quiet:true,
+        activity:"auto-fix 1/3", refreshed:"2026-09-19T00:00:00Z"}}]}')
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the fleet: $out"
+  printf '%s' "$out" | jq -e '
+    (.underway | length) == 1
+    and (.underway[0].progress
+      | ([.steps[] | .text] == ["intent", "review", "tests"])
+        and (.steps[0].cls | test("bb-step--done"))
+        and (.steps[1].cls | test("bb-step--now")) and (.steps[1].cls | test("bb-step--here"))
+        and (.steps[2].cls | test("bb-step--wait"))
+        and .quiet == true
+        and (.meta | test("working")) and (.meta | test("step review"))
+        and (.meta | test("for 12m3s")) and (.meta | test("last 31m2s"))
+        and (.meta | test("auto-fix 1/3"))
+        and (.meta | test("as of 2026-09-19T00:00:00Z"))
+        and (.detail == "validating (fixing)"))
+  ' >/dev/null || fail "the English step ladder did not render: $out"
+
+  home=$(make_home progress-ladder-hant)
+  out=$(render_payload "$home" "$(printf '%s' "$payload" | jq '.lang = "hant"')")
+  printf '%s' "$out" | jq -e '
+    (.underway[0].progress
+      | ([.steps[] | .text] == ["意圖", "審查", "測試"])
+        and (.meta | test("進行中")) and (.meta | test("步驟 審查"))
+        and (.meta | test("已跑 12m3s")) and (.meta | test("沒動靜"))
+        and (.meta | test("更新於")))
+  ' >/dev/null || fail "the step ladder did not switch language: $out"
+  pass "an Underway row renders its step ladder, timing, and freshness trilingually"
+}
+
+test_an_underway_row_without_progress_renders_exactly_as_before() {
+  local home out
+  home=$(make_home progress-absent)
+  out=$(render_board "$home" '[{"id":"ship-task","repo":"sample","kind":"ship","state":"working","name":"Ship the thing","doing":"validating"}]' '[]')
+  printf '%s' "$out" | jq -e '
+    (.underway | length) == 1
+    and (.underway[0].title == "Ship the thing")
+    and (.underway[0].progress == null)
+  ' >/dev/null || fail "a row with no progress did not render plainly: $out"
+  pass "an Underway row with no progress renders exactly as it did before"
+}
+
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first
@@ -322,3 +378,5 @@ test_omitted_warnings_never_count_as_more_queued
 test_an_omitted_kind_keeps_the_existing_queued_rendering
 test_a_decision_card_answers_the_five_questions_in_english_by_default
 test_the_payload_language_switches_every_visible_string
+test_an_underway_row_renders_its_step_ladder_trilingually
+test_an_underway_row_without_progress_renders_exactly_as_before
