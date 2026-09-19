@@ -66,7 +66,10 @@ PIDFILE="$STATE/board-live.pid"
 ENDPOINT="$STATE/board-live.endpoint"
 SERVER="$SCRIPT_DIR/fm-board-live.mjs"
 
-usage() { sed -n '2,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# The whole header, found by where it ends rather than by a line number: a
+# hardcoded range silently drops whatever is added past it, which is how this
+# help lost its pointer to the file that owns the port and the paths.
+usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; }
 
 # One JSON string, escaped the way JSON requires. jq is this repo's JSON tool
 # everywhere else, but `event` must not depend on a tool being installed to
