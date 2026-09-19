@@ -403,15 +403,28 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     "no-mistakes DOD lost the stated-split requirement"
   assert_grep "Your fix is the next candidate" "$brief" \
     "no-mistakes DOD lost the review-your-own-diff practice"
-  assert_grep "revert the production fix, confirm the test goes red, restore it" "$brief" \
+  assert_grep "reverting the production fix, confirming the test goes red, and restoring it" "$brief" \
     "no-mistakes DOD lost the test-vacuity practice"
   assert_grep "Read the primary source before writing a check" "$brief" \
     "no-mistakes DOD lost the primary-source practice"
 
-  # The long form stays in the external skill; this repo points at it.
+  # Every practice a worker could read as a worktree edit has to carry its own
+  # mid-run half, because the no-hand-edit rule sits paragraphs away from these
+  # bullets and a worker who reads only the bullet must not reach an edit.
+  assert_grep "Once a run is active you never touch the worktree" "$brief" \
+    "no-mistakes DOD must bar a hand-run vacuity proof during an active run"
+  assert_grep "the pipeline's fix commit rather than one you are about to submit" "$brief" \
+    "no-mistakes DOD must say whose diff the review pass runs over mid-run"
+
+  # The long form stays in the external skill; this repo points at the one
+  # reference that carries the technique, not at the run structure around it.
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`greenlight` skill at `~/.claude/skills/greenlight`' "$brief" \
-    "no-mistakes DOD must point at the greenlight skill for the long form"
+  assert_grep '`references/verify-your-fix.md` in the `greenlight` skill at `~/.claude/skills/greenlight`' "$brief" \
+    "no-mistakes DOD must point at the greenlight long-form reference"
+  assert_grep "taking the technique and not its run structure" "$brief" \
+    "no-mistakes DOD must bound the greenlight pointer to the technique"
+  assert_no_grep "the PR body" "$brief" \
+    "no-mistakes DOD must not name a surface this worker never writes"
 
   # Both faster paths, not just one: neither runs the pipeline whose rounds these
   # practices bound.
