@@ -85,11 +85,15 @@
 #     fill="var(--card)"
 #   - every selectable shape (`<rect>`, `<polygon>`) carries data-node, the
 #     latin identity from the source, never the reader's wording
-#   - every id inside the svg is prefixed `<slug>-`, so two figures inlined on
-#     one page cannot collide over a marker id and break each other's arrows
+#   - every id inside the svg is prefixed `<slug>-`, and no two figures in one
+#     packet share a slug, so two figures inlined on one page cannot collide
+#     over a marker id and break each other's arrows
 #   - no external font reference, and no <script> or on* handler: the page
 #     must render offline inside a sandboxed iframe, and the drawing is
-#     static markup
+#     static markup. For the same reason every href, xlink:href and src points
+#     at a same-document `#fragment`; only an `<a>` may leave the page, and
+#     only through http, https or mailto - the schemes the page's prose links
+#     already allow, since the svg rides the page unescaped
 #   - every connector that draws an arrow (marker-start or marker-end)
 #     carries data-edge, and every data-edge has its own evidence line saying
 #     what proves that line
@@ -358,7 +362,15 @@ packet, kind, options = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
 lines = packet.read_text(encoding="utf-8").splitlines()
 problems = []
 
-start = next((i + 1 for i, l in enumerate(lines) if l.strip() == "## Figures"), None)
+# The section and figure headings render decides on, character for character:
+# a heading either side reads differently is a drawing one of them silently
+# turns into prose, and render inlines the svg unescaped on verify's word.
+SP = r"[ \t\v\f\r]"
+SECTION = re.compile(r"^##%s+(.*?)%s*$" % (SP, SP))
+FIGURE = re.compile(r"^###%s+(.*?)%s*$" % (SP, SP))
+
+start = next((i + 1 for i, l in enumerate(lines)
+              if SECTION.match(l) and SECTION.match(l).group(1) == "Figures"), None)
 body = []
 if start is None:
     if kind == "needs-decision":
@@ -368,14 +380,14 @@ if start is None:
                         "declare here")
 else:
     for l in lines[start:]:
-        if l.startswith("## "):
+        if SECTION.match(l):
             break
         body.append(l)
 
 # ---- split the section into figures at their ### headings -------------------
 figures, cur = [], None
 for l in body:
-    m = re.match(r"^###\s+(.*?)\s*$", l)
+    m = FIGURE.match(l)
     if m:
         cur = {"heading": m.group(1), "lines": []}
         figures.append(cur)
@@ -400,6 +412,9 @@ LITERAL = re.compile(r"#[0-9A-Fa-f]{3,8}\b|\brgba?\(|\bhsla?\(")
 ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
 TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
+REF_ATTRS = ("href", "xlink:href", "src")
+SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+LINK_SCHEMES = ("http", "https", "mailto")
 
 def attrs_of(text):
     out = {}
@@ -414,7 +429,7 @@ def style_decls(value):
             k, v = decl.split(":", 1)
             yield k.strip().lower(), v.strip()
 
-figure_nodes = []
+figure_nodes, slugs_seen = [], {}
 for n, fig in enumerate(figures, 1):
     chunk = "\n".join(fig["lines"])
     name = fig["heading"] or "(no heading)"
@@ -431,6 +446,12 @@ for n, fig in enumerate(figures, 1):
     if not re.match(r"^[a-z0-9][a-z0-9-]*$", slug):
         bad("'figure: <slug>' is missing or not lowercase letters, digits and hyphens")
         slug = ""
+    elif slug in slugs_seen:
+        bad("'figure: %s' is already the slug of figure %d (%s); the prefix only keeps two "
+            "drawings off each other's ids while each owns one" % (slug, slugs_seen[slug][0],
+                                                                   slugs_seen[slug][1]))
+    else:
+        slugs_seen[slug] = (n, name)
     if not fields.get("caption"):
         bad("'caption:' is missing or empty")
 
@@ -463,6 +484,16 @@ for n, fig in enumerate(figures, 1):
             if k in COLOUR_ATTRS and not COLOUR_OK.match(v.strip()):
                 bad("<%s> has %s=\"%s\"; colours come from the page's CSS variables, as "
                     "var(--...)" % (tag, k, v))
+            if k in REF_ATTRS:
+                ref = v.strip()
+                m_scheme = SCHEME.match(ref)
+                if m_scheme is None:
+                    ok_ref = ref.startswith("#")
+                else:
+                    ok_ref = m_scheme.group(1).lower() in LINK_SCHEMES and tag == "a"
+                if not ok_ref:
+                    bad("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
+                        "only an <a> may leave the page, with http, https or mailto" % (tag, k, ref))
             if k == "style":
                 for prop, val in style_decls(v):
                     if prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
@@ -516,13 +547,14 @@ if kind == "needs-decision" and figure_nodes and options:
                         'data-node="%s"; a comparison that omits an option is not a comparison'
                         % (best[0], '", "'.join(missing)))
 
+print(len(figures))
 for line in problems:
     print(line)
 PY
 }
 
 command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
-  local id=${1-} packet kind problems=0 n block
+  local id=${1-} packet kind problems=0 n block figcount=0
   local -a opts=()
   [ -n "$id" ] || { usage >&2; exit 2; }
   fm_pr_task_id_valid "$id" || fail "invalid task id"
@@ -556,28 +588,35 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
       done < <(printf '%s\n' "$block" | jq -r '.options[]?.value | select(type == "string")' 2>/dev/null)
     fi
   fi
-  if [ "$kind" = needs-decision ] || grep -qx '## Figures' "$packet"; then
+  # Looser than the checker's own heading rule on purpose: this only decides
+  # whether python3 is needed, and a gate stricter than the parser it guards
+  # would wave a section through unchecked.
+  if [ "$kind" = needs-decision ] || grep -qE '^##[[:space:]]+Figures[[:space:]]*$' "$packet"; then
     if ! command -v python3 >/dev/null 2>&1; then
       echo "fm-packet: python3 is required to check the packet's figures" >&2; problems=$((problems + 1))
     else
       # A checker that dies must never read as a clean packet: take its exit
-      # status, which a process substitution would discard.
+      # status, which a process substitution would discard. Its first line is
+      # the figure count, from the same parse that did the checking.
       local figs status=0
       figs=$(figures_problems "$packet" "$kind" ${opts[@]+"${opts[@]}"}) || status=$?
       if [ "$status" -ne 0 ]; then
         echo "fm-packet: the figures check failed (exit $status); the packet is not verified" >&2
         problems=$((problems + 1))
       fi
+      case "${figs%%$'\n'*}" in
+        ''|*[!0-9]*) ;;
+        *) figcount=${figs%%$'\n'*} ;;
+      esac
       while IFS= read -r line; do
         [ -n "$line" ] || continue
         echo "fm-packet: figures: $line" >&2; problems=$((problems + 1))
-      done <<<"$figs"
+      done < <(printf '%s\n' "$figs" | tail -n +2)
     fi
   fi
   [ "$problems" -eq 0 ] || exit 1
   printf 'packet: ok %s\n' "$packet"
-  n=$(section_body "$packet" "Figures" | grep -c '^### ' || true)
-  [ "$n" -eq 0 ] || printf 'figures: %d checked against the contract; legibility is not - render the page and look at the drawing\n' "$n"
+  [ "$figcount" -eq 0 ] || printf 'figures: %d checked against the contract; legibility is not - render the page and look at the drawing\n' "$figcount"
 }
 
 # ---- card -------------------------------------------------------------------
@@ -646,10 +685,17 @@ raw = src.read_text(encoding="utf-8")
 lines = raw.splitlines()
 
 # ---- parse: header key: value lines, then ## sections in order -------------
+# The heading rules are verify's, character for character (figures_problems
+# states the same two): a heading the two read differently is a drawing one of
+# them turns into prose while the other passes its svg through unescaped.
+SP = r"[ \t\v\f\r]"
+SECTION = re.compile(r"^##%s+(.*?)%s*$" % (SP, SP))
+FIGURE = re.compile(r"^###%s+(.*?)%s*$" % (SP, SP))
+
 meta = {}
 body_start = 0
 for i, line in enumerate(lines):
-    if line.startswith("## "):
+    if SECTION.match(line):
         body_start = i
         break
     m = re.match(r"^([a-z]+): (.*)$", line)
@@ -657,8 +703,9 @@ for i, line in enumerate(lines):
         meta[m.group(1)] = m.group(2)
 sections = []  # [heading, [lines]]
 for line in lines[body_start:]:
-    if line.startswith("## "):
-        sections.append([line[3:].strip(), []])
+    m = SECTION.match(line)
+    if m:
+        sections.append([m.group(1), []])
     elif sections:
         sections[-1][1].append(line)
 
@@ -828,14 +875,18 @@ FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
 FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 
 def figures_html(body):
-    # Split exactly where verify splits, so a figure whose heading opens the
-    # section is a figure here too rather than prose with an escaped svg in it.
-    chunks = re.split(r"(?m)^###[ \t]+", "\n".join(body))
-    head = chunks[0]
-    out = [md(head.splitlines())] if head.strip() else []
-    for chunk in chunks[1:]:
-        lines = chunk.splitlines()
-        heading, lines = (lines[0].strip() if lines else ""), lines[1:] if lines else []
+    head, figures, cur = [], [], None
+    for line in body:
+        m = FIGURE.match(line)
+        if m:
+            cur = (m.group(1), []); figures.append(cur)
+        elif cur is not None:
+            cur[1].append(line)
+        else:
+            head.append(line)
+    out = [md(head)] if "\n".join(head).strip() else []
+    for heading, lines in figures:
+        chunk = "\n".join(lines)
         fields, edges = {}, []
         for line in lines:
             m = FIG_ATTR.match(line)

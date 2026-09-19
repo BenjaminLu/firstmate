@@ -321,6 +321,10 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/id=\"opt-arrow\"/id=\"arrow\"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     'is not prefixed "opt-"' "an unprefixed marker id"
+  # The prefix only separates two drawings while each owns its own slug.
+  body=$(printf '%s\n\n%s\n' "$(good_figures)" "$(good_figures)")
+  assert_figure_refused "$home" "$packet" "$body" \
+    "already the slug of figure 1" "two figures declaring the same slug"
 
   # 5. no external font reference, no script
   svg=${GOOD_SVG/<title id=\"opt-title\">/<style>@import url(https://fonts.googleapis.com/css2?family=Geist);</style><title id=\"opt-title\">}
@@ -329,6 +333,15 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/<title id=\"opt-title\">/<script>void 0;<\/script><title id=\"opt-title\">}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "the svg carries a <script>" "a script inside the drawing"
+  # The svg rides the page unescaped, so a link scheme the page's own prose
+  # refuses must not reach it through a drawing, and nothing may fetch on open.
+  svg=${GOOD_SVG/<rect id=\"opt-box-end\"/<a href=\"javascript:alert(1)\"><rect id=\"opt-box-end\"}
+  svg=${svg/<\/svg>/<\/a><\/svg>}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "only an <a> may leave the page" "a javascript: link inside the drawing"
+  svg=${GOOD_SVG/<title id=\"opt-title\">/<image href=\"https:\/\/evil.example\/beacon.png\" x=\"0\" y=\"0\"\/><title id=\"opt-title\">}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "same-document #fragment" "an image fetched from the network"
 
   # 6. a drawn connector needs an identity, and every identity needs evidence
   svg=${GOOD_SVG/ data-edge=\"quiet-to-end\"/}
@@ -394,7 +407,7 @@ PY
 }
 
 test_a_done_packet_is_not_refused_for_having_no_figures() {
-  local home packet out
+  local home packet out rc
   home=$(make_home done-figures)
   run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -409,6 +422,17 @@ test_a_done_packet_is_not_refused_for_having_no_figures() {
   out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a good figure on a done packet: $out"
   assert_figure_refused "$home" "$packet" "$(good_figures "${GOOD_SVG/ data-node=\"wake\"/}")" \
     "carries no data-node" "a broken figure on a done packet"
+
+  # render routes a '## Figures ' heading through figures_html and inlines its
+  # svg unescaped, so verify must hold that same heading to the contract; a
+  # gate stricter than the renderer it guards is a way past every clause.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("\n## Figures\n", "\n##  Figures \n"))
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a whitespace-padded Figures heading skipped the contract: $out"
+  assert_contains "$out" "carries no data-node" "the padded heading was not checked: $out"
   pass "a done packet needs no figures and is held to the contract for the ones it has"
 }
 
@@ -519,7 +543,7 @@ PY
 }
 
 test_render_decision_card_answers_the_five_questions() {
-  local home packet page
+  local home packet page out
   home=$(make_home render-decision)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -573,6 +597,19 @@ PY
   run_packet "$home" render pk-1 >/dev/null || fail "render failed on a Figures section that opens on its heading"
   assert_grep '<rect id="opt-box-a" data-node="bound"' "$page" "the first figure's svg was not inlined"
   assert_no_grep '&lt;svg' "$page" "the first figure's svg was escaped into prose"
+
+  # Whatever separates '###' from the heading, verify and render must read the
+  # same line as a figure: a drawing checked by one and escaped by the other
+  # goes missing from the page without a word.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("### Where the two", "###\tWhere the two"))
+PY
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a tab-separated figure heading: $out"
+  assert_contains "$out" "figures: 1 checked against the contract" "the tab-separated figure went uncounted: $out"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed on a tab-separated figure heading"
+  assert_grep '<rect id="opt-box-a" data-node="bound"' "$page" "the tab-separated figure's svg was not inlined"
+  assert_no_grep '&lt;svg' "$page" "the tab-separated figure's svg was escaped into prose"
   pass "the rendered decision card answers all five questions and the recommendation"
 }
 
