@@ -1,6 +1,6 @@
 # Control and recovery
 
-Load this with the running or recorded tool reference for trust, skill invocation, interrupt, exit, resume, or recovery.
+Load this with the running or recorded tool reference for trust, a worker permission prompt, skill invocation, interrupt, exit, resume, or recovery.
 
 ## Typed data and lifecycle control
 
