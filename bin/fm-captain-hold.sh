@@ -865,7 +865,7 @@ command_card() {
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --store) shift; src=${1:-} ;;
+      --store) shift; [ "$#" -ge 1 ] || { usage >&2; exit 2; }; src=$1 ;;
       *) usage >&2; exit 2 ;;
     esac
     shift

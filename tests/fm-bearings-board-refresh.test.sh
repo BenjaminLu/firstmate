@@ -417,6 +417,56 @@ test_a_stored_card_the_validator_would_refuse_costs_only_its_own_row() {
   pass "a stored card the payload validator would refuse costs its own row, not the board"
 }
 
+# A merge card as a build publishes and stores it, keyed by the card key.
+store_merge_card() {  # <home> <key> <pr-url>
+  local home=$1 key=$2 url=$3
+  jq -n --arg key "$key" --arg url "$url" '{key:$key, type:"merge", repo:"firstmate",
+    title:"Merge: Ship the thing", detail:"checks passing, review APPROVED",
+    risk:"unassessed", pr_url:$url,
+    options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}],
+    allow_freeform:true}' > "$home/merge-card.json"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-captain-hold.sh" card "$key" --store "$home/merge-card.json" >/dev/null
+}
+
+test_a_refresh_carries_the_merge_card_forward_and_retires_it_when_it_lands() {
+  local home card
+  home=$(make_home merge-carry)
+  seed_board "$home"
+  # NO --snapshot, which is the only way a fleet trigger ever calls this: PR
+  # discovery is an opt-in the first mate passes, so the snapshot a refresh
+  # reads carries no candidate_prs at all. The Merge now control the captain
+  # opened the board to click has to survive that.
+  store_merge_card "$home" merge.ship-task "https://github.com/example/firstmate/pull/9"
+  run_board "$home" refresh >/dev/null || fail "a refresh with no snapshot argument failed"
+  injected_payload "$home" | jq -e '.prs_live == false' >/dev/null \
+    || fail "the fixture is not on the PR-less path this regression is about"
+  card=$(injected_payload "$home" | jq -c '.captains_call[] | select(.key == "merge.ship-task")')
+  [ -n "$card" ] || fail "a refresh deleted the captain's merge card: $(injected_payload "$home")"
+  printf '%s' "$card" | jq -e '
+    .type == "merge"
+    and .pr_url == "https://github.com/example/firstmate/pull/9"
+    and ([.options[].value] == ["merge", "hold"])
+  ' >/dev/null || fail "the carried merge card lost its pull request or its options: $card"
+
+  # The same card once its pull request reaches the payload's own landed rows
+  # - the fixture backlog lands PR 7. No forge is asked; the board drops the
+  # card and retires the stored copy, so it cannot return when that landed row
+  # ages out.
+  store_merge_card "$home" merge.ship-task "https://github.com/example/firstmate/pull/7"
+  run_board "$home" refresh >/dev/null || fail "the refresh after the merge landed failed"
+  injected_payload "$home" | jq -e '
+    [.captains_call[] | select(.key == "merge.ship-task")] | length == 0
+  ' >/dev/null || fail "a merge card whose PR landed stayed on the board"
+  [ ! -e "$home/data/merge.ship-task/board-card.json" ] \
+    || fail "the landed merge card was dropped but its stored copy was kept"
+  run_board "$home" refresh >/dev/null || fail "the refresh after retirement failed"
+  injected_payload "$home" | jq -e '
+    [.captains_call[] | select(.key == "merge.ship-task")] | length == 0
+  ' >/dev/null || fail "the retired merge card came back on the next refresh"
+  pass "a refresh carries the merge card forward and retires it once its work lands"
+}
+
 # --- the Underway progress projection ---------------------------------------
 # The progress a captain reads comes from structured state alone: the current
 # state bin/fm-crew-state.sh reports, and the attributed validation run's own
@@ -897,6 +947,7 @@ test_refresh_reuses_the_stored_card_verbatim
 test_a_stored_card_publishes_only_the_copy_it_carries
 test_a_stored_card_the_validator_would_refuse_costs_only_its_own_row
 test_a_stored_card_carrying_a_placeholder_costs_only_its_own_row
+test_a_refresh_carries_the_merge_card_forward_and_retires_it_when_it_lands
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run

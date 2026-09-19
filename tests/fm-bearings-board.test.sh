@@ -813,6 +813,27 @@ test_build_refuses_a_payload_that_occupies_the_reconcile_value() {
   pass "build refuses a payload that occupies the reserved reconcile value"
 }
 
+# A build is the only place PR discovery happens, so it is the only place a
+# merge card is composed. It stores that card like a decision card, because a
+# fleet-triggered refresh has no PR view of its own and would otherwise
+# publish a board with the captain's Merge now control deleted.
+test_build_stores_the_merge_card_it_publishes() {
+  local home data card
+  home=$(make_home merge-persist)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the build failed"
+  card=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-captain-hold.sh" card merge.sample-task) \
+    || fail "the build published a merge card and stored nothing for it"
+  printf '%s' "$card" | jq -e '
+    .key == "merge.sample-task" and .type == "merge"
+    and .pr_url == "https://github.com/example/sample/pull/1"
+    and ([.options[].value] == ["merge", "hold"])
+  ' >/dev/null || fail "the stored merge card is not the one published: $card"
+  pass "a build stores the merge card it publishes, keyed by the card key"
+}
+
 test_build_refuses_a_nondecision_reconcile_value() {
   local home data rc out
   home=$(make_home merge-reconcile-reserved)
@@ -1676,6 +1697,7 @@ test_build_fails_when_reconcile_cannot_establish_a_listener
 test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
+test_build_stores_the_merge_card_it_publishes
 test_build_accepts_trilingual_copy_and_five_question_fields
 test_build_refuses_malformed_copy_and_card_fields
 test_compose_maps_every_section_from_the_recorded_snapshot

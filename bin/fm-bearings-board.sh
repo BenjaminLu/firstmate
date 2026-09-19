@@ -38,9 +38,10 @@
 #              armed: <source-id>            (first registration)
 #              already-armed: <source-id>    (registration already present)
 #              listening: <owner>            (only when a replacement was needed)
-#            Every dropped card is named on stderr as a `dropped-landed-card:`
-#            line, so a rebuild states what it removed instead of quietly
-#            shrinking Captain's Call.
+#            Every dropped card - a decision card whose subject landed or
+#            whose call closed, a merge card whose work landed - is named on
+#            stderr as a `dropped-landed-card:` line, so a rebuild states what
+#            it removed instead of quietly shrinking Captain's Call.
 # compose    Print an fm-bearings-board.v1 payload SKELETON mapped
 #            deterministically from `bin/fm-bearings-snapshot.sh --json`
 #            (or the recorded snapshot named by --snapshot), so the composer
@@ -166,7 +167,17 @@
 #            the stable path, WITHOUT establishing, reopening, binding, or
 #            arming anything. It is the no-model-in-the-loop republication: it
 #            composes with --deterministic, reconciles the payload exactly as
-#            build does, and injects it into the board file. It takes no
+#            build does, and injects it into the board file. It carries the
+#            MERGE cards forward: PR discovery is an opt-in the first mate
+#            passes, and a fleet event has no one to pass it, so a refresh
+#            composes from a snapshot with no PR view and reuses the merge
+#            cards the last publication stored rather than deleting the
+#            Merge now control the captain opened the board to click. A merge
+#            card retires when its work lands - its PR or its task reaches the
+#            payload's own landed rows, which retires the stored copy too - or
+#            when a compose that DID discover PRs finds it no longer
+#            merge-ready, because a live PR view decides the merge cards by
+#            itself. No forge is read either way. It takes no
 #            language of its own: the board PAGE it is republishing already
 #            names the language the board was built in, and a refresh reads
 #            that back and carries it forward, so a republication can never
@@ -302,6 +313,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REFRESH_LOG_MAX_BYTES=${FM_BEARINGS_REFRESH_LOG_MAX_BYTES:-65536}
 case "$REFRESH_LOG_MAX_BYTES" in ''|*[!0-9]*|0) REFRESH_LOG_MAX_BYTES=65536 ;; esac
 REFRESH_TIMEOUT=${FM_BEARINGS_REFRESH_TIMEOUT:-90}
@@ -583,10 +595,15 @@ decision_card_is_stale() {  # <task-id> <landed-0-or-1>
   return 1
 }
 
-# Drop every stale decision card, then give every surviving decision card the
-# standard reconcile choice. Injecting it here is what makes "every decision
-# card offers reconcile" a property of the board rather than of the composer's
-# memory; the validator prevents duplicate decision options.
+# Drop every stale decision card and every merge card whose work has landed,
+# then give every surviving decision card the standard reconcile choice.
+# Injecting it here is what makes "every decision card offers reconcile" a
+# property of the board rather than of the composer's memory; the validator
+# prevents duplicate decision options.
+# A merge card is judged on the payload's own landed rows alone - no captain
+# hold to consult, no forge to ask - and dropping one also retires the copy a
+# publication stored, because those landed rows are bounded and the card would
+# otherwise return as soon as its merge scrolled out of them.
 effective_payload() {  # <data.json> <dest.json>
   local data=$1 dest=$2 landed_keys key reason drop='' tmp landed=0
   landed_keys=$(jq -c '
@@ -615,12 +632,26 @@ effective_payload() {  # <data.json> <dest.json>
     printf 'dropped-landed-card: %s (%s)\n' "$key" "$reason" >&2
     drop=$drop$key$'\n'
   done < <(jq -r '.captains_call[]? | select(.type == "decision") | .key' "$data")
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    printf 'dropped-landed-card: %s (its work already landed)\n' "$key" >&2
+    retire_stored_card "$key"
+    drop=$drop$key$'\n'
+  done < <(jq -r '
+    . as $payload
+    | .captains_call[]?
+    | select(.type == "merge")
+    | . as $card
+    | select(
+        ($payload.landed | any(.id == ($card.key | sub("^merge\\."; ""))))
+        or (($card.pr_url? != null) and ($payload.landed | any(.pr_url? == $card.pr_url))))
+    | .key' "$data")
   tmp=$(printf '%s' "$drop" | jq -R -s 'split("\n") | map(select(length > 0))') || return 1
   jq --argjson dropped "$tmp" '
     .captains_call = [
       .captains_call[]
       | . as $card
-      | select($card.type != "decision" or (($dropped | index($card.key)) == null))
+      | select(($dropped | index($card.key)) == null)
       | if .type == "decision"
         then .options += [{
           value: "reconcile",
@@ -739,6 +770,33 @@ stored_card() {  # <task-id>
     || printf 'null\n'
 }
 
+# Every merge card a previous publication stored, as {key: card}. A refresh
+# composes from a snapshot with no PR view - discovery is an opt-in the first
+# mate passes, and a fleet event has no one to pass it - so without this the
+# captain's Merge now control would vanish from the page on the next session
+# start. The card is read through the same guard a decision card passes, and
+# `bin/fm-captain-hold.sh` stores it under the card key, so a merge card and
+# the decision card for the same task never collide.
+stored_merge_cards() {
+  local dir key card acc='{}'
+  for dir in "$DATA"/merge.*; do
+    [ -f "$dir/board-card.json" ] || continue
+    key=${dir##*/}
+    card=$(stored_card "$key")
+    [ "$card" != null ] || continue
+    acc=$(jq -n --argjson acc "$acc" --arg key "$key" --argjson card "$card" \
+      '$acc + {($key): $card}') || return 1
+  done
+  printf '%s\n' "$acc"
+}
+
+# Retire a stored merge card whose publication just dropped it. The landed
+# rows that prove a merge happened are bounded and recent, so a card left on
+# disk would come back the moment its PR scrolled out of them.
+retire_stored_card() {  # <card-key>
+  rm -f -- "$DATA/$1/board-card.json" 2>/dev/null || true
+}
+
 # One task's structured progress projection, reduced to the payload shape.
 # bin/fm-task-progress.sh owns every read; this maps its document onto the row.
 task_progress() {  # <task-id>
@@ -780,7 +838,7 @@ command_compose_check() {  # <data.json>
 
 command_compose() {
   local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
-  local deterministic=false progress='{}' row
+  local deterministic=false progress='{}' row merge_cards
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
@@ -849,9 +907,11 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.in_flight[]? | select(.id | contains("/") | not) | .id')
 EOF
+  merge_cards=$(stored_merge_cards) || merge_cards='{}'
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" \
+    --argjson merge_cards "$merge_cards" \
     --argjson progress "$progress" --argjson deterministic "$deterministic" \
     --argjson readable "$readable" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     . as $snap |
@@ -964,6 +1024,17 @@ EOF
     def merge_ready_prs:
       [ .candidate_prs[]?
         | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready) ];
+    # PR discovery is an opt-in the first mate passes; a fleet event has no
+    # one to pass it, so a refresh sees no candidate_prs at all. When this
+    # snapshot carries no PR view, the merge cards the last publication stored
+    # are carried forward unchanged - otherwise the captain would open the
+    # board and find the Merge now control he asked for gone. When it DOES
+    # carry one, that view is authoritative and decides the merge cards alone:
+    # a PR no longer ready gets no card, and the publication retires its
+    # stored copy.
+    def prs_checked: (.prs | startswith("checked"));
+    def carried_merge_cards:
+      if prs_checked then [] else [ $merge_cards[] ] end;
     # A card key IS one intake address, so the board may never carry two cards
     # under it. A task held more than once consolidates into one card, and the
     # composer is told to answer every one of its questions there; two
@@ -993,13 +1064,14 @@ EOF
         + $sibling + ", plus any " + $kind + " rows you cut");
     {
       schema: $schema, home: .home, generated: .generated, lang: $lang,
-      prs_live: (.prs | startswith("checked")),
+      prs_live: prs_checked,
       captains_call: (
         [ held_rows as $rows | $rows[] | . as $row
           | decision_card + consolidated([$rows[] | select(.key == $row.key)] | length) ]
         + [ merge_ready_prs as $prs | $prs[] | . as $pr
           | select([$prs[] | select(.task == $pr.task)] | length == 1)
           | merge_card ]
+        + carried_merge_cards
         | first_per_key),
       underway: [ .in_flight[]? | . as $row
         | {id, repo, name: t(.name; .id), state, kind, doing: t(.doing; .state)}
@@ -1097,7 +1169,7 @@ persist_composed_cards() {  # <payload.json>
     [ -n "$key" ] || continue
     jq -c --arg key "$key" '.captains_call[] | select(.key == $key)' "$1" > "$tmp" 2>/dev/null || continue
     "$SCRIPT_DIR/fm-captain-hold.sh" card "$key" --store "$tmp" >/dev/null 2>&1 || true
-  done < <(jq -r '.captains_call[]? | select(.type == "decision") | .key' "$1" 2>/dev/null)
+  done < <(jq -r '.captains_call[]? | select(.type == "decision" or .type == "merge") | .key' "$1" 2>/dev/null)
   rm -f -- "$tmp"
 }
 
