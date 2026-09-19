@@ -59,7 +59,7 @@ A continuity break is escalated once and stays unarmed until an operator deliber
 For the captain's answers on the remote board, arm the board adapter at the moment you publish a board carrying cards he has not answered, naming every one of them:
 
 ```sh
-bin/fm-procevent-board-remote.sh arm --key <task-id> [--key <task-id>=release]... [--interval <secs>]
+bin/fm-procevent-board-remote.sh arm --key <task-id> [--key <task-id>=release]...
 ```
 
 This is the one source whose registered child is a timer rather than a read of the source, because the remote board's answers live where only a first-party Claude session's own Artifact tool reaches: yours.

@@ -2,13 +2,12 @@
 # Remote-board answer adapter for the generic process-to-event runner.
 #
 # Usage:
-#   fm-procevent-board-remote.sh arm --key <key>[=done|release] [--key ...] [--interval <secs>]
-#   fm-procevent-board-remote.sh ingest --documents <dir> [--dry-run]
+#   fm-procevent-board-remote.sh arm --key <key>[=done|release] [--key ...]
+#   fm-procevent-board-remote.sh ingest --documents <dir>
 #   fm-procevent-board-remote.sh tick [--interval <secs>]
 #   fm-procevent-board-remote.sh classify <result-file>
 #   fm-procevent-board-remote.sh terminal <result-file>
 #   fm-procevent-board-remote.sh silent <result-file>
-#   fm-procevent-board-remote.sh status
 #   fm-procevent-board-remote.sh source-id
 #   fm-procevent-board-remote.sh retire
 #
@@ -34,15 +33,14 @@
 #            `settled`, which the runner treats as both silent and terminal, so
 #            the source retires without announcing anything.
 #            `retire` is the explicit path for a board rebuilt with no cards.
-# `status` prints the awaited set and whether the source should be armed at all.
 # Whether a runner is actually listening is bin/fm-procevent.sh list's fact, not
 # this script's.
 #
 # So the cost is genuinely gated. While a card is open, one short firstmate turn
 # per interval; while none is, the source does not exist and nothing is woken at
-# all. The interval floor is 60 seconds because the board already promises the
-# captain a real consequence within about a minute, so a finer interval cannot
-# be noticed and still spends a turn every time.
+# all. The cadence is fixed rather than a caller's knob: the board already
+# promises the captain a real consequence within about a minute, so a finer
+# interval cannot be noticed and still spends a turn every time.
 #
 # Stated plainly rather than accepted quietly: this is SLOWER than the local
 # Lavish board it replaces, which woke firstmate within seconds of a click
@@ -71,6 +69,15 @@
 # from the cursor: the store keeps a document until the captain changes it, so
 # forgetting an identity would re-deliver an answer that is still sitting there.
 # The cursor grows by one line per distinct answer ever given.
+#
+# AN ARM OPENS A GENERATION, which is how a never-pruned cursor and a reusable
+# card key live together. `dispatch.charted` is asked again on every board round,
+# so "has this key ever been answered" is the wrong question; "has it been
+# answered since it was armed" is the right one. `arm` bumps a counter and stamps
+# every awaited card with it, `ingest` stamps every record it writes with the
+# counter's value at delivery, and a card armed at generation G is settled only
+# by a record at G or later. It is still identity, never position and never a
+# count, that decides whether an answer is delivered.
 #
 # THE CHANNEL DECIDES NOTHING. `ingest` turns documents into
 # `<key>TAB<answer>TAB<label>[TAB<mode>]` lines and pipes them into
@@ -106,15 +113,21 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 CANONICAL_SOURCE_ID=board-remote
 ADAPTER=board-remote
+# The board already promises the captain a real consequence within about a
+# minute, so a finer interval cannot be noticed and still spends a turn every
+# time. That figure is the responsiveness standard, which is why the cadence is
+# this constant and not something a caller sets.
 DEFAULT_INTERVAL=90
-MIN_ARM_INTERVAL=60
-MAX_ARM_INTERVAL=3600
+# The intake truncates every field at this bound too, so framing a longer answer
+# is what the channel refuses, never delivering it at all.
+MAX_FIELD=512
 KEY_PATTERN='^[A-Za-z0-9._-]{1,128}$'
 TAB=$'\t'
 
 STATE_DIR="$STATE/board-remote"
 AWAITING="$STATE_DIR/awaiting"
 DELIVERED="$STATE_DIR/delivered"
+GENERATION="$STATE_DIR/generation"
 
 usage() {
   awk '
@@ -168,6 +181,7 @@ record_usable() {  # <path>
 require_usable_records() {
   record_usable "$AWAITING" || die "the awaited card set is not a plain file: $AWAITING"
   record_usable "$DELIVERED" || die "the answer record is not a plain file: $DELIVERED"
+  record_usable "$GENERATION" || die "the arm generation counter is not a plain file: $GENERATION"
 }
 
 read_lines() {  # <path>  (an absent file reads as empty)
@@ -183,16 +197,32 @@ count_lines() {  # <path>
 
 awaiting_count() { count_lines "$AWAITING"; }
 
+# A counter that has never been written, or that no longer reads as a whole
+# number, is generation 0: every card armed from here carries a higher one, so
+# no record can settle a card it did not answer.
+current_generation() {
+  local n
+  n=$(read_lines "$GENERATION" | head -1)
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s\n' "$n"
+}
+
+# The counter is published before the awaited set that cites it, so a crash in
+# between skips a generation rather than handing two boards the same one.
+open_generation() {
+  local n staged
+  n=$(( $(current_generation) + 1 ))
+  staged=$(stage_in_state generation) || return 1
+  printf '%s\n' "$n" > "$staged" || { rm -f -- "$staged"; return 1; }
+  publish_file "$staged" "$GENERATION" || { rm -f -- "$staged"; return 1; }
+  printf '%s\n' "$n"
+}
+
 # --- arming -----------------------------------------------------------------
 
 valid_key() {
   local LC_ALL=C
   [[ "${1-}" =~ $KEY_PATTERN ]]
-}
-
-arm_interval_valid() {
-  case "${1-}" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$1" -ge "$MIN_ARM_INTERVAL" ] && [ "$1" -le "$MAX_ARM_INTERVAL" ]
 }
 
 positive_number() {
@@ -202,8 +232,8 @@ positive_number() {
 }
 
 cmd_arm() {
-  local interval=$DEFAULT_INTERVAL key mode staged
-  local -a keys=()
+  local key mode staged generation entry
+  local -a keys=() awaited=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --key)
@@ -221,12 +251,6 @@ cmd_arm() {
         keys+=("$key$TAB$mode")
         shift 2
         ;;
-      --interval)
-        arm_interval_valid "${2-}" \
-          || die "--interval is whole seconds from $MIN_ARM_INTERVAL to $MAX_ARM_INTERVAL: the board already promises the captain a consequence within about a minute, so a finer interval cannot be noticed and still spends a turn every time"
-        interval=$2
-        shift 2
-        ;;
       *) usage ;;
     esac
   done
@@ -234,44 +258,27 @@ cmd_arm() {
     || die "arm needs at least one --key: a source with nothing awaited would wake firstmate for a board nobody owes an answer on"
   state_dir_ready || die "cannot prepare the adapter's state directory: $STATE_DIR"
   require_usable_records
+  generation=$(open_generation) || die "cannot open a new arm generation"
+  for entry in "${keys[@]}"; do
+    awaited+=("$entry$TAB$generation")
+  done
   # The awaited set is written BEFORE the registration, so a tick can never run
   # against a missing record and read a freshly armed board as settled.
   staged=$(stage_in_state awaiting) || die "cannot stage the awaited card set"
-  printf '%s\n' "${keys[@]}" > "$staged" \
+  printf '%s\n' "${awaited[@]}" > "$staged" \
     || { rm -f -- "$staged"; die "cannot write the awaited card set"; }
   publish_file "$staged" "$AWAITING" \
     || { rm -f -- "$staged"; die "cannot publish the awaited card set"; }
   "$SCRIPT_DIR/fm-procevent.sh" register "$ADAPTER" "$CANONICAL_SOURCE_ID" \
-    -- "$SCRIPT_DIR/fm-procevent-board-remote.sh" tick --interval "$interval" || exit 1
+    -- "$SCRIPT_DIR/fm-procevent-board-remote.sh" tick --interval "$DEFAULT_INTERVAL" || exit 1
   printf 'armed: %s\n' "$CANONICAL_SOURCE_ID"
-  printf 'interval: %ss\n' "$interval"
+  printf 'interval: %ss\n' "$DEFAULT_INTERVAL"
   printf 'awaiting: %s\n' "${#keys[@]}"
 }
 
 cmd_source_id() { printf '%s\n' "$CANONICAL_SOURCE_ID"; }
 
 cmd_retire() { "$SCRIPT_DIR/fm-procevent.sh" retire "$CANONICAL_SOURCE_ID"; }
-
-cmd_status() {
-  local lines key mode count
-  require_usable_records
-  count=$(awaiting_count)
-  printf 'source: %s\n' "$CANONICAL_SOURCE_ID"
-  printf 'awaiting: %s\n' "$count"
-  lines=$(read_lines "$AWAITING")
-  if [ -n "$lines" ]; then
-    while IFS=$'\t' read -r key mode; do
-      [ -n "$key" ] || continue
-      printf 'key: %s (close: %s)\n' "$key" "${mode:-done}"
-    done <<< "$lines"
-  fi
-  printf 'delivered: %s\n' "$(count_lines "$DELIVERED")"
-  if [ "$count" -gt 0 ]; then
-    printf 'should-be-armed: yes\n'
-  else
-    printf 'should-be-armed: no\n'
-  fi
-}
 
 # --- the registered child ---------------------------------------------------
 
@@ -360,32 +367,31 @@ document_identity() {  # <doc-id> <file>
 
 # Print `<key>TAB<answer>TAB<label>` for one document, or nothing when its
 # stored content is not an answer this channel can frame. Control characters are
-# replaced before the line is built, so a typed value cannot forge a field.
+# replaced before the line is built, so a typed value cannot forge a field, and
+# the fields are joined with a literal tab rather than framed as TSV: no escape
+# is needed once the separators are gone, and `@tsv` would double a backslash
+# the captain typed into an answer that names a path.
 document_row() {  # <file>
-  jq -r '
+  jq -r --argjson max "$MAX_FIELD" '
     def clean: gsub("[\\x00-\\x1f\\x7f]"; " ");
     if type != "object" then empty
     else
       .key as $k | .value as $v | (.label // "") as $l |
       if ($k | type) != "string" or ($v | type) != "string" or ($l | type) != "string" then empty
       elif ($k | test("^[A-Za-z0-9._-]{1,128}$") | not) then empty
-      elif ($v | length) == 0 or ($v | length) > 512 then empty
-      else [ $k, ($v | clean), ($l[0:512] | clean) ] | @tsv
+      elif ($v | length) == 0 then empty
+      else [ $k, ($v[0:$max] | clean), ($l[0:$max] | clean) ] | join("\t")
       end
     end
   ' < "$1" 2>/dev/null
 }
 
+# The fields are read with awk rather than bash's own splitting, because `read`
+# folds the empty close mode of an ordinary card into one separator and would
+# hand back the card's generation as its mode.
 awaited_mode() {  # <key>
-  local lines key mode
-  lines=$(read_lines "$AWAITING")
-  [ -n "$lines" ] || return 0
-  while IFS=$'\t' read -r key mode; do
-    if [ "$key" = "$1" ]; then
-      printf '%s\n' "${mode:-}"
-      return 0
-    fi
-  done <<< "$lines"
+  [ -f "$AWAITING" ] && [ ! -L "$AWAITING" ] || return 0
+  awk -F'\t' -v key="$1" '$1 == key { print $2; exit }' "$AWAITING"
 }
 
 # Pipe the staged rows into the one keyed-answer intake. Best-effort by design:
@@ -406,28 +412,34 @@ feed_intake() {  # <rows-file>
   return 1
 }
 
-# An awaited key is settled once ANY answer for it has been recorded, not only
-# one delivered on this pass, so a repeated ingest converges instead of drifting.
+# An awaited key is settled once an answer for it has been recorded SINCE IT WAS
+# ARMED - not only one delivered on this pass, so a repeated ingest converges
+# instead of drifting, and not one from an earlier generation, so asking the same
+# key again on a later board round is a genuinely open card.
 # The record is matched on its KEY COLUMN, never as a substring of the line: an
 # answer's own value can be a task id - `dispatch.charted` carries exactly that -
 # and a substring match would read one card's dispatch pick as an answer to the
 # card that task happens to own.
-answer_recorded() {  # <key>
+answer_recorded() {  # <key> <armed-generation>
   [ -f "$DELIVERED" ] && [ ! -L "$DELIVERED" ] || return 1
-  awk -F'\t' -v key="$1" '$2 == key { found = 1; exit } END { exit !found }' "$DELIVERED"
+  awk -F'\t' -v key="$1" -v gen="${2:-0}" \
+    '$2 == key && ($6 + 0) >= (gen + 0) { found = 1; exit } END { exit !found }' "$DELIVERED"
 }
 
 prune_awaiting() {
-  local lines key mode staged
+  local lines line key generation staged
   local -a remaining=()
   lines=$(read_lines "$AWAITING")
   [ -n "$lines" ] || return 0
-  while IFS=$'\t' read -r key mode; do
-    [ -n "$key" ] || continue
-    if answer_recorded "$key"; then
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    key=${line%%"$TAB"*}
+    generation=${line##*"$TAB"}
+    case "$generation" in ''|*[!0-9]*) generation=0 ;; esac
+    if answer_recorded "$key" "$generation"; then
       continue
     fi
-    remaining+=("$key$TAB$mode")
+    remaining+=("$line")
   done <<< "$lines"
   staged=$(stage_in_state awaiting) || die "cannot stage the awaited card set"
   if [ "${#remaining[@]}" -gt 0 ]; then
@@ -454,7 +466,7 @@ retire_when_settled() {  # <awaited-before>
 }
 
 cmd_ingest() {
-  local dir='' dry=0 f docid identity row key answer label mode
+  local dir='' f docid identity row key answer label mode generation
   local documents=0 new=0 unusable=0 staged rows_file delivered_lines awaited_before
   local -a notes=() rows=() records=()
   while [ "$#" -gt 0 ]; do
@@ -464,7 +476,6 @@ cmd_ingest() {
         dir=$2
         shift 2
         ;;
-      --dry-run) dry=1; shift ;;
       *) usage ;;
     esac
   done
@@ -476,6 +487,7 @@ cmd_ingest() {
   require_usable_records
 
   awaited_before=$(awaiting_count)
+  generation=$(current_generation)
   delivered_lines=$(read_lines "$DELIVERED")
   for f in "$dir"/*.json; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
@@ -505,7 +517,7 @@ cmd_ingest() {
     else
       rows+=("$key$TAB$answer$TAB$label")
     fi
-    records+=("$identity$TAB$key$TAB$answer$TAB$label$TAB$mode")
+    records+=("$identity$TAB$key$TAB$answer$TAB$label$TAB$mode$TAB$generation")
   done
 
   printf 'board-remote: ingest\n'
@@ -513,14 +525,6 @@ cmd_ingest() {
   printf 'new: %s\n' "$new"
   printf 'unusable: %s\n' "$unusable"
   [ "${#notes[@]}" -eq 0 ] || printf '%s\n' "${notes[@]}"
-
-  if [ "$dry" -eq 1 ]; then
-    [ "${#rows[@]}" -eq 0 ] || printf 'answer: %s\n' "${rows[@]}"
-    printf 'cursor: unchanged (dry run)\n'
-    printf 'intake: not run (dry run)\n'
-    printf 'awaiting: %s\n' "$(awaiting_count)"
-    return 0
-  fi
 
   if [ "$new" -gt 0 ]; then
     # The cursor advances only once these answers are recorded here. Until that
@@ -556,7 +560,6 @@ case "${1-}" in
   classify)  shift; cmd_classify "$@" ;;
   terminal)  shift; cmd_terminal "$@" ;;
   silent)    shift; cmd_silent "$@" ;;
-  status)    shift; cmd_status "$@" ;;
   source-id) shift; cmd_source_id "$@" ;;
   retire)    shift; cmd_retire "$@" ;;
   ''|-h|--help|help) usage ;;

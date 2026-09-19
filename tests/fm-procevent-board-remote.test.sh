@@ -96,11 +96,7 @@ test_arm_refuses_what_it_cannot_serve() {
   local home out
   home=$(make_home arm-refusals)
 
-  out=$(run_adapter "$home" arm --key sample-call --interval 30 2>&1) && fail "an interval under the floor was accepted"
-  assert_contains "$out" "60" "the sub-floor refusal did not name the floor"
-  assert_contains "$out" "within about a minute" "the sub-floor refusal did not say why the floor is there"
-
-  out=$(run_adapter "$home" arm --interval 60 2>&1) && fail "arming with nothing awaited was accepted"
+  out=$(run_adapter "$home" arm 2>&1) && fail "arming with nothing awaited was accepted"
   assert_contains "$out" "at least one --key" "arming with no key did not name what was missing"
 
   out=$(run_adapter "$home" arm --key "not a key" 2>&1) && fail "an invalid card key was accepted"
@@ -109,28 +105,28 @@ test_arm_refuses_what_it_cannot_serve() {
 
   assert_absent "$home/state/board-remote/awaiting" \
     "a refused arm still wrote an awaited card set"
-  pass "arm refuses a sub-floor interval, an empty card set, a bad key and a bad close mode"
+  pass "arm refuses an empty card set, a bad key and a bad close mode"
 }
 
-test_arm_records_the_cards_and_status_reports_them() {
+test_arm_reports_the_cards_it_will_wait_for() {
   local home out
   home=$(make_home arm-records)
-  out=$(run_adapter "$home" arm --key sample-call=release --key merge.other --interval 60) \
+  out=$(run_adapter "$home" arm --key sample-call=release --key merge.other) \
     || fail "could not arm the source"
+  assert_contains "$out" "armed: board-remote" "arm did not report the source it registered"
   assert_contains "$out" "awaiting: 2" "arm did not report the awaited card count"
-  out=$(run_adapter "$home" status)
-  assert_contains "$out" "key: sample-call (close: release)" "status lost the card's close mode"
-  assert_contains "$out" "key: merge.other (close: done)" "status lost the default close mode"
-  assert_contains "$out" "should-be-armed: yes" "status did not say the source should be armed"
+  run_adapter "$home" tick --interval 0.2 > "$home/armed.result" || fail "the tick failed while the cards were open"
+  assert_equals "due" "$(run_adapter "$home" classify "$home/armed.result")" \
+    "a freshly armed board did not make its tick due"
   run_adapter "$home" retire >/dev/null || fail "could not retire the armed source"
-  pass "arm records every card with its close mode and status reports them"
+  pass "arm registers the source and waits for every card it was given"
 }
 
 test_tick_is_due_while_a_card_is_open_and_settled_when_none_is() {
   local home out
   home=$(make_home tick-states)
 
-  run_adapter "$home" arm --key sample-call --interval 60 >/dev/null || fail "could not arm the source"
+  run_adapter "$home" arm --key sample-call >/dev/null || fail "could not arm the source"
   run_adapter "$home" tick --interval 0.2 > "$home/due.result" || fail "the tick failed while a card was open"
   assert_equals "due" "$(run_adapter "$home" classify "$home/due.result")" \
     "a tick with a card open did not classify due"
@@ -282,34 +278,63 @@ test_a_typed_value_cannot_forge_a_field() {
 }
 
 test_unusable_documents_are_reported_not_dropped() {
-  local home dir out long
+  local home dir out
   home=$(make_home unusable-documents)
   dir=$(answers_dir "$home")
   printf 'not json at all\n' > "$dir/broken.json"
   printf '["an","array"]\n' > "$dir/array.json"
   jq -n '{at: "x", key: "has spaces", lang: "hant", label: "", value: "yes"}' > "$dir/badkey.json"
-  long=$(printf 'x%.0s' $(seq 1 600))
-  jq -n --arg v "$long" '{at: "x", key: "long-value", lang: "hant", label: "", value: $v}' \
-    > "$dir/longvalue.json"
   jq -n '{at: "x", key: "empty-value", lang: "hant", label: "", value: ""}' > "$dir/emptyvalue.json"
 
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
-  assert_contains "$out" "documents: 5" "not every document was read"
+  assert_contains "$out" "documents: 4" "not every document was read"
   assert_contains "$out" "new: 0" "an unusable document was delivered as an answer"
-  assert_contains "$out" "unusable: 5" "the unusable documents were not counted"
+  assert_contains "$out" "unusable: 4" "the unusable documents were not counted"
   assert_contains "$out" "unparsable-document: broken" "a document that is not JSON was dropped silently"
   assert_contains "$out" "unparsable-document: array" "a document that is not an object was dropped silently"
   assert_contains "$out" "unusable-document: badkey" "a document with a malformed key was dropped silently"
-  assert_contains "$out" "unusable-document: longvalue" "an over-long answer was dropped silently"
   assert_contains "$out" "unusable-document: emptyvalue" "an empty answer was dropped silently"
   pass "a document this channel cannot frame is reported rather than silently dropped"
+}
+
+# The intake truncates every field at 512 characters anyway, so refusing a longer
+# answer here would only strand its card and wake firstmate every interval for an
+# answer the captain has already given.
+test_an_over_long_answer_is_truncated_rather_than_stranding_its_card() {
+  local home dir out long value
+  home=$(make_home long-answer)
+  dir=$(answers_dir "$home")
+  run_adapter "$home" arm --key long-call >/dev/null || fail "could not arm the source"
+  long=$(printf 'x%.0s' $(seq 1 600))
+  jq -n --arg v "$long" '{at: "2026-09-19T07:00:00.000Z", key: "long-call", lang: "hant",
+                          label: "", value: $v}' > "$dir/long_call.json"
+
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  value=$(printf '%s\n' "$out" | sed -n 's/^answer: //p' | awk -F'\t' '$1 == "long-call" { print $2 }')
+  assert_equals "512" "${#value}" "the over-long answer did not arrive truncated to the intake's own bound"
+  assert_contains "$out" "awaiting: 0" "an over-long answer left its card awaited forever"
+  assert_contains "$out" "retired: yes" "an over-long answer kept the source armed with nothing left to wait for"
+  pass "an over-long answer is truncated and settles its card instead of pinning the source"
+}
+
+# A path or an escape the captain typed must reach the intake as he typed it.
+test_a_typed_backslash_reaches_the_intake_unchanged() {
+  local home dir out value
+  home=$(make_home typed-backslash)
+  dir=$(answers_dir "$home")
+  write_answer "$home" path_call path-call 'C:\logs\run and 100%' 'Use C:\logs' 2026-09-19T07:00:00.000Z
+
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  value=$(printf '%s\n' "$out" | sed -n 's/^answer: //p' | awk -F'\t' '$1 == "path-call" { print $2 }')
+  assert_equals 'C:\logs\run and 100%' "$value" "a typed backslash did not survive the framing intact"
+  pass "a backslash the captain typed reaches the intake exactly as he typed it"
 }
 
 test_the_close_mode_comes_from_arming() {
   local home dir out
   home=$(make_home close-mode)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --key gated-work=release --key plain-call --interval 60 >/dev/null \
+  run_adapter "$home" arm --key gated-work=release --key plain-call >/dev/null \
     || fail "could not arm the source"
   write_answer "$home" gated_work gated-work proceed "Proceed" 2026-09-19T07:00:00.000Z
   write_answer "$home" plain_call plain-call gold-only "Gold only" 2026-09-19T07:01:00.000Z
@@ -329,7 +354,7 @@ test_ingest_retires_the_source_once_every_card_is_answered() {
   local home dir out
   home=$(make_home retire-on-settled)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --key first-call --key second-call --interval 60 >/dev/null \
+  run_adapter "$home" arm --key first-call --key second-call >/dev/null \
     || fail "could not arm the source"
 
   write_answer "$home" first_call first-call yes "Yes" 2026-09-19T07:00:00.000Z
@@ -351,7 +376,7 @@ test_another_cards_answer_does_not_settle_a_card() {
   local home dir out
   home=$(make_home key-column)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --key sample-call --interval 60 >/dev/null \
+  run_adapter "$home" arm --key sample-call >/dev/null \
     || fail "could not arm the source"
   write_answer "$home" dispatch_charted dispatch.charted sample-call "sample-call" 2026-09-19T07:00:00.000Z
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
@@ -374,18 +399,34 @@ test_an_unarmed_ingest_claims_no_retirement() {
   pass "a read against a board that was never armed here claims no retirement"
 }
 
-test_a_dry_run_changes_nothing() {
+# `dispatch.charted` is asked again on every board round, so the cursor - which
+# is never pruned, because that is what keeps an answer from arriving twice -
+# holds an answer under that key from the last round. A card armed now is open
+# until the captain answers THIS round's question.
+test_an_earlier_rounds_answer_does_not_settle_a_freshly_armed_card() {
   local home dir out
-  home=$(make_home dry-run)
+  home=$(make_home re-armed-key)
   dir=$(answers_dir "$home")
-  write_answer "$home" sample_call sample-call gold-only "Gold only" 2026-09-19T07:00:00.000Z
-  out=$(run_adapter "$home" ingest --documents "$dir" --dry-run 2>/dev/null)
-  assert_contains "$out" "answer: sample-call" "a dry run did not report what it would deliver"
-  assert_contains "$out" "cursor: unchanged (dry run)" "a dry run did not say the cursor was untouched"
-  assert_absent "$home/state/board-remote/delivered" "a dry run advanced the cursor"
+  run_adapter "$home" arm --key dispatch.charted >/dev/null || fail "could not arm the source"
+  write_answer "$home" dispatch_charted dispatch.charted first-task "First task" 2026-09-19T07:00:00.000Z
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
-  assert_contains "$out" "answer: sample-call" "a dry run consumed the answer"
-  pass "a dry run reports what it would deliver and changes nothing"
+  assert_contains "$out" "retired: yes" "the first round did not retire once its card was answered"
+
+  run_adapter "$home" arm --key dispatch.charted >/dev/null || fail "could not arm the same card again"
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  assert_contains "$out" "new: 0" "last round's answer was delivered a second time"
+  assert_contains "$out" "awaiting: 1" "last round's answer settled a freshly armed card"
+  assert_not_contains "$out" "retired: yes" "the source retired while this round's card was unanswered"
+  run_adapter "$home" tick --interval 0.2 > "$home/rearmed.result" || fail "the tick failed while the card was open"
+  assert_equals "due" "$(run_adapter "$home" classify "$home/rearmed.result")" \
+    "the source stopped waking firstmate while the captain still owed an answer"
+
+  write_answer "$home" dispatch_charted dispatch.charted second-task "Second task" 2026-09-19T08:00:00.000Z
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  assert_contains "$out" "answer: dispatch.charted	second-task" "this round's answer was not delivered"
+  assert_contains "$out" "awaiting: 0" "this round's own answer did not settle its card"
+  assert_contains "$out" "retired: yes" "the source stayed armed after its card was answered"
+  pass "a card armed for a new round is settled only by an answer given since it was armed"
 }
 
 # The keyed lines reach the one intake and close the captain's own tasks. Needs
@@ -399,7 +440,7 @@ test_answers_close_their_captain_held_tasks() {
     || fail "could not hold the sample captain call"
   run_captain "$home" hold gated-work --reason "needs the captain's word" --title "Gated work" >/dev/null \
     || fail "could not hold the sample gated work"
-  run_adapter "$home" arm --key membership-call --key gated-work=release --interval 60 >/dev/null \
+  run_adapter "$home" arm --key membership-call --key gated-work=release >/dev/null \
     || fail "could not arm the source"
 
   write_answer "$home" membership_call membership-call gold-only "Gold only" 2026-09-19T07:00:00.000Z
@@ -422,7 +463,7 @@ test_answers_close_their_captain_held_tasks() {
 
 test_help_advertises_the_commands
 test_arm_refuses_what_it_cannot_serve
-test_arm_records_the_cards_and_status_reports_them
+test_arm_reports_the_cards_it_will_wait_for
 test_tick_is_due_while_a_card_is_open_and_settled_when_none_is
 test_an_unreadable_result_stays_armed_and_announced
 test_a_captured_answer_is_never_delivered_twice
@@ -431,12 +472,14 @@ test_an_uncaptured_answer_survives_a_failed_read
 test_an_unwritable_record_refuses_rather_than_re_delivering_forever
 test_the_read_never_consumes_the_store
 test_a_typed_value_cannot_forge_a_field
+test_a_typed_backslash_reaches_the_intake_unchanged
 test_unusable_documents_are_reported_not_dropped
+test_an_over_long_answer_is_truncated_rather_than_stranding_its_card
 test_the_close_mode_comes_from_arming
 test_ingest_retires_the_source_once_every_card_is_answered
 test_another_cards_answer_does_not_settle_a_card
+test_an_earlier_rounds_answer_does_not_settle_a_freshly_armed_card
 test_an_unarmed_ingest_claims_no_retirement
-test_a_dry_run_changes_nothing
 test_answers_close_their_captain_held_tasks
 
 printf '# all fm-procevent-board-remote tests passed\n'
