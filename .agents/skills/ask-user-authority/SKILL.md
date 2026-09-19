@@ -29,12 +29,17 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
    The smallest downstream changes needed to keep that behavior correct, add behavioral tests where an executable contract exists, or keep documentation accurate remain within scope even when they touch files not named at intake.
    Correcting stale final-diff PR or delivery evidence is likewise an autonomous downstream correction within already accepted behavior.
 3. Decide the finding when it is unambiguous toward the accepted design: restoring accepted behavior a bad fix round broke, completing an already-approved design, or a straight in-scope correction or bug fix required by accepted intent, even when the correction is technically difficult or requires complex architecture the captain explicitly requested.
-4. Escalate only genuinely ambiguous findings:
+4. Count the fix rounds already spent on the step this finding came from.
+   From the fourth round on one step, the correction rate is itself the evidence: each narrow remedy is producing the next finding.
+   The instructions firstmate passes with that gate's Fix stop naming a narrow remedy and instead ask for the coherent change - what keeps producing these findings, the single change that would close them together, and whether the honest answer is to revert a chunk of the work or narrow the task.
+   Nothing carries a question to the reviewer and returns a reply, so never wait for one: `no-mistakes axi respond --action fix --instructions` reaches the next fix round, and the only thing that comes back is the next gate report.
+   Read that report as evidence, not authority: firstmate still decides, and escalates under step 5 when the coherent change would revert or narrow what the captain accepted.
+5. Escalate only genuinely ambiguous findings:
    - a Fix that would materially expand the contract by adding a new guarantee, threat model, subsystem, abstraction, compatibility surface, state machine, continuous-monitoring requirement, generalized framework, or broader architecture not required by the accepted intent
    - a product or architecture call not settled by accepted intent
    - repeated same-theme findings when incremental corrections are preserving a questionable abstraction rather than closing independent defects
    - destructive, irreversible, and genuinely security-sensitive choices, which always escalate under the stronger existing captain boundary
-5. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
+6. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
 
 ## Captain-facing escalation
 
@@ -52,6 +57,6 @@ Do not relay reviewer labels or gate output as if they settled the decision.
 
 - Fixing a concrete defect that violates an original acceptance criterion is firstmate's to decide, regardless of implementation difficulty.
 - Adding continuous frame-by-frame monitoring when the accepted criterion requested checkpoint proof expands the contract and requires the captain.
-- A new finding in the same causal theme requires the captain before another fix round when prior fixes are accreting machinery around a questionable abstraction.
+- A new finding in the same causal theme requires the captain before another fix round when prior fixes are accreting machinery around a questionable abstraction; step 4's coherent-change request runs first, and the gate report it produces is evidence for that escalation.
 - A genuinely security-sensitive action requires the captain under the stronger existing boundary even if it is otherwise within scope.
 - Complex architecture explicitly requested by the captain stays within scope and does not escalate merely because it is complex.
