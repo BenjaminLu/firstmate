@@ -137,6 +137,15 @@ SH
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
   "api graphql")
+    case " $* " in
+      # The contribution observation armed alongside a PR watch reads one pull
+      # request snapshot - core, permission, head and both check lanes - from a
+      # single document, so this forge answers it with one.
+      *statusCheckRollup*)
+        printf '%s\n' "{\"data\":{\"repository\":{\"viewerPermission\":\"READ\",\"pullRequest\":{\"state\":\"OPEN\",\"isDraft\":false,\"mergeable\":\"MERGEABLE\",\"reviewDecision\":\"APPROVED\",\"headRefOid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"author\":{\"login\":\"author\",\"__typename\":\"User\"},\"commits\":{\"nodes\":[{\"commit\":{\"oid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"statusCheckRollup\":null}}]}}}}}"
+        exit 0
+        ;;
+    esac
     printf '%s\n' \
       "state=${FM_TEST_GH_GRAPHQL_STATE:-MERGED}" \
       "merged=${FM_TEST_GH_GRAPHQL_MERGED:-true}" \
@@ -164,18 +173,6 @@ esac
 case " $* " in
   *" api repos/"*"/issues/"*"/comments?per_page=100 "*|*" api repos/"*"/pulls/"*"/reviews?per_page=100 "*|*" api repos/"*"/pulls/"*"/comments?per_page=100 "*)
     printf '%s\n' '[[]]'
-    ;;
-  *" api repos/"*"/commits/"*"/check-runs?filter=all&per_page=100 "*)
-    printf '%s\n' '[{"check_runs":[]}]'
-    ;;
-  *" api repos/"*"/commits/"*"/statuses?per_page=100 "*)
-    printf '%s\n' '[[]]'
-    ;;
-  *" api repos/"*"/pulls/"*)
-    printf '%s\n' "{\"state\":\"open\",\"user\":{\"login\":\"author\"},\"head\":{\"sha\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\"},\"draft\":false,\"mergeable\":true,\"merged_at\":null}"
-    ;;
-  *" api repos/"*)
-    printf '%s\n' '{"permissions":{"push":false}}'
     ;;
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
   *" state "*)
