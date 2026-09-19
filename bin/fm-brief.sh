@@ -514,8 +514,6 @@ The posted review is the deliverable. Everything below exists so firstmate and t
 3. Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate: a finding you marked as widening scope is a captain call this review exposed.
 4. Append \`done: review posted on $PR_URL - <verdict>, <n> findings\` to the status file and stop.
 
-When you must stop for a decision instead, leave a decision packet first: run \`$FM_ROOT/bin/fm-packet.sh scaffold $ID --kind needs-decision\`, fill every \`{FILL}\` placeholder, and run \`$FM_ROOT/bin/fm-packet.sh verify $ID\` until it prints \`packet: ok\`; only then append the \`needs-decision:\` line. Your local record is the packet for \`done:\`.
-That packet's figures are drawn through the diagram-design skill at \`~/.claude/skills/diagram-design\`, never hand-written SVG, against the contract \`$FM_ROOT/bin/fm-packet.sh --help\` states and verify enforces; it owes one drawing that puts every option together, and if that skill is not installed where you are running, that is a blocker you escalate to firstmate rather than a packet you write without figures.
 EOF
 echo "scaffolded: $BRIEF (review of $PR_URL; replace {TASK} and {FIRSTMATE_SPEC}; spawn with --scout)"
 exit 0
@@ -584,8 +582,6 @@ Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
-When you must stop for a decision, leave a decision packet first: run \`$FM_ROOT/bin/fm-packet.sh scaffold $ID --kind needs-decision\`, fill every \`{FILL}\` placeholder, and run \`$FM_ROOT/bin/fm-packet.sh verify $ID\` until it prints \`packet: ok\`; only then append the \`needs-decision:\` line. Your report is the packet for \`done:\`.
-That packet's figures are drawn through the diagram-design skill at \`~/.claude/skills/diagram-design\`, never hand-written SVG, against the contract \`$FM_ROOT/bin/fm-packet.sh --help\` states and verify enforces; it owes one drawing that puts every option together, and if that skill is not installed where you are running, that is a blocker you escalate to firstmate rather than a packet you write without figures.
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
