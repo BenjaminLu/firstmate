@@ -175,4 +175,12 @@ case "$READY_RC" in
   0|1) ;;
   *) printf 'actionable: PR %s is registered but its ready line did not reach the parent channel (rc=%s)\n' "$URL" "$READY_RC" >&2 ;;
 esac
+# Registering the pull request is the moment this home knows there is one, so
+# the captain's board is told now. The board cannot map a pull request onto
+# work it still lists as underway - a merge card is composed, never mapped, and
+# merging is the captain's call - so this event makes the board SAY a rebuild
+# is owed instead of quietly looking complete. One append; it cannot fail this
+# registration (bin/fm-board-live.sh).
+"$SCRIPT_DIR/fm-board-live.sh" event pr "$ID" --pr-url "$URL" >/dev/null 2>&1 || true
+
 printf 'armed: state/%s.check.sh\n' "$ID"
