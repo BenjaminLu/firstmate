@@ -64,53 +64,49 @@ refresh() {  # <home> [extra args]
   run_board "$home" refresh --snapshot "$SNAPSHOT_FIXTURE" "$@"
 }
 
-payload_of() {  # <home>
-  cat "$1/.lavish/bearings-board.json"
-}
-
-# What the built page actually carries, read back out of the page rather than
-# from the sidecar, so injection is proved rather than assumed.
+# The board page's data block IS the published payload - the one artifact a
+# publication writes - so every assertion below reads it back out of the page.
 injected_payload() {  # <home>
   sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' \
     "$1/.lavish/bearings-board.html" | sed '1d;$d'
 }
 
-test_refresh_publishes_the_board_and_a_payload_beside_it() {
+# Rewrite the published page's payload through <jq-filter>, leaving the rest of
+# the page byte-for-byte. This is how a test puts the board in a state a build
+# would have left it in, editing the published artifact the same way it reads
+# it.
+set_page_payload() {  # <home> <jq-filter>
+  local page="$1/.lavish/bearings-board.html" json
+  json=$(injected_payload "$1" | jq -c "$2") || return 1
+  json=${json//</\\u003c}
+  PAGE_JSON="$json" perl -0pi -e '
+    s{(<script id="bearings-data" type="application/json">\n).*?(\n</script>)}{$1$ENV{PAGE_JSON}$2}s
+  ' "$page"
+}
+
+test_refresh_publishes_the_board_in_place() {
   local home out
   home=$(make_home publish)
   seed_board "$home"
   out=$(refresh "$home") || fail "refresh refused a seeded board: $out"
   assert_contains "$out" "refreshed: $home/.lavish/bearings-board.html" \
     "refresh did not name the board it republished: $out"
-  assert_contains "$out" "payload: $home/.lavish/bearings-board.json" \
-    "refresh did not name the payload it wrote: $out"
-  [ "$(run_board "$home" payload-path)" = "$home/.lavish/bearings-board.json" ] \
-    || fail "payload-path does not print the stable payload location"
-  jq -e '.schema == "fm-bearings-board.v1" and (.underway | length) >= 1' \
-    "$home/.lavish/bearings-board.json" >/dev/null \
-    || fail "the payload file is not a board payload: $(payload_of "$home")"
-  # The page and the file beside it are the same payload, so a remote consumer
-  # reads exactly what the local page shows.
-  diff <(injected_payload "$home" | jq -S .) <(payload_of "$home" | jq -S .) >/dev/null \
-    || fail "the payload file and the injected page payload differ"
-  pass "refresh injects the board in place and publishes the same payload beside it"
+  injected_payload "$home" \
+    | jq -e '.schema == "fm-bearings-board.v1" and (.underway | length) >= 1' >/dev/null \
+    || fail "the page does not carry a board payload: $(injected_payload "$home")"
+  pass "refresh injects a board payload into the page in place"
 }
 
 test_refresh_is_idempotent() {
-  local home first second
+  local home
   home=$(make_home idempotent)
   seed_board "$home"
   refresh "$home" >/dev/null || fail "the first refresh failed"
-  first="$home/first.json"
-  cp "$home/.lavish/bearings-board.json" "$first"
   cp "$home/.lavish/bearings-board.html" "$home/first.html"
   refresh "$home" >/dev/null || fail "the second refresh failed"
-  second="$home/.lavish/bearings-board.json"
-  cmp -s "$first" "$second" \
-    || fail "a second refresh over unchanged state produced a different payload"
   cmp -s "$home/first.html" "$home/.lavish/bearings-board.html" \
     || fail "a second refresh over unchanged state produced a different page"
-  pass "refresh over unchanged state republishes byte-identical output"
+  pass "refresh over unchanged state republishes a byte-identical page"
 }
 
 test_refresh_never_touches_the_session_or_its_armed_source() {
@@ -186,8 +182,9 @@ test_a_concurrent_refresh_is_a_no_op_rather_than_a_race() {
     || { echo "skip: could not hold the refresh lock in this environment"; return 0; }
   out=$(refresh "$home") || fail "a locked-out refresh failed instead of standing down"
   assert_contains "$out" "refresh: busy" "a locked-out refresh did not say it stood down: $out"
-  [ ! -e "$home/.lavish/bearings-board.json" ] \
-    || fail "a locked-out refresh published anyway"
+  # The seeded page still carries the template's data slot, not a payload.
+  injected_payload "$home" | jq -e '.schema == "fm-bearings-board.v1"' >/dev/null 2>&1 \
+    && fail "a locked-out refresh published anyway"
   # Every fleet trigger discards this stdout, so the stand-down must also be
   # readable afterwards or a board that stopped refreshing is undiagnosable.
   assert_grep "refresh: busy" "$home/state/.bearings-board-refresh.log" \
@@ -211,61 +208,28 @@ test_a_refresh_lock_whose_owner_is_gone_is_reclaimed() {
   [ -e "$home/state/.bearings-board-refresh.lock" ] \
     || fail "the killed holder released the lock, so there is nothing to reclaim"
   refresh "$home" >/dev/null || fail "a refresh behind a dead owner's lock failed"
-  jq -e '.schema == "fm-bearings-board.v1"' "$home/.lavish/bearings-board.json" >/dev/null \
+  injected_payload "$home" | jq -e '.schema == "fm-bearings-board.v1"' >/dev/null \
     || fail "the refresh behind a dead owner's lock published nothing"
   pass "a refresh lock left by a dead owner is reclaimed instead of wedging the board"
-}
-
-# Rewrite the language of the payload the board PAGE is carrying, leaving the
-# rest of the published page byte-for-byte. This is the state a build for an
-# English-reading captain leaves behind; the page's data block is the board's
-# own published artifact, and the test edits it the same way it reads it.
-set_page_lang() {  # <home> <lang>
-  local page="$1/.lavish/bearings-board.html" json
-  json=$(injected_payload "$1" | jq -c --arg l "$2" '.lang = $l') || return 1
-  json=${json//</\\u003c}
-  PAGE_JSON="$json" perl -0pi -e '
-    s{(<script id="bearings-data" type="application/json">\n).*?(\n</script>)}{$1$ENV{PAGE_JSON}$2}s
-  ' "$page"
 }
 
 test_refresh_keeps_the_language_the_board_was_published_in() {
   local home
   home=$(make_home language)
   seed_board "$home"
-  # No board payload anywhere yet, so the compose default is all a refresh has.
+  # A page with no payload yet, so the compose default is all a refresh has.
   refresh "$home" >/dev/null || fail "the first refresh failed"
-  jq -e '.lang == "hant"' "$home/.lavish/bearings-board.json" >/dev/null \
-    || fail "a first refresh did not fall back to the compose default: $(payload_of "$home")"
+  injected_payload "$home" | jq -e '.lang == "hant"' >/dev/null \
+    || fail "a first refresh did not fall back to the compose default: $(injected_payload "$home")"
 
-  # A board built for an English-reading captain. The page is where that
-  # choice is published, so a fleet event must carry it forward rather than
-  # re-deciding it - even though the payload beside it still says otherwise.
-  set_page_lang "$home" en || fail "could not republish the page in English"
+  # A board built for an English-reading captain. The published page is where
+  # that choice lives, so a fleet event must read it back and carry it forward
+  # rather than re-deciding it.
+  set_page_payload "$home" '.lang = "en"' || fail "could not republish the page in English"
   refresh "$home" >/dev/null || fail "the refresh after an English build failed"
-  printf '%s' "$(injected_payload "$home")" | jq -e '.lang == "en"' >/dev/null \
-    || fail "a refresh moved the board off the captain's language"
-  jq -e '.lang == "en"' "$home/.lavish/bearings-board.json" >/dev/null \
-    || fail "the payload beside the board kept a language the page had left: $(payload_of "$home")"
+  injected_payload "$home" | jq -e '.lang == "en"' >/dev/null \
+    || fail "a refresh moved the board off the captain's language: $(injected_payload "$home")"
   pass "a refresh republishes the board in the language its page was published in"
-}
-
-test_a_board_with_no_payload_beside_it_keeps_its_language() {
-  local home
-  home=$(make_home language-page-only)
-  seed_board "$home"
-  refresh "$home" >/dev/null || fail "the first refresh failed"
-  set_page_lang "$home" en || fail "could not republish the page in English"
-  # Every board built before the payload file existed is exactly this: a page
-  # carrying its payload, and nothing beside it. A republication must read the
-  # captain's language back off the page rather than resetting it.
-  rm -f "$home/.lavish/bearings-board.json"
-  refresh "$home" >/dev/null || fail "the refresh of a board with no payload beside it failed"
-  printf '%s' "$(injected_payload "$home")" | jq -e '.lang == "en"' >/dev/null \
-    || fail "a board with no payload beside it was republished in another language"
-  jq -e '.lang == "en"' "$home/.lavish/bearings-board.json" >/dev/null \
-    || fail "the republished payload did not carry the page's language: $(payload_of "$home")"
-  pass "a board whose only payload is the one in its page keeps the language it was built in"
 }
 
 test_a_build_waits_for_the_publication_already_under_way() {
@@ -290,8 +254,6 @@ test_a_build_waits_for_the_publication_already_under_way() {
   # then discovered the contention is exactly the race this serializes.
   [ ! -e "$home/.lavish/bearings-board.html" ] \
     || fail "the build wrote the board while another publication held the lock"
-  [ ! -e "$home/.lavish/bearings-board.json" ] \
-    || fail "the build wrote the payload while another publication held the lock"
   pass "a build takes the same publication lock a refresh does instead of racing it"
 }
 
@@ -302,18 +264,18 @@ test_refresh_carries_no_placeholder_to_the_captain() {
   refresh "$home" >/dev/null || fail "refresh failed"
   # The fixture holds two captain calls with no stored card and no packet, and
   # a merge-ready PR: every one of those is a slot a composer would have filled.
-  jq -e '[paths(type == "string" and test("\\{(FILL|TRANSLATE)"))] | length == 0' \
-    "$home/.lavish/bearings-board.json" >/dev/null \
-    || fail "the refreshed payload still carries composer placeholders: $(payload_of "$home")"
-  jq -e '
+  injected_payload "$home" \
+    | jq -e '[paths(type == "string" and test("\\{(FILL|TRANSLATE)"))] | length == 0' >/dev/null \
+    || fail "the refreshed payload still carries composer placeholders: $(injected_payload "$home")"
+  injected_payload "$home" | jq -e '
     (.captains_call | length) >= 2
     and ([.captains_call[] | select(.type == "decision")] | length) >= 1
     and ([.captains_call[] | select(.type == "merge")][0].risk == "unassessed")
     and ([.captains_call[] | select(.type == "decision")][0]
       | (.title | type == "string") and (.decide | type == "string")
         and ([.options[].value] == ["reconcile"]) and .allow_freeform == true)
-  ' "$home/.lavish/bearings-board.json" >/dev/null \
-    || fail "a card with no written copy did not degrade to an answerable one: $(payload_of "$home")"
+  ' >/dev/null \
+    || fail "a card with no written copy did not degrade to an answerable one: $(injected_payload "$home")"
   pass "refresh degrades unwritten copy instead of publishing a placeholder"
 }
 
@@ -334,8 +296,7 @@ test_refresh_reuses_the_stored_card_verbatim() {
               consequence:{en:"faster, riskier", hant:"快一點，風險高"}}],
     allow_freeform:true}' > "$home/data/gated-work/board-card.json"
   refresh "$home" >/dev/null || fail "refresh failed"
-  card=$(jq -c '.captains_call[] | select(.key == "gated-work")' \
-    "$home/.lavish/bearings-board.json")
+  card=$(injected_payload "$home" | jq -c '.captains_call[] | select(.key == "gated-work")')
   printf '%s' "$card" | jq -e '
     .title.hant == "上線順序"
     and .decide.hant == "先上哪一種順序？"
@@ -551,7 +512,7 @@ test_the_board_carries_each_underway_rows_progress() {
   seed_board "$home"
   run_board "$home" refresh --snapshot "$SNAPSHOT_FIXTURE" >/dev/null \
     || fail "refresh failed"
-  row=$(jq -c '.underway[] | select(.id == "ship-task")' "$home/.lavish/bearings-board.json")
+  row=$(injected_payload "$home" | jq -c '.underway[] | select(.id == "ship-task")')
   printf '%s' "$row" | jq -e --arg act "$CAPTURED_LAST_ACTIVITY" '
     .progress.state == "working"
     and .progress.step == "ci"
@@ -580,8 +541,7 @@ test_a_stored_card_carrying_the_injected_reconcile_choice_still_builds() {
              {value:"reconcile", label:{en:"Reconcile", hant:"重新核對"}}],
     allow_freeform:true}' > "$home/data/gated-work/board-card.json"
   refresh "$home" >/dev/null || fail "a stored card carrying reconcile refused the board"
-  card=$(jq -c '.captains_call[] | select(.key == "gated-work")' \
-    "$home/.lavish/bearings-board.json")
+  card=$(injected_payload "$home" | jq -c '.captains_call[] | select(.key == "gated-work")')
   printf '%s' "$card" | jq -e '[.options[].value] == ["canary", "reconcile"]' >/dev/null \
     || fail "the reconcile choice was duplicated or lost: $card"
   pass "a stored card carrying the injected reconcile choice still publishes exactly one"
@@ -600,11 +560,11 @@ test_refresh_states_only_the_omission_total_the_snapshot_establishes() {
     "$SNAPSHOT_FIXTURE" > "$home/snapshot.json"
   run_board "$home" refresh --snapshot "$home/snapshot.json" >/dev/null \
     || fail "refresh failed on a snapshot that omitted gate rows"
-  jq -e '(has("charted_more") | not) and (has("charted_warning_more") | not)' \
-    "$home/.lavish/bearings-board.json" >/dev/null \
-    || fail "refresh split an omitted total the snapshot never split: $(payload_of "$home")"
-  row=$(jq -c '.charted[] | select(.id == "charted-omitted")' "$home/.lavish/bearings-board.json")
-  [ -n "$row" ] || fail "refresh hid the omission instead of stating it: $(payload_of "$home")"
+  injected_payload "$home" \
+    | jq -e '(has("charted_more") | not) and (has("charted_warning_more") | not)' >/dev/null \
+    || fail "refresh split an omitted total the snapshot never split: $(injected_payload "$home")"
+  row=$(injected_payload "$home" | jq -c '.charted[] | select(.id == "charted-omitted")')
+  [ -n "$row" ] || fail "refresh hid the omission instead of stating it: $(injected_payload "$home")"
   printf '%s' "$row" | jq -e '
     .kind == "warning" and .dispatchable == false
     and (.title | tostring | test("5 more"))
@@ -623,9 +583,8 @@ test_a_malformed_stored_card_degrades_one_row_instead_of_the_board() {
     options:[{value:"bad value with spaces", label:"x"}], allow_freeform:true}' \
     > "$home/data/gated-work/board-card.json"
   refresh "$home" >/dev/null || fail "a malformed stored card refused the whole board"
-  card=$(jq -c '.captains_call[] | select(.key == "gated-work")' \
-    "$home/.lavish/bearings-board.json")
-  [ -n "$card" ] || fail "the malformed stored card dropped its captain call entirely: $(payload_of "$home")"
+  card=$(injected_payload "$home" | jq -c '.captains_call[] | select(.key == "gated-work")')
+  [ -n "$card" ] || fail "the malformed stored card dropped its captain call entirely: $(injected_payload "$home")"
   printf '%s' "$card" | jq -e '(.title | tostring | length) > 0' >/dev/null \
     || fail "the degraded card carried the malformed title through: $card"
   pass "a malformed stored card degrades its own row instead of refusing the board"
@@ -655,12 +614,11 @@ SH
   fm_write_meta "$home/state/ledger-task.meta" "worktree=$home" "kind=ship" "project=firstmate"
   : > "$home/state/ledger-task.status"
   refresh "$home" >/dev/null || fail "the initial refresh failed"
-  before=$(jq -r .generated "$home/.lavish/bearings-board.json")
+  before=$(injected_payload "$home" | jq -r .generated)
   # Force the next publication to differ, so republication is observable
   # without depending on clock resolution.
-  jq '.generated = "1970-01-01T00:00:00Z"' "$home/.lavish/bearings-board.json" \
-    > "$home/.lavish/bearings-board.json.tmp" \
-    && mv "$home/.lavish/bearings-board.json.tmp" "$home/.lavish/bearings-board.json"
+  set_page_payload "$home" '.generated = "1970-01-01T00:00:00Z"' \
+    || fail "could not stamp the published page"
 
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
@@ -682,13 +640,13 @@ SH
   printf 'blocked [key=fixture]: waiting on the fixture\n' >> "$home/state/ledger-task.status"
   i=0
   while [ "$i" -lt 300 ]; do
-    [ "$(jq -r .generated "$home/.lavish/bearings-board.json" 2>/dev/null)" = "1970-01-01T00:00:00Z" ] || break
+    [ "$(injected_payload "$home" | jq -r .generated 2>/dev/null)" = "1970-01-01T00:00:00Z" ] || break
     sleep 0.1
     i=$((i + 1))
   done
   kill "$watch_pid" 2>/dev/null || true
   wait "$watch_pid" 2>/dev/null || true
-  [ "$(jq -r .generated "$home/.lavish/bearings-board.json" 2>/dev/null)" != "1970-01-01T00:00:00Z" ] \
+  [ "$(injected_payload "$home" | jq -r .generated 2>/dev/null)" != "1970-01-01T00:00:00Z" ] \
     || fail "a status change did not republish the board within the watcher cadence"
   [ -n "$before" ] || fail "the initial publication recorded no generation"
   [ ! -e "$home/lavish-calls" ] \
@@ -696,7 +654,7 @@ SH
   pass "a watcher-observed status change republishes the board without touching its session"
 }
 
-test_refresh_publishes_the_board_and_a_payload_beside_it
+test_refresh_publishes_the_board_in_place
 test_refresh_is_idempotent
 test_a_stored_card_carrying_the_injected_reconcile_choice_still_builds
 test_refresh_never_touches_the_session_or_its_armed_source
@@ -704,7 +662,6 @@ test_refresh_refuses_when_no_board_has_been_built
 test_a_concurrent_refresh_is_a_no_op_rather_than_a_race
 test_a_refresh_lock_whose_owner_is_gone_is_reclaimed
 test_refresh_keeps_the_language_the_board_was_published_in
-test_a_board_with_no_payload_beside_it_keeps_its_language
 test_a_build_waits_for_the_publication_already_under_way
 test_refresh_carries_no_placeholder_to_the_captain
 test_refresh_reuses_the_stored_card_verbatim

@@ -148,7 +148,6 @@ Do not run it yourself as part of a digest, and do not treat a refreshed board a
 A refresh also states no `charted_more` or `charted_warning_more` at all - only you can divide that one omitted total by kind - and carries the omission as a single warning row naming the total instead.
 Each Underway row also carries its own progress - the phase, the validation step it is on with the steps already passed, how long that step has run, its last activity and age, and the row's own refreshed-at time - from `bin/fm-task-progress.sh`, which reads structured state only.
 A refresh also takes no language of its own: it reads the language back out of the board page it is republishing, so the board never moves off the language you built it in.
-The same payload is written beside the board as a plain JSON file (`bin/fm-bearings-board.sh payload-path`), so the captain reading this board away from this machine sees exactly the local page's payload without recomposing it.
 
 ### Handling a board wake
 

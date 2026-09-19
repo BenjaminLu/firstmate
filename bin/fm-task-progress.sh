@@ -46,18 +46,24 @@
 #     activity       the active step's own round text (e.g. "auto-fix 1/3"),
 #                    from the pipeline's `round` column, or null
 #
-# Only a ship task can own a validation run, so a scout or secondmate row
-# reports run: null without asking the pipeline anything. A selected run is
-# used only after the identity proofs bin/fm-nm-run-lib.sh requires of its
-# callers - the same ones bin/fm-crew-state.sh applies - so a run whose id,
-# branch, status class or code identity cannot be established yields no ladder
-# rather than an unproven one.
+# ONE reader owns run attribution. bin/fm-crew-state.sh already selects the
+# branch's run, reads it by id, and applies every acceptance route the
+# contract in bin/fm-nm-run-lib.sh defines - including the ledger-anchored one
+# for an active fix round whose head object this copy never fetched. This
+# script asks that read to hand over the run it resolved
+# (FM_CREW_STATE_RUN_OUT_FILE) and only reshapes it, so there is no second
+# selection here to drift from the first. No attributed run, no ladder: a
+# scout, a secondmate, a task with no pipeline, and a run whose identity
+# crew-state could not establish all report run: null.
 #
-# Bounds: the crew-state read and each no-mistakes read are bounded by
-# FM_TASK_PROGRESS_TIMEOUT (default 20) and FM_TASK_PROGRESS_NM_TIMEOUT
-# (default 10) seconds respectively, so one unresponsive pipeline cannot hold a
-# board refresh open. A bound that trips degrades that part of the document to
-# unknown or null rather than failing the read.
+# Bounds and cost: this projection makes exactly ONE external read - the
+# crew-state call - bounded by FM_TASK_PROGRESS_TIMEOUT (default 20 seconds).
+# One board row therefore costs at most 20 seconds, so the board's refresh
+# deadline (FM_BEARINGS_REFRESH_TIMEOUT, default 90 seconds, which also covers
+# the fleet snapshot and the injection) fits four worst-case Underway rows and
+# many more that answer normally. Change either number against that
+# arithmetic. A bound that trips degrades the document to unknown with no
+# ladder rather than failing the read.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,8 +81,6 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 PROGRESS_SCHEMA=fm-task-progress.v1
 TIMEOUT=${FM_TASK_PROGRESS_TIMEOUT:-20}
 case "$TIMEOUT" in ''|*[!0-9]*|0) TIMEOUT=20 ;; esac
-NM_TIMEOUT=${FM_TASK_PROGRESS_NM_TIMEOUT:-10}
-case "$NM_TIMEOUT" in ''|*[!0-9]*|0) NM_TIMEOUT=10 ;; esac
 
 usage() { sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -87,13 +91,6 @@ esac
 ID=$1
 shift
 [ "$#" -eq 0 ] || { usage >&2; exit 2; }
-
-META=${FM_TASK_PROGRESS_META_OVERRIDE:-"$STATE/$ID.meta"}
-
-meta_value() {  # <key>
-  [ -f "$META" ] || return 0
-  grep "^$1=" "$META" 2>/dev/null | tail -1 | cut -d= -f2- || true
-}
 
 strip_quotes() {
   local s=${1:-}
@@ -113,6 +110,7 @@ read_phase() {
   raw=$(
     fm_run_timed "$TIMEOUT" \
       env FM_ROOT_OVERRIDE="$FM_ROOT" FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+      FM_CREW_STATE_RUN_OUT_FILE="$RUN_TOON_FILE" \
       "$SCRIPT_DIR/fm-crew-state.sh" "$ID" 2>/dev/null || true
   )
   raw=$(printf '%s\n' "$raw" | head -1)
@@ -201,58 +199,18 @@ toon_table_json() {  # <axi-status-output> <table-name>
   '
 }
 
-# The run attributed to this task, or empty. Selection is
-# fm-nm-run-lib.sh's - this script adds no attribution rule of its own, and an
-# ambiguous or unverifiable selection deliberately yields no ladder rather than
-# a guessed one.
+# The run bin/fm-crew-state.sh attributed to this task, reshaped onto the
+# document. That read owns the selection, the id-addressed status read, and
+# every acceptance route; this reads back only what it resolved. A run it did
+# not attribute leaves no file behind, and the row carries no ladder.
 RUN_JSON=null
 
-# What bin/fm-nm-run-lib.sh requires of every caller before it may use a
-# selected run's steps: fetch the full status BY ID, then prove branch and head
-# or active pipeline custody. bin/fm-crew-state.sh applies exactly these proofs
-# to exactly this selection; the primitives are the library's, so there is one
-# attribution rule in the repo rather than a second one here. An unproven
-# identity means NO ladder: a run that finished on code this worktree has moved
-# past would otherwise render as nine passed steps beside a worker mid-rework.
-run_verified() {  # <worktree> <branch> <selected-id> <selected-status> <status-toon>
-  local wt=$1 branch=$2 selected_id=$3 selected_status=$4 run_out=$5 run_class
-  [ "$(strip_quotes "$(fm_nm_field "$run_out" id)")" = "$selected_id" ] || return 1
-  [ "$(strip_quotes "$(fm_nm_field "$run_out" branch)")" = "$branch" ] || return 1
-  case "$(strip_quotes "$(fm_nm_field "$run_out" status)")" in
-    pending|running|fixing|ci|awaiting_approval|fix_review|completed|failed|cancelled) ;;
-    *) return 1 ;;
-  esac
-  if fm_nm_run_is_active "$run_out"; then run_class=live; else run_class=terminal; fi
-  [ "$(fm_nm_run_status_class "$selected_status")" = "$run_class" ] || return 1
-  fm_nm_head_matches_worktree "$wt" "$(strip_quotes "$(fm_nm_field "$run_out" head)")" \
-    || fm_nm_run_is_pipeline_owned_active "$run_out"
-}
-
 read_run() {
-  local wt kind branch overview choice selected_id selected_status run_out status
-  local steps active step run_class
+  local run_out status steps active step
   local active_for='' last_activity='' quiet=false activity=''
-  wt=$(meta_value worktree)
-  kind=$(meta_value kind)
-  [ -n "$kind" ] || kind=ship
-  [ "$kind" = ship ] || return 0
-  [ -z "$(meta_value remote_host)" ] || return 0
-  [ -n "$wt" ] && [ -d "$wt" ] || return 0
-  command -v no-mistakes >/dev/null 2>&1 || return 0
-  branch=$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null) || return 0
-  [ -n "$branch" ] && [ "$branch" != HEAD ] || return 0
-  overview=$(fm_nm_run_checked "$wt" "$NM_TIMEOUT" axi) || return 0
-  [ -n "$overview" ] || return 0
-  choice=$(fm_nm_select_run "$branch" "$overview" "$wt")
-  case "$choice" in
-    selected\|*) ;;
-    *) return 0 ;;
-  esac
-  IFS='|' read -r _ selected_id selected_status _ <<< "$choice"
-  [ -n "$selected_id" ] || return 0
-  run_out=$(fm_nm_run_checked "$wt" "$NM_TIMEOUT" axi status --run "$selected_id") || return 0
+  [ -n "$RUN_TOON_FILE" ] && [ -s "$RUN_TOON_FILE" ] || return 0
+  run_out=$(cat "$RUN_TOON_FILE" 2>/dev/null) || return 0
   [ -n "$run_out" ] || return 0
-  run_verified "$wt" "$branch" "$selected_id" "$selected_status" "$run_out" || return 0
   status=$(strip_quotes "$(fm_nm_field "$run_out" status)")
   steps=$(toon_table_json "$run_out" steps)
   active=$(toon_table_json "$run_out" active_steps)
@@ -271,7 +229,8 @@ read_run() {
     esac
   fi
   RUN_JSON=$(jq -n \
-    --arg id "$selected_id" --arg status "$status" --arg step "$step" \
+    --arg id "$(strip_quotes "$(fm_nm_field "$run_out" id)")" \
+    --arg status "$status" --arg step "$step" \
     --argjson steps "$steps" \
     --arg active_for "$active_for" --arg last_activity "$last_activity" \
     --argjson quiet "$quiet" --arg activity "$activity" '
@@ -284,8 +243,10 @@ read_run() {
 
 command -v jq >/dev/null 2>&1 || { printf 'fm-task-progress: jq is required\n' >&2; exit 1; }
 
+RUN_TOON_FILE=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-task-progress-run.XXXXXX") || RUN_TOON_FILE=
 read_phase
 read_run
+[ -z "$RUN_TOON_FILE" ] || rm -f -- "$RUN_TOON_FILE"
 
 NOW_EPOCH=${FM_TASK_PROGRESS_NOW_EPOCH:-$(date -u +%s)}
 case "$NOW_EPOCH" in ''|*[!0-9]*) NOW_EPOCH=$(date -u +%s) ;; esac

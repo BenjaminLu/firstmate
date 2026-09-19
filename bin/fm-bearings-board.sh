@@ -15,7 +15,6 @@
 #   fm-bearings-board.sh build <data.json>
 #   fm-bearings-board.sh refresh [--snapshot <file>] [--best-effort]
 #   fm-bearings-board.sh path
-#   fm-bearings-board.sh payload-path
 #   fm-bearings-board.sh url
 #   fm-bearings-board.sh open
 #
@@ -161,41 +160,36 @@
 #            the stable path, WITHOUT establishing, reopening, binding, or
 #            arming anything. It is the no-model-in-the-loop republication: it
 #            composes with --deterministic, reconciles the payload exactly as
-#            build does, injects it into the board file, and writes the same
-#            payload beside the board as a plain JSON file (see payload-path),
-#            so a consumer other than the local page can pick it up without
-#            recomposing. It takes no language of its own: the board PAGE it is
-#            republishing already names the language the board was built in,
-#            and a refresh carries that forward, so a republication can never
-#            move the board off what the captain chose. The payload beside the
-#            page answers only when the page carries none, which is how a board
-#            built before that file existed keeps its language too; a home with
-#            neither falls back to the compose default.
+#            build does, and injects it into the board file. It takes no
+#            language of its own: the board PAGE it is republishing already
+#            names the language the board was built in, and a refresh reads
+#            that back and carries it forward, so a republication can never
+#            move the board off what the captain chose; a home whose page
+#            carries no payload yet falls back to the compose default.
 #            Safe to run on every fleet event: it touches no Lavish session, so
 #            the board's URL, its process-event source, and its keyed-answer
 #            binding all survive untouched. One home-local exclusive lock
 #            covers every board publication, a build's as well as a refresh's,
-#            so a build and a fleet trigger can never both be writing the page,
-#            the payload and the stored cards; a refresh that finds it held
-#            stands down as a no-op, while a build waits for it. That lock
+#            so a build and a fleet trigger can never both be writing the page
+#            and the stored cards; a refresh that finds it held stands down as
+#            a no-op, while a build waits for it. That lock
 #            records its holder, so a publication killed mid-flight is
 #            reclaimed by the next one instead of wedging the board, and every
 #            stand-down is logged. The whole refresh runs in a child under
 #            one FM_BEARINGS_REFRESH_TIMEOUT deadline (default 90 seconds),
-#            because a compose costs one bounded read per Underway row and the
-#            lock is held for all of them. It refuses
+#            because the lock is held across a compose whose cost grows with
+#            the fleet: one Underway row costs one bin/fm-task-progress.sh
+#            read, itself bounded at FM_TASK_PROGRESS_TIMEOUT (default 20
+#            seconds), so the deadline fits four worst-case rows plus the
+#            snapshot and the injection, and many more rows that answer
+#            normally. Move either bound against that arithmetic, not by
+#            feel. It refuses
 #            when no board has been built yet; with --best-effort that refusal,
 #            and every other failure, becomes a silent exit 0 with the reason
 #            appended to the bounded state/.bearings-board-refresh.log, so a
 #            supervision trigger can never be changed by this side-band
-#            publication. Output is `refreshed: <board>` and `payload: <path>`.
+#            publication. Output is `refreshed: <board>`.
 # path       Print the stable board path for this home.
-# payload-path
-#            Print the stable path of the payload file build and refresh write
-#            beside the board. Its consumer is the captain reading this same
-#            board from somewhere other than this machine - a page served
-#            outside this repository rendering the identical payload - so the
-#            file is a published interface, not a spare copy of the page.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
 #            open session exists. The URL never changes while the board keeps
@@ -1119,8 +1113,6 @@ command_build() {
     rm -f -- "$effective"
     fail "cannot inject the board data into $TEMPLATE"
   fi
-  publish_payload_file "$effective" "$(payload_path)" \
-    || fail "cannot publish the board payload file: $(payload_path)"
   persist_composed_cards "$data"
   board_unlock
   trap - EXIT
@@ -1180,32 +1172,17 @@ command_build() {
 # event. Concurrency is a no-op rather than a race - a trigger that finds the
 # lock held simply leaves the board to the refresh already under way.
 
-# The board payload as a plain file beside the page. Its consumer is the
-# captain reading this same board away from this machine, through a page served
-# outside this repository: one canonical path, written by build and by every
-# refresh, so that reader never has to recompose or scrape the local page.
-payload_path() { printf '%s/.lavish/bearings-board.json\n' "$FM_HOME"; }
-
-payload_lang() {  # <payload-json-on-stdin>
-  jq -r 'if (.lang | type) == "string" then .lang else empty end' 2>/dev/null || printf ''
-}
-
 # The language the published board was built in. A refresh republishes the
-# board the captain already has, so the language is read back rather than
-# re-decided. The BOARD PAGE is asked first: it is the one artifact every home
-# already has, including homes whose board was built before the sidecar beside
-# it existed, and republishing those in a language nobody chose is the whole
-# failure this guards. The sidecar answers only when the page carries no
-# payload; a home with neither has no language to carry.
+# board the captain already has, so the language is read back off the page it
+# is about to replace rather than re-decided. The page is the one published
+# artifact, so there is nowhere else to ask and nothing to keep in step with
+# it; a home whose page carries no payload has no language to carry.
 published_lang() {
-  local board payload lang=''
+  local board lang=''
   board=$(board_path)
   if [ -f "$board" ]; then
-    lang=$(injected_payload "$board" | payload_lang)
-  fi
-  if [ -z "$lang" ]; then
-    payload=$(payload_path)
-    [ ! -f "$payload" ] || lang=$(payload_lang < "$payload")
+    lang=$(injected_payload "$board" \
+      | jq -r 'if (.lang | type) == "string" then .lang else empty end' 2>/dev/null) || lang=''
   fi
   case "$lang" in
     en|hant|hans) printf '%s\n' "$lang" ;;
@@ -1302,16 +1279,6 @@ inject_board() {  # <payload.json> <board>
   fi
 }
 
-publish_payload_file() {  # <payload.json> <dest>
-  local data=$1 dest=$2 tmp
-  (umask 077; mkdir -p "${dest%/*}") || return 1
-  tmp=$(umask 077; mktemp "${dest%/*}/.board-payload.XXXXXX") || return 1
-  if ! jq . "$data" > "$tmp"; then rm -f -- "$tmp"; return 1; fi
-  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$dest"; }; then
-    rm -f -- "$tmp"; return 1
-  fi
-}
-
 # The deadline owner. A compose reads a fresh snapshot and one progress
 # projection per Underway row, each individually bounded but O(N) in total, and
 # it holds the exclusive lock while it does, so a refresh that cannot finish
@@ -1347,7 +1314,7 @@ command_refresh() {
 }
 
 refresh_worker() {
-  local board payload_out lang lock='' skeleton effective leftover
+  local board lang lock='' skeleton effective leftover
   local -a compose_args=(--deterministic)
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1358,7 +1325,6 @@ refresh_worker() {
   done
   command -v jq >/dev/null 2>&1 || refresh_fail "jq is required"
   board=$(board_path)
-  payload_out=$(payload_path)
   if lang=$(published_lang); then compose_args+=(--lang "$lang"); fi
   # Refreshing means refreshing a board that exists. A home that never asked
   # for one is left alone rather than quietly given a page nobody armed.
@@ -1412,15 +1378,10 @@ refresh_worker() {
     rm -f -- "$effective"
     refresh_fail "cannot inject the refreshed board payload"
   fi
-  if ! publish_payload_file "$effective" "$payload_out"; then
-    rm -f -- "$effective"
-    refresh_fail "cannot publish the board payload file: $payload_out"
-  fi
   rm -f -- "$effective"
   board_unlock
   trap - EXIT
   printf 'refreshed: %s\n' "$board"
-  printf 'payload: %s\n' "$payload_out"
 }
 
 command_url() {
@@ -1453,7 +1414,6 @@ case "${1-}" in
   build) shift; command_build "$@" ;;
   refresh) shift; command_refresh "$@" ;;
   path) board_path ;;
-  payload-path) payload_path ;;
   url) command_url ;;
   open) command_open ;;
   -h|--help|help) usage ;;
