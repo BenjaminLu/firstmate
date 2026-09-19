@@ -77,7 +77,8 @@ Verify the review is on the pull request before relaying anything to the captain
 
 ## Rule on each finding
 
-Every finding gets a ruling. A finding left silent is the black box coming back.
+Every finding gets a ruling.
+A finding left silent is the black box coming back.
 
 Load `ask-user-authority` and apply its criteria unchanged.
 Finding authority does not depend on who produced the finding, so a reviewer finding and a pipeline ask-user finding are the same question: firstmate decides what is unambiguous toward the accepted intent and escalates what is genuinely ambiguous, expanding, or destructive.
