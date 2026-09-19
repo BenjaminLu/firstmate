@@ -1295,6 +1295,29 @@ test_spawn_launches_and_warns_when_the_imports_verdict_is_undecided() {
   pass "fm-spawn.sh: an undecided external-imports verdict warns and still launches"
 }
 
+
+# A spec that names an in-tree path and only leaves the tree once its symlink is
+# resolved poses a question nobody put to the product: does resolving through a
+# link count as leaving the directory. The depth-0 memory file a few lines up in
+# the scan already answers that by reporting rather than refusing, and answering
+# it the other way here refused a dispatch on the vendor's parse - the one thing
+# this gate must never do.
+test_a_symlinked_import_target_is_reported_not_refused() {
+  local row out status
+  row=$(import_case imports-symlink-target)
+  read_case "$row"
+  printf '# p\n\n@shared.md\n' > "$WT/CLAUDE.md"
+  printf 'shared\n' > "$CASE_DIR/shared-real.md"
+  ln -s "$CASE_DIR/shared-real.md" "$WT/shared.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 4 "$status" "an import that only leaves the tree through a symlink must be reported, not refused: $out"
+  assert_contains "$out" "external imports: unknown" \
+    "the gate did not report the symlinked target as undecided"
+  assert_contains "$out" "shared.md" \
+    "the report did not name the import whose target resolves outside the worktree"
+  pass "fm-claude-trust.sh: an import whose target is a symlink out of the worktree is reported, not refused"
+}
+
 test_fresh_worktree_is_trusted
 test_fresh_worktree_also_trusts_the_project_root_without_import_consent
 test_registration_carries_forward_existing_import_consent
@@ -1343,6 +1366,7 @@ test_a_parenthesised_in_tree_import_is_reported_unfollowed
 test_a_punctuated_spelling_of_an_already_scanned_file_stays_clear
 test_an_import_naming_an_outside_directory_does_not_block
 test_a_memory_file_symlinked_out_of_the_worktree_is_reported
+test_a_symlinked_import_target_is_reported_not_refused
 test_a_memory_file_symlinked_out_of_the_worktree_is_still_read
 test_secondmate_home_external_import_blocks_the_launch
 test_secondmate_home_with_an_underivable_consent_entry_is_undecided

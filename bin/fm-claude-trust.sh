@@ -916,6 +916,19 @@ while (queue.length > 0) {
       continue;
     }
     if (!inside(targetReal)) {
+      // The spec AS WRITTEN is what decides this. A spec naming an in-tree path
+      // that only leaves the tree once symlinks are resolved poses the question
+      // this never put to the product - does resolving through a link count as
+      // leaving the directory - so it is reported, never refused. The depth-0
+      // memory file a few lines above is the same question and is already
+      // answered this way; answering it differently here is what made one shape
+      // refuse a dispatch on the vendor's parse.
+      if (inside(path.resolve(target))) {
+        undecidable.push(
+          `${real} imports '${spec}', which names a path inside ${dir} but resolves to ${targetReal}, outside it`,
+        );
+        continue;
+      }
       const where = targetReal === spec ? "" : ` (${targetReal})`;
       external.push(`${real} imports '${spec}'${where}`);
       continue;
