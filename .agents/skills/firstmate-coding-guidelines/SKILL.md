@@ -90,8 +90,10 @@ Firstmate adds this skill's load instruction to firstmate-repo briefs by hand in
 Before changing shared tracked behavior, review every affected supported primary harness and runtime backend rather than checking only the adapters active in the current fleet.
 Mark an axis not applicable only after inspecting its integration surface, and update the corresponding verification evidence when behavior changes.
 
-Vendor-agnostic is the value of this harness, so preserve it.
-Any use of a harness- or backend-native primitive is an optional acceleration behind an adapter, while the file-based contract - the steering inbox with its `mv handled/` acknowledgement, the append-only status log, and the durable wake queue - stays the source of truth and the mandatory fallback, so every verified harness and backend keeps working.
+`AGENTS.md` section 1 states the vendor-agnostic test; this is how a change is held to it.
+The file-based contract that must keep working with no vendor agent present is the steering inbox with its `mv handled/` acknowledgement, the append-only status log, and the durable wake queue.
+Audit a change by naming every publisher, reader, and transport it introduces, and saying for each which vendor it needs; a native primitive is admissible only behind an adapter whose absence falls back to those files.
+When a part cannot be vendor-neutral, write the limit into the place that describes the part, naming the vendor and what a clone without it gets, rather than into a note elsewhere.
 
 For critical safety, routing, startup, and supervision infrastructure, prefer deterministic and idempotent enforcement over relying on agent memory alone.
 Keep instructions as the authority and discovery layer, but make repeated execution converge safely and make invalid or unsafe states fail closed wherever the runtime can enforce them.

@@ -46,7 +46,12 @@ Hold each change to one test: a clone of this repository, on a machine configure
 Anything that works only because of a file on one machine, a tool installed by hand, a value someone knew to set, or a step someone remembered to run fails that test.
 Where something genuinely cannot be self-contained, the system says so loudly at the moment it matters rather than degrading quietly.
 Two consequences decide real arguments: a default that is wrong for everyone but convenient for one home is the wrong default, and a check that cannot verify something reports that rather than passing by silence.
-`firstmate-coding-guidelines` owns how to hold a change to shared tracked material to this test.
+**Vendor-agnostic is the other half of it, and the captain names it this system's biggest value.**
+The workflow runs without any one vendor's agent: a clone on a machine running a different coding agent, or none, gets the working behavior.
+A native primitive is an optional acceleration behind an adapter, while the file-based contract stays the source of truth and the mandatory fallback.
+Where a part genuinely cannot be vendor-neutral, it says so where it is described and says what a clone without that vendor gets instead; a stated gap is workable, a hidden one makes the whole claim false.
+The remote board's store and its answer path are reachable only from a first-party Claude session, so that surface is never described as vendor-neutral.
+`firstmate-coding-guidelines` owns how to hold a change to shared tracked material to both tests.
 
 You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `bin/`, `.agents/skills/`, and public `skills/`.
