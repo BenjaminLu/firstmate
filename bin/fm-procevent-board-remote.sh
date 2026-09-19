@@ -27,8 +27,9 @@
 # running right now.
 #   arms:    `arm`, naming every card on the board the captain has not answered
 #            and given the answer documents as they stand at that moment.
-#            Composing a board that carries open cards is the moment to call it,
-#            and the read comes before the arm, never after it.
+#            Composing a board that carries open cards is the moment to call it.
+#            `arm` INGESTS those documents before it opens the new cards, so a
+#            rebuild can never step over an answer he has already given.
 #   retires: `ingest`, the moment the last awaited key has an answer. That is
 #            the deterministic path, not something an agent has to remember.
 #            A `tick` that finds nothing awaited is the backstop: it classifies
@@ -75,27 +76,18 @@
 # AN ANSWER SETTLES THE CARD IT WAS GIVEN FOR AND NO OTHER. `dispatch.charted`
 # is asked again on every board round, so "has this key ever been answered" is
 # the wrong question; "was this answer given for the card standing now" is the
-# right one. The only evidence the adapter can have that an answer predates a
-# card is that it existed when that card was armed, which is why `arm` is given
-# the documents and records, once, every answer identity that already existed:
-# every one of them answers a question that no longer exists.
+# right one. `arm` records the cursor's identities as they stand when it opens
+# the cards, and a card is settled only by a record for its key that is NOT in
+# that set - that is, only by an answer delivered after the card was published.
 #
-# THAT SET IS TWO HALVES, and it needs both. The store the read returns holds
-# only the captain's LATEST answer under each key, because a changed answer
-# overwrites its document in place - so the store alone forgets an answer the
-# moment he changes it, while the record of having delivered it lives forever.
-# `arm` therefore takes the identities the store holds now together with every
-# identity the cursor already carries, which is exactly "everything that existed
-# before this arm" and is a set nothing can fall out of afterwards: the cursor is
-# append-only and this set is rewritten only by the next `arm`. Whether an answer
-# settles a card is then RECORDED at arming time rather than re-derived later
-# from a store that has moved on. Such an answer is
-# DISCARDED rather than applied - it never reaches the intake and never settles
-# a card - and it is counted and named in the ingest report, because a captain
-# answer that goes nowhere must be visible rather than absent. It is recorded in
-# the cursor all the same, or the next pass would find it and report it forever.
-# On the very first arm in a home the store already holds every answer of every
-# earlier board round, and all of them are pre-existing by exactly this rule.
+# NOTHING PENDING IS EVER STEPPED OVER, which is what makes that set safe to
+# take. `arm` ingests the documents it was handed BEFORE it records the set and
+# opens the cards, so the round that is ending is settled and every answer the
+# captain has given but nobody has acted on is delivered first. An answer is
+# therefore never lost to a board rebuild - the worst thing this component could
+# do to him, because he has no way to see that it happened. What is left behind
+# is only what has already reached the intake, and the cursor is append-only, so
+# the set can never lose a member and the store never enters the question.
 #
 # THE CHANNEL DECIDES NOTHING. `ingest` turns documents into
 # `<key>TAB<answer>TAB<label>[TAB<mode>]` lines and pipes them into
@@ -216,14 +208,6 @@ count_lines() {  # <path>
 
 awaiting_count() { count_lines "$AWAITING"; }
 
-# Whole-line membership, so one identity is never read as a prefix of another.
-line_present() {  # <line> <newline-separated-lines>
-  case $'\n'"$2"$'\n' in
-    *$'\n'"$1"$'\n'*) return 0 ;;
-  esac
-  return 1
-}
-
 # --- arming -----------------------------------------------------------------
 
 valid_key() {
@@ -273,16 +257,14 @@ cmd_arm() {
   command -v jq >/dev/null 2>&1 || die "jq is not installed"
   state_dir_ready || die "cannot prepare the adapter's state directory: $STATE_DIR"
   require_usable_records
+  # Everything the captain has already answered reaches the intake before the
+  # round that would make it unanswerable is opened over it.
+  cmd_ingest --documents "$dir"
   # The pre-arm set is published BEFORE the cards that rely on it, so a crash in
   # between leaves the previous cards guarded by a newer set - they stay awaited
   # and keep waking firstmate - rather than leaving new cards a stale answer
   # could settle.
-  pre_arm=$(
-    {
-      snapshot_identities "$dir"
-      read_lines "$DELIVERED" | awk -F'\t' '$1 != "" { print $1 }'
-    } | sort -u
-  )
+  pre_arm=$(read_lines "$DELIVERED" | cut -f1)
   staged=$(stage_in_state pre-arm) || die "cannot stage the pre-arm answer set"
   { [ -z "$pre_arm" ] || printf '%s\n' "$pre_arm"; } > "$staged" \
     || { rm -f -- "$staged"; die "cannot write the pre-arm answer set"; }
@@ -392,21 +374,6 @@ document_identity() {  # <doc-id> <file>
   printf '%s\n%s\n' "$1" "$canon" | sha256_text
 }
 
-# Print the identity of every answer the store already holds. A document this
-# channel cannot even parse is left out: it has no identity, so it can settle
-# nothing and needs guarding against nothing.
-snapshot_identities() {  # <dir>
-  local f docid identity
-  for f in "$1"/*.json; do
-    [ -f "$f" ] && [ ! -L "$f" ] || continue
-    docid=${f##*/}
-    docid=${docid%.json}
-    identity=$(document_identity "$docid" "$f") || continue
-    [ -n "$identity" ] || continue
-    printf '%s\n' "$identity"
-  done
-}
-
 # Print `<key>TAB<answer>TAB<label>` for one document, or nothing when its
 # stored content is not an answer this channel can frame. Control characters are
 # replaced before the line is built, so a typed value cannot forge a field, and
@@ -454,11 +421,10 @@ feed_intake() {  # <rows-file>
 }
 
 # An awaited key is settled once an answer for it has been recorded that was not
-# already in the store when the card was armed. Any answer that was is one this
-# card never asked for, so it settles nothing however it got into the cursor -
-# whether it was delivered for an earlier round of the same key or discarded on
-# arrival. Not only an answer delivered on this pass counts, so a repeated
-# ingest converges instead of drifting.
+# already in the cursor when the card was armed. One that was is an answer to an
+# earlier round of the same key, already delivered then, and it settles nothing
+# now. Not only an answer delivered on this pass counts, so a repeated ingest
+# converges instead of drifting.
 # The record is matched on its KEY COLUMN, never as a substring of the line: an
 # answer's own value can be a task id - `dispatch.charted` carries exactly that -
 # and a substring match would read one card's dispatch pick as an answer to the
@@ -511,8 +477,8 @@ retire_when_settled() {  # <awaited-before>
 
 cmd_ingest() {
   local dir='' f docid identity row key answer label mode
-  local documents=0 new=0 unusable=0 discarded=0
-  local staged rows_file delivered_lines pre_arm_lines awaited_before
+  local documents=0 new=0 unusable=0
+  local staged rows_file delivered_lines awaited_before
   local -a notes=() rows=() records=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -533,7 +499,6 @@ cmd_ingest() {
 
   awaited_before=$(awaiting_count)
   delivered_lines=$(read_lines "$DELIVERED")
-  pre_arm_lines=$(read_lines "$PRE_ARM")
   for f in "$dir"/*.json; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     documents=$((documents + 1))
@@ -548,12 +513,6 @@ cmd_ingest() {
     case "$delivered_lines" in
       "$identity$TAB"*|*$'\n'"$identity$TAB"*) continue ;;
     esac
-    if line_present "$identity" "$pre_arm_lines"; then
-      discarded=$((discarded + 1))
-      notes+=("answered-before-arm: $docid")
-      records+=("$identity$TAB$TAB$TAB$TAB")
-      continue
-    fi
     row=$(document_row "$f")
     if [ -z "$row" ]; then
       unusable=$((unusable + 1))
@@ -574,14 +533,12 @@ cmd_ingest() {
   printf 'board-remote: ingest\n'
   printf 'documents: %s\n' "$documents"
   printf 'new: %s\n' "$new"
-  printf 'discarded: %s\n' "$discarded"
   printf 'unusable: %s\n' "$unusable"
   [ "${#notes[@]}" -eq 0 ] || printf '%s\n' "${notes[@]}"
 
-  if [ "${#records[@]}" -gt 0 ]; then
+  if [ "$new" -gt 0 ]; then
     # The cursor advances only once these answers are recorded here. Until that
     # write lands the store still holds them and the next pass finds them again.
-    # A discarded answer is recorded too, so it is reported once and not forever.
     staged=$(stage_in_state delivered) || die "cannot stage the answer record"
     {
       [ -z "$delivered_lines" ] || printf '%s\n' "$delivered_lines"
@@ -589,12 +546,7 @@ cmd_ingest() {
     } > "$staged" || { rm -f -- "$staged"; die "cannot write the answer record"; }
     publish_file "$staged" "$DELIVERED" \
       || { rm -f -- "$staged"; die "cannot publish the answer record"; }
-    printf 'cursor: advanced by %s\n' "${#records[@]}"
-  else
-    printf 'cursor: unchanged (nothing new)\n'
-  fi
-
-  if [ "$new" -gt 0 ]; then
+    printf 'cursor: advanced by %s\n' "$new"
     printf 'answer: %s\n' "${rows[@]}"
     rows_file=$(stage_in_state rows) || die "cannot stage the answer rows"
     printf '%s\n' "${rows[@]}" > "$rows_file" \
@@ -602,6 +554,7 @@ cmd_ingest() {
     feed_intake "$rows_file" || true
     rm -f -- "$rows_file"
   else
+    printf 'cursor: unchanged (nothing new)\n'
     printf 'intake: not run (nothing new)\n'
   fi
 

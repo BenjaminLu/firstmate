@@ -10,7 +10,9 @@
 #     the answer's own identity rather than on its position or on a count, so
 #     the same answer re-listed beside new ones is still recognized;
 #   - an answer settles the card it was given for and no other, so an answer
-#     already in the store when a card was armed never settles or retires it;
+#     already delivered when a card was armed never settles or retires it;
+#   - an answer the captain has given is never stepped over by a board rebuild,
+#     because arming ingests what it was handed before it opens new cards;
 #   - an answer that has not been captured is never lost by the act of reading,
 #     so a read that fails before the record lands leaves the store and the
 #     cursor exactly as they were and the next pass still delivers it.
@@ -407,46 +409,41 @@ test_an_unarmed_ingest_claims_no_retirement() {
   pass "a read against a board that was never armed here claims no retirement"
 }
 
-# A replay of the sequence that costs the captain his answer: he answers while
-# the tick is still asleep, a new board round goes up over it, and the read only
-# happens afterwards. That answer was given for a card that no longer exists, so
-# it must not settle - and therefore must not retire - the card standing now.
-test_an_answer_given_before_a_new_round_does_not_settle_its_card() {
+# The sequence that used to cost the captain his answer: he answers while the
+# tick is still asleep, and a board rebuild goes up over it before anyone reads.
+# Losing that answer is the worst thing this adapter can do to him, because he
+# has no way to see it happen - so the rebuild must deliver it, and it must
+# still not settle the card the rebuild put up in its place.
+test_a_board_rebuild_delivers_a_pending_answer_instead_of_stepping_over_it() {
   local home dir out
-  home=$(make_home answered-before-arm)
+  home=$(make_home rebuild-over-answer)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --documents "$dir" --key dispatch.charted >/dev/null \
+  run_adapter "$home" arm --documents "$dir" --key task-a --key dispatch.charted >/dev/null \
     || fail "could not arm the first round"
-  write_answer "$home" dispatch_charted dispatch.charted first-task "First task" 2026-09-19T07:00:00.000Z
-  run_adapter "$home" arm --documents "$dir" --key dispatch.charted >/dev/null \
-    || fail "could not arm the second round"
+  write_answer "$home" task_a task-a yes "Yes" 2026-09-19T07:00:00.000Z
+
+  out=$(run_adapter "$home" arm --documents "$dir" --key task-a --key dispatch.charted) \
+    || fail "could not rebuild the board"
+  assert_contains "$out" "answer: task-a	yes" \
+    "a board rebuild stepped over an answer the captain had already given"
+  assert_contains "$out" "armed: board-remote" "the rebuild did not arm the new round"
 
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
-  assert_contains "$out" "discarded: 1" "the answer to the retired card was not discarded"
-  assert_contains "$out" "answered-before-arm: dispatch_charted" \
-    "a discarded captain answer went unreported instead of being visible"
-  assert_not_contains "$out" "answer: dispatch.charted" \
-    "an answer to a question that no longer exists was fed to the intake"
-  assert_contains "$out" "awaiting: 1" "the previous round's answer settled the card standing now"
-  assert_not_contains "$out" "retired: yes" "the source retired with this round's card unanswered"
-  run_adapter "$home" tick --interval 0.2 > "$home/open.result" || fail "the tick failed while the card was open"
+  assert_contains "$out" "new: 0" "the delivered answer was delivered a second time"
+  assert_contains "$out" "awaiting: 2" "the answer delivered by the rebuild settled a card the rebuild armed"
+  assert_not_contains "$out" "retired: yes" "the source retired with both of this round's cards unanswered"
+  run_adapter "$home" tick --interval 0.2 > "$home/open.result" || fail "the tick failed while the cards were open"
   assert_equals "due" "$(run_adapter "$home" classify "$home/open.result")" \
     "the source stopped waking firstmate while the captain still owed an answer"
-
-  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
-  assert_contains "$out" "discarded: 0" "the discarded answer was reported again on the next pass"
-  assert_contains "$out" "awaiting: 1" "the card standing now stopped being awaited"
-
-  write_answer "$home" dispatch_charted dispatch.charted second-task "Second task" 2026-09-19T08:00:00.000Z
-  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
-  assert_contains "$out" "answer: dispatch.charted	second-task" "this round's own answer was not delivered"
-  assert_contains "$out" "retired: yes" "this round's own answer did not settle its card"
-  pass "an answer given before a new round is discarded, and only the answer to the card standing now settles it"
+  run_adapter "$home" retire >/dev/null || fail "could not retire the armed source"
+  pass "a board rebuild delivers an answer already given and never settles its new cards with it"
 }
 
 # The first arm in a real home meets a store that already holds every answer of
-# every earlier board round, because the board never deletes one.
-test_earlier_rounds_answers_are_discarded_by_the_first_arm() {
+# every earlier board round, because the board never deletes one. None of them
+# was ever acted on, so all of them are delivered - and none of them answers a
+# card this arm is putting up.
+test_the_first_arm_delivers_a_full_store_without_settling_its_own_cards() {
   local home dir out
   home=$(make_home store-already-full)
   dir=$(answers_dir "$home")
@@ -455,17 +452,15 @@ test_earlier_rounds_answers_are_discarded_by_the_first_arm() {
 
   out=$(run_adapter "$home" arm --documents "$dir" --key dispatch.charted --key new-call) \
     || fail "could not arm against a store that already holds answers"
-  assert_contains "$out" "already-answered: 2" "arm did not report what the store already held"
+  assert_contains "$out" "new: 2" "the answers already in the store were not delivered"
+  assert_contains "$out" "already-answered: 2" "arm did not record what had already been delivered"
 
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
-  assert_contains "$out" "new: 0" "an answer from an earlier board round was delivered as if it were new"
-  assert_contains "$out" "discarded: 2" "the earlier rounds' answers were not discarded"
-  assert_contains "$out" "answered-before-arm: dispatch_charted" "a discarded answer went unreported"
-  assert_contains "$out" "answered-before-arm: old_call" "a discarded answer went unreported"
+  assert_contains "$out" "new: 0" "an answer from an earlier board round was delivered twice"
   assert_contains "$out" "awaiting: 2" "an earlier round's answer settled a card armed today"
   assert_not_contains "$out" "retired:" "the source retired on answers nobody gave to its cards"
   run_adapter "$home" retire >/dev/null || fail "could not retire the armed source"
-  pass "answers already in the store when the cards were armed are discarded, not delivered"
+  pass "the first arm delivers a store full of earlier answers and settles none of its own cards with them"
 }
 
 # `dispatch.charted` is asked again on every board round, so the cursor - which
@@ -567,8 +562,8 @@ test_the_close_mode_comes_from_arming
 test_ingest_retires_the_source_once_every_card_is_answered
 test_another_cards_answer_does_not_settle_a_card
 test_an_earlier_rounds_answer_does_not_settle_a_freshly_armed_card
-test_an_answer_given_before_a_new_round_does_not_settle_its_card
-test_earlier_rounds_answers_are_discarded_by_the_first_arm
+test_a_board_rebuild_delivers_a_pending_answer_instead_of_stepping_over_it
+test_the_first_arm_delivers_a_full_store_without_settling_its_own_cards
 test_an_unarmed_ingest_claims_no_retirement
 test_answers_close_their_captain_held_tasks
 
