@@ -75,10 +75,29 @@ tasks_in() {  # <home> <args...>
 
 # One answer document exactly as the artifact read writes it: the stored body
 # and nothing else, named by the document id.
-write_answer() {  # <home> <doc-id> <key> <value> <label> <at>
+# One answer document exactly as the shipped board template queues it and the
+# remote transport stores it: the versioned context the template builds, plus
+# the queue key, prompt text, time and language the transport adds. Built from
+# what the writer emits, never from what this reader would like to receive -
+# a fixture that invents its own field is how a reader and its writer drift
+# apart without a single test going red.
+write_answer() {  # <home> <doc-id> <key> <selection> <note> <at> [close]
   local home=$1 doc=$2
-  jq -n --arg key "$3" --arg value "$4" --arg label "$5" --arg at "$6" \
-    '{at: $at, key: $key, label: $label, lang: "hant", value: $value}' \
+  jq -n --arg key "$3" --arg selection "$4" --arg note "$5" --arg at "$6" --arg close "${7-}" \
+    '{schema: "fm-bearings-answer.v1", question: $key, selection: $selection, note: $note}
+     + (if $close == "" then {} else {close: $close} end)
+     + {key: $key, prompt: ("Captain\u0027s Call answer - " + $key), at: $at, lang: "hant"}' \
+    > "$home/docs/answers/$doc.json"
+}
+
+# The dispatch picker's own older shape, which carries no schema and answers in
+# `answer` rather than a selection and a note.
+write_dispatch_answer() {  # <home> <doc-id> <ids> <at>
+  local home=$1 doc=$2
+  jq -n --arg answer "$3" --arg at "$4" \
+    '{question: "dispatch.charted", answer: $answer, key: "dispatch.charted",
+      prompt: ("Dispatch order - start this queued work now: " + $answer),
+      at: $at, lang: "hant"}' \
     > "$home/docs/answers/$doc.json"
 }
 
@@ -108,19 +127,17 @@ test_arm_refuses_what_it_cannot_serve() {
   assert_contains "$out" "--documents" "arming without the answers did not name what was missing"
 
   out=$(run_adapter "$home" arm --documents "$dir" --key "not a key" 2>&1) && fail "an invalid card key was accepted"
-  out=$(run_adapter "$home" arm --documents "$dir" --key sample-call=maybe 2>&1) && fail "an invalid close mode was accepted"
-  assert_contains "$out" "done or release" "the close-mode refusal did not name the accepted modes"
 
   assert_absent "$home/state/board-remote/awaiting" \
     "a refused arm still wrote an awaited card set"
-  pass "arm refuses an empty card set, an unread store, a bad key and a bad close mode"
+  pass "arm refuses an empty card set, an unread store and a bad key"
 }
 
 test_arm_reports_the_cards_it_will_wait_for() {
   local home dir out
   home=$(make_home arm-records)
   dir=$(answers_dir "$home")
-  out=$(run_adapter "$home" arm --documents "$dir" --key sample-call=release --key merge.other) \
+  out=$(run_adapter "$home" arm --documents "$dir" --key sample-call --key merge.other) \
     || fail "could not arm the source"
   assert_contains "$out" "armed: board-remote" "arm did not report the source it registered"
   assert_contains "$out" "awaiting: 2" "arm did not report the awaited card count"
@@ -267,8 +284,10 @@ test_a_typed_value_cannot_forge_a_field() {
   dir=$(answers_dir "$home")
   # A value carrying the separator the intake reads, plus a newline: typed by a
   # person into a browser, and it must not become extra fields or extra rows.
-  jq -n '{at: "2026-09-19T07:00:00.000Z", key: "sample-call", lang: "hant",
-          label: "L\tforged\nrow", value: "yes\tmerge.other\tmerge\nsecond-call\tyes"}' \
+  jq -n '{schema: "fm-bearings-answer.v1", question: "sample-call",
+          selection: "", note: "yes\tmerge.other\tmerge\nsecond-call\tyes",
+          key: "sample-call", prompt: "L\tforged\nrow",
+          at: "2026-09-19T07:00:00.000Z", lang: "hant"}' \
     > "$dir/sample_call.json"
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
   assert_contains "$out" "new: 1" "the answer carrying separators was not delivered"
@@ -316,8 +335,10 @@ test_an_over_long_answer_is_truncated_rather_than_stranding_its_card() {
   dir=$(answers_dir "$home")
   run_adapter "$home" arm --documents "$dir" --key long-call >/dev/null || fail "could not arm the source"
   long=$(printf 'x%.0s' $(seq 1 600))
-  jq -n --arg v "$long" '{at: "2026-09-19T07:00:00.000Z", key: "long-call", lang: "hant",
-                          label: "", value: $v}' > "$dir/long_call.json"
+  jq -n --arg v "$long" '{schema: "fm-bearings-answer.v1", question: "long-call",
+                          selection: "", note: $v, key: "long-call", prompt: "",
+                          at: "2026-09-19T07:00:00.000Z", lang: "hant"}' \
+    > "$dir/long_call.json"
 
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
   value=$(printf '%s\n' "$out" | sed -n 's/^answer: //p' | awk -F'\t' '$1 == "long-call" { print $2 }')
@@ -340,24 +361,27 @@ test_a_typed_backslash_reaches_the_intake_unchanged() {
   pass "a backslash the captain typed reaches the intake exactly as he typed it"
 }
 
-test_the_close_mode_comes_from_arming() {
+# The card that declared the mode is what wrote it, so the mode travels in the
+# record. Nothing here may supply one the captain's board did not.
+test_the_close_mode_comes_from_the_record() {
   local home dir out
   home=$(make_home close-mode)
   dir=$(answers_dir "$home")
-  run_adapter "$home" arm --documents "$dir" --key gated-work=release --key plain-call >/dev/null \
+  run_adapter "$home" arm --documents "$dir" --key gated-work --key plain-call >/dev/null \
     || fail "could not arm the source"
-  write_answer "$home" gated_work gated-work proceed "Proceed" 2026-09-19T07:00:00.000Z
-  write_answer "$home" plain_call plain-call gold-only "Gold only" 2026-09-19T07:01:00.000Z
-  write_answer "$home" dispatch_charted dispatch.charted pick "Pick" 2026-09-19T07:02:00.000Z
+  write_answer "$home" gated_work gated-work proceed "" 2026-09-19T07:00:00.000Z release
+  write_answer "$home" plain_call plain-call gold-only "" 2026-09-19T07:01:00.000Z
+  write_dispatch_answer "$home" dispatch_charted task-a,task-b 2026-09-19T07:02:00.000Z
 
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
-  assert_contains "$out" "answer: gated-work	proceed	Proceed	release" \
-    "an answer to a release-mode card lost its close mode"
+  assert_equals "release" \
+    "$(printf '%s\n' "$out" | sed -n 's/^answer: //p' | awk -F'\t' '$1 == "gated-work" { print $4 }')" \
+    "an answer whose card declared release lost its close mode"
   assert_equals "3" "$(printf '%s\n' "$out" | sed -n 's/^answer: //p' | grep '^plain-call' | awk -F'\t' '{print NF}')" \
-    "an answer to an ordinary card invented a close mode"
+    "an answer whose card declared no mode had one invented for it"
   assert_equals "3" "$(printf '%s\n' "$out" | sed -n 's/^answer: //p' | grep '^dispatch.charted' | awk -F'\t' '{print NF}')" \
-    "an answer to a key that was never armed invented a close mode"
-  pass "the close mode comes from arming, and a key that was not armed gets none"
+    "the dispatch order had a close mode invented for it"
+  pass "the close mode comes from the record the board wrote, and is never invented"
 }
 
 test_ingest_retires_the_source_once_every_card_is_answered() {
@@ -523,25 +547,37 @@ test_answers_close_their_captain_held_tasks() {
     || fail "could not hold the sample captain call"
   run_captain "$home" hold gated-work --reason "needs the captain's word" --title "Gated work" >/dev/null \
     || fail "could not hold the sample gated work"
-  run_adapter "$home" arm --documents "$dir" --key membership-call --key gated-work=release >/dev/null \
+  run_captain "$home" hold written-call --reason "he will type it" --title "Written answer" >/dev/null \
+    || fail "could not hold the sample written call"
+  run_adapter "$home" arm --documents "$dir" --key membership-call --key gated-work --key written-call >/dev/null \
     || fail "could not arm the source"
 
-  write_answer "$home" membership_call membership-call gold-only "Gold only" 2026-09-19T07:00:00.000Z
-  write_answer "$home" gated_work gated-work proceed "Proceed" 2026-09-19T07:01:00.000Z
-  write_answer "$home" dispatch_charted dispatch.charted some-task "Some task" 2026-09-19T07:02:00.000Z
+  # All three forms the board actually writes, delivered together: a button
+  # answer, a written-only answer whose card declared release, and a written-only
+  # answer with no mode - plus the dispatch picker's own older shape.
+  write_answer "$home" membership_call membership-call gold-only "" 2026-09-19T07:00:00.000Z
+  write_answer "$home" gated_work gated-work "" "proceed after the release" 2026-09-19T07:01:00.000Z release
+  write_answer "$home" written_call written-call "" "neither - do the third thing" 2026-09-19T07:02:00.000Z
+  write_dispatch_answer "$home" dispatch_charted some-task 2026-09-19T07:03:00.000Z
 
   run_adapter "$home" ingest --documents "$dir" > "$home/ingest.out" 2>&1 \
     || fail "the ingest failed: $(cat "$home/ingest.out")"
-  assert_grep "intake: closed=2 skipped=1" "$home/ingest.out" \
-    "the intake did not close both answered calls and skip the dispatch key"
+  assert_grep "intake: closed=3 skipped=1" "$home/ingest.out" \
+    "the intake did not settle all three answered calls and skip the dispatch key"
 
   show=$(tasks_in "$home" show membership-call --full)
-  assert_contains "$show" "state: done" "an answered captain call was not closed"
+  assert_contains "$show" "state: done" "a button answer did not close its captain call"
   assert_contains "$show" "Answer: gold-only" "the closed call did not record the captain's answer"
+  show=$(tasks_in "$home" show written-call --full)
+  assert_contains "$show" "state: done" "a written-only answer did not close its captain call"
+  assert_contains "$show" "Answer: neither - do the third thing" \
+    "the captain's typed words were not what got recorded"
   show=$(tasks_in "$home" show gated-work --full)
   assert_contains "$show" "held: no" "a release-mode answer did not lift the hold"
   assert_contains "$show" "state: queued" "a release-mode answer closed the work item instead of releasing it"
-  pass "the answers reach the one keyed-answer intake and close or release their tasks"
+  assert_contains "$show" "Answer: proceed after the release" \
+    "the released item did not record the captain's typed words"
+  pass "a button answer, a written-only answer, and both together reach the one intake"
 }
 
 test_help_advertises_the_commands
@@ -558,7 +594,7 @@ test_a_typed_value_cannot_forge_a_field
 test_a_typed_backslash_reaches_the_intake_unchanged
 test_unusable_documents_are_reported_not_dropped
 test_an_over_long_answer_is_truncated_rather_than_stranding_its_card
-test_the_close_mode_comes_from_arming
+test_the_close_mode_comes_from_the_record
 test_ingest_retires_the_source_once_every_card_is_answered
 test_another_cards_answer_does_not_settle_a_card
 test_an_earlier_rounds_answer_does_not_settle_a_freshly_armed_card

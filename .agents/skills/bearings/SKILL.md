@@ -142,6 +142,17 @@ An answer the captain gives on a board reaches firstmate on its own: firstmate n
 Where a board's answers cannot be delivered by an event, keep a source that wakes firstmate while an unanswered card is open and is silent when none is, so the cost is paid only while something is actually waiting; `process-event-sources` owns the arming and wake mechanics for both shapes.
 A board that replaces an older one does not regress its responsiveness: the retired local Lavish surface woke firstmate within seconds of a click, so a replacement that notices only later is a downgrade to state plainly - in the change that introduces it and to the captain - rather than to accept quietly.
 
+### What a board answer record carries
+
+Stated once here because the board owns it, and pointed at from everywhere else.
+The WRITER is authoritative and the writer is the shipped template: a reader conforms to what the template emits and never requires a field it does not write, on either board.
+Two branches agreeing by coincidence is what produced a pair that silently dropped every answer.
+
+The template queues a decision, merge or credential answer with the versioned context `{schema: "fm-bearings-answer.v1", question, selection, note}`, plus `close` when the card declared one, and the dispatch picker queues the older `{question, answer}` pair with no schema.
+Whatever carries it adds the queue key, the prompt text, the time and the captain's language; the remote board's transport writes that record to the artifact store under the answer's key.
+An empty `selection` beside a non-empty `note` is a REAL ANSWER - the captain typed his reply instead of pressing a button - and a reader that drops it is losing his words.
+The reserved `reconcile` selection is not an answer: it belongs to the binding-verified re-check request intake, never to keyed answers.
+
 ### Handling a board wake
 
 The captain's remote copy of the board reaches firstmate through its own source: when you publish it carrying cards he has not answered, arm `bin/fm-procevent-board-remote.sh` with those card keys, and load `process-event-sources` for the arming and wake contract. Its answers reach the same keyed-answer intake and the same merge ruling below, so nothing in this section changes for them.

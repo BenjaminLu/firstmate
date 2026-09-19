@@ -69,7 +69,7 @@ An answer settles the card it was given for and no other: once delivered, an ans
 This is the one source whose registered child is a timer rather than a read of the source, because the remote board's answers live where only a first-party Claude session's own Artifact tool reaches: yours.
 The timer exists to bring your own read forward, so arm it only while a card is open - it retires itself the moment the last awaited card has an answer, and a home with no open card runs no timer at all.
 Pass `=release` for a card whose answer should free a captain-gated work item rather than close it, because the board stores no close mode and the answer would otherwise close the item.
-`bearings` owns why this source exists at all and the responsiveness a board must not fall below.
+`bearings` owns why this source exists at all, the responsiveness a board must not fall below, and the shape of the answer record both boards' readers conform to.
 
 For a recurring mid-task quota check, arm the quota adapter:
 

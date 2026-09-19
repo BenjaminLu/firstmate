@@ -2,7 +2,7 @@
 # Remote-board answer adapter for the generic process-to-event runner.
 #
 # Usage:
-#   fm-procevent-board-remote.sh arm --documents <dir> --key <key>[=done|release] [--key ...]
+#   fm-procevent-board-remote.sh arm --documents <dir> --key <key> [--key ...]
 #   fm-procevent-board-remote.sh ingest --documents <dir>
 #   fm-procevent-board-remote.sh tick [--interval <secs>]
 #   fm-procevent-board-remote.sh classify <result-file>
@@ -98,11 +98,13 @@
 # as it routes the local board's. The reserved `reconcile` value is not filtered
 # here either - the intake refuses it - and this board offers no such option.
 #
-# The close mode comes from `arm`, not from the answer. The board stores
-# `{at, key, label, lang, value}` and no close mode, so an answer to a
-# captain-gated WORK item would otherwise close the item instead of releasing
-# it. Firstmate knows each card's mode when it composes the board, so it records
-# the mode at arming time and `ingest` emits it as the fourth field.
+# THE WRITER OWNS THE RECORD'S SHAPE. The shipped board template is what writes
+# an answer, and `.agents/skills/bearings/SKILL.md` states the record it emits; this reads exactly that
+# and requires no field the template does not write. The close mode is part of
+# it, because the card that declared the mode is what wrote it - nothing here
+# supplies a mode the captain's board did not, and `arm` names card keys only.
+# A written-only answer, where the captain typed his reply without pressing a
+# button, is a real answer and is delivered like any other.
 #
 # Feeding is best-effort and never gates the cursor, exactly as the runner's own
 # feed seam is: a key the intake skips is a per-key fact, not a failed delivery.
@@ -222,7 +224,7 @@ positive_number() {
 }
 
 cmd_arm() {
-  local dir='' key mode staged pre_arm
+  local dir='' staged pre_arm
   local -a keys=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -233,17 +235,9 @@ cmd_arm() {
         ;;
       --key)
         [ -n "${2-}" ] || die "--key needs a board card key"
-        key=${2%%=*}
-        mode=''
-        case "$2" in *=*) mode=${2#*=} ;; esac
-        valid_key "$key" \
-          || die "a card key is letters, digits, dot, dash or underscore, at most 128 of them: $key"
-        case "$mode" in
-          ''|done) mode='' ;;
-          release) : ;;
-          *) die "a card close mode is done or release: $mode" ;;
-        esac
-        keys+=("$key$TAB$mode")
+        valid_key "$2" \
+          || die "a card key is letters, digits, dot, dash or underscore, at most 128 of them: $2"
+        keys+=("$2")
         shift 2
         ;;
       *) usage ;;
@@ -374,32 +368,68 @@ document_identity() {  # <doc-id> <file>
   printf '%s\n%s\n' "$1" "$canon" | sha256_text
 }
 
-# Print `<key>TAB<answer>TAB<label>` for one document, or nothing when its
-# stored content is not an answer this channel can frame. Control characters are
-# replaced before the line is built, so a typed value cannot forge a field, and
-# the fields are joined with a literal tab rather than framed as TSV: no escape
-# is needed once the separators are gone, and `@tsv` would double a backslash
-# the captain typed into an answer that names a path.
+# Print `<key>TAB<answer>TAB<label>[TAB<mode>]` for one answer document, or
+# nothing when its stored content is not an answer this channel can frame.
+#
+# THE WRITER OWNS THIS SHAPE AND THIS READER CONFORMS TO IT. The shipped board
+# template is what writes an answer, and `bearings` states the record it emits;
+# this parses exactly that and invents no field of its own. Two shapes reach
+# here because the template emits two: a versioned decision answer carrying
+# `schema`, `question`, `selection`, `note` and an optional `close`, and the
+# dispatch picker's older `question`/`answer` pair, which carries no schema.
+#
+# An empty selection is an ANSWER, not an absence: the captain who typed his
+# reply without pressing a button has answered, and dropping that is losing his
+# words. A versioned record is usable when either the selection or the note
+# carries something.
+#
+# The close mode comes from the record, because the card that declared it is
+# what wrote it. Nothing here supplies a mode the captain's board did not.
+#
+# The reserved `reconcile` selection is not an answer and is not framed as one;
+# it needs the binding-verified request intake this adapter does not have, so it
+# is refused here rather than passed on as if it were a decision.
+#
+# Control characters are replaced before the line is built, so a typed value
+# cannot forge a field, and the fields are joined with a literal tab rather than
+# framed as TSV: no escape is needed once the separators are gone, and `@tsv`
+# would double a backslash the captain typed into an answer that names a path.
 document_row() {  # <file>
   jq -r --argjson max "$MAX_FIELD" '
     def clean: gsub("[\\x00-\\x1f\\x7f]"; " ");
+    def keyed($k): ($k | type) == "string" and ($k | test("^[A-Za-z0-9._-]{1,128}$"));
     if type != "object" then empty
     else
-      .key as $k | .value as $v | (.label // "") as $l |
-      if ($k | type) != "string" or ($v | type) != "string" or ($l | type) != "string" then empty
-      elif ($k | test("^[A-Za-z0-9._-]{1,128}$") | not) then empty
-      elif ($v | length) == 0 then empty
-      else [ $k, ($v[0:$max] | clean), ($l[0:$max] | clean) ] | join("\t")
+      (.question // .key) as $k |
+      (.prompt // "") as $label |
+      if (keyed($k) | not) or (($label | type) != "string") then empty
+      elif .schema == "fm-bearings-answer.v1" then
+        (.selection) as $sel | (.note) as $note |
+        if ($sel | type) != "string" or ($note | type) != "string" then empty
+        elif $sel == "reconcile" then empty
+        elif ($sel | length) == 0 and ($note | length) == 0 then empty
+        else
+          (if ($sel | length) > 0 then $sel else $note end) as $answer |
+          (if (.close | type) == "string" then .close else "" end) as $close |
+          if $close != "" and $close != "done" and $close != "release" then empty
+          else
+            [ $k, ($answer[0:$max] | clean), ($label[0:$max] | clean) ]
+            + (if $close == "" then [] else [ $close ] end)
+            | join("\t")
+          end
+        end
+      elif (.schema | type) != "null" then empty
+      elif (has("selection") or has("note")) then empty
+      else
+        (.answer) as $answer |
+        if ($answer | type) != "string" then empty
+        elif ($answer | length) == 0 then empty
+        elif $answer == "reconcile" then empty
+        else [ $k, ($answer[0:$max] | clean), ($label[0:$max] | clean) ] | join("\t")
+        end
       end
     end
   ' < "$1" 2>/dev/null
-}
-
-# The fields are read with awk rather than bash's own splitting, because `read`
-# folds the empty close mode of an ordinary card into its separator.
-awaited_mode() {  # <key>
-  [ -f "$AWAITING" ] && [ ! -L "$AWAITING" ] || return 0
-  awk -F'\t' -v key="$1" '$1 == key { print $2; exit }' "$AWAITING"
 }
 
 # Pipe the staged rows into the one keyed-answer intake. Best-effort by design:
@@ -476,7 +506,7 @@ retire_when_settled() {  # <awaited-before>
 }
 
 cmd_ingest() {
-  local dir='' f docid identity row key answer label mode
+  local dir='' f docid identity row key
   local documents=0 new=0 unusable=0
   local staged rows_file delivered_lines awaited_before
   local -a notes=() rows=() records=()
@@ -519,15 +549,12 @@ cmd_ingest() {
       notes+=("unusable-document: $docid")
       continue
     fi
-    IFS=$'\t' read -r key answer label <<< "$row"
-    mode=$(awaited_mode "$key")
+    # awk rather than bash's own splitting: `read` folds the absent close mode
+    # of an ordinary card into its separator.
+    key=$(printf '%s' "$row" | awk -F'\t' '{print $1}')
     new=$((new + 1))
-    if [ -n "$mode" ]; then
-      rows+=("$key$TAB$answer$TAB$label$TAB$mode")
-    else
-      rows+=("$key$TAB$answer$TAB$label")
-    fi
-    records+=("$identity$TAB$key$TAB$answer$TAB$label$TAB$mode")
+    rows+=("$row")
+    records+=("$identity$TAB$row")
   done
 
   printf 'board-remote: ingest\n'
