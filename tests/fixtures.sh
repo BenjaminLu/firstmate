@@ -253,34 +253,6 @@ Exercise the spawn behavior under test.
 EOF
 }
 
-# fm_test_fake_treehouse_help <fakebin> <with-no-fetch:0|1>
-# Replaces the no-op treehouse with one whose `get --help` either advertises
-# `--no-fetch` (1) or does not (0), so a suite can prove which `treehouse get`
-# line spawn sends for each generation of the tool. Every other invocation
-# still exits 0.
-fm_test_fake_treehouse_help() {
-  local fakebin=$1 with_no_fetch=$2
-  if [ "$with_no_fetch" = 1 ]; then
-    cat > "$fakebin/treehouse" <<'SH'
-#!/usr/bin/env bash
-if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>] [--no-fetch]'
-  printf '%s\n' '      --no-fetch   Skip fetching origin before acquiring; use existing local refs'
-fi
-exit 0
-SH
-  else
-    cat > "$fakebin/treehouse" <<'SH'
-#!/usr/bin/env bash
-if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
-fi
-exit 0
-SH
-  fi
-  chmod +x "$fakebin/treehouse"
-}
-
 # fm_test_fake_git_log <fakebin>
 # Drops a `git` on the fakebin PATH that appends each top-level invocation's
 # arguments to FM_FAKE_GIT_LOG and then execs the real git found at fixture

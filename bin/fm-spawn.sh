@@ -205,13 +205,18 @@
 #   task worktree. When an origin configuration is detected, spawn fetches it
 #   exactly once, resolves the current remote default branch, and resets to its
 #   tip. That one `git fetch origin` is the spawn's only network round trip:
-#   the pool slot is acquired with `treehouse get --no-fetch` whenever the
-#   installed treehouse advertises that flag in `treehouse get --help` (probed
-#   once per spawn; an older treehouse gets plain `treehouse get` and fetches
-#   on its own), `git remote set-head origin --auto` runs only when
-#   refs/remotes/origin/HEAD is missing or points at a ref that does not
+#   the pool slot is acquired with `treehouse get --no-fetch` unconditionally
+#   (bin/fm-bootstrap.sh's treehouse floor owns that flag's availability, so
+#   spawn never probes for it), `git remote set-head origin --auto` runs only
+#   when refs/remotes/origin/HEAD is missing or points at a ref that does not
 #   resolve, and the default branch's remote-tracking ref is trusted as the
-#   fetch just left it rather than fetched a second time. When no origin
+#   fetch just left it rather than fetched a second time. The fetch carries
+#   `-c remote.origin.followRemoteHEAD=always` so that a default-branch rename
+#   on origin repoints refs/remotes/origin/HEAD from that same round trip.
+#   RESIDUAL: that config is git >= 2.48 only and this machine runs git 2.45.1,
+#   which silently ignores it; on a git without followRemoteHEAD support, a
+#   default-branch rename on origin that keeps the old branch needs one
+#   `git remote set-head origin --auto` in the primary clone. When no origin
 #   configuration is detected, spawn skips that remote freshness check and
 #   launches from the clean worktree's current HEAD. Relaunch reuses the
 #   recorded worktree without fetching or resetting its base. An unreachable
@@ -2835,7 +2840,7 @@ freshen_spawn_worktree_base() { # <worktree>
   if ! spawn_worktree_has_origin_config "$worktree"; then
     return 0
   fi
-  if ! git -C "$worktree" fetch --quiet origin; then
+  if ! git -C "$worktree" -c remote.origin.followRemoteHEAD=always fetch --quiet origin; then
     echo "error: could not fetch origin for pooled worktree '$worktree'; refusing to launch from a potentially stale base" >&2
     return 1
   fi
@@ -3248,21 +3253,6 @@ fi
 # WT_TARGET to $T for them (and for any future backend) - the shared treehouse-get +
 # worktree-detection steps below must never reference an unbound WT_TARGET under set -u.
 : "${WT_TARGET:=$T}"
-# The interactive `treehouse get` fetches origin before handing the slot over,
-# and freshen_spawn_worktree_base fetches again right after; only the second
-# fetch is load-bearing. Skip treehouse's own fetch when the installed version
-# advertises `--no-fetch`, probing `treehouse get --help` once per spawn; an
-# older treehouse keeps its plain command and its own fetch, at the cost of the
-# extra round trip.
-SPAWN_TREEHOUSE_GET_COMMAND=
-spawn_resolve_treehouse_get_command() { # sets SPAWN_TREEHOUSE_GET_COMMAND
-  [ -z "$SPAWN_TREEHOUSE_GET_COMMAND" ] || return 0
-  if treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--no-fetch([^[:alnum:]_-]|$)'; then
-    SPAWN_TREEHOUSE_GET_COMMAND='treehouse get --no-fetch'
-  else
-    SPAWN_TREEHOUSE_GET_COMMAND='treehouse get'
-  fi
-}
 spawn_send_text_line() { # <target> <text>
   case "$BACKEND" in
   tmux) fm_backend_tmux_send_text_line "$1" "$2" ;;
@@ -3627,8 +3617,13 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_resolve_treehouse_get_command
-  spawn_send_text_line "$WT_TARGET" "$SPAWN_TREEHOUSE_GET_COMMAND"
+  # The interactive `treehouse get` would fetch origin before handing the slot
+  # over, and freshen_spawn_worktree_base fetches again right after; only the
+  # second fetch is load-bearing. bin/fm-bootstrap.sh's treehouse floor already
+  # requires `--no-fetch`, so it is sent unconditionally rather than probed
+  # here - a probe would run in fm-spawn's PATH while this line runs in the
+  # pane's interactive shell, which can resolve a different treehouse.
+  spawn_send_text_line "$WT_TARGET" 'treehouse get --no-fetch'
 
   # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
