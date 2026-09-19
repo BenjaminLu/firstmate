@@ -871,8 +871,8 @@ COMPOSE_ASSETS="$ROOT/tests/assets/bearings-compose"
 # The packet's decision block for the held work item, keyed to its task id.
 COMPOSE_DECISION='{"key":"gated-work","title":{"en":"Rollout order","hant":"上線順序"},"decide":"Which rollout order ships first?","if_nothing":"the release waits","reversible":"partly","risk":"medium","options":[{"value":"canary","label":"Canary first","consequence":"slower, safer"},{"value":"all","label":{"en":"All at once"},"consequence":"faster, riskier"}],"recommend_value":"canary","recommend_why":"the canary caught the last regression"}'
 
-make_compose_home() {  # <name> -> a board home whose backlog and packet match the fixture
-  local home packet
+make_compose_home() {  # <name> [decision-json] -> a board home whose backlog and packet match the fixture
+  local home packet decision=${2-$COMPOSE_DECISION}
   home=$(make_home "$1")
   cp "$COMPOSE_ASSETS/backlog.md" "$home/data/backlog.md"
   fm_write_meta "$home/state/gated-work.meta" "worktree=$home" "project=firstmate" "kind=ship"
@@ -880,7 +880,7 @@ make_compose_home() {  # <name> -> a board home whose backlog and packet match t
     PATH="$home/fakebin:$PATH" "$ROOT/bin/fm-packet.sh" scaffold gated-work --kind needs-decision --worktree "$home" >/dev/null \
     || fail "cannot scaffold the fixture packet"
   packet="$home/data/gated-work/packet.md"
-  python3 - "$packet" "$COMPOSE_DECISION" <<'PY2'
+  python3 - "$packet" "$decision" <<'PY2'
 import sys, re, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 s = re.sub(r"\{FILL: every path you tried.*?\}", "- tried a flag; dropped it\n- the bound is unverified\n- the order assumes one region", s, flags=re.S)
@@ -894,16 +894,25 @@ PY2
   printf '%s\n' "$home"
 }
 
-# Replace every compose placeholder with prose, the way the composer does.
+# Resolve every compose slot the way the composer does: the enum and count
+# slots take real values, the rest take prose and translations.
 fill_skeleton() {  # <skeleton.json> <filled.json>
   jq '
-    walk(if type == "string" then
+    def unfilled: type == "string" and startswith("{FILL: ");
+    .charted_more = 0
+    | .charted_warning_more = 0
+    | .captains_call |= map(
+        if .type == "decision" then
+          (if (.reversible | unfilled) then .reversible = "yes" else . end)
+          | (if (.risk | unfilled) then .risk = "low" else . end)
+          | (if (.recommend_value | unfilled) then .recommend_value = .options[0].value else . end)
+        else . end)
+    | walk(if type == "string" then
       (if test("^\\{TRANSLATE: ") then ("譯: " + (.[12:-1]))
        elif test("^\\{FILL: low") then "low"
        elif test("^\\{FILL: ") then ("filled " + (.[7:-1]))
        else . end)
     else . end)
-    | .captains_call |= map(if .type == "decision" and (has("reversible") | not) then . + {reversible: "yes", risk: "low"} else . end)
   ' "$1" > "$2"
 }
 
@@ -937,7 +946,10 @@ test_compose_maps_every_section_from_the_recorded_snapshot() {
       and (.reason.en | startswith("until 2030-01-01")) and (.reason.hant | startswith("{TRANSLATE: until")))
     and (.charted[3] | .id == "main-inventory" and .kind == "warning" and .dispatchable == false
       and .filed == null and .repo == null)
-    and .charted_more == 0 and .charted_warning_more == 0
+    # Neither omitted count is derivable from the snapshot, so both arrive as
+    # slots naming how many gate rows the snapshot itself omitted.
+    and (.charted_more | startswith("{FILL: queued Charted Next rows not shown, counting the 0 "))
+    and (.charted_warning_more | startswith("{FILL: warning Charted Next rows not shown, counting the 0 "))
   ' "$skeleton" >/dev/null || fail "the skeleton did not map the fleet sections as recorded: $(cat "$skeleton")"
   pass "compose maps underway, landed, and charted rows from the recorded snapshot"
 }
@@ -971,7 +983,13 @@ test_compose_cards_every_live_hold_and_merge_ready_pr() {
       and ([.options[].value] == ["option-a", "option-b"])
       and .options[0].consequence.en == "{FILL: option A consequence}"
       and .recommend_why.en == "{FILL: recommend_why}"
-      and (has("close") | not) and (has("recommend_value") | not))
+      # The five questions are not the whole card: risk, reversibility, and the
+      # recommended option are slots too, so no card reaches the captain
+      # missing them.
+      and .risk == "{FILL: low | medium | high}"
+      and .reversible == "{FILL: yes | no | partly}"
+      and .recommend_value == "{FILL: recommend one of option-a | option-b}"
+      and (has("close") | not))
     # Only the green, mergeable PR becomes a merge card, keyed by its task,
     # with the URL set and the risk left to fill; the red PR never appears.
     and (.captains_call[2] | .type == "merge" and .repo == "firstmate"
@@ -1040,6 +1058,70 @@ test_compose_cards_no_merge_for_a_pr_without_an_owning_task() {
     and ([.captains_call[] | .pr_url? // empty] | index("https://github.com/example/firstmate/pull/12") == null)
   ' "$skeleton" >/dev/null || fail "a green PR with no owning task was carded: $(cat "$skeleton")"
   pass "compose cards a merge only for a PR an owning task claims"
+}
+
+test_compose_leaves_the_omitted_charted_counts_to_the_composer() {
+  local home skeleton out rc
+  home=$(make_compose_home compose-charted-more)
+  # The snapshot reports one omitted-gates total and never says how many of the
+  # dropped rows were warnings, so neither count may be asserted here.
+  jq '.omitted += [{surface: "gates showing 4 of 7", reveal: "--all-gates"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot that omitted gate rows"
+  jq -e '
+    (.charted_more | type == "string") and (.charted_warning_more | type == "string")
+    and (.charted_more | contains("queued") and contains("3 gate rows"))
+    and (.charted_warning_more | contains("warning") and contains("3 gate rows"))
+  ' "$skeleton" >/dev/null || fail "the omitted counts were asserted instead of slotted: $(cat "$skeleton")"
+  set +e; out=$(run_board "$home" compose --check "$skeleton" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "compose --check passed a skeleton whose omitted counts are unresolved"
+  assert_contains "$out" "charted_more: {FILL: queued" "check did not list the queued count slot: $out"
+  assert_contains "$out" "charted_warning_more: {FILL: warning" "check did not list the warning count slot: $out"
+  pass "compose slots both omitted Charted Next counts with the snapshot total"
+}
+
+test_compose_slots_the_risk_a_packet_leaves_out() {
+  local home skeleton decision
+  decision=$(printf '%s' "$COMPOSE_DECISION" | jq -c 'del(.risk)')
+  home=$(make_compose_home compose-packet-no-risk "$decision")
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a verified packet whose decision block records no risk"
+  jq -e '.captains_call[0] | .key == "gated-work"
+    and .reversible == "partly" and .recommend_value == "canary"
+    and .risk == "{FILL: low | medium | high}"' "$skeleton" >/dev/null \
+    || fail "the packet card did not slot the risk the packet left out: $(cat "$skeleton")"
+  pass "compose slots only the card fields a verified packet left out"
+}
+
+test_build_names_the_unfilled_card_slot_it_refuses() {
+  local home skeleton filled board out rc
+  home=$(make_compose_home compose-unfilled-slot)
+  skeleton="$home/skeleton.json"
+  filled="$home/filled.json"
+  board="$home/.lavish/bearings-board.html"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  fill_skeleton "$skeleton" "$filled"
+  # One slot left unresolved: build must name that slot, not report it as an
+  # unknown enum value or a recommendation that matches no option.
+  jq '.captains_call[1].risk = "{FILL: low | medium | high}"
+    | .captains_call[1].recommend_value = "{FILL: recommend one of option-a | option-b}"' \
+    "$filled" > "$filled.tmp" && mv "$filled.tmp" "$filled"
+  set +e; out=$(run_board "$home" build "$filled" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "build accepted a card with unresolved slots"
+  assert_contains "$out" "captains_call.1.risk: {FILL: low | medium | high}" \
+    "build did not name the unfilled risk slot: $out"
+  assert_contains "$out" "captains_call.1.recommend_value: {FILL: recommend one of" \
+    "build did not name the unfilled recommendation slot: $out"
+  assert_contains "$out" "placeholders" "build did not name placeholders as the reason: $out"
+  case "$out" in
+    *"does not satisfy"*) fail "build reported a validator error instead of the unfilled slot: $out" ;;
+  esac
+  assert_absent "$board" "a payload with unresolved slots still produced a board"
+  pass "build names the unfilled card slot instead of a validator enum error"
 }
 
 test_compose_validates_the_skeleton_on_stdout_too() {
@@ -1149,6 +1231,9 @@ test_compose_seeds_a_packet_card_without_a_recorded_project
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
+test_compose_leaves_the_omitted_charted_counts_to_the_composer
+test_compose_slots_the_risk_a_packet_leaves_out
+test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled
 test_url_reads_the_live_session_listing

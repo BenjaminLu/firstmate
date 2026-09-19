@@ -15,7 +15,8 @@
 #   fm-bearings-board.sh url
 #   fm-bearings-board.sh open
 #
-# build      Validate the payload, drop the Captain's Call cards whose subject
+# build      Refuse any leftover compose placeholder (naming every one), then
+#            validate the payload, drop the Captain's Call cards whose subject
 #            already landed, give every surviving decision card the standard
 #            reconcile choice, and inject the result into a fresh copy of the
 #            shipped template at the stable board path. Establish the Lavish
@@ -68,11 +69,16 @@
 #            optionally hans) is filled without re-typing the English; the
 #            fixed merge choices carry their known translations. A card's
 #            decide, about, if_nothing, options[].consequence, recommend_why,
-#            and a merge card's risk are {FILL: ...} placeholders, and
-#            reversible and risk on a decision card are left for the composer
-#            to add. The top-level lang comes from --lang (default hant). The
-#            skeleton satisfies the payload validator as-is, but build refuses
-#            it until every placeholder is gone.
+#            risk, reversible, and recommend_value are {FILL: ...}
+#            placeholders; a packet-seeded card keeps the worker's risk,
+#            reversible, and recommend_value and gets a placeholder only for
+#            the ones the packet left out. charted_more and
+#            charted_warning_more are {FILL: ...} placeholders too, each
+#            naming how many gate rows the snapshot omitted, because the
+#            snapshot reports one total and never splits it into queued and
+#            warning rows. The top-level lang comes from --lang (default
+#            hant). The skeleton satisfies the payload validator as-is, but
+#            build refuses it until every placeholder is gone.
 #            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
 #            placeholder as `<path>: <value>` and exits 1 while any remain.
 # path       Print the stable board path for this home.
@@ -131,7 +137,11 @@
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
 # the fm-bearings-board.v1 types and item invariants below, and no string may
-# still carry a compose placeholder. Every fleet row and
+# still carry a compose placeholder. The enum and count slots (risk,
+# reversible, recommend_value, charted_more, charted_warning_more) also accept
+# a compose placeholder, so a skeleton validates as a skeleton; build refuses
+# every placeholder BEFORE it validates, so those slots are always real values
+# by the time a board is built. Every fleet row and
 # Captain's Call item explicitly carries `repo`; the composer fills it from the
 # snapshot and task records wherever known, and uses null or an empty string
 # only as the deliberate genuinely-no-repo marker. In that exceptional case
@@ -162,6 +172,7 @@ TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/a
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
 BOARD_SCHEMA=fm-bearings-board.v1
+PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
 
 usage() {
   awk '
@@ -179,8 +190,13 @@ fail() {
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
 validate_payload() {  # <data.json>
-  jq -e --arg schema "$BOARD_SCHEMA" '
+  jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" '
     def nonempty_string: type == "string" and length > 0;
+    # A compose placeholder stands in for a value the composer still owes. The
+    # enum and count slots accept one so the skeleton validates as a skeleton;
+    # build refuses every placeholder before it validates, so a payload that
+    # reaches the captain still satisfies the enums below.
+    def placeholder: type == "string" and test($ph);
     # Captain-facing copy is a plain string or an {en, hant, hans?} object; the
     # renderer resolves it for the language the captain chose.
     def i18n: type == "object" and (.en | nonempty_string) and (.hant | nonempty_string)
@@ -240,9 +256,11 @@ validate_payload() {  # <data.json>
       and (optional_copy("if_nothing"))
       and (optional_copy("recommend_why"))
       and (optional_copy("reversible_note"))
-      and ((has("reversible") | not) or (.reversible == "yes" or .reversible == "no" or .reversible == "partly"))
+      and ((has("reversible") | not) or (.reversible | placeholder)
+        or (.reversible == "yes" or .reversible == "no" or .reversible == "partly"))
       and (if .type == "merge" then true
-        else ((has("risk") | not) or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
+        else ((has("risk") | not) or (.risk | placeholder)
+          or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
       and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
       and (optional_link_url("packet_url"))
       and (optional_https_url("pr_url"))
@@ -252,6 +270,7 @@ validate_payload() {  # <data.json>
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
       and ((has("recommend_value") | not)
+        or (.recommend_value | placeholder)
         or ((.recommend_value | slug(128))
           and (.recommend_value as $recommend
             | ([.options[].value] | index($recommend) != null))))
@@ -282,9 +301,9 @@ validate_payload() {  # <data.json>
     and (.underway | type == "array")
     and (.landed | type == "array")
     and (.charted | type == "array")
-    and ((has("charted_more") | not)
+    and ((has("charted_more") | not) or (.charted_more | placeholder)
       or ((.charted_more | type == "number") and (.charted_more >= 0) and (.charted_more | floor == .)))
-    and ((has("charted_warning_more") | not)
+    and ((has("charted_warning_more") | not) or (.charted_warning_more | placeholder)
       or ((.charted_warning_more | type == "number") and (.charted_warning_more >= 0) and (.charted_warning_more | floor == .)))
     and ([.captains_call[] | call_item] | all)
     and ([.underway[] | underway_item] | all)
@@ -464,9 +483,9 @@ await_source_owner() {  # <source-id>
 # The skeleton is a deterministic projection of the snapshot; the composer's
 # judgment (ranking, prose, translations, risk, reversibility) is written into
 # it afterwards, and build refuses the payload while any placeholder remains.
-# The placeholder shapes: `{FILL: ...}` marks prose the composer writes, and
-# `{TRANSLATE: <english>}` marks a translation of the English beside it.
-PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
+# The placeholder shapes are owned by PLACEHOLDER_RE above: `{FILL: ...}` marks
+# prose or a value the composer writes, and `{TRANSLATE: <english>}` marks a
+# translation of the English beside it.
 
 # A scalar from `tasks-axi show`: a value that needed quoting is JSON-quoted
 # (\" and \\ inside), so it is decoded as a JSON string.
@@ -573,7 +592,11 @@ EOF
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" '
     def t($s): {en: $s, hant: ("{TRANSLATE: " + $s + "}")};
-    def fill($what): {en: ("{FILL: " + $what + "}"), hant: ("{FILL: " + $what + "}")};
+    def fillv($what): "{FILL: " + $what + "}";
+    def fill($what): {en: fillv($what), hant: fillv($what)};
+    def risk_slot: fillv("low | medium | high");
+    def reversible_slot: fillv("yes | no | partly");
+    def recommend_slot($values): fillv("recommend one of " + ($values | join(" | ")));
     def i18n: if type == "string" then t(.) else . end;
     def slugify: gsub("[^A-Za-z0-9._-]"; "-") | gsub("^-+|-+$"; "") | if length == 0 then "row" else . end;
     def record($id): $records[$id] // null;
@@ -590,7 +613,9 @@ EOF
        options: [
          {value: "option-a", label: fill("option A label"), consequence: fill("option A consequence")},
          {value: "option-b", label: fill("option B label"), consequence: fill("option B consequence")}],
-       recommend_why: fill("recommend_why"), allow_freeform: true}
+       recommend_why: fill("recommend_why"),
+       recommend_value: recommend_slot(["option-a", "option-b"]),
+       reversible: reversible_slot, risk: risk_slot, allow_freeform: true}
       + hold_close;
     def packet_seeded($card): . as $row
       | $card
@@ -599,6 +624,9 @@ EOF
          about: fill("about"),
          options: [$card.options[] | .label |= i18n | .consequence |= i18n]}
       + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n)} else {} end)
+      + ({recommend_value: recommend_slot([$card.options[].value]),
+          reversible: reversible_slot, risk: risk_slot}
+         | with_entries(select($card[.key] == null)))
       + (if $card.close != null then {close: $card.close} else hold_close end);
     def decision_card: . as $row | ($cards[$row.id] // null) as $card
       | if $card == null then placeholder_card else packet_seeded($card) end;
@@ -610,14 +638,21 @@ EOF
          repo: (.repo | split("/") | last),
          title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo))),
          detail: t("checks " + .checks + ", review " + .review),
-         pr_url: .url, risk: "{FILL: low | medium | high}",
+         pr_url: .url, risk: risk_slot,
          options: [
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
            {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
          allow_freeform: true};
-    def charted_more:
+    # The snapshot reports ONE omitted-gates total and never splits it into
+    # queued and warning rows, so the skeleton states that total in the hint and
+    # leaves both counts to the composer instead of asserting a split it cannot
+    # derive.
+    def gates_omitted:
       [ .omitted[]? | .surface | capture("^gates showing (?<shown>[0-9]+) of (?<total>[0-9]+)") ]
       | if length == 0 then 0 else ((.[0].total | tonumber) - (.[0].shown | tonumber)) end;
+    def more_slot($kind): gates_omitted as $n
+      | fillv($kind + " Charted Next rows not shown, counting the " + ($n | tostring)
+        + " gate rows the snapshot omitted plus any you cut");
     {
       schema: $schema, home: .home, generated: .generated, lang: $lang,
       prs_live: (.prs | startswith("checked")),
@@ -634,8 +669,8 @@ EOF
            dispatchable: ((warning_gate | not) and .blocked_by == "-" and .reason == "-"),
            kind: (if warning_gate then "warning" else "queued" end),
            filed: .filed} ],
-      charted_more: charted_more,
-      charted_warning_more: 0
+      charted_more: more_slot("queued"),
+      charted_warning_more: more_slot("warning")
     }' > "$tmp" || { rm -f -- "$tmp"; fail "cannot compose the board skeleton"; }
   if ! validate_payload "$tmp"; then
     rm -f -- "$tmp"
@@ -651,15 +686,20 @@ EOF
 }
 
 command_build() {
-  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner
+  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner leftover
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
-  validate_payload "$data" || fail "board data does not satisfy $BOARD_SCHEMA: $data"
-  if [ -n "$(list_placeholders "$data")" ]; then
+  # The placeholder refusal runs FIRST, so an unfilled enum or recommendation
+  # fails with the slot that is still empty rather than with a validator enum or
+  # option-reference error that names nothing the composer can act on.
+  leftover=$(list_placeholders "$data") || fail "cannot scan the board data: $data"
+  if [ -n "$leftover" ]; then
+    printf '%s\n' "$leftover" >&2
     fail "board data still carries compose placeholders (run: fm-bearings-board.sh compose --check $data)"
   fi
+  validate_payload "$data" || fail "board data does not satisfy $BOARD_SCHEMA: $data"
   [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "board template is missing: $TEMPLATE"
   [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \
     || fail "board template does not carry exactly one data slot: $TEMPLATE"
