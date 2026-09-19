@@ -353,15 +353,12 @@ a { color: inherit; text-decoration: none; }
 .bb-packet__body { font-size: var(--fs-sm); color: var(--text-body); min-width: 0; }
 .bb-packet__body .pk-part__h { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--text-muted); margin: 14px 0 5px; font-weight: 600; }
-.bb-packet__body h5 { font-size: var(--fs-sm); margin: 10px 0 3px; color: var(--text-strong); }
-.bb-packet__body p { margin: 0 0 7px; }
-.bb-packet__body ul, .bb-packet__body ol { margin: 0 0 7px; padding-left: 18px; }
 .bb-packet__body li { margin-bottom: 4px; }
 .bb-packet__body code { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--paper-100);
   border-radius: var(--radius-xs); padding: 1px 4px; }
-.bb-packet__body pre { overflow-x: auto; background: var(--paper-100); border-radius: var(--radius-sm); padding: 9px 11px; }
-.bb-packet__body pre code { background: none; padding: 0; }
 .bb-packet__body a { color: var(--ocean-600); text-decoration: underline; }
+.bb-packet__list { margin: 0 0 7px; padding-left: 18px; list-style: disc; }
+.bb-packet__link { margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -777,7 +774,7 @@ __FM_BEARINGS_BOARD_DATA__
        written. */
     function packetOf(item) {
       var pk = item.packet;
-      if (!pk || typeof pk !== "object" || typeof pk.body !== "string") return null;
+      if (!pk || typeof pk !== "object" || !Array.isArray(pk.sections)) return null;
       if (!Array.isArray(pk.figures)) return null;
       return pk;
     }
@@ -864,7 +861,6 @@ __FM_BEARINGS_BOARD_DATA__
          no answer can pick up a value some earlier click left lying around. */
       if (packet) {
         var compare = comparisonFigure(packet, item.options);
-        var drawable = packet.figures.length > 0;
         var claimed = [];
         var tabs = el("div", "bb-tabs");
         tabs.setAttribute("role", "tablist");
@@ -897,11 +893,10 @@ __FM_BEARINGS_BOARD_DATA__
         /* then one tab per option: what that option changes, and its button */
         item.options.forEach(function (o, i) {
           var panel = el("div", "bb-panel");
-          var drawn = 0;
           packet.figures.forEach(function (fig) {
             if (fig === compare || claimed.indexOf(fig) >= 0) return;
             if (fig.option !== o.value) return;
-            panel.appendChild(figureNode(fig)); claimed.push(fig); drawn += 1;
+            panel.appendChild(figureNode(fig)); claimed.push(fig);
           });
           var head = el("div", "bb-panel__head");
           head.appendChild(el("span", "bb-panel__label", pick(o.label)));
@@ -1009,16 +1004,34 @@ __FM_BEARINGS_BOARD_DATA__
         ev.appendChild(chips);
         form.appendChild(ev);
       }
-      /* the rest of the packet, behind one collapsed line: the as-written
-         block, which does not switch and says so */
-      if (packet && packet.body) {
+      /* The rest of the packet, behind one collapsed line. It arrives as data,
+         never as markup: a heading and its items, built here with the same
+         el()/textContent path every other payload string takes, so nothing a
+         worker writes into a packet can restyle or re-script the surface the
+         captain answers on. The headings are copy, so they follow him; the
+         items are the worker's own words in the one language they wrote them,
+         which the line above the block says. */
+      if (packet && packet.sections.length) {
         var more = el("details", "bb-packet");
         more.appendChild(el("summary", "", t("packet_all")));
-        var said = el("p", "bb-packet__said", t("packet_said"));
-        more.appendChild(said);
+        more.appendChild(el("p", "bb-packet__said", t("packet_said")));
         var bodyBox = el("div", "bb-packet__body");
         bodyBox.setAttribute("lang", packet.lang === "en" ? "en" : (packet.lang === "hans" ? "zh-Hans" : "zh-Hant"));
-        bodyBox.innerHTML = packet.body;
+        packet.sections.forEach(function (s) {
+          bodyBox.appendChild(el("h4", "pk-part__h", pick(s.heading)));
+          var ul = el("ul", "bb-packet__list");
+          (s.items || []).forEach(function (it) {
+            var li = el("li", "");
+            var words = pick(it.text);
+            if (it.code) li.appendChild(el("code", "", words));
+            else if (words) li.appendChild(el("span", "", words));
+            (it.links || []).forEach(function (l) {
+              li.appendChild(link("bb-packet__link", pick(l.label), l.url));
+            });
+            ul.appendChild(li);
+          });
+          bodyBox.appendChild(ul);
+        });
         more.appendChild(bodyBox);
         form.appendChild(more);
       }

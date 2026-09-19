@@ -803,19 +803,26 @@ MD
         and (.svg | startswith("<svg"))
         # what a figure says is carried once, in the body, not twice
         and (has("caption") | not) and (has("edges") | not))
-    and (.packet.body | test("only one writes"))
-    # and the rest of the packet comes as markup, minus the block that became
-    # the card and minus the drawings that moved into the tabs
-    and (.packet.body | test("tried a retry loop first"))
-    and (.packet.body | test("<svg") | not)
-    and (.packet.body | test("fm-packet-decision") | not)
+    # the rest of the packet comes as DATA: a heading the renderer owns in all
+    # three languages, and the lines the worker wrote under it as text
+    and ([.packet.sections[].heading | if type == "object" then .en else . end]
+         == ["What changed", "What only this session knows", "Figures",
+             "Evidence", "How to pull more"])
+    and (.packet.sections[1].heading
+         | .en == "What only this session knows" and .hant == "只有這個 session 知道的事")
+    and ([.packet.sections[].items[].text] | any(test("tried a retry loop first")))
+    and ([.packet.sections[].items[].text] | any(test("only one writes")))
+    # no markup anywhere in it: the board builds the tags, the packet supplies
+    # only words, so nothing a worker writes can restyle the captain surface
+    and ([.packet.sections[].items[].text] | any(test("<svg")) | not)
+    and ([.packet.sections[].items[].text] | any(test("fm-packet-decision")) | not)
     # a figure still says in words what it is, while its per-connector check
     # on the drawing renders nowhere - it was never page content
-    and (.packet.body | test("Where the options part"))
-    and (.packet.body | test("the gate reads the error stream") | not)
-    and (.packet.body | test("edge a-b") | not)
+    and ([.packet.sections[].items[].text] | any(test("Where the options part")))
+    and ([.packet.sections[].items[].text] | any(test("the gate reads the error stream")) | not)
+    and ([.packet.sections[].items[].text] | any(test("edge a-b")) | not)
   ' >/dev/null || fail "the card did not carry the packet: $out"
-  pass "the card carries the packet itself: its drawings, and the rest as markup"
+  pass "the card carries the packet itself: its drawings, and the rest as words"
 }
 
 # The board still renders a card whose packet carries no drawings - that path is
@@ -862,10 +869,39 @@ p = pathlib.Path(sys.argv[1]); s = p.read_text()
 p.write_text(s.replace("kind: needs-decision", "kind: needs-decision\nlang: hant", 1))
 PY
   out=$(run_packet "$home" card pk-1) || fail "card failed after declaring a language: $out"
+  printf '%s' "$out" | jq -e '.packet.lang == "hant"' >/dev/null \
+    || fail "a declared packet language did not reach the card: $out"
+  # and a language nothing renders is named rather than absorbed into "en"
+  python3 - "$packet" <<'LANGPY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("lang: hant", "lang: zh-Hant", 1))
+LANGPY
+  set +e; out=$(run_packet "$home" card pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a lang the card cannot name was accepted: $out"
+  printf '%s' "$out" | grep -q "lang line must be en, hant or hans" \
+    || fail "the refusal does not name the lang it refused: $out"
+  pass "the packet declares the one language its own words are in, and a typo is refused"
+}
+
+# Every heading in that block is this renderer's own words, and it has all
+# three - so the captain reads it in his language, as the prototype he approved
+# does. Only what the worker typed stays as typed.
+test_the_packet_block_switches_every_heading_it_owns() {
+  local home out packet
+  home=$(make_home card-packet-headings)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
   printf '%s' "$out" | jq -e '
-    .packet.lang == "hant" and (.packet.body | test("只有這個 session 知道的事"))
-  ' >/dev/null || fail "a declared packet language did not reach the body: $out"
-  pass "the packet body declares the one language it is in, and its headings follow it"
+    ([.packet.sections[].heading | type] | unique == ["object"])
+    and ([.packet.sections[].heading | keys_unsorted | sort] | unique == [["en", "hans", "hant"]])
+    and ([.packet.sections[].heading | select(.hant == .en)] | length) == 0
+  ' >/dev/null || fail "a heading in the as-written block did not carry all three: $out"
+  pass "every heading the card owns rides it in all three languages"
 }
 
 # The clause-by-clause refusals live in the verify test above; what matters here
@@ -912,6 +948,44 @@ MD
          and (.nodes == ["a0-fn"]))
   ' >/dev/null || fail "a figure did not carry the option it illustrates: $out"
   pass "a figure names the option it illustrates, whatever its shapes are called"
+}
+
+# Which figure is which is its POSITION in the section, never its heading text:
+# nothing makes a heading unique, so two figures that share one must still be
+# told apart - or the comparison rule filters out the drawing that does compare
+# and refuses a packet that carries one, naming a cause that is not the cause.
+test_two_figures_may_share_a_heading() {
+  local home out packet
+  home=$(make_home fig-same-heading)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  set_figures_from_stdin "$packet" <<'MD'
+### What changes
+
+figure: cmp
+caption: Both options end at the same place; only the left column differs.
+
+<svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="both" data-hant="兩個" data-hans="两个">both</text></svg>
+
+### What changes
+
+figure: raise
+option: bound
+caption: the wait grows and the failures stop.
+
+<svg viewBox="0 0 20 20"><rect data-node="a0-fn" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="before" data-hant="之前" data-hans="之前">before</text></svg>
+MD
+  out=$(run_packet "$home" verify pk-1 2>&1) \
+    || fail "a packet whose comparison shares a heading with an option drawing was refused: $out"
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    ([.packet.figures[] | .slug] == ["cmp", "raise"])
+    and (.packet.figures[0].option == "")
+    and (.packet.figures[1].option == "bound")
+  ' >/dev/null || fail "two figures sharing a heading did not both reach the card: $out"
+  pass "two figures may share a heading; the comparison is still found"
 }
 
 test_a_figure_cannot_name_an_option_the_decision_never_offers() {
@@ -979,11 +1053,11 @@ MD
   printf '%s' "$out" | jq -e '
     ([.packet.figures[] | .slug] == ["cmp"])
     and (.packet.figures[0].nodes == ["bound", "quiet"])
-    # and the drawing left the body rather than being dumped into it as text
-    and (.packet.body | test("<svg") | not)
-    and (.packet.body | test("figure: cmp") | not)
-    and (.packet.body | test("Where the options part"))
-    and (.packet.body | test("only one writes"))
+    # and the drawing left the block rather than being dumped into it as text
+    and ([.packet.sections[].items[].text] | any(test("<svg")) | not)
+    and ([.packet.sections[].items[].text] | any(test("figure: cmp")) | not)
+    and ([.packet.sections[].items[].text] | any(test("Where the options part")))
+    and ([.packet.sections[].items[].text] | any(test("only one writes")))
   ' >/dev/null || fail "a Figures section with no blank line after it did not parse: $out"
   pass "a figure opening on the line after the section heading parses like any other"
 }
@@ -1236,7 +1310,9 @@ test_name_support_probe_never_lists_before_the_session_is_opened
 test_the_card_carries_the_packet_itself
 test_a_needs_decision_packet_with_no_figures_is_refused
 test_the_packet_body_declares_the_one_language_it_is_in
+test_the_packet_block_switches_every_heading_it_owns
 test_a_figure_names_the_option_it_illustrates
+test_two_figures_may_share_a_heading
 test_a_figure_cannot_name_an_option_the_decision_never_offers
 test_a_drawing_that_could_run_code_never_produces_a_card
 test_a_figures_section_parses_the_same_without_a_blank_line_after_it

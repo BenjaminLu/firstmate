@@ -371,7 +371,13 @@ packet_payload() {  # <lang> <figures-json>
       packet_url:"https://example.test/packet.html",
       packet:{
         lang:"en", figures:$figures,
-        body:"<section class=\"pk-part\"><h4 class=\"pk-part__h\">What only this session knows</h4><div class=\"pk-prose\"><ul><li>the probe never ran on Linux</li></ul></div></section>"}
+        sections:[
+          {heading:{en:"What only this session knows", hant:"只有這個 session 知道的事",
+                    hans:"只有这个 session 知道的事"},
+           items:[{text:"the probe never ran on Linux"},
+                  {text:"", links:[{label:"PR #10", url:"https://example.test/pr/10"}]}]},
+          {heading:{en:"How to pull more", hant:"怎麼再往下挖", hans:"怎么再往下挖"},
+           items:[{text:"gh pr diff 10", code:true}]}]}
     }]}'
 }
 
@@ -424,7 +430,7 @@ test_a_packet_without_figures_still_renders_its_card() {
       | ([.tabs[] | .label] == ["Difference", "Error stream only", "Both streams", "Reconcile"])
         and ([.panels[] | .figures] | flatten | length) == 0
         and ([.panels[] | .buttons[] | .queues.selection] == ["quiet", "loud", "reconcile"])
-        and (.packet.body | test("the probe never ran on Linux")))
+        and (.packet.items == [["the probe never ran on Linux", "PR #10"], ["gh pr diff 10"]]))
   ' >/dev/null || fail "a packet with no drawings lost its tabs or its body: $out"
   pass "a packet with no figures still renders its tabs, its answers and its body"
 }
@@ -440,13 +446,82 @@ test_the_packet_body_stays_in_the_language_it_was_written_in() {
       | ([.tabs[] | .label] == ["差在哪", "只走錯誤輸出", "兩個都留", "重新核對"])
         and (.panels[1] | .cost == "少兩段程式。" and (.buttons[0].text | test("選 只走錯誤輸出")))
         and (.panels[0].notes | map(test("[A-Za-z]")) | any | not)
-        # and the block that is one language says so, in his language, and
-        # renders as written rather than half-switched
+        # the headings in that block are words this renderer owns, so they
+        # follow him too - the prototype the captain approved carries all
+        # three on every heading in that block
+        and (.packet.headings == ["只有這個 session 知道的事", "怎麼再往下挖"])
+        # and what only the worker could write stays as written, labelled with
+        # the language it is in rather than half-switched
         and (.packet.lang == "en")
         and (.packet.said | test("工作者自己的話"))
-        and (.packet.body | test("the probe never ran on Linux")))
+        and (.packet.items == [["the probe never ran on Linux", "PR #10"], ["gh pr diff 10"]]))
   ' >/dev/null || fail "the language rule did not hold across the card: $out"
   pass "the switching part follows the captain while the as-written block says which language it is"
+}
+
+# The block is the one place a packet's own words reach the captain's surface,
+# and that surface hosts the answer channel. It is built from data, so markup a
+# worker typed into a packet arrives as the characters they typed.
+test_the_packet_block_renders_its_words_as_words() {
+  local home out payload
+  home=$(make_home packet-not-markup)
+  payload=$(packet_payload en '[]' | jq '
+    .captains_call[0].packet.sections[0].items[0].text
+      = "<img src=x onerror=\"window.lavish.queuePrompt(\u0027pwned\u0027)\"> and <b>bold</b>"')
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '
+    (.cards[0].packet.items[0][0]
+      | test("<img src=x") and test("<b>bold</b>"))
+  ' >/dev/null || fail "the packet block did not render a worker's characters as text: $out"
+  # and the link it names is a real link the captain can follow
+  printf '%s' "$out" | jq -e '
+    .cards[0].packet.links == [{text:"PR #10", url:"https://example.test/pr/10"}]
+  ' >/dev/null || fail "a link the packet named did not render as a link: $out"
+  pass "the packet block renders a worker's words as words, and its links as links"
+}
+
+# The board INLINES a drawing, so the drawing is the one field it cannot render
+# as text. It is held to the figure contract by the contract's own checker,
+# run over the payload this build was handed rather than trusted from the
+# packet it was read out of.
+test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board() {
+  local home payload rc out
+  home=$(make_home packet-hostile-figure)
+  payload=$(packet_payload en "[$(packet_figure cmp quiet loud)]" | jq '
+    .captains_call[0].packet.figures[0].svg
+      |= sub("<text"; "<a xlink:href=\"javascript:alert(1)\"></a><text")')
+  printf '%s\n' "$payload" > "$home/payload.json"
+  set +e
+  out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$home/payload.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the board built with a drawing that can run code: $out"
+  printf '%s' "$out" | grep -q "javascript:alert(1)" \
+    || fail "the refusal does not name the href it refused: $out"
+  pass "a payload drawing that breaks the figure contract refuses the board"
+}
+
+# A figure says which option tab it opens in. The template renders it in the
+# tab whose value matches exactly and in NO tab otherwise, so a payload edited
+# to name an option the card does not offer is refused rather than losing the
+# drawing off the surface the captain decides on.
+test_a_figure_cannot_name_an_option_the_card_does_not_offer() {
+  local home payload rc out
+  home=$(make_home packet-figure-option)
+  payload=$(packet_payload en "[$(packet_option_figure quiet-only "Quiet" quiet)]")
+  printf '%s\n' "$payload" > "$home/payload.json"
+  set +e
+  out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$home/payload.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the board accepted a drawing for an option it does not offer: $out"
+  pass "a drawing that names an option the card does not offer refuses the board"
 }
 
 test_an_inline_packet_never_offers_a_second_address() {
@@ -552,6 +627,9 @@ test_the_payload_language_switches_every_visible_string
 test_a_packet_with_figures_opens_its_tabs_inside_the_card
 test_a_packet_without_figures_still_renders_its_card
 test_the_packet_body_stays_in_the_language_it_was_written_in
+test_the_packet_block_renders_its_words_as_words
+test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board
+test_a_figure_cannot_name_an_option_the_card_does_not_offer
 test_an_inline_packet_never_offers_a_second_address
 test_a_card_with_no_packet_renders_exactly_as_it_did
 test_an_option_panel_carries_what_it_changes_touches_and_buys

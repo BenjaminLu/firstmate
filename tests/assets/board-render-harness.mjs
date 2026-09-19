@@ -10,7 +10,8 @@
 //             tabs:[{label,selected}],
 //             panels:[{hidden,figures,notes,rows,label,cost,
 //                      buttons:[{text,queues}]}],
-//             on_enter, on_enter_all, packet:{said,lang,body}|null}],
+//             on_enter, on_enter_all,
+//             packet:{said,lang,headings,items,links,text}|null}],
 //     headings:[call,charted,underway,landed], error }
 import { readFileSync } from "node:fs";
 
@@ -240,7 +241,13 @@ const cards = deck.children
       return {
         said: findAll(card, "bb-packet__said")[0]?.textContent ?? "",
         lang: box.attributes.lang ?? "",
-        body: box.innerHTML,
+        /* the as-written block as the page actually built it: a heading per
+           section, the items under it, and the links they named */
+        headings: findAll(box, "pk-part__h").map((h) => h.textContent),
+        items: findAll(box, "bb-packet__list").map((ul) =>
+          ul.children.map((li) => li.textContent)),
+        links: findAll(box, "bb-packet__link").map((a) => ({ text: a.textContent, url: a.href })),
+        text: box.textContent,
       };
     })(),
   }));

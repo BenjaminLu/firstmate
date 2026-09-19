@@ -183,13 +183,23 @@
 #
 # THE PACKET RIDES THE CARD. A decision card MAY also carry `packet`, the whole
 # decision packet as `bin/fm-packet.sh card` reads it:
-#   {lang, figures: [{slug, svg, nodes, option}], body}
+#   {lang,
+#    figures: [{slug, svg, nodes, option}],
+#    sections: [{heading, items: [{text, code?, links?}]}]}
 # The template opens it in place - a tab strip whose first tab is the drawing
 # that names every option, one tab per option after it, and the rest of the
 # packet behind one collapsed line - so the captain decides on the board's own
 # address instead of on a second page a closed tab loses. `fm-packet.sh serve`
 # stays the one explicit way to put a packet on its own address; nothing here
 # calls it, and no second session is ever established for a card.
+# The packet's prose rides as DATA, so it reaches the page through the same
+# el()/textContent path as every other payload string and can no more style or
+# script the captain's surface than a title can. The drawings cannot: an svg is
+# inlined as markup because that is what a drawing is, so every one of them is
+# run through `bin/fm-packet.sh svg-check` - the figure contract's own
+# implementation, never a second copy - before the board is built. `card` wrote
+# those drawings, but the composing agent edits this file afterwards, so the
+# payload is checked rather than trusted.
 #
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
@@ -271,6 +281,35 @@ fail() {
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
+# The board INLINES a packet's drawings into the captain's page, beside the
+# answer channel, so the bytes it inlines are held to the figure contract that
+# governs a drawing anywhere. The check is not restated here: it is
+# `bin/fm-packet.sh svg-check`, the one implementation, run over the payload
+# THIS script was handed - `fm-packet.sh card` wrote those drawings, but the
+# composing agent edits that file afterwards, so verify's word about the packet
+# on disk is not a word about the drawing in this payload.
+validate_packet_drawings() {  # <data.json> ; names every refusal on stderr
+  local key slug encoded tmp problems status=0
+  command -v python3 >/dev/null 2>&1 \
+    || { printf 'fm-bearings-board: python3 is required to check a packet drawing\n' >&2; return 1; }
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-figure.XXXXXX") || return 1
+  while IFS=$'\t' read -r key slug encoded; do
+    [ -n "$encoded" ] || continue
+    if ! printf '%s' "$encoded" | base64 -d > "$tmp" 2>/dev/null; then
+      printf 'fm-bearings-board: card %s: a packet drawing could not be read\n' "$key" >&2
+      status=1; continue
+    fi
+    if ! problems=$("$SCRIPT_DIR/fm-packet.sh" svg-check "$tmp" "$slug" 2>&1); then
+      printf '%s\n' "$problems" \
+        | sed "s|^|fm-bearings-board: card $key: drawing ${slug:-(unnamed)}: |" >&2
+      status=1
+    fi
+  done < <(jq -r '.captains_call[]? | select(has("packet"))
+    | .key as $k | .packet.figures[]? | [$k, (.slug // ""), (.svg | @base64)] | @tsv' "$1")
+  rm -f -- "$tmp"
+  return "$status"
+}
+
 validate_payload() {  # <data.json>
   jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     def nonempty_string: type == "string" and length > 0;
@@ -304,22 +343,46 @@ validate_payload() {  # <data.json>
     def evidence_item: type == "object" and (.label | copy) and (.url | link_url);
     # The packet the card opens in place (bin/fm-packet.sh card). The template
     # consumes every field here, so every field is typed here: a drawing that
-    # is not a drawing, or a body that is not markup, refuses the board rather
-    # than reaching the captain as a blank panel.
-    def figure_item:
+    # is not a drawing, or a section that is not a section, refuses the board
+    # rather than reaching the captain as a blank panel.
+    #
+    # A figure `option` says which option tab that drawing opens in, and the
+    # template renders it in the tab whose value matches EXACTLY - and in no
+    # tab at all otherwise. So a drawing that names an option this card does
+    # not offer refuses the board here, rather than going missing from the one
+    # surface the captain decides on.
+    def figure_item($values):
       type == "object"
       and (.slug | type == "string")
       and (.svg | type == "string" and test("^[[:space:]]*<svg\\b"))
       and (.nodes | type == "array") and ([.nodes[] | type == "string"] | all)
-      and ((has("option") | not) or (.option | type == "string"));
-    def optional_packet:
+      and ((has("option") | not) or (.option == "")
+           or ((.option | type == "string")
+               and (.option as $o | $values | index($o) != null)));
+    # The prose of a packet reaches the page through el()/textContent like
+    # every other string in this payload, so it is DATA here rather than
+    # markup: one heading and its items, each item a line and the links it
+    # named. Nothing in a packet can style or script the surface it is read on.
+    def packet_link: type == "object" and (.label | copy) and (.url | link_url);
+    def packet_item:
+      type == "object"
+      and (.text | copy_or_empty)
+      and ((has("code") | not) or (.code | type == "boolean"))
+      and ((has("links") | not)
+           or ((.links | type == "array") and ([.links[] | packet_link] | all)));
+    def packet_section:
+      type == "object"
+      and (.heading | copy)
+      and (.items | type == "array") and ([.items[] | packet_item] | all);
+    def optional_packet($values):
       (has("packet") | not)
       or (.packet
         | type == "object"
           and (.lang == "en" or .lang == "hant" or .lang == "hans")
-          and (.body | type == "string")
+          and (.sections | type == "array")
+          and ([.sections[] | packet_section] | all)
           and (.figures | type == "array")
-          and ([.figures[] | figure_item] | all));
+          and ([.figures[] | figure_item($values)] | all));
     def call_item:
       type == "object"
       and (.key | slug(128))
@@ -356,7 +419,7 @@ validate_payload() {  # <data.json>
           or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
       and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
       and (optional_link_url("packet_url"))
-      and optional_packet
+      and ([.options[].value] as $values | optional_packet($values))
       and (optional_https_url("pr_url"))
       and optional_subject
       and (if has("subject") then .type == "decision" else true end)
@@ -406,7 +469,8 @@ validate_payload() {  # <data.json>
     and ([.underway[] | underway_item] | all)
     and ([.landed[] | landed_item] | all)
     and ([.charted[] | charted_item] | all)
-  ' "$1" >/dev/null
+  ' "$1" >/dev/null || return 1
+  validate_packet_drawings "$1"
 }
 
 # --- Lavish session liveness -------------------------------------------------

@@ -12,6 +12,7 @@
 # Usage:
 #   fm-packet.sh scaffold <task-id> [--kind done|needs-decision] [--worktree <dir>] [--pr <url>] [--force]
 #   fm-packet.sh verify <task-id>
+#   fm-packet.sh svg-check <svg-file> [slug]
 #   fm-packet.sh card <task-id> [--repo <name>]
 #   fm-packet.sh render <task-id>
 #   fm-packet.sh serve <task-id>
@@ -200,22 +201,34 @@
 #            bearings board can open the whole thing inside the card instead
 #            of sending the captain to a second page he can lose by closing a
 #            tab:
-#              {lang, figures: [{slug, svg, nodes, option}], body}
+#              {lang,
+#               figures: [{slug, svg, nodes, option}],
+#               sections: [{heading, items: [{text, code?, links?}]}]}
 #            `figures` is the "Figures" section's drawings, each with the
 #            `data-node` identities it draws and the option it declares itself
 #            a drawing of, so the board can tell the comparison from an
-#            option's own drawing; `body` is the rest of
-#            the packet - every section except the decision block, already
-#            converted to HTML by the same converter the page uses. Nothing a
+#            option's own drawing; `sections` is the rest of the packet - every
+#            section except the decision block - as DATA rather than markup.
+#            A heading this script knows is copy in all three languages; a
+#            heading the worker invented, and every item under it, is the one
+#            language they typed. An item is one line that says something: a
+#            list entry, a paragraph line, or a command out of a fenced block
+#            (`code`), plus the links that line named (`links`). The board
+#            builds all of it with the same el()/textContent path every other
+#            payload string takes, so nothing in a packet can restyle or
+#            re-script the surface it is read on. Nothing a
 #            figure SAYS is repeated in `figures`: its heading and its caption
-#            reach the card through `body`, which is where the language rule
-#            below puts them, so the card carries one copy of every string and
-#            renders every field it carries. Its `- edge` lines are an
+#            reach the card through `sections`, which is where the language
+#            rule below puts them, so the card carries one copy of every string
+#            and renders every field it carries. Its `- edge` lines are an
 #            integrity check the drawing has to satisfy, never page content, so
 #            they render nowhere - exactly as the figure contract has it. The
 #            reader never opens a session and never writes a file for this:
 #            `fm-packet.sh serve` stays the one explicit way to put a packet
 #            on its own address.
+#            A card without its packet is a decision with its evidence missing
+#            and nothing saying so, so there is no fallback: whatever stops the
+#            packet being read fails the command.
 #            A drawing is inlined into the BOARD, which is not the packet's own
 #            page, so what may be inlined matters more here than anywhere else.
 #            It is the figure contract above, enforced by verify, which `card`
@@ -229,37 +242,30 @@
 #            had nothing to say about drawings; it is gone, because a second
 #            copy of a security boundary is one that can disagree with the
 #            first, and this one did - three times, over which spellings of an
-#            attribute separator it recognised.
+#            attribute separator it recognised. `fm-packet.sh svg-check <file>
+#            [slug]` is that same check, offered to a surface that inlines one
+#            drawing without the packet around it: the bearings board runs it
+#            over every drawing in the payload it is handed, because a
+#            composing model edits that payload after `card` wrote it.
 #
-# ONE LANGUAGE RULE, FOR THE WHOLE PACKET. The captain reads EN / 繁體 / 简体
-# and every captain-facing surface owes him all three. A packet cannot give
-# him all three of everything: the decision block's fields are copy objects,
-# and so are a drawing's own <text> labels, but the prose sections and a
-# figure's heading and caption are one language - the
-# one the worker wrote. Translating them here is not on the table; nothing in
-# this repo can translate. So the rule is where a string renders, not what it
-# says:
+# LANGUAGE. The captain reads EN / 繁體 / 简体 and every captain-facing surface
+# owes him all three. Everything this renderer owns, it owes: the section
+# headings of the packet block are written here, in all three, so they ride the
+# card as copy objects and follow the captain like every other string the board
+# renders. The decision block's fields are copy objects and a drawing's <text>
+# labels carry all three by the figure contract, so those switch too.
 #
-#   a string renders in the switching part of the card when the packet carries
-#   it in three languages, and in the as-written part otherwise.
-#
-# That puts the decision's own copy and the drawings in the switching part,
-# where the captain's language moves all of it together, and the prose, the
-# figure headings and the captions in one block below,
-# which does not move at all. No block is ever half-switched - a drawing whose
-# labels follow the captain while the sentence under it stands still is the
-# exact failure this rule exists to prevent - and the card says which block is
-# which.
-#
-# The cost is real and it is the worker's prose: it reaches the captain in the
-# language it was written in, inside one marked block, not in his. A figure's
-# caption is part of that cost - it sits in that block rather than under its
-# own drawing, which is where it belongs. The remedy is not in this renderer:
-# the moment the figure contract carries heading and caption per language,
-# they satisfy the rule as written and move up beside the drawing with no
-# change to it. `lang:` in the packet header (en|hant|hans, default en) names
-# the language that block is in, so its section headings match its body
-# instead of switching underneath it.
+# What is left is what only the worker can write: their prose, and a figure's
+# heading and caption. Those are one language - the one they typed - because
+# nothing in this repo can translate and a renderer that guessed would put its
+# words in the worker's mouth. They render as written, under headings that do
+# switch, and the card says which language they are in: `lang:` in the packet
+# header (en|hant|hans, default en, and verify refuses anything else) names it,
+# so the block is labelled rather than silently assumed English. The moment the
+# packet format carries that prose per language, it arrives here as copy and
+# switches with everything else, with no change to this renderer: every item
+# the card emits is already a field the board reads through the same
+# three-language lookup.
 # render     Verify, then write the packet as ONE self-contained HTML page at
 #            data/<id>/packet.html: no network, no CDN, no external
 #            fonts, sections in packet order, the decision block as a card
@@ -494,13 +500,16 @@ decision_jq='
 # used because an SVG attribute does not fit on one line and a line-oriented
 # scanner would pass a broken drawing. It is called only when the packet has a
 # Figures section or owes one, so a packet without figures never needs python3.
-figures_problems() {  # <packet> <kind> [option-value...] -> one problem per line
+#
+# It has two entry points and ONE implementation of the contract. `packet`
+# reads a whole packet, which is what verify needs. `svg` reads a single
+# drawing, which is what a surface that INLINES one needs - the bearings board
+# validates the drawings in a payload a composing model has edited since
+# `card` produced it, and that check has to be this check rather than a second
+# copy of it that can disagree.
+figures_python() {  # packet <packet> <kind> [option...] | svg <svg-file> [slug]
   FM_NAME_RE="$NAME_RE" python3 - "$@" <<'PY'
 import os, pathlib, re, sys
-
-packet, kind, options = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
-lines = packet.read_text(encoding="utf-8").splitlines()
-problems = []
 
 # The headings render decides on, character for character, and the same one
 # space the awk section reader and the scaffold already use: a heading two
@@ -511,28 +520,6 @@ def section_heading(line):
 
 def figure_heading(line):
     return line[4:].strip() if line.startswith("### ") else None
-
-sections, inside = [], False
-for l in lines:
-    h = section_heading(l)
-    if h is not None:
-        inside = h == "Figures"
-        if inside:
-            sections.append([])
-    elif inside:
-        sections[-1].append(l)
-
-found = bool(sections)
-if len(sections) > 1:
-    problems.append("the packet declares %d '## Figures' sections; it carries one, and the page "
-                    "gives that section one id" % len(sections))
-body = sections[0] if sections else []
-
-if not found and kind == "needs-decision":
-    problems.append("kind=needs-decision but there is no '## Figures' section; "
-                    "draw the options through the diagram-design skill. An environment that "
-                    "cannot draw is a blocker to escalate to firstmate, not something to "
-                    "declare here")
 
 # The one rule for lines that belong to no drawing, which both the section and
 # the figure body report through: markup is one problem naming the drawing,
@@ -546,33 +533,6 @@ def stray_problems(lines, where, advice):
     if any(SVG_OPEN.search(l) for l in offending):
         return ["a drawing %s; %s" % (where, advice)]
     return ['the line "%s" %s; %s' % (l, where, advice) for l in offending]
-
-# ---- split the section into figures at their ### headings -------------------
-# Everything in the section belongs to a figure. A line above the first '### '
-# is read by no figure clause - so a drawing parked there would reach the page
-# with nothing having checked it, and prose there renders where the figure
-# body's own stray-line rule says prose may not go.
-figures, cur, preamble = [], None, []
-for l in body:
-    h = figure_heading(l)
-    if h is not None:
-        cur = {"heading": h, "lines": []}
-        figures.append(cur)
-    elif cur is not None:
-        cur["lines"].append(l)
-    elif l.strip():
-        preamble.append(l)
-
-problems.extend(stray_problems(
-    preamble,
-    "sits above the first '### ' figure, where no figure clause reads it",
-    "every line in the section belongs to a figure: a drawing needs its own '### ' heading, "
-    "a sentence about one goes in that figure's caption, and anything longer goes in the "
-    "packet section it belongs to"))
-
-if found and not figures:
-    problems.append("the Figures section carries no '### ' figure; a section is the drawings in "
-                    "it, and a needs-decision packet owes one that puts every option together")
 
 # ---- per-figure checks ------------------------------------------------------
 COLOUR_ATTRS = ("fill", "stroke", "color", "stop-color", "flood-color", "lighting-color")
@@ -658,7 +618,162 @@ def top_level_svgs(text):
             depth += 1
     return out
 
-figure_nodes, slugs_seen, figure_options = [], {}, {}
+# The contract every drawing is held to, wherever it is read from: the packet
+# on its way to verify, or one drawing lifted out of a board payload on its way
+# to being inlined beside the answer channel. One implementation, so the two
+# can never disagree about what a drawing is allowed to carry.
+def svg_problems(svg, slug):
+    """-> (problems, the data-node identities it draws, the data-edge ids it draws)"""
+    problems, nodes, edges_drawn = [], set(), set()
+    if re.search(r"<\s*script\b", svg, re.I):
+        problems.append("the svg carries a <script>; a figure is static markup")
+    if EXTERNAL_FONT.search(svg):
+        problems.append("the svg references an external font or stylesheet; the page must render offline")
+    if re.search(r"<\s*style\b", svg, re.I):
+        problems.append("the svg carries a <style>; an inline style element is not scoped to its drawing "
+                        "and restyles the whole page, so a figure styles itself through style=\"...\"")
+    if re.search(r"<\s*foreignObject\b", svg, re.I):
+        problems.append("the svg carries a <foreignObject>; it holds HTML the language clause cannot read, "
+                        "so its labels stay English when the page switches, and its layout is the page's "
+                        "not the drawing's. Re-draw those labels as <text> nodes carrying data-en, "
+                        "data-hant and data-hans")
+
+    for m in TEXT_ELEMENT.finditer(svg):
+        if re.search(r"<\s*[A-Za-z]", m.group(1)):
+            problems.append("a <text> has element children; the language switch replaces a label's whole "
+                            "text content, so they are destroyed the first time the captain switches. "
+                            "Write one string per language and split a long label into separate "
+                            "positioned <text> elements, which also keeps the geometry from drifting "
+                            "between languages")
+
+    for m in TAG.finditer(svg):
+        tag, at = m.group(1).lower(), attrs_of(m.group(2))
+        for k, v in at.items():
+            if k.startswith("on"):
+                problems.append("<%s> carries an inline %s handler; a figure is static markup" % (tag, k))
+            if k == "id" and slug and not v.startswith(slug + "-"):
+                problems.append("id=\"%s\" is not prefixed \"%s-\"; two figures on one page share one id "
+                                "namespace" % (v, slug))
+            if k in COLOUR_ATTRS and not COLOUR_OK.match(v.strip()):
+                problems.append("<%s> has %s=\"%s\"; %s" % (tag, k, v, colour_advice(v)))
+            if k in REF_ATTRS and not ref_is_local(v.strip(), tag):
+                problems.append("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
+                                "only an <a> may leave the page, with http, https or mailto"
+                                % (tag, k, v.strip()))
+            for ref in URL_REF.findall(v):
+                if not ref.strip().strip("\"'").startswith("#"):
+                    problems.append("<%s> has %s=\"%s\"; a url() in a drawing points at a same-document "
+                                    "#fragment, or the page fetches it and stops rendering offline"
+                                    % (tag, k, v))
+            if k == "style":
+                for prop, val in style_decls(v):
+                    if prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
+                        problems.append("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
+        if tag in ANIMATION_TAGS and at.get("attributename", "").lower() in REF_ATTRS:
+            for k in ANIMATION_VALUES:
+                for ref in at.get(k, "").split(";"):
+                    if ref.strip() and not ref_is_local(ref.strip(), tag):
+                        problems.append("<%s> animates %s to \"%s\"; an animation reaches the same place "
+                                        "the attribute itself does, so it points at a same-document "
+                                        "#fragment like every other reference in a drawing"
+                                        % (tag, at.get("attributename"), ref.strip()))
+        if tag == "text":
+            missing = [a for a in ("data-en", "data-hant", "data-hans") if not at.get(a)]
+            if missing:
+                problems.append("a <text> is missing %s; one missing attribute leaks English onto the "
+                                "Chinese page" % ", ".join(missing))
+        if at.get("data-node"):
+            if LATIN_ID.match(at["data-node"]):
+                nodes.add(at["data-node"])
+            else:
+                problems.append("<%s> has data-node=\"%s\"; an identity is the latin name the source "
+                                "gives the thing, never the reader's wording, because the decision block "
+                                "names its options in those terms" % (tag, at["data-node"]))
+        if at.get("data-edge"):
+            edges_drawn.add(at["data-edge"])
+        elif tag in ("path", "line", "polyline"):
+            style = at.get("style", "")
+            if at.get("marker-end") or at.get("marker-start") or "marker-" in style:
+                problems.append("a <%s> draws an arrow with no data-edge; every connector needs one so its "
+                                "evidence line can name it" % tag)
+    return problems, nodes, edges_drawn
+
+# ---- one drawing, read on its own -------------------------------------------
+# What a surface that inlines a drawing asks: is THIS svg one the contract
+# allows onto a page? It is the same check verify runs, minus the clauses that
+# are about the packet around the drawing rather than the drawing itself.
+if sys.argv[1] == "svg":
+    drawing = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+    only = top_level_svgs(drawing)
+    lone = [p for p in
+            (["the drawing is %d top-level <svg> element(s); it is exactly one" % len(only)]
+             if len(only) != 1 else
+             ([] if only[0].strip() == drawing.strip()
+              else ["the drawing carries markup outside its one <svg> element"]))]
+    found, _nodes, _edges = svg_problems(drawing, sys.argv[3] if len(sys.argv) > 3 else "")
+    for line in lone + found:
+        print(line)
+    sys.exit(1 if (lone or found) else 0)
+
+# ---- a whole packet ----------------------------------------------------------
+packet, kind, options = pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4:]
+lines = packet.read_text(encoding="utf-8").splitlines()
+problems = []
+
+sections, inside = [], False
+for l in lines:
+    h = section_heading(l)
+    if h is not None:
+        inside = h == "Figures"
+        if inside:
+            sections.append([])
+    elif inside:
+        sections[-1].append(l)
+
+found = bool(sections)
+if len(sections) > 1:
+    problems.append("the packet declares %d '## Figures' sections; it carries one, and the page "
+                    "gives that section one id" % len(sections))
+body = sections[0] if sections else []
+
+if not found and kind == "needs-decision":
+    problems.append("kind=needs-decision but there is no '## Figures' section; "
+                    "draw the options through the diagram-design skill. An environment that "
+                    "cannot draw is a blocker to escalate to firstmate, not something to "
+                    "declare here")
+
+# ---- split the section into figures at their ### headings -------------------
+# Everything in the section belongs to a figure. A line above the first '### '
+# is read by no figure clause - so a drawing parked there would reach the page
+# with nothing having checked it, and prose there renders where the figure
+# body's own stray-line rule says prose may not go.
+figures, cur, preamble = [], None, []
+for l in body:
+    h = figure_heading(l)
+    if h is not None:
+        cur = {"heading": h, "lines": []}
+        figures.append(cur)
+    elif cur is not None:
+        cur["lines"].append(l)
+    elif l.strip():
+        preamble.append(l)
+
+problems.extend(stray_problems(
+    preamble,
+    "sits above the first '### ' figure, where no figure clause reads it",
+    "every line in the section belongs to a figure: a drawing needs its own '### ' heading, "
+    "a sentence about one goes in that figure's caption, and anything longer goes in the "
+    "packet section it belongs to"))
+
+if found and not figures:
+    problems.append("the Figures section carries no '### ' figure; a section is the drawings in "
+                    "it, and a needs-decision packet owes one that puts every option together")
+
+# Which figures are which is kept by their POSITION in the section, never by
+# their heading text: nothing makes a heading unique, and two figures that
+# happen to share one would otherwise be indistinguishable to the comparison
+# rule below - which would then refuse a packet that does carry a comparison.
+figure_nodes, slugs_seen, figure_options, option_figures = [], {}, {}, set()
 for n, fig in enumerate(figures, 1):
     chunk = "\n".join(fig["lines"])
     name = fig["heading"] or "(no heading)"
@@ -714,79 +829,11 @@ for n, fig in enumerate(figures, 1):
             "packet section it belongs to"):
         bad(line)
 
-    if re.search(r"<\s*script\b", svg, re.I):
-        bad("the svg carries a <script>; a figure is static markup")
-    if EXTERNAL_FONT.search(svg):
-        bad("the svg references an external font or stylesheet; the page must render offline")
-    if re.search(r"<\s*style\b", svg, re.I):
-        bad("the svg carries a <style>; an inline style element is not scoped to its drawing "
-            "and restyles the whole page, so a figure styles itself through style=\"...\"")
-    if re.search(r"<\s*foreignObject\b", svg, re.I):
-        bad("the svg carries a <foreignObject>; it holds HTML the language clause cannot read, "
-            "so its labels stay English when the page switches, and its layout is the page's "
-            "not the drawing's. Re-draw those labels as <text> nodes carrying data-en, "
-            "data-hant and data-hans")
+    found_problems, nodes, edges_drawn = svg_problems(svg, slug)
+    for line in found_problems:
+        bad(line)
 
-    for m in TEXT_ELEMENT.finditer(svg):
-        if re.search(r"<\s*[A-Za-z]", m.group(1)):
-            bad("a <text> has element children; the language switch replaces a label's whole "
-                "text content, so they are destroyed the first time the captain switches. "
-                "Write one string per language and split a long label into separate "
-                "positioned <text> elements, which also keeps the geometry from drifting "
-                "between languages")
-
-    nodes, edges_drawn, edges_declared = set(), set(), set()
-    for m in TAG.finditer(svg):
-        tag, at = m.group(1).lower(), attrs_of(m.group(2))
-        for k, v in at.items():
-            if k.startswith("on"):
-                bad("<%s> carries an inline %s handler; a figure is static markup" % (tag, k))
-            if k == "id" and slug and not v.startswith(slug + "-"):
-                bad("id=\"%s\" is not prefixed \"%s-\"; two figures on one page share one id "
-                    "namespace" % (v, slug))
-            if k in COLOUR_ATTRS and not COLOUR_OK.match(v.strip()):
-                bad("<%s> has %s=\"%s\"; %s" % (tag, k, v, colour_advice(v)))
-            if k in REF_ATTRS and not ref_is_local(v.strip(), tag):
-                bad("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
-                    "only an <a> may leave the page, with http, https or mailto"
-                    % (tag, k, v.strip()))
-            for ref in URL_REF.findall(v):
-                if not ref.strip().strip("\"'").startswith("#"):
-                    bad("<%s> has %s=\"%s\"; a url() in a drawing points at a same-document "
-                        "#fragment, or the page fetches it and stops rendering offline"
-                        % (tag, k, v))
-            if k == "style":
-                for prop, val in style_decls(v):
-                    if prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
-                        bad("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
-        if tag in ANIMATION_TAGS and at.get("attributename", "").lower() in REF_ATTRS:
-            for k in ANIMATION_VALUES:
-                for ref in at.get(k, "").split(";"):
-                    if ref.strip() and not ref_is_local(ref.strip(), tag):
-                        bad("<%s> animates %s to \"%s\"; an animation reaches the same place "
-                            "the attribute itself does, so it points at a same-document "
-                            "#fragment like every other reference in a drawing"
-                            % (tag, at.get("attributename"), ref.strip()))
-        if tag == "text":
-            missing = [a for a in ("data-en", "data-hant", "data-hans") if not at.get(a)]
-            if missing:
-                bad("a <text> is missing %s; one missing attribute leaks English onto the "
-                    "Chinese page" % ", ".join(missing))
-        if at.get("data-node"):
-            if LATIN_ID.match(at["data-node"]):
-                nodes.add(at["data-node"])
-            else:
-                bad("<%s> has data-node=\"%s\"; an identity is the latin name the source "
-                    "gives the thing, never the reader's wording, because the decision block "
-                    "names its options in those terms" % (tag, at["data-node"]))
-        if at.get("data-edge"):
-            edges_drawn.add(at["data-edge"])
-        elif tag in ("path", "line", "polyline"):
-            style = at.get("style", "")
-            if at.get("marker-end") or at.get("marker-start") or "marker-" in style:
-                bad("a <%s> draws an arrow with no data-edge; every connector needs one so its "
-                    "evidence line can name it" % tag)
-
+    edges_declared = set()
     for l in fig["lines"]:
         m = FIG_EDGE.match(l)
         if m:
@@ -796,11 +843,7 @@ for n, fig in enumerate(figures, 1):
     for e in sorted(edges_declared - edges_drawn):
         bad("evidence names edge \"%s\", which the svg does not draw" % e)
 
-    declared_option = ""
-    for l in fig["lines"]:
-        m = FIG_FIELD.match(l)
-        if m and m.group(1) == "option":
-            declared_option = m.group(2)
+    declared_option = fields.get("option", "")
     if declared_option:
         if not LATIN_ID.match(declared_option):
             bad("option=\"%s\" is not a latin identity; a figure names the option the "
@@ -815,8 +858,9 @@ for n, fig in enumerate(figures, 1):
                 % (declared_option, figure_options[declared_option]))
         else:
             figure_options[declared_option] = name
+            option_figures.add(n)
 
-    figure_nodes.append((name, nodes))
+    figure_nodes.append((n, name, nodes))
 
 # ---- the comparison rule ----------------------------------------------------
 # A figure carrying a data-node for every option IS the comparison; no separate
@@ -827,14 +871,14 @@ for n, fig in enumerate(figures, 1):
 # never a candidate comparison: it draws one side of the choice on purpose, and
 # letting it compete here would let a packet answer the comparison rule with a
 # drawing that compares nothing.
-comparison_candidates = [c for c in figure_nodes if c[0] not in figure_options.values()]
+comparison_candidates = [c for c in figure_nodes if c[0] not in option_figures]
 if kind == "needs-decision" and figure_nodes and options and not comparison_candidates:
     problems.append('every figure names the option it illustrates, so none of them compares: '
                     'a needs-decision packet still owes one drawing that puts the options '
                     'together, carrying data-node="%s"' % '" and data-node="'.join(options))
 elif kind == "needs-decision" and comparison_candidates and options:
-    best = max(comparison_candidates, key=lambda c: len(set(options) & c[1]))
-    missing = [o for o in options if o not in best[1]]
+    best = max(comparison_candidates, key=lambda c: len(set(options) & c[2]))
+    missing = [o for o in options if o not in best[2]]
     if len(missing) == len(options):
         problems.append('no figure puts the options together: none draws a shape with '
                         'data-node="%s". Separate drawings bury the only question the reader '
@@ -843,7 +887,7 @@ elif kind == "needs-decision" and comparison_candidates and options:
     elif missing:
         problems.append('the figure that compares the options (%s) draws no shape with '
                         'data-node="%s"; a comparison that omits an option is not a comparison'
-                        % (best[0], '", "'.join(missing)))
+                        % (best[1], '", "'.join(missing)))
 
 print(len(figures))
 for line in problems:
@@ -851,8 +895,21 @@ for line in problems:
 PY
 }
 
+figures_problems() {  # <packet> <kind> [option-value...] -> one problem per line
+  figures_python packet "$@"
+}
+
+# One drawing, held to the same contract, for a surface that inlines it without
+# the packet around it. Prints one problem per line and exits 1 on any.
+command_svg_check() {  # <svg-file> [slug]
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  [ -f "$1" ] || fail "no drawing at $1"
+  command -v python3 >/dev/null 2>&1 || fail "python3 is required to check a drawing"
+  figures_python svg "$1" "${2-}"
+}
+
 command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
-  local id=${1-} packet kind problems=0 n block figcount=0
+  local id=${1-} packet kind lang problems=0 n block figcount=0
   local -a opts=()
   [ -n "$id" ] || { usage >&2; exit 2; }
   fm_pr_task_id_valid "$id" || fail "invalid task id"
@@ -862,6 +919,15 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
   grep -qx "schema: $PACKET_SCHEMA" "$packet" || { echo "fm-packet: missing 'schema: $PACKET_SCHEMA' line" >&2; problems=$((problems + 1)); }
   kind=$(sed -n 's/^kind: //p' "$packet" | head -1)
   case "$kind" in done|needs-decision) ;; *) echo "fm-packet: kind line must be done or needs-decision" >&2; problems=$((problems + 1)) ;; esac
+  # `lang:` names the language the as-written block is in, and the card labels
+  # that block with it. A value nothing renders would be absorbed into a silent
+  # "en", which is a wrong label on the one field whose whole job is the label.
+  # Read from the header only, exactly where the card's own meta reader stops.
+  lang=$(awk '/^## / { exit } /^lang: / { sub(/^lang: /, ""); print; exit }' "$packet")
+  case "$lang" in
+    ''|en|hant|hans) ;;
+    *) echo "fm-packet: lang line must be en, hant or hans (got '$lang')" >&2; problems=$((problems + 1)) ;;
+  esac
   if grep -q '{FILL' "$packet"; then
     echo "fm-packet: placeholders remain: $(grep -c '{FILL' "$packet") x {FILL" >&2; problems=$((problems + 1))
   fi
@@ -921,20 +987,12 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
 
 # ---- card -------------------------------------------------------------------
 
-# The packet itself, as the card's `packet` object, or empty when this host
-# has no python3. A card with no packet object renders on the board exactly as
-# it did before the packet moved into it, so a missing interpreter costs the
-# captain the inline packet and nothing else.
-packet_fragment() {  # <task-id> -> one JSON object, or nothing
-  local packet fragment
-  command -v python3 >/dev/null 2>&1 || return 0
-  packet=$(packet_path "$1")
-  fragment=$(packet_python "$packet" - "$1" card 2>/dev/null) || return 0
-  # Anything but one readable object is dropped rather than carried into the
-  # card, where it would take the whole card down with it and leave the board
-  # composing a placeholder for a task that has a perfectly good packet.
-  printf '%s' "$fragment" | jq -e 'type == "object"' >/dev/null 2>&1 || return 0
-  printf '%s\n' "$fragment"
+# The packet itself, as the card's `packet` object. It is not optional and it
+# has no fallback: a card is the captain's whole view of the decision now, so a
+# card built without the packet is a decision with its evidence silently
+# missing. Whatever goes wrong here goes wrong out loud, and card fails.
+packet_fragment() {  # <task-id> -> one JSON object
+  packet_python "$(packet_path "$1")" - "$1" card
 }
 
 command_card() {
@@ -964,9 +1022,10 @@ command_card() {
       real=$(page_realpath "$page") && packet_url=$(lavish_open_url "$real")
     fi
   fi
-  fragment=$(packet_fragment "$id")
+  fragment=$(packet_fragment "$id") \
+    || fail "the packet could not be read into the card; the card is the captain's whole view of it"
   decision_block "$packet" | jq --arg repo "$repo" --arg packet_url "${packet_url:-}" \
-    --argjson packet "${fragment:-null}" '
+    --argjson packet "$fragment" '
     def flat: if type == "object" then (if (.hant | type) == "string" then . else .en end) else . end;
     {
       key: .key, type: "decision", repo: $repo,
@@ -983,7 +1042,7 @@ command_card() {
     + (if has("recommend_why") then {recommend_why: (.recommend_why | flat)} else {} end)
     + (if has("close") then {close: .close} else {} end)
     + (if $packet_url != "" then {packet_url: $packet_url} else {} end)
-    + (if $packet == null then {} else {packet: $packet} end)'
+    + {packet: $packet}'
 }
 
 # ---- render -----------------------------------------------------------------
@@ -1155,43 +1214,64 @@ def inline(text):
         out.append(p)
     return "".join(out)
 
-def md(body):
-    out, i, n = [], 0, len(body)
-    def para(buf):
-        if buf: out.append("<p>%s</p>" % "<br>".join(inline(l) for l in buf))
-    buf = []
+LIST_ITEM = re.compile(r"^\s*([-*]|\d+[.)])\s+(.*)$")
+
+# The packet's prose, parsed ONCE into typed blocks. The page renders them as
+# markup and the card renders them as payload the board builds with the same
+# el()/textContent path every other string on it takes; a second parse would be
+# a second answer to what a line of the packet means.
+def md_blocks(body):
+    out, buf, i, n = [], [], 0, len(body)
+    def para():
+        if buf: out.append({"kind": "p", "lines": list(buf)}); del buf[:]
     while i < n:
         line = body[i]
         if line.startswith("```"):
-            para(buf); buf = []
+            para()
             lang = line[3:].strip()
             code = []; i += 1
             while i < n and not body[i].startswith("```"):
                 code.append(body[i]); i += 1
             i += 1
-            out.append('<pre%s><code>%s</code></pre>' % ((' data-lang="%s"' % esc(lang)) if lang else "", esc("\n".join(code))))
+            out.append({"kind": "code", "lang": lang, "lines": code})
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", line)
         if m:
-            para(buf); buf = []
-            level = min(len(m.group(1)) + 2, 6)
-            out.append("<h%d>%s</h%d>" % (level, inline(m.group(2)), level)); i += 1; continue
-        lm = re.match(r"^\s*([-*]|\d+[.)])\s+(.*)$", line)
+            para()
+            out.append({"kind": "h", "level": min(len(m.group(1)) + 2, 6), "text": m.group(2)})
+            i += 1; continue
+        lm = LIST_ITEM.match(line)
         if lm:
-            para(buf); buf = []
+            para()
             ordered = lm.group(1)[0].isdigit()
             items = []
             while i < n:
-                lm = re.match(r"^\s*([-*]|\d+[.)])\s+(.*)$", body[i])
+                lm = LIST_ITEM.match(body[i])
                 if not lm or lm.group(1)[0].isdigit() != ordered: break
                 items.append(lm.group(2)); i += 1
-            tag = "ol" if ordered else "ul"
-            out.append("<%s>%s</%s>" % (tag, "".join("<li>%s</li>" % inline(x) for x in items), tag))
+            out.append({"kind": "list", "ordered": ordered, "items": items})
             continue
         if not line.strip():
-            para(buf); buf = []; i += 1; continue
+            para(); i += 1; continue
         buf.append(line); i += 1
-    para(buf)
+    para()
+    return out
+
+def md(body):
+    out = []
+    for b in md_blocks(body):
+        if b["kind"] == "p":
+            out.append("<p>%s</p>" % "<br>".join(inline(l) for l in b["lines"]))
+        elif b["kind"] == "code":
+            out.append('<pre%s><code>%s</code></pre>'
+                       % ((' data-lang="%s"' % esc(b["lang"])) if b["lang"] else "",
+                          esc("\n".join(b["lines"]))))
+        elif b["kind"] == "h":
+            out.append("<h%d>%s</h%d>" % (b["level"], inline(b["text"]), b["level"]))
+        else:
+            tag = "ol" if b["ordered"] else "ul"
+            out.append("<%s>%s</%s>"
+                       % (tag, "".join("<li>%s</li>" % inline(x) for x in b["items"]), tag))
     return "\n".join(out)
 
 # ---- figures: the drawings ride the page as inline SVG ----------------------
@@ -1228,27 +1308,38 @@ def top_level_svgs(text):
     return out
 
 
-def figures_html(body):
-    figures, cur = [], None
+# The ONE reader of a Figures section, for both surfaces. The page and the card
+# used to chunk, read fields and split the drawing separately, and this branch
+# paid for that twice - once over which bytes are the drawing, once over which
+# spellings of an attribute separator count. Both now ask this.
+def figures_parsed(body):
+    """-> (heading, fields, the one drawing or None) per figure, in packet order"""
+    chunks, cur = [], None
     for line in body:
         h = figure_heading(line)
         if h is not None:
-            cur = (h, []); figures.append(cur)
+            cur = (h, []); chunks.append(cur)
         elif cur is not None:
             cur[1].append(line)
     out = []
-    for heading, lines in figures:
-        chunk = "\n".join(lines)
+    for heading, lines in chunks:
         fields = {}
         for line in lines:
             m = FIG_ATTR.match(line)
             if m and m.group(1) not in fields:
                 fields[m.group(1)] = m.group(2)
-        svgs = top_level_svgs(chunk)
+        svgs = top_level_svgs("\n".join(lines))
+        out.append((heading, fields, svgs[0] if svgs else None))
+    return out
+
+
+def figures_html(body):
+    out = []
+    for heading, fields, drawing in figures_parsed(body):
         parts = ['<figure class="pk-fig" id="fig-%s">' % esc(fields.get("figure", "")),
                  "<h3 class=\"pk-fig__h\">%s</h3>" % inline(heading)]
-        if svgs:
-            parts.append('<div class="pk-fig__svg">%s</div>' % svgs[0])
+        if drawing:
+            parts.append('<div class="pk-fig__svg">%s</div>' % drawing)
         if fields.get("caption"):
             parts.append('<figcaption class="pk-fig__cap">%s</figcaption>' % inline(fields["caption"]))
         parts.append("</figure>")
@@ -1313,11 +1404,66 @@ def decision_card(d):
 # ---- the card fragment: the packet, ready to open inside the board card ------
 # This script's header owns the one language rule; this is where it is applied.
 # The switching part of the card gets what the packet carries in three
-# languages - the decision block's copy, which command_card already emits, and
-# the drawings, whose <text> nodes carry all three by the figure contract. The
-# as-written part gets everything else, in one language, headings included, so
-# the block never moves by halves.
+# languages - the decision block's copy, the drawings whose <text> nodes carry
+# all three by the figure contract, and the SECTION HEADINGS of the block
+# below, which this renderer owns in all three and therefore owes in all three.
+# What stays as written is the worker's own prose, which exists in exactly the
+# language they typed it in.
+#
+# The card carries that prose as DATA, never as markup: the board builds every
+# other payload string with el()/textContent, and a packet body that arrived as
+# a markup string would be the one field on the captain's surface that could
+# restyle or re-script the surface it is rendered on. So a section is a heading
+# plus its items, an item is a line of text with the links it named, and the
+# board decides what tags any of it becomes.
 FIG_NODE = re.compile(r"""data-node\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+LINK_MD = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+EMPHASIS = re.compile(r"\*\*(.+?)\*\*")
+CODE_SPAN = re.compile(r"`([^`]*)`")
+
+def plain(text):
+    """one line of prose as text plus the links it names, markdown spent"""
+    links = []
+    def take(m):
+        label, url = m.group(1), html.unescape(m.group(2))
+        if not safe_href(url):
+            return m.group(0)
+        links.append({"label": label, "url": url})
+        return label
+    t = LINK_MD.sub(take, text)
+    t = EMPHASIS.sub(r"\1", t)
+    t = CODE_SPAN.sub(r"\1", t)
+    return t, links
+
+def item_of(text, code=False):
+    t, links = plain(text)
+    # A line that IS a link reads once, as the link: leaving its label in the
+    # text as well would print the same words twice, once unclickable.
+    if len(links) == 1 and t.strip() == links[0]["label"].strip():
+        t = ""
+    item = {"text": t}
+    if code:
+        item["code"] = True
+    if links:
+        item["links"] = links
+    return item
+
+def packet_items(body):
+    """a prose section as the items the board renders, one per line that says something"""
+    items = []
+    for b in md_blocks(body):
+        if b["kind"] == "code":
+            # a command is the same command in every language; it rides as
+            # written, marked so the board sets it in the mono face
+            items.extend({"text": l, "code": True} for l in b["lines"] if l.strip())
+        elif b["kind"] == "list":
+            items.extend(item_of(x) for x in b["items"] if x.strip())
+        elif b["kind"] == "h":
+            items.append(item_of(b["text"]))
+        else:
+            items.extend(item_of(l) for l in b["lines"] if l.strip())
+    return items
+
 # The card inlines a drawing into the BOARD rather than the packet's own page,
 # and what may be inlined is the figure contract verify enforces: no <script>,
 # no <style>, no <foreignObject>, no on* handler, and every href, xlink:href and
@@ -1328,75 +1474,63 @@ FIG_NODE = re.compile(r"""data-node\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 # the figure contract had not landed and verify had nothing to say about
 # drawings. It is gone: a second copy of a security boundary is one that can
 # disagree with the first, and this one already did, three times, over which
-# spellings of an attribute separator it recognised.
+# spellings of an attribute separator it recognised. The board re-runs THIS
+# check (`fm-packet.sh svg-check`) on the payload it is handed, because a
+# composing model edits that payload after card wrote it.
 def figures_of(body):
-    """the drawings in packet order"""
-    # figure_heading is the reader verify and the page already share, so a
-    # packet all three accept is split the same way by all three. Content above
-    # the first heading is not collected: verify refuses it outright, so the
-    # card can only ever have seen a section that has none.
-    chunks = []
-    for line in body:
-        h = figure_heading(line)
-        if h is not None:
-            chunks.append([h, []])
-        elif chunks:
-            chunks[-1][1].append(line)
+    """the drawings in packet order, read by the parser the page shares"""
     out_figs = []
-    for heading, chunk_lines in chunks:
-        fields = {}
-        for line in chunk_lines:
-            m = FIG_ATTR.match(line)
-            if m and m.group(1) not in fields:
-                fields[m.group(1)] = m.group(2)
-        svgs = top_level_svgs("\n".join(chunk_lines))
-        if not svgs:
+    for heading, fields, drawing in figures_parsed(body):
+        if not drawing:
             continue
-        drawing = svgs[0]
         nodes = sorted({(a or b) for a, b in FIG_NODE.findall(drawing) if (a or b)})
-        out_figs.append({"slug": fields.get("figure", ""), "heading": inline(heading),
-                         "caption": inline(fields.get("caption", "")),
+        out_figs.append({"slug": fields.get("figure", ""), "heading": heading,
+                         "caption": fields.get("caption", ""),
                          "option": fields.get("option", ""),
                          "svg": drawing, "nodes": nodes})
     return out_figs
 
 def figures_words(figs):
     """what a figure says in words: its heading and its caption"""
-    parts = []
+    items = []
     for fig in figs:
-        parts.append("<h5>%s</h5>" % fig["heading"])
+        items.append(item_of(fig["heading"]))
         if fig["caption"]:
-            parts.append('<p class="pk-fig__cap">%s</p>' % fig["caption"])
-    return "".join(parts)
+            items.append(item_of(fig["caption"]))
+    return items
 
 if mode == "card":
+    # verify refuses any other value, so there is nothing to fall back to: a
+    # language the card cannot name is a packet that never reaches this line.
     packet_lang = meta.get("lang", "en")
-    if packet_lang not in LANGS:
-        packet_lang = "en"
-    figures, parts = [], []
+    figures, out_sections = [], []
     for heading, body in sections:
         body, _decision = split_decision(body)
         if heading == "Figures":
             figures = figures_of(body)
+            # The drawings move up into the switching part of the card; their
+            # headings and captions stay down here, where one language is the
+            # rule rather than a leak.
+            items = figures_words(figures)
+        else:
+            items = packet_items(body)
         key = SECTION_KEYS.get(heading)
-        h = T[packet_lang][key] if key else heading
-        # The drawings move up into the switching part of the card; their
-        # headings and captions stay down here, where one language is the
-        # rule rather than a leak.
-        inner = figures_words(figures) if heading == "Figures" else md(body)
+        # A heading this renderer knows is a heading it has in all three, so it
+        # rides as copy and follows the captain. One the worker invented rides
+        # as written, like the prose under it.
+        title = {l: T[l][key] for l in LANGS} if key else heading
         # "The decision" is the card itself; a section left with nothing but
         # the block that moved into the card is not worth a heading.
-        if inner.strip():
-            parts.append('<section class="pk-part"><h4 class="pk-part__h">%s</h4>'
-                         '<div class="pk-prose">%s</div></section>' % (esc(h), inner))
+        if items:
+            out_sections.append({"heading": title, "items": items})
     # The card carries a drawing and the identities it draws, and nothing else:
     # what a figure SAYS - its heading and its caption - is already in the
-    # body, which is where the language rule puts it. One copy of every
+    # sections, which is where the language rule puts it. One copy of every
     # string, and every field the card carries is a field the board renders.
     drawings = [{"slug": f["slug"], "svg": f["svg"], "nodes": f["nodes"],
                  "option": f["option"]}
                 for f in figures if f["svg"]]
-    print(json.dumps({"lang": packet_lang, "figures": drawings, "body": "".join(parts)},
+    print(json.dumps({"lang": packet_lang, "figures": drawings, "sections": out_sections},
                      ensure_ascii=False))
     sys.exit(0)
 
@@ -1766,6 +1900,7 @@ command_serve() {  # <task-id> ; renders, opens the page, prints `page:` and `ur
 case "${1-}" in
   scaffold) shift; command_scaffold "$@" ;;
   verify) shift; command_verify "$@" ;;
+  svg-check) shift; command_svg_check "$@" ;;
   card) shift; command_card "$@" ;;
   render) shift; command_render "$@" ;;
   serve) shift; command_serve "$@" ;;
