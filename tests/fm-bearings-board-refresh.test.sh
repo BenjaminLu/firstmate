@@ -269,21 +269,22 @@ test_refresh_carries_no_placeholder_to_the_captain() {
     || fail "the refreshed payload still carries composer placeholders: $(injected_payload "$home")"
   # A degraded card must ASK something, and the fm-bearings.v1 contract gives
   # a main captain-hold row exactly {id,key,verb,summary,owner} - no separate
-  # reason field. The question therefore has to be that row's own summary,
-  # which fm-bearings-snapshot.sh fitted as "<title>: <hold reason>". The
-  # fixture rows are shaped to that contract, so a card that fell back to the
-  # task title, or to the bare key, fails here: the title is a strict prefix
-  # of the summary, never equal to it.
-  local summary title
+  # reason field. So the question is that row's own summary, which
+  # fm-bearings-snapshot.sh fitted as "<title>: <hold reason>", while the
+  # card's title is the durable task title. Both expectations are literal:
+  # the fixture row is "Pick the route: route choice pending", from which
+  # hold_title takes "Pick the route". A card that published the key, or the
+  # summary, or the title in the other slot fails one of these.
+  local summary
   summary=$(jq -r '.decisions_open[] | select(.id == "pick-route") | .summary' "$SNAPSHOT_FIXTURE")
-  title=$(injected_payload "$home" | jq -r '.captains_call[] | select(.key == "pick-route") | .title')
-  [ "$title" != "$summary" ] \
-    || fail "the fixture cannot distinguish the title from the question it should ask"
-  injected_payload "$home" | jq -e --arg summary "$summary" --arg title "$title" '
+  [ "$summary" = "Pick the route: route choice pending" ] \
+    || fail "the fixture row is not the contract-shaped summary this asserts: $summary"
+  injected_payload "$home" | jq -e '
     (.captains_call | length) >= 2
     and ([.captains_call[] | select(.type == "merge")][0].risk == "unassessed")
     and ([.captains_call[] | select(.key == "pick-route")][0]
-      | .title == $title and .decide == $summary
+      | .title == "Pick the route"
+        and .decide == "Pick the route: route choice pending"
         and ([.options[].value] == ["reconcile"]) and .allow_freeform == true)
   ' >/dev/null \
     || fail "a card with no written copy did not degrade to an answerable one: $(injected_payload "$home")"
@@ -317,6 +318,35 @@ test_refresh_reuses_the_stored_card_verbatim() {
     and (.options[0].consequence.hant == "慢一點，安全一點")
   ' >/dev/null || fail "the stored card was not carried onto the board verbatim: $card"
   pass "a stored card round-trips onto a refreshed board without recomposition"
+}
+
+test_a_stored_card_publishes_only_the_copy_it_carries() {
+  local home card
+  home=$(make_home stored-card-partial)
+  seed_board "$home"
+  # What the SKILL tells the composer to produce when one call carries several
+  # questions: options consolidated beyond the skeleton two, so the extra ones
+  # have no consequence slot, and no if_nothing written. `build` stores that
+  # card and every later refresh republishes it. An absent field must stay
+  # absent - filled, the captain reads the option slug as the consequence of
+  # choosing it and the task id as what happens if he does nothing.
+  mkdir -p "$home/data/gated-work"
+  jq -n '{key:"gated-work", type:"decision", repo:"firstmate",
+    title:{en:"Rollout order", hant:"\u4e0a\u7dda\u9806\u5e8f"},
+    options:[{value:"canary", label:{en:"Canary first", hant:"\u5148\u91d1\u7d72\u96c0"}},
+             {value:"all", label:{en:"All at once", hant:"\u4e00\u6b21\u5168\u4e0a"}},
+             {value:"regional", label:{en:"One region", hant:"\u55ae\u4e00\u5340\u57df"}}],
+    allow_freeform:true}' > "$home/data/gated-work/board-card.json"
+  refresh "$home" >/dev/null || fail "refresh failed on a partially written stored card"
+  card=$(injected_payload "$home" | jq -c '.captains_call[] | select(.key == "gated-work")')
+  printf '%s' "$card" | jq -e '
+    (has("if_nothing") | not)
+    and (has("decide") | not)
+    and ([.options[] | select(.value != "reconcile") | has("consequence")] | any | not)
+    and (.title.hant == "\u4e0a\u7dda\u9806\u5e8f")
+    and ([.options[].value] == ["canary", "all", "regional", "reconcile"])
+  ' >/dev/null || fail "the board invented copy the stored card never carried: $card"
+  pass "a stored card publishes the copy it carries and invents none it omits"
 }
 
 # --- the Underway progress projection ---------------------------------------
@@ -685,6 +715,61 @@ test_a_malformed_stored_card_degrades_one_row_instead_of_the_board() {
 # for real: a real watcher, a real status append, and the board republished
 # within its cadence.
 
+test_a_hung_dependency_still_publishes_the_board_with_rows_marked_unknown() {
+  local home out rows
+  home=$(make_home progress-hung)
+  seed_board "$home"
+  # Three Underway rows and a no-mistakes that never answers. Each row waits
+  # out the same wedged CLI, so the reads cost 3 x 3s against a 10s refresh
+  # deadline whose progress phase gets half: the third row is past the budget
+  # before it starts and must be published unread rather than read. Without
+  # that budget the reads keep growing with the fleet until they outlast the
+  # deadline and the board is never written at all.
+  jq '.in_flight = [
+        {id:"ship-a", kind:"ship", state:"unknown", repo:"firstmate", name:"Ship A", doing:"validating"},
+        {id:"ship-b", kind:"ship", state:"unknown", repo:"firstmate", name:"Ship B", doing:"validating"},
+        {id:"ship-c", kind:"ship", state:"unknown", repo:"firstmate", name:"Ship C", doing:"validating"}]' \
+    "$SNAPSHOT_FIXTURE" > "$home/snapshot.json"
+  for t in ship-a ship-b ship-c; do
+    mkdir -p "$home/wt-$t"
+    git -C "$home/wt-$t" init -q
+    git -C "$home/wt-$t" checkout -q -b "fm/$t"
+    git -C "$home/wt-$t" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    fm_write_meta "$home/state/$t.meta" "worktree=$home/wt-$t" "kind=ship" "project=firstmate"
+  done
+  cat > "$home/fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+sleep 120
+SH
+  chmod +x "$home/fakebin/no-mistakes"
+
+  out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    LAVISH_FAKE_CALLS="$home/lavish-calls" \
+    FM_BEARINGS_REFRESH_TIMEOUT=10 FM_TASK_PROGRESS_TIMEOUT=6 \
+    FM_CREW_STATE_NM_TIMEOUT=3 \
+    "$BOARD" refresh --snapshot "$home/snapshot.json" 2>&1) \
+    || fail "a hung dependency stopped the board being published at all: $out"
+  assert_contains "$out" "refreshed:" "the refresh did not report a publication: $out"
+  injected_payload "$home" | jq -e '.schema == "fm-bearings-board.v1"' >/dev/null \
+    || fail "the board page carries no payload after a hung-dependency refresh"
+
+  # Every row is still on the board, and every one says its progress is
+  # unknown rather than claiming a ladder or quietly omitting the field.
+  rows=$(injected_payload "$home" | jq -c '[.underway[] | {id, state: .progress.state, steps: (.progress.steps | length)}]')
+  printf '%s' "$rows" | jq -e '
+    length == 3 and (map(.state == "unknown" and .steps == 0) | all)
+  ' >/dev/null || fail "a row read through a hung dependency did not report unknown: $rows"
+  # And at least one row was never read at all - the phase budget stopped it,
+  # which is what keeps the refresh inside its own deadline.
+  injected_payload "$home" | jq -e '
+    [.underway[] | select(.progress.detail == "progress not read within this refresh budget")]
+      | length >= 1
+  ' >/dev/null \
+    || fail "no row was degraded by the progress budget: $(injected_payload "$home")"
+  pass "a hung dependency still publishes the board, with the rows it could not read marked unknown"
+}
+
 test_a_watcher_observed_status_change_republishes_the_board() {
   local home watch_pid i=0 before
   home=$(make_home watcher-trigger)
@@ -754,6 +839,7 @@ test_refresh_keeps_the_language_the_board_was_published_in
 test_a_build_waits_for_the_publication_already_under_way
 test_refresh_carries_no_placeholder_to_the_captain
 test_refresh_reuses_the_stored_card_verbatim
+test_a_stored_card_publishes_only_the_copy_it_carries
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run
@@ -766,4 +852,5 @@ test_progress_reads_a_gate_that_is_waiting_on_the_captain
 test_progress_reports_no_ladder_without_an_attributable_run
 test_progress_never_reads_a_workers_terminal
 test_the_board_carries_each_underway_rows_progress
+test_a_hung_dependency_still_publishes_the_board_with_rows_marked_unknown
 test_a_watcher_observed_status_change_republishes_the_board

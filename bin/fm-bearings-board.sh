@@ -109,10 +109,13 @@
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
-#            `bin/fm-captain-hold.sh card <id>` returns a STORED card, that card
-#            is used as-is: `build` stores the copy it publishes on each held
-#            task, and every later compose and refresh reuses it rather than
-#            asking the first mate for prose again. A call whose stored card a
+#            `bin/fm-captain-hold.sh card <id>` returns a STORED card, that
+#            card supplies the copy: `build` stores what it publishes on each
+#            held task, and every later compose and refresh reuses it rather
+#            than asking the first mate for prose again. Only the fields that
+#            card actually carries are published - an optional field it left
+#            out stays out rather than being filled with the task id or an
+#            option slug. A call whose stored card a
 #            re-hold retired, and one that never had one, still needs copy
 #            written once. Failing that,
 #            when `bin/fm-packet.sh verify` accepts the held task's packet, the
@@ -183,10 +186,16 @@
 #            because the lock is held across a compose whose cost grows with
 #            the fleet: one Underway row costs one bin/fm-task-progress.sh
 #            read, itself bounded at FM_TASK_PROGRESS_TIMEOUT (default 20
-#            seconds), so the deadline fits four worst-case rows plus the
-#            snapshot and the injection, and many more rows that answer
-#            normally. Move either bound against that arithmetic, not by
-#            feel. It refuses
+#            seconds). Those reads share one dependency, so a wedged
+#            no-mistakes costs EVERY row its full bound rather than one; the
+#            progress phase therefore has half the refresh deadline of its
+#            own, and a row not read by then is published with its progress
+#            unknown. The phase can overshoot by at most the one row already
+#            under way, so it costs at most 45 + 20 seconds of the 90 and
+#            always leaves the snapshot, the reconciliation and the injection
+#            their share. That is what keeps a stuck pipeline visible ON the
+#            board instead of silently stopping the board. One dial moves all
+#            of it. It refuses
 #            when no board has been built yet; with --best-effort that refusal,
 #            and every other failure, becomes a silent exit 0 with the reason
 #            appended to the bounded state/.bearings-board-refresh.log, so a
@@ -741,6 +750,17 @@ task_progress() {  # <task-id>
        refreshed: .generated}' 2>/dev/null | head -1
 }
 
+# The progress a row carries when this refresh could not read it: the state
+# word the template already translates, no ladder, and a detail naming why.
+# Reporting unknown is the honest answer; omitting the field would render the
+# row exactly like one whose worker reported nothing.
+unread_progress() {
+  jq -nc --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{state: "unknown", detail: "progress not read within this refresh budget",
+      step: null, steps: [], active_for: null, last_activity: null,
+      quiet: false, activity: null, refreshed: $now}'
+}
+
 list_placeholders() {  # <data.json> -> "<path>: <value>" lines
   jq -r --arg re "$PLACEHOLDER_RE" '
     . as $doc
@@ -820,10 +840,21 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
+  # Every per-row read is bounded, but they share one dependency: a wedged
+  # no-mistakes makes EVERY row cost its full bound, not one, so a per-row
+  # bound alone would let the progress phase spend the whole refresh deadline
+  # and publish nothing. The phase gets half that deadline; a row not read by
+  # then is published with its progress UNKNOWN instead. A board that is
+  # current about the fleet and honest about the rows it could not read beats
+  # a refresh that gives up and leaves yesterday's page looking live.
+  progress_until=$(( $(date +%s) + REFRESH_TIMEOUT / 2 ))
   while IFS= read -r row; do
     [ -n "$row" ] || continue
-    card=$(task_progress "$row") || continue
-    [ -n "$card" ] || continue
+    card=''
+    if [ "$(date +%s)" -lt "$progress_until" ]; then
+      card=$(task_progress "$row") || card=''
+    fi
+    [ -n "$card" ] || card=$(unread_progress)
     progress=$(jq -n --argjson acc "$progress" --arg id "$row" --argjson p "$card" \
       '$acc + {($id): $p}')
   done <<EOF
@@ -889,13 +920,21 @@ EOF
        recommend_value: recommend_slot(["option-a", "option-b"]),
        reversible: reversible_slot, risk: risk_slot, allow_freeform: true}
       + hold_close;
+    # i18n($fallback) fills an ABSENT field with its fallback, which is right
+    # for a field the card carries in one language and wrong for one it does
+    # not carry at all: the captain would read an option slug as the
+    # consequence of choosing it, or the task id as what happens if he does
+    # nothing. Every optional field is emitted only when the card carries it.
     def packet_seeded($card): . as $row
       | $card
       + {repo: ($card.repo | if . == null or . == "" then repo_of($row.id) else . end),
-         title: ($card.title | i18n($card.key)), decide: ($card.decide | i18n($card.key)),
-         if_nothing: ($card.if_nothing | i18n($card.key)),
+         title: ($card.title | i18n($card.key)),
          options: [$card.options[] | . as $o
-           | .label |= i18n($o.value) | .consequence |= i18n($o.value)]}
+           | .label |= i18n($o.value)
+           | if $o.consequence == null then del(.consequence)
+             else .consequence |= i18n($o.value) end]}
+      + (if $card.decide != null then {decide: ($card.decide | i18n($card.key))} else {} end)
+      + (if $card.if_nothing != null then {if_nothing: ($card.if_nothing | i18n($card.key))} else {} end)
       + (if $card.about != null then {about: ($card.about | i18n($card.key))}
           elif $deterministic then {} else {about: fill("about")} end)
       + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n($card.key))} else {} end)

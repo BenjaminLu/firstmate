@@ -57,13 +57,13 @@
 # crew-state could not establish all report run: null.
 #
 # Bounds and cost: this projection makes exactly ONE external read - the
-# crew-state call - bounded by FM_TASK_PROGRESS_TIMEOUT (default 20 seconds).
-# One board row therefore costs at most 20 seconds, so the board's refresh
-# deadline (FM_BEARINGS_REFRESH_TIMEOUT, default 90 seconds, which also covers
-# the fleet snapshot and the injection) fits four worst-case Underway rows and
-# many more that answer normally. Change either number against that
-# arithmetic. A bound that trips degrades the document to unknown with no
-# ladder rather than failing the read.
+# crew-state call - bounded by FM_TASK_PROGRESS_TIMEOUT (default 20 seconds),
+# so one board row costs at most 20 seconds. That bound is per row and the
+# dependency behind it is shared, so it does not bound a whole fleet:
+# bin/fm-bearings-board.sh gives the progress phase a deadline of its own and
+# publishes a row it did not reach with its progress unknown. A bound that
+# trips here degrades the document to unknown with no ladder rather than
+# failing the read.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
