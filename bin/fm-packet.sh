@@ -116,7 +116,11 @@
 #     For the same reason every href, xlink:href
 #     and src points at a same-document `#fragment`; only an `<a>` may leave
 #     the page, and only through http, https or mailto - the schemes the
-#     page's prose links already allow, since the svg rides the page unescaped
+#     page's prose links already allow, since the svg rides the page unescaped.
+#     Motion is welcome, but a SMIL `<animate>`, `<set>`, `<animateTransform>`
+#     or `<animateMotion>` aimed at one of those attributes reaches the same
+#     place the attribute does, so its `to`, `from` and `values` are held to
+#     the same rule
 #   - every connector that draws an arrow (marker-start or marker-end)
 #     carries data-edge, and every data-edge has its own evidence line saying
 #     what proves that line. This is baton's figure rule, from its
@@ -133,9 +137,9 @@
 #     about the drawing goes in the caption, anything longer in the packet
 #     section it belongs to. Above the first heading the cost is higher still,
 #     since no figure clause reads there at all
-#   - a url() inside style="" points at a same-document `#fragment`, like
-#     href and src: a protocol-relative or absolute one fetches when the page
-#     opens or on hover, from a page that must render offline
+#   - a url() in any attribute value points at a same-document `#fragment`,
+#     like href and src: a protocol-relative or absolute one fetches when the
+#     page opens or on hover, from a page that must render offline
 #
 # The figure's `### ` heading and its caption render as the worker wrote them,
 # in one language, like the packet's other prose - a decided scope boundary,
@@ -143,6 +147,11 @@
 # where this packet is rendered inside its card; the packet page's own
 # language story belongs to that task, and a trilingual caption sitting above
 # single-language packet prose would be the inconsistency, not the fix.
+# A drawing's `<title>` and `<desc>` are the same residual: they are the
+# accessible name the drawing tool generated, kept as baton says to keep it,
+# and they announce in whatever language the worker wrote. Every `<text>` the
+# reader can actually read carries all three, which is the clause above and
+# the one baton states.
 #
 # verify owns the mechanical half of that contract and only that half. It
 # checks absences a script is good at - a missing language attribute, a baked
@@ -501,6 +510,17 @@ REF_ATTRS = ("href", "xlink:href", "src")
 URL_REF = re.compile(r"url\(\s*([^)]*)\)", re.I)
 SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 LINK_SCHEMES = ("http", "https", "mailto")
+# SMIL sets an attribute at runtime, so an animation aimed at href reaches the
+# value the clause below refuses. The rule is the same rule, read once here so
+# the static attribute and the animated one cannot drift apart.
+ANIMATION_TAGS = ("animate", "set", "animatetransform", "animatemotion")
+ANIMATION_VALUES = ("to", "from", "values")
+
+def ref_is_local(ref, tag):
+    m = SCHEME.match(ref)
+    if m is None:
+        return ref.startswith("#")
+    return m.group(1).lower() in LINK_SCHEMES and tag == "a"
 
 VAR_REF = re.compile(r"^var\(\s*(--[A-Za-z0-9_-]+)")
 
@@ -640,16 +660,10 @@ for n, fig in enumerate(figures, 1):
                     "namespace" % (v, slug))
             if k in COLOUR_ATTRS and not COLOUR_OK.match(v.strip()):
                 bad("<%s> has %s=\"%s\"; %s" % (tag, k, v, colour_advice(v)))
-            if k in REF_ATTRS:
-                ref = v.strip()
-                m_scheme = SCHEME.match(ref)
-                if m_scheme is None:
-                    ok_ref = ref.startswith("#")
-                else:
-                    ok_ref = m_scheme.group(1).lower() in LINK_SCHEMES and tag == "a"
-                if not ok_ref:
-                    bad("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
-                        "only an <a> may leave the page, with http, https or mailto" % (tag, k, ref))
+            if k in REF_ATTRS and not ref_is_local(v.strip(), tag):
+                bad("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
+                    "only an <a> may leave the page, with http, https or mailto"
+                    % (tag, k, v.strip()))
             for ref in URL_REF.findall(v):
                 if not ref.strip().strip("\"'").startswith("#"):
                     bad("<%s> has %s=\"%s\"; a url() in a drawing points at a same-document "
@@ -659,6 +673,14 @@ for n, fig in enumerate(figures, 1):
                 for prop, val in style_decls(v):
                     if prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
                         bad("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
+        if tag in ANIMATION_TAGS and at.get("attributename", "").lower() in REF_ATTRS:
+            for k in ANIMATION_VALUES:
+                for ref in at.get(k, "").split(";"):
+                    if ref.strip() and not ref_is_local(ref.strip(), tag):
+                        bad("<%s> animates %s to \"%s\"; an animation reaches the same place "
+                            "the attribute itself does, so it points at a same-document "
+                            "#fragment like every other reference in a drawing"
+                            % (tag, at.get("attributename"), ref.strip()))
         if tag == "text":
             missing = [a for a in ("data-en", "data-hant", "data-hans") if not at.get(a)]
             if missing:

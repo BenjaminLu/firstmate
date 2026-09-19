@@ -325,6 +325,22 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/id=\"opt-box-end\"/"$filtered"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "a url() in a drawing points at a same-document #fragment" "a filter attribute that fetches off-origin"
+  # SMIL sets the attribute at runtime, so an animation aimed at href reaches
+  # the scheme the clause above refuses; motion itself stays welcome.
+  animated='<a href="#opt-box-a"><set attributeName="href" to="javascript:alert(1)" begin="0s"/><rect id="opt-box-a" data-node="bound" x="24" y="24" width="220" height="80" fill="var(--card)"/></a><rect id="opt-box-a2"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-a\"/"$animated"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'animates href to "javascript:alert(1)"' "an animation that repoints a link at a script"
+  # An animation that moves a shape, or repoints a reference inside the
+  # document, is what the drawing tool emits and is not refused.
+  moved='<animate attributeName="opacity" from="0" to="1" begin="0s" dur="1s"/><rect id="opt-box-a"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-a\"/"$moved"}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an animation that moves a shape: $out"
+  local_ref='<set attributeName="href" to="#opt-box-end" begin="0s"/><rect id="opt-box-a"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-a\"/"$local_ref"}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an animation onto a same-document fragment: $out"
   # The same-document form every drawing already uses is untouched.
   fill_figures "$packet"
   out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused url(#opt-arrow): $out"
