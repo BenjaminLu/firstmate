@@ -417,7 +417,7 @@ settle_final() { # canonical-url task... : copy the URL's final observation to e
 }
 
 poll() {
-  local task url old kind error observed
+  local task url old kind error observed stamp
   local -a row
   acquire
   get_input
@@ -463,6 +463,9 @@ poll() {
       done
       break
     fi
+    # One observation is one read, so every owner shares the instant it ended:
+    # that keeps checked_at and any synthetic event token identical across them.
+    stamp=$(read_stamp)
     # Wake once per failure episode: only when no owner has a prior error.
     if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
       'all($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
@@ -474,7 +477,7 @@ poll() {
       load_old "$task" "$url" "$kind"
       old="$TMP/old.json"
       if [ "$observed" -eq 0 ]; then
-        jq -n --arg now "$(read_stamp)" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
+        jq -n --arg now "$stamp" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
           $old[0] as $old | $observation[0] as $o
           | ($o.events + (if $o.ready == true and $old.observation.ready != true and (any($o.events[]; .type == "ready-for-pr") | not) then
               [{token:("ready-for-pr:" + $now),type:"ready-for-pr",source:$old.url,head:null,body:"filed issue reached ready-for-pr"}]
@@ -485,7 +488,7 @@ poll() {
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
         error='forge observation unavailable or changed during read'
-        jq --arg now "$(read_stamp)" --arg error "$error" '.checked_at=$now | .error=$error | .cut_at=null' "$old" > "$TMP/row.json"
+        jq --arg now "$stamp" --arg error "$error" '.checked_at=$now | .error=$error | .cut_at=null' "$old" > "$TMP/row.json"
       fi
       write_record "$task" "$TMP/row.json"
       publish_pending "$task" "$url" "$TMP/row.json"
