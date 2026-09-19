@@ -374,6 +374,17 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   assert_figure_refused "$home" "$packet" "$body" \
     'evidence names edge "ghost"' "evidence for a line the drawing does not have"
 
+  # Nothing renders a line the figure body does not recognise, so verify
+  # refuses it by name rather than letting it verify and then vanish.
+  body=$(good_figures)$'\n''The left path re-uses the existing queue; the right one adds a second.'
+  assert_figure_refused "$home" "$packet" "$body" \
+    'The left path re-uses the existing queue' "a stray sentence inside a figure body"
+  assert_figure_refused "$home" "$packet" "$body" \
+    "goes in the caption" "a stray sentence without saying where it belongs"
+  body=$(printf '%s\n%s\n' "$(good_figures)" 'caption: and a second caption nothing reads')
+  assert_figure_refused "$home" "$packet" "$body" \
+    "'caption:' is given twice" "a figure declaring one key twice"
+
   # A figure must still declare its slug, role and caption.
   body=$(good_figures | grep -v '^caption:')
   assert_figure_refused "$home" "$packet" "$body" \

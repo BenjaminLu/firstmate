@@ -121,6 +121,11 @@
 #     never render, exactly as baton has it
 #   - at most one `## Figures` section: a second one is a second drawing set
 #     the page has no place for, and the page gives the section one id
+#   - a figure body carries figure:, caption:, one drawing and its `- edge`
+#     lines, and nothing else. Nothing renders a stray line, and a sentence
+#     that verifies and then never reaches the page is worse than a refusal:
+#     one about the drawing goes in the caption, anything longer in the
+#     packet section it belongs to
 #
 # verify owns the mechanical half of that contract and only that half. It
 # checks absences a script is good at - a missing language attribute, a baked
@@ -155,7 +160,7 @@
 #            markdown sections converted by a small stdlib-only python3
 #            converter (headings, lists, fenced code, inline code, bold,
 #            links), the "Figures" section's drawings inlined with their
-#            captions and per-connector evidence, a copy-the-context button that puts the raw markdown on
+#            captions, a copy-the-context button that puts the raw markdown on
 #            the clipboard with a selected-text fallback for sandboxed
 #            iframes, and an EN / 繁體 / 简体 switch for the page chrome that
 #            shares the board's stored choice. Copy objects in the decision
@@ -441,6 +446,8 @@ COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)
 ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
 TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
+FIG_FIELD = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
+FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 TEXT_ELEMENT = re.compile(r"""<\s*text\b(?:[^<>"']|"[^"]*"|'[^']*')*>(.*?)<\s*/\s*text\s*>""", re.S)
 REF_ATTRS = ("href", "xlink:href", "src")
 SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
@@ -493,9 +500,12 @@ for n, fig in enumerate(figures, 1):
         bad("the '###' heading is empty")
     fields = {}
     for l in fig["lines"]:
-        m = re.match(r"^(figure|caption):\s*(\S.*?)\s*$", l)
-        if m and m.group(1) not in fields:
-            fields[m.group(1)] = m.group(2)
+        m = FIG_FIELD.match(l)
+        if m:
+            if m.group(1) in fields:
+                bad("'%s:' is given twice; the second is dropped where the first is read" % m.group(1))
+            else:
+                fields[m.group(1)] = m.group(2)
     slug = fields.get("figure", "")
     if not re.match(r"^[a-z0-9][a-z0-9-]*$", slug):
         bad("'figure: <slug>' is missing or not lowercase letters, digits and hyphens")
@@ -510,6 +520,25 @@ for n, fig in enumerate(figures, 1):
         bad("'caption:' is missing or empty")
 
     svgs = top_level_svgs(chunk)
+
+    # A figure body is figure:, caption:, one drawing and its '- edge' lines.
+    # Anything else renders nowhere, so it is refused by name here rather than
+    # accepted and silently dropped on the way to the page.
+    drawn = set()
+    at = 0
+    for one in svgs:
+        i = chunk.index(one, at)
+        at = i + len(one)
+        first = chunk.count("\n", 0, i)
+        drawn.update(range(first, first + one.count("\n") + 1))
+    for i, l in enumerate(fig["lines"]):
+        if i in drawn or not l.strip() or FIG_FIELD.match(l) or FIG_EDGE.match(l):
+            continue
+        bad("the line \"%s\" is not part of the figure, and nothing renders it; a figure body "
+            "carries figure:, caption:, one drawing and its '- edge' lines. A sentence about "
+            "the drawing goes in the caption; anything longer goes in the packet section it "
+            "belongs to" % l.strip())
+
     if len(svgs) != 1:
         bad("the figure carries %d inline <svg> block(s); it needs exactly one, "
             "drawn through the diagram-design skill" % len(svgs))
@@ -583,7 +612,7 @@ for n, fig in enumerate(figures, 1):
                     "evidence line can name it" % tag)
 
     for l in fig["lines"]:
-        m = re.match(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$", l)
+        m = FIG_EDGE.match(l)
         if m:
             edges_declared.add(m.group(1))
     for e in sorted(edges_drawn - edges_declared):
