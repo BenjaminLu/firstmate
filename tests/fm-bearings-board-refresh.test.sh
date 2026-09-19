@@ -216,26 +216,83 @@ test_a_refresh_lock_whose_owner_is_gone_is_reclaimed() {
   pass "a refresh lock left by a dead owner is reclaimed instead of wedging the board"
 }
 
+# Rewrite the language of the payload the board PAGE is carrying, leaving the
+# rest of the published page byte-for-byte. This is the state a build for an
+# English-reading captain leaves behind; the page's data block is the board's
+# own published artifact, and the test edits it the same way it reads it.
+set_page_lang() {  # <home> <lang>
+  local page="$1/.lavish/bearings-board.html" json
+  json=$(injected_payload "$1" | jq -c --arg l "$2" '.lang = $l') || return 1
+  json=${json//</\\u003c}
+  PAGE_JSON="$json" perl -0pi -e '
+    s{(<script id="bearings-data" type="application/json">\n).*?(\n</script>)}{$1$ENV{PAGE_JSON}$2}s
+  ' "$page"
+}
+
 test_refresh_keeps_the_language_the_board_was_published_in() {
   local home
   home=$(make_home language)
   seed_board "$home"
-  # No payload published yet, so the compose default is all a refresh can use.
+  # No board payload anywhere yet, so the compose default is all a refresh has.
   refresh "$home" >/dev/null || fail "the first refresh failed"
   jq -e '.lang == "hant"' "$home/.lavish/bearings-board.json" >/dev/null \
     || fail "a first refresh did not fall back to the compose default: $(payload_of "$home")"
 
-  # A board built for an English-reading captain. The published payload beside
-  # the board is where that choice lives, so a fleet event must carry it
-  # forward rather than re-deciding it.
-  jq '.lang = "en"' "$home/.lavish/bearings-board.json" > "$home/en.json" \
-    && mv "$home/en.json" "$home/.lavish/bearings-board.json"
+  # A board built for an English-reading captain. The page is where that
+  # choice is published, so a fleet event must carry it forward rather than
+  # re-deciding it - even though the payload beside it still says otherwise.
+  set_page_lang "$home" en || fail "could not republish the page in English"
   refresh "$home" >/dev/null || fail "the refresh after an English build failed"
-  jq -e '.lang == "en"' "$home/.lavish/bearings-board.json" >/dev/null \
-    || fail "a refresh moved the board off the captain's language: $(payload_of "$home")"
   printf '%s' "$(injected_payload "$home")" | jq -e '.lang == "en"' >/dev/null \
-    || fail "the page the captain opens was republished in another language"
-  pass "a refresh republishes the board in the language it was published in"
+    || fail "a refresh moved the board off the captain's language"
+  jq -e '.lang == "en"' "$home/.lavish/bearings-board.json" >/dev/null \
+    || fail "the payload beside the board kept a language the page had left: $(payload_of "$home")"
+  pass "a refresh republishes the board in the language its page was published in"
+}
+
+test_a_board_with_no_payload_beside_it_keeps_its_language() {
+  local home
+  home=$(make_home language-page-only)
+  seed_board "$home"
+  refresh "$home" >/dev/null || fail "the first refresh failed"
+  set_page_lang "$home" en || fail "could not republish the page in English"
+  # Every board built before the payload file existed is exactly this: a page
+  # carrying its payload, and nothing beside it. A republication must read the
+  # captain's language back off the page rather than resetting it.
+  rm -f "$home/.lavish/bearings-board.json"
+  refresh "$home" >/dev/null || fail "the refresh of a board with no payload beside it failed"
+  printf '%s' "$(injected_payload "$home")" | jq -e '.lang == "en"' >/dev/null \
+    || fail "a board with no payload beside it was republished in another language"
+  jq -e '.lang == "en"' "$home/.lavish/bearings-board.json" >/dev/null \
+    || fail "the republished payload did not carry the page's language: $(payload_of "$home")"
+  pass "a board whose only payload is the one in its page keeps the language it was built in"
+}
+
+test_a_build_waits_for_the_publication_already_under_way() {
+  local home out rc=0 holder data
+  home=$(make_home build-lock)
+  # A publication in flight - a fleet-triggered refresh composing right now.
+  holder=$(FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" hold_refresh_lock "$home") \
+    || { echo "skip: could not hold the publication lock in this environment"; return 0; }
+  data="$home/payload.json"
+  jq -n '{schema:"fm-bearings-board.v1", home:"build-lock", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"en", captains_call:[], underway:[], landed:[], charted:[]}' > "$data"
+  set +e
+  out=$(FM_BEARINGS_REFRESH_TIMEOUT=2 run_board "$home" build "$data" 2>&1)
+  rc=$?
+  set -e
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ "$rc" -ne 0 ] || fail "a build published straight through a publication already under way: $out"
+  assert_contains "$out" "another board publication is still under way" \
+    "the build did not say what it was waiting for: $out"
+  # The decisive part: it wrote nothing. A build that injected first and only
+  # then discovered the contention is exactly the race this serializes.
+  [ ! -e "$home/.lavish/bearings-board.html" ] \
+    || fail "the build wrote the board while another publication held the lock"
+  [ ! -e "$home/.lavish/bearings-board.json" ] \
+    || fail "the build wrote the payload while another publication held the lock"
+  pass "a build takes the same publication lock a refresh does instead of racing it"
 }
 
 test_refresh_carries_no_placeholder_to_the_captain() {
@@ -295,9 +352,30 @@ test_refresh_reuses_the_stored_card_verbatim() {
 # state bin/fm-crew-state.sh reports, and the attributed validation run's own
 # step tables. A worker's terminal is never read for it.
 
-# A worktree on a branch, plus a no-mistakes whose overview and run status are
-# the exact TOON shapes the real CLI emits.
-make_run_home() {  # <name> <status> <step-table> <active-table>
+# One of the recorded `no-mistakes axi status --run` captures, bound to this
+# test's disposable repository. Only the run id, branch and head are
+# substituted - the same three fields tests/fm-crew-state.test.sh substitutes;
+# the steps, statuses and active-step columns stay exactly as the real CLI
+# emitted them, so the projection is tested against the pipeline's own output
+# rather than a hand-typed row.
+captured_axi_status() {  # <capture> <branch> <run-id> <head>
+  awk -v branch="$2" -v id="$3" -v head="$4" '
+    /^  id:/ { print "  id: \"" id "\""; next }
+    /^  branch:/ { print "  branch: " branch; next }
+    /^  head:/ { print "  head: " head; next }
+    /^  head_sha:/ { print "  head_sha: " head; next }
+    { print }
+  ' "$ROOT/tests/captures/no-mistakes-v1.70.1/$1.toon"
+}
+
+CAPTURED_RUN_ID=01M2GAWMSDQK4B5EA9GZW35RXE
+# The exact bytes replacement.toon's active_steps row carries in its
+# last_activity column, minus the `quiet ` prefix the projection lifts into
+# its own flag.
+CAPTURED_LAST_ACTIVITY="2h58m ago: log: all CI checks passed - still monitoring until merged or closed"
+
+# A worktree on a branch, plus a no-mistakes that replays <capture> for it.
+make_run_home() {  # <name> <capture>
   local home head short
   home=$(make_home "$1")
   mkdir -p "$home/wt"
@@ -307,28 +385,19 @@ make_run_home() {  # <name> <status> <step-table> <active-table>
   head=$(git -C "$home/wt" rev-parse HEAD)
   short=$(git -C "$home/wt" rev-parse --short=8 HEAD)
   fm_write_meta "$home/state/ship-task.meta" "worktree=$home/wt" "kind=ship" "project=firstmate"
+  captured_axi_status "$2" fm/ship-task "$CAPTURED_RUN_ID" "$head" > "$home/axi-status.toon"
   cat > "$home/fakebin/no-mistakes" <<SH
 #!/usr/bin/env bash
 set -u
 if [ "\${1-}" = axi ] && [ "\${2-}" = status ]; then
-  cat <<'EOF'
-run:
-  id: "01RUN"
-  branch: fm/ship-task
-  status: $2
-  head: "$head"
-  pr: ""
-  findings: none
-$3
-$4
-EOF
+  cat "$home/axi-status.toon"
   exit 0
 fi
 if [ "\${1-}" = axi ]; then
   cat <<'EOF'
 count: 1 of 1 total
 runs[1]{id,branch,status,head,pr}:
-  "01RUN",fm/ship-task,running,$short,""
+  "$CAPTURED_RUN_ID",fm/ship-task,running,$short,""
 EOF
   exit 0
 fi
@@ -337,13 +406,6 @@ SH
   chmod +x "$home/fakebin/no-mistakes"
   printf '%s\n' "$home"
 }
-
-STEPS_TABLE='  steps[3]{step,status,findings,duration_ms}:
-    intent,completed,0,120
-    review,fixing,2,50000
-    test,pending,0,0'
-ACTIVE_TABLE='  active_steps[1]{step,active_for,last_activity,agent_pid,round}:
-    review,12m3s,"quiet 31m2s",44121,"auto-fix 1/3"'
 
 run_progress() {  # <home> <id>
   local home=$1
@@ -355,21 +417,50 @@ run_progress() {  # <home> <id>
 
 test_progress_reads_the_ladder_from_the_attributed_run() {
   local home doc
-  home=$(make_run_home progress-run fixing "$STEPS_TABLE" "$ACTIVE_TABLE")
+  home=$(make_run_home progress-run replacement)
   doc=$(run_progress "$home" ship-task) || fail "the progress read failed"
-  printf '%s' "$doc" | jq -e '
+  printf '%s' "$doc" | jq -e --arg id "$CAPTURED_RUN_ID" --arg act "$CAPTURED_LAST_ACTIVITY" '
     .schema == "fm-task-progress.v1" and .id == "ship-task"
     and .state == "working" and .source == "run-step"
     and (.generated | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))
-    and (.run.id == "01RUN") and (.run.status == "fixing")
-    and (.run.step == "review")
-    and ([.run.steps[] | .step] == ["intent", "review", "test"])
-    and ([.run.steps[] | select(.status == "completed") | .step] == ["intent"])
-    and (.run.active_for == "12m3s")
-    and (.run.last_activity == "31m2s") and (.run.quiet == true)
-    and (.run.activity == "auto-fix 1/3")
-  ' >/dev/null || fail "the projection did not read the run ladder: $doc"
+    and (.run.id == $id) and (.run.status == "running")
+    and (.run.step == "ci")
+    and ([.run.steps[] | .step]
+      == ["intent", "rebase", "review", "test", "document", "lint", "push", "pr", "ci"])
+    and ([.run.steps[] | select(.status == "skipped") | .step] == ["rebase"])
+    and (.run.active_for == "4h28m")
+    and (.run.last_activity == $act) and (.run.quiet == true)
+    and (.run.activity == "starting")
+  ' >/dev/null || fail "the projection did not read the recorded run ladder: $doc"
   pass "the progress projection reads phase, ladder, timing, and activity from structured state"
+}
+
+test_progress_carries_the_pipelines_whole_last_activity_message() {
+  local home doc
+  # The pipeline puts the age AND the line it is reporting in one column
+  # (tests/captures/no-mistakes-v1.70.1/replacement.toon). The projection lifts
+  # out only the `quiet` prefix, which is already a flag of its own, and hands
+  # the rest on whole rather than cutting it to a duration it never was.
+  home=$(make_run_home progress-activity replacement)
+  doc=$(run_progress "$home" ship-task) || fail "the progress read failed"
+  printf '%s' "$doc" | jq -e --arg act "$CAPTURED_LAST_ACTIVITY" '
+    .run.last_activity == $act
+    and (.run.last_activity | startswith("quiet ") | not)
+    and .run.quiet == true
+  ' >/dev/null || fail "the last-activity message was cut down or kept its prefix: $doc"
+  pass "the projection hands on the pipeline's whole last-activity message, quiet lifted out"
+}
+
+test_progress_reads_a_gate_that_is_waiting_on_the_captain() {
+  local home doc
+  home=$(make_run_home progress-parked parked)
+  doc=$(run_progress "$home" ship-task) || fail "the progress read failed"
+  printf '%s' "$doc" | jq -e '
+    ([.run.steps[] | select(.status == "awaiting_approval") | .step] == ["test"])
+    and (.run.step == null)
+    and (.run.last_activity == null) and (.run.quiet == false)
+  ' >/dev/null || fail "a run parked at a gate did not read as awaiting approval: $doc"
+  pass "a run parked at a captain gate reports that status rather than inventing a step"
 }
 
 test_progress_reports_no_ladder_without_an_attributable_run() {
@@ -384,7 +475,7 @@ test_progress_reports_no_ladder_without_an_attributable_run() {
 
 test_progress_never_reads_a_workers_terminal() {
   local home doc
-  home=$(make_run_home progress-noterm fixing "$STEPS_TABLE" "$ACTIVE_TABLE")
+  home=$(make_run_home progress-noterm replacement)
   # Every terminal-reading backend command fails loudly. A projection that
   # depended on scrollback would surface that failure instead of the ladder.
   cat > "$home/fakebin/tmux" <<'SH'
@@ -397,7 +488,7 @@ SH
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_TERMINAL_READS="$home/terminal-reads" "$PROGRESS" ship-task) \
     || fail "the progress read failed"
-  printf '%s' "$doc" | jq -e '.run.step == "review" and .state == "working"' >/dev/null \
+  printf '%s' "$doc" | jq -e '.run.step == "ci" and .state == "working"' >/dev/null \
     || fail "the projection did not read the ladder: $doc"
   # A scrollback capture would have been recorded above; the ladder came from
   # the run tables either way.
@@ -410,17 +501,18 @@ SH
 
 test_the_board_carries_each_underway_rows_progress() {
   local home row
-  home=$(make_run_home progress-board fixing "$STEPS_TABLE" "$ACTIVE_TABLE")
+  home=$(make_run_home progress-board replacement)
   seed_board "$home"
   run_board "$home" refresh --snapshot "$SNAPSHOT_FIXTURE" >/dev/null \
     || fail "refresh failed"
   row=$(jq -c '.underway[] | select(.id == "ship-task")' "$home/.lavish/bearings-board.json")
-  printf '%s' "$row" | jq -e '
+  printf '%s' "$row" | jq -e --arg act "$CAPTURED_LAST_ACTIVITY" '
     .progress.state == "working"
-    and .progress.step == "review"
-    and ([.progress.steps[] | .step] == ["intent", "review", "test"])
-    and .progress.active_for == "12m3s"
-    and .progress.last_activity == "31m2s"
+    and .progress.step == "ci"
+    and ([.progress.steps[] | .step]
+      == ["intent", "rebase", "review", "test", "document", "lint", "push", "pr", "ci"])
+    and .progress.active_for == "4h28m"
+    and .progress.last_activity == $act
     and .progress.quiet == true
     and (.progress.refreshed | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))
   ' >/dev/null || fail "the Underway row does not carry its progress: $row"
@@ -566,11 +658,15 @@ test_refresh_refuses_when_no_board_has_been_built
 test_a_concurrent_refresh_is_a_no_op_rather_than_a_race
 test_a_refresh_lock_whose_owner_is_gone_is_reclaimed
 test_refresh_keeps_the_language_the_board_was_published_in
+test_a_board_with_no_payload_beside_it_keeps_its_language
+test_a_build_waits_for_the_publication_already_under_way
 test_refresh_carries_no_placeholder_to_the_captain
 test_refresh_reuses_the_stored_card_verbatim
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run
+test_progress_carries_the_pipelines_whole_last_activity_message
+test_progress_reads_a_gate_that_is_waiting_on_the_captain
 test_progress_reports_no_ladder_without_an_attributable_run
 test_progress_never_reads_a_workers_terminal
 test_the_board_carries_each_underway_rows_progress

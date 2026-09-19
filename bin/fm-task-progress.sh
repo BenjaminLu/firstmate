@@ -34,14 +34,17 @@
 #                    steps are visible beside the one under way
 #     active_for     how long the current step has run (the pipeline's own
 #                    duration word, e.g. "12m3s"), or null
-#     last_activity  the age of that step's newest activity, as the pipeline
-#                    words it (e.g. "8s"), or null. The client prefixes it with
-#                    `quiet` once nothing has arrived for longer than its
-#                    configured warning; the prefix is stripped here and
-#                    reported as the quiet flag instead
+#     last_activity  the active step's whole last-activity message, exactly as
+#                    the pipeline's own last_activity column words it - its age
+#                    and the line together, e.g.
+#                    "2h58m ago: log: all CI checks passed" - or null. The
+#                    pipeline prefixes that column with `quiet` once nothing
+#                    has arrived for longer than its configured warning; the
+#                    prefix alone is stripped here and reported as the quiet
+#                    flag, and the message itself is never cut down
 #     quiet          true when the pipeline flagged that activity as quiet
-#     activity       the active step's own round text (e.g. "auto-fix 1/3"), or
-#                    null - the last-activity LINE beside its age
+#     activity       the active step's own round text (e.g. "auto-fix 1/3"),
+#                    from the pipeline's `round` column, or null
 #
 # Only a ship task can own a validation run, so a scout or secondmate row
 # reports run: null without asking the pipeline anything.

@@ -143,10 +143,11 @@ Never run `lavish-axi poll` for the board yourself: the armed source's supervise
 
 After a build, the board republishes on every fleet event this home already republishes its structured summary on - a locked session start, a watcher-observed status change, a spawn, a teardown, and the watcher's recurring cadence - through `bin/fm-bearings-board.sh refresh`, detached and best effort.
 That refresh recomposes deterministically and injects in place: it never re-establishes, rebinds, or re-arms anything, so the session URL, the armed source, and the answer binding all survive it, and the page is never more than one supervision poll behind.
+Your build and that refresh take the same home-local publication lock, so a fleet event can never land on top of the board you are publishing; a build waits for a refresh already under way rather than racing it.
 Do not run it yourself as part of a digest, and do not treat a refreshed board as a rebuild: a NEW captain hold whose copy has never been written shows as a degraded card (its durable title, the hold reason as the question, reconcile and free-form answers) until the next `/bearings lavish` writes that copy once.
 A refresh also states no `charted_more` or `charted_warning_more` at all - only you can divide that one omitted total by kind - and carries the omission as a single warning row naming the total instead.
 Each Underway row also carries its own progress - the phase, the validation step it is on with the steps already passed, how long that step has run, its last activity and age, and the row's own refreshed-at time - from `bin/fm-task-progress.sh`, which reads structured state only.
-A refresh also takes no language of its own: it republishes in whatever language the published payload already names, so the board never moves off the language you built it in.
+A refresh also takes no language of its own: it reads the language back out of the board page it is republishing, so the board never moves off the language you built it in.
 The same payload is written beside the board as a plain JSON file (`bin/fm-bearings-board.sh payload-path`), so the captain reading this board away from this machine sees exactly the local page's payload without recomposing it.
 
 ### Handling a board wake

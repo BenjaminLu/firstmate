@@ -271,11 +271,15 @@ a { color: inherit; text-decoration: none; }
 .bb-step--now { color: var(--rust-500); border-color: var(--rust-400); }
 .bb-step--bad { color: var(--status-danger); border-color: var(--status-danger); }
 .bb-step--skip { color: var(--text-faint); border-style: dashed; }
+.bb-step--ask { color: var(--status-warn); border-color: var(--status-warn); background: var(--status-warn-soft); }
 .bb-step--wait { color: var(--text-faint); }
 .bb-step--here { box-shadow: var(--focus-ring); }
 .bb-prog__meta { font-size: var(--fs-2xs); color: var(--text-muted); font-family: var(--font-mono);
   overflow: hidden; text-overflow: ellipsis; }
 .bb-prog__meta--quiet { color: var(--status-warn); }
+.bb-prog__activity { font-size: var(--fs-2xs); color: var(--text-muted); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-prog__activity--quiet { color: var(--status-warn); }
 .bb-prog__detail { font-size: var(--fs-2xs); color: var(--text-faint); font-family: var(--font-mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -474,6 +478,7 @@ __FM_BEARINGS_BOARD_DATA__
       s_document: "docs", s_lint: "lint", s_push: "push", s_pr: "pull request", s_ci: "CI",
       st_completed: "passed", st_running: "running", st_fixing: "fixing",
       st_failed: "failed", st_pending: "not started", st_skipped: "skipped",
+      st_awaiting_approval: "waiting on you",
       err_title: "This board could not load", err_ask: " - ask firstmate to rebuild the board."
     },
     hant: {
@@ -506,6 +511,7 @@ __FM_BEARINGS_BOARD_DATA__
       s_document: "文件", s_lint: "lint", s_push: "推送", s_pr: "PR", s_ci: "CI",
       st_completed: "已過", st_running: "執行中", st_fixing: "修正中",
       st_failed: "失敗", st_pending: "未開始", st_skipped: "略過",
+      st_awaiting_approval: "等你批准",
       err_title: "這個看板無法載入", err_ask: "，請 firstmate 重建看板。"
     },
     hans: {
@@ -538,6 +544,7 @@ __FM_BEARINGS_BOARD_DATA__
       s_document: "文档", s_lint: "lint", s_push: "推送", s_pr: "PR", s_ci: "CI",
       st_completed: "已过", st_running: "执行中", st_fixing: "修正中",
       st_failed: "失败", st_pending: "未开始", st_skipped: "略过",
+      st_awaiting_approval: "等你批准",
       err_title: "这个看板无法加载", err_ask: "，请 firstmate 重建看板。"
     }
   };
@@ -646,7 +653,8 @@ __FM_BEARINGS_BOARD_DATA__
   }
   var STEP_TONE = {
     completed: "bb-step--done", running: "bb-step--now", fixing: "bb-step--now",
-    failed: "bb-step--bad", skipped: "bb-step--skip"
+    failed: "bb-step--bad", skipped: "bb-step--skip",
+    awaiting_approval: "bb-step--ask"
   };
   function progressBlock(p) {
     var box = el("div", "bb-prog");
@@ -664,16 +672,21 @@ __FM_BEARINGS_BOARD_DATA__
     var bits = [vocab("p_", p.state)];
     if (p.step) bits.push(t("p_step") + " " + vocab("s_", p.step));
     if (p.active_for) bits.push(t("p_for") + " " + p.active_for);
-    if (p.last_activity) {
-      bits.push(t("p_activity") + " " + p.last_activity + (p.quiet ? " (" + t("p_quiet") + ")" : ""));
-    } else if (p.quiet) {
-      bits.push(t("p_quiet"));
-    }
+    if (!p.last_activity && p.quiet) bits.push(t("p_quiet"));
     if (p.activity) bits.push(p.activity);
     if (p.refreshed) bits.push(t("p_asof") + " " + p.refreshed);
     var meta = el("div", "bb-prog__meta", bits.join(" · "));
     if (p.quiet) meta.className += " bb-prog__meta--quiet";
     box.appendChild(meta);
+    /* The pipeline's last_activity column carries the whole message - the age
+       and the line it is reporting - so it gets its own truncating line
+       instead of a token inside the compact timing strip. */
+    if (p.last_activity) {
+      var act = el("div", "bb-prog__activity",
+        t("p_activity") + " " + p.last_activity + (p.quiet ? " (" + t("p_quiet") + ")" : ""));
+      if (p.quiet) act.className += " bb-prog__activity--quiet";
+      box.appendChild(act);
+    }
     if (p.detail) box.appendChild(el("div", "bb-prog__detail", p.detail));
     return box;
   }

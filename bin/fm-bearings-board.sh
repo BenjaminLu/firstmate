@@ -164,18 +164,23 @@
 #            build does, injects it into the board file, and writes the same
 #            payload beside the board as a plain JSON file (see payload-path),
 #            so a consumer other than the local page can pick it up without
-#            recomposing. It takes no language of its own: the payload already
-#            published names the language the board was built in, and a refresh
-#            carries that forward, so a republication can never move the board
-#            off what the captain chose. Only a home with no published payload
-#            yet falls back to the compose default. Safe to run on every fleet
-#            event: it touches no Lavish session, so the board's URL, its
-#            process-event source, and its
-#            keyed-answer binding all survive untouched, and a home-local
-#            exclusive lock makes a concurrent trigger a no-op rather than a
-#            race. That lock records its holder, so a refresh killed mid-flight
-#            is reclaimed by the next trigger instead of wedging the board, and
-#            every stand-down is logged. The whole refresh runs in a child under
+#            recomposing. It takes no language of its own: the board PAGE it is
+#            republishing already names the language the board was built in,
+#            and a refresh carries that forward, so a republication can never
+#            move the board off what the captain chose. The payload beside the
+#            page answers only when the page carries none, which is how a board
+#            built before that file existed keeps its language too; a home with
+#            neither falls back to the compose default.
+#            Safe to run on every fleet event: it touches no Lavish session, so
+#            the board's URL, its process-event source, and its keyed-answer
+#            binding all survive untouched. One home-local exclusive lock
+#            covers every board publication, a build's as well as a refresh's,
+#            so a build and a fleet trigger can never both be writing the page,
+#            the payload and the stored cards; a refresh that finds it held
+#            stands down as a no-op, while a build waits for it. That lock
+#            records its holder, so a publication killed mid-flight is
+#            reclaimed by the next one instead of wedging the board, and every
+#            stand-down is logged. The whole refresh runs in a child under
 #            one FM_BEARINGS_REFRESH_TIMEOUT deadline (default 90 seconds),
 #            because a compose costs one bounded read per Underway row and the
 #            lock is held for all of them. It refuses
@@ -1067,7 +1072,7 @@ persist_composed_cards() {  # <payload.json>
 }
 
 command_build() {
-  local data=${1-} board sid effective owner version pre_reopen_owner leftover
+  local data=${1-} board sid effective owner version pre_reopen_owner leftover lock
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
@@ -1092,16 +1097,33 @@ command_build() {
     fail "cannot reconcile the board payload against landed work"
   fi
   board=$(board_path)
+  # The page, the payload beside it and the per-task stored cards are one
+  # publication, and a fleet-triggered refresh writes the same three. Taking
+  # the shared lock across all three keeps a refresh that started before this
+  # build - and therefore composed degraded copy for a card written here -
+  # from landing on top of it afterwards. A refresh can hold the lock for at
+  # most its own deadline, so that is how long a build waits for it.
+  mkdir -p "$STATE" 2>/dev/null || fail "the state directory is unavailable: $STATE"
+  board_require_libs
+  lock=$(board_lock_path)
+  if ! fm_lock_acquire_wait_bounded "$lock" "$REFRESH_TIMEOUT"; then
+    rm -f -- "$effective"
+    fail "another board publication is still under way (holder pid ${FM_LOCK_HELD_PID:-unknown})"
+  fi
+  BOARD_LOCK=$lock
+  trap board_unlock EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   if ! inject_board "$effective" "$board"; then
     rm -f -- "$effective"
     fail "cannot inject the board data into $TEMPLATE"
   fi
-  # The same payload beside the board, for a consumer that is not the local
-  # page, and the composed decision cards stored per task, so every later
-  # refresh reuses the copy written here instead of asking for prose again.
   publish_payload_file "$effective" "$(payload_path)" \
     || fail "cannot publish the board payload file: $(payload_path)"
   persist_composed_cards "$data"
+  board_unlock
+  trap - EXIT
   rm -f -- "$effective"
   printf 'board: %s\n' "$board"
 
@@ -1164,15 +1186,27 @@ command_build() {
 # refresh, so that reader never has to recompose or scrape the local page.
 payload_path() { printf '%s/.lavish/bearings-board.json\n' "$FM_HOME"; }
 
+payload_lang() {  # <payload-json-on-stdin>
+  jq -r 'if (.lang | type) == "string" then .lang else empty end' 2>/dev/null || printf ''
+}
+
 # The language the published board was built in. A refresh republishes the
 # board the captain already has, so the language is read back rather than
-# re-decided; a home with nothing published yet has none to carry.
+# re-decided. The BOARD PAGE is asked first: it is the one artifact every home
+# already has, including homes whose board was built before the sidecar beside
+# it existed, and republishing those in a language nobody chose is the whole
+# failure this guards. The sidecar answers only when the page carries no
+# payload; a home with neither has no language to carry.
 published_lang() {
-  local payload lang
-  payload=$(payload_path)
-  [ -f "$payload" ] || return 1
-  lang=$(jq -r 'if (.lang | type) == "string" then .lang else empty end' "$payload" 2>/dev/null) \
-    || return 1
+  local board payload lang=''
+  board=$(board_path)
+  if [ -f "$board" ]; then
+    lang=$(injected_payload "$board" | payload_lang)
+  fi
+  if [ -z "$lang" ]; then
+    payload=$(payload_path)
+    [ ! -f "$payload" ] || lang=$(payload_lang < "$payload")
+  fi
   case "$lang" in
     en|hant|hans) printf '%s\n' "$lang" ;;
     *) return 1 ;;
@@ -1196,16 +1230,17 @@ refresh_log() {  # <message>
 }
 
 REFRESH_BEST_EFFORT=0
-REFRESH_LOCK=
+BOARD_LOCK=
 
-# The lock and the deadline owner are loaded only for a refresh: every other
-# subcommand needs neither, and sourcing the wake library creates state/.
-refresh_require_libs() {
-  # The wake library creates the state directory at source time, and this
-  # script's errexit would turn that failure into a bare abort no --best-effort
-  # caller could absorb, so the condition is named here instead.
-  mkdir -p "$STATE" 2>/dev/null \
-    || refresh_fail "the state directory is unavailable: $STATE"
+# ONE board publication is one exclusive critical section, whichever command
+# performs it: a build and a fleet-triggered refresh both write the page and
+# the payload beside it, so they take the same home-local lock rather than
+# racing to be last writer.
+board_lock_path() { printf '%s/.bearings-board-refresh.lock\n' "$STATE"; }
+
+# The lock and the deadline owner are loaded only for a publication: no other
+# subcommand needs either, and sourcing the wake library creates state/.
+board_require_libs() {
   if ! command -v fm_run_timed >/dev/null 2>&1; then
     # shellcheck source=bin/fm-timeout-lib.sh
     # shellcheck disable=SC1091
@@ -1218,11 +1253,11 @@ refresh_require_libs() {
   fi
 }
 
-# shellcheck disable=SC2329 # Invoked by the EXIT trap below.
-refresh_unlock() {
-  [ -n "$REFRESH_LOCK" ] || return 0
-  fm_lock_release "$REFRESH_LOCK" || true
-  REFRESH_LOCK=
+# shellcheck disable=SC2329 # Invoked by the EXIT traps below.
+board_unlock() {
+  [ -n "$BOARD_LOCK" ] || return 0
+  fm_lock_release "$BOARD_LOCK" || true
+  BOARD_LOCK=
 }
 
 refresh_fail() {  # <message>
@@ -1231,6 +1266,14 @@ refresh_fail() {  # <message>
     exit 0
   fi
   fail "$1"
+}
+
+# The payload a board page is carrying, read back out of its data block. The
+# page is the board's own published artifact and outlives every rebuild of this
+# script, so it - not the sidecar beside it - is the authority on what was last
+# published here.
+injected_payload() {  # <board>
+  sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$1" | sed '1d;$d'
 }
 
 # Inject <payload.json> into a fresh copy of the template and publish it
@@ -1250,7 +1293,7 @@ inject_board() {  # <payload.json> <board>
     rm -f -- "$tmp"; return 1
   fi
   if grep -qxF "$PLACEHOLDER" "$tmp"; then rm -f -- "$tmp"; return 1; fi
-  extracted=$(sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' "$tmp" | sed '1d;$d')
+  extracted=$(injected_payload "$tmp")
   if ! printf '%s\n' "$extracted" | jq -e --arg schema "$BOARD_SCHEMA" '.schema == $schema' >/dev/null 2>&1; then
     rm -f -- "$tmp"; return 1
   fi
@@ -1283,7 +1326,12 @@ command_refresh() {
   for arg in "$@"; do
     if [ "$arg" = --best-effort ]; then REFRESH_BEST_EFFORT=1; fi
   done
-  refresh_require_libs
+  # The wake library creates the state directory at source time, and this
+  # script's errexit would turn that failure into a bare abort no --best-effort
+  # caller could absorb, so the condition is named here instead.
+  mkdir -p "$STATE" 2>/dev/null \
+    || refresh_fail "the state directory is unavailable: $STATE"
+  board_require_libs
   if [ "${FM_BEARINGS_BOARD_REFRESH_WORKER:-0}" = 1 ]; then
     refresh_worker "$@"
     return
@@ -1316,7 +1364,7 @@ refresh_worker() {
   # for one is left alone rather than quietly given a page nobody armed.
   [ -f "$board" ] && [ ! -L "$board" ] \
     || refresh_fail "no board has been built yet at $board (run /bearings lavish)"
-  lock="$STATE/.bearings-board-refresh.lock"
+  lock=$(board_lock_path)
   if ! fm_lock_try_acquire "$lock"; then
     # Another trigger is already publishing a payload at least as fresh. The
     # stand-down is logged as well as printed, because every fleet trigger
@@ -1326,8 +1374,8 @@ refresh_worker() {
     printf 'refresh: busy\n'
     return 0
   fi
-  REFRESH_LOCK=$lock
-  trap refresh_unlock EXIT
+  BOARD_LOCK=$lock
+  trap board_unlock EXIT
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -1369,7 +1417,7 @@ refresh_worker() {
     refresh_fail "cannot publish the board payload file: $payload_out"
   fi
   rm -f -- "$effective"
-  refresh_unlock
+  board_unlock
   trap - EXIT
   printf 'refreshed: %s\n' "$board"
   printf 'payload: %s\n' "$payload_out"

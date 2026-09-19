@@ -5,6 +5,7 @@
 // Usage: node board-render-harness.mjs <built-board.html>
 // Prints one JSON document:
 //   { stats:[{n,label}], underway:[{title,sub,badges,progress}],
+//     progress: { steps:[{text,cls,title}], meta, quiet, activity, detail },
 //     charted:[{title,sub,badges,pickable}], empty, more,
 //     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips}],
 //     headings:[call,charted,underway,landed], error }
@@ -97,8 +98,9 @@ const stats = strip.children.map((t) => ({
   label: t.children.find((c) => c.className.includes("bb-stat__label"))?.textContent,
 }));
 
-/* An Underway row's progress block: the step ladder as rendered chips (text
-   plus the tone class the template chose), the timing line, and the raw
+/* An Underway row's progress block: the step ladder as rendered chips (text,
+   the tone class the template chose, and the tooltip that names the step's
+   status), the timing line, the pipeline's last-activity line, and the raw
    evidence detail. null when the row carries no progress at all. */
 const progressOf = (main) => {
   const box = main?.children.find((c) => c.className.split(/\s+/).includes("bb-prog"));
@@ -107,9 +109,12 @@ const progressOf = (main) => {
   const partText = (cls) =>
     box.children.find((c) => c.className.includes(cls))?.textContent ?? "";
   return {
-    steps: ladder ? ladder.children.map((c) => ({ text: c.textContent, cls: c.className })) : [],
+    steps: ladder
+      ? ladder.children.map((c) => ({ text: c.textContent, cls: c.className, title: c.title }))
+      : [],
     meta: partText("bb-prog__meta"),
     quiet: box.children.some((c) => c.className.includes("bb-prog__meta--quiet")),
+    activity: partText("bb-prog__activity"),
     detail: partText("bb-prog__detail"),
   };
 };
