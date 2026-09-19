@@ -1919,16 +1919,22 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
 # rather than inventing a card. An answer publishes its key, which is the one
 # thing the board needs to stop asking. Neither can fail this script; see
 # bin/fm-board-live.sh.
-publish_board_event() {  # <kind> <task-id> [args...]
-  local kind=$1 id=$2
-  shift 2
-  [ -n "$id" ] || return 0
-  "$SCRIPT_DIR/fm-board-live.sh" event "$kind" "$id" "$@" >/dev/null 2>&1 || true
+# Publishing must never change what this script reports. It runs AFTER the
+# command it follows, so without preserving that command's status the case
+# branch would exit with the publisher's - and a subcommand that returned
+# nonzero rather than calling fail() would silently read as success.
+publish_board_event() {  # <status> <kind> <task-id> [args...]
+  local status=$1 kind=$2 id=$3
+  shift 3
+  if [ -n "$id" ]; then
+    "$SCRIPT_DIR/fm-board-live.sh" event "$kind" "$id" "$@" >/dev/null 2>&1 || true
+  fi
+  return "$status"
 }
 
 case "${1:-}" in
-  hold) shift; command_hold "$@"; publish_board_event call "${1-}" ;;
-  answer) shift; command_answer "$@"; publish_board_event answered "${1-}" --key "${1-}" ;;
+  hold) shift; command_hold "$@"; rc=$?; publish_board_event "$rc" call "${1-}" ;;
+  answer) shift; command_answer "$@"; rc=$?; publish_board_event "$rc" answered "${1-}" --key "${1-}" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;
