@@ -369,7 +369,7 @@ family_for_basename() {
     fm-control.test.sh|fm-control-relaunch.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-send-resolve-key.test.sh|fm-send-strict.test.sh|\
     fm-send-inbox.test.sh|fm-spawn-batch.test.sh|\
-    fm-spawn-dispatch-profile.test.sh|fm-claude-trust.test.sh|\
+    fm-spawn-dispatch-profile.test.sh|fm-dispatch.test.sh|fm-claude-trust.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
@@ -713,6 +713,7 @@ tests/fm-cursor-primary-live-e2e.test.sh 72
 tests/fm-cursor-primary.test.sh 52269
 tests/fm-daemon.test.sh 27262
 tests/fm-dispatch-resolve.test.sh 4397
+tests/fm-dispatch.test.sh 47000
 tests/fm-documentation-audiences.test.sh 847
 tests/fm-extension-binding.test.sh 9053
 tests/fm-fleet-snapshot-view.test.sh 17465
@@ -1448,6 +1449,9 @@ families_for_changed_path() {
       ;;
     bin/fm-dispatch-resolve.sh)
       printf '%s\n' "__script__:fm-dispatch-resolve.test.sh"
+      ;;
+    bin/fm-dispatch.sh)
+      printf '%s\n' "__script__:fm-dispatch.test.sh"
       ;;
     bin/fm-env-lib.sh)
       # The one .env accessor, sourced by bin/fm-x-lib.sh (Relay token) and

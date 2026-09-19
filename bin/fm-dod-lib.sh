@@ -74,22 +74,33 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id>
   esac
 }
 
+# Return 0 when one named Task subsection still consists only of its scaffold
+# placeholder. bin/fm-dispatch.sh asks per subsection, because a brief where
+# exactly one is still intact would take only one of its two files.
+fm_brief_task_placeholder_intact() {  # <file> <heading> <placeholder>
+  local file=$1 body
+  [ -f "$file" ] || return 1
+  body=$(fm_brief_task_heading_body "$file" "$2")
+  [ "$(printf '%s' "$body" | tr -d '[:space:]')" = "$3" ]
+}
+
 # Return 0 when a Task subsection still consists only of its scaffold
 # placeholder. A missing file and legacy briefs carry no such placeholders.
 fm_brief_task_placeholders_present() {  # <file>
-  local file=$1 intent spec
-  [ -f "$file" ] || return 1
-  intent=$(fm_brief_task_heading_body "$file" "## Captain's intent")
-  spec=$(fm_brief_task_heading_body "$file" "## Firstmate spec")
-  [ "$(printf '%s' "$intent" | tr -d '[:space:]')" = '{TASK}' ] && return 0
-  [ "$(printf '%s' "$spec" | tr -d '[:space:]')" = '{FIRSTMATE_SPEC}' ] && return 0
+  local file=$1
+  fm_brief_task_placeholder_intact "$file" "## Captain's intent" '{TASK}' && return 0
+  fm_brief_task_placeholder_intact "$file" "## Firstmate spec" '{FIRSTMATE_SPEC}' && return 0
   return 1
 }
 
 # Parse an exact ATX heading outside fenced blocks. Body mode prints through
 # the next unfenced heading at the same or a higher level; present mode reports
-# whether the heading exists.
-fm_brief_heading_parse() {  # <file|-> <heading> <body|present>
+# whether the heading exists; terminator mode prints the first unfenced heading
+# at the same or a higher level as <heading> anywhere in the input, the line
+# that would end <heading>'s body, or the opening line of a fence still open
+# at end of input, which would swallow every heading after it; it fails when
+# there is neither.
+fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
     input=/dev/stdin
@@ -123,11 +134,23 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present>
           fenced = 1
           fence_marker = marker
           fence_len = marker_len
+          fence_open_line = line
         } else if (marker == fence_marker && marker_len >= fence_len && rest ~ /^[[:space:]]*$/) {
           fenced = 0
         }
       }
 
+      if (mode == "terminator") {
+        if (is_fence || was_fenced) next
+        level = 0
+        while (substr(scan, level + 1, 1) == "#") level++
+        if (level > 0 && level <= target_level && substr(scan, level + 1, 1) ~ /^[[:space:]]?$/) {
+          print line
+          found = 1
+          exit
+        }
+        next
+      }
       if (!found && !was_fenced && line == heading) {
         found = 1
         if (mode == "present") next
@@ -146,9 +169,24 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present>
       print line
     }
     END {
-      if (mode == "present" && !found) exit 1
+      if (mode == "terminator" && !found && fenced) {
+        print fence_open_line
+        found = 1
+      }
+      if ((mode == "present" || mode == "terminator") && !found) exit 1
     }
   ' "$input"
+}
+
+# Print the first line of the text on stdin that would break <heading>'s body
+# once spliced into a brief: an unfenced ATX heading at the same or a higher
+# level, which ends the body early, or the opening line of a fence left open
+# at end of input, which hides every heading after it. Fail when there is
+# neither. bin/fm-dispatch.sh applies it to the ask and spec files before
+# splicing them under their headings, so neither can silently truncate or
+# swallow the sections the parser later extracts.
+fm_brief_body_terminator_line_of_text() {  # <heading> < text
+  fm_brief_heading_parse - "$1" terminator
 }
 
 fm_brief_heading_body() {  # <file> <heading>
@@ -214,13 +252,32 @@ fm_brief_task_content_valid() {  # <file>
   [ -n "$(printf '%s' "$task" | tr -d '[:space:]')" ]
 }
 
-# Print the first `## Captain's intent` body line that opens with an operator
-# address spelling; fail when there is none. The body is never rewritten.
-fm_brief_intent_address_line() {  # <file>
-  fm_brief_task_heading_body "$1" "## Captain's intent" | awk '
+# Print a ship brief's recorded delivery mode: the value of the fixed
+# "Delivery contract: mode=<mode>" line fm_dod_block opens with. Prints nothing
+# for a brief that records none - a scout brief, or one scaffolded before the
+# line existed. This is the one owner of that read: bin/fm-spawn.sh checks it
+# against the spawn's own --mode and bin/fm-dispatch.sh checks it against the
+# dispatch's, and those two refusals must not drift.
+fm_brief_delivery_mode() {  # <file>
+  sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$1" | head -n 1
+}
+
+# Print the first line of the captain-intent text on stdin that opens with an
+# operator address spelling; fail when there is none. This is the one owner of
+# that spelling set: bin/fm-spawn.sh applies it to a filled brief through the
+# wrapper below, and bin/fm-dispatch.sh applies it to the ask file before any
+# brief exists, so the two refusals cannot drift.
+fm_brief_intent_address_line_of_text() {  # < text
+  awk '
     /^[[:space:]]*(Captain('\''s (words|ask|intent))?:|Captain,)/ { print; found = 1; exit }
     END { exit !found }
   '
+}
+
+# Print the first `## Captain's intent` body line that opens with an operator
+# address spelling; fail when there is none. The body is never rewritten.
+fm_brief_intent_address_line() {  # <file>
+  fm_brief_task_heading_body "$1" "## Captain's intent" | fm_brief_intent_address_line_of_text
 }
 
 fm_ask_user_escalation_block() {  # <data-dir> <task-id>

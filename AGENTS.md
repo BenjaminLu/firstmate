@@ -231,6 +231,7 @@ Break genuine evidence ties without array-order or harness bias.
 `quota-axi` owns how model or product windows relate to bounding account windows and remains data-only.
 Load `quota-array-dispatch` before choosing among a matched profile array; that skill is the single owner of the TOON-first spendPriority selection procedure.
 Run `bin/fm-dispatch-resolve.sh` directly on the written brief in the same turn, with no preflight, and on `clear` pass its `profile:` line to `fm-spawn` unless you state a reason to override; `ambiguous`, `escalate`, `error`, and off all mean the intake above, unchanged (contract: `docs/configuration.md` "Typed dispatch resolution").
+The one-call dispatch in section 7 makes that same resolve call itself, so never run the resolver a second time before or after it; its stop hands you the same outcomes to decide here.
 The generic effort fallback and its precedence are owned by `harness-adapters`: explicit captain and standing configured effort win; otherwise use low for well-understood explicit work, xhigh for ambiguous investigation or design, intermediate levels proportionally, and never max without explicit captain preference.
 Do not add model-specific versions of that policy.
 
@@ -321,6 +322,7 @@ Treat file or subsystem overlap as a risk signal rather than an automatic reason
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
 Write the task-specific brief under section 11 before spawning.
 Fill the task subsections according to section 11.
+Once intake has resolved the project, mode, `yolo` posture, ask, spec, and any deviation reason, `bin/fm-dispatch.sh` scaffolds and fills the brief, resolves the profile, files the item with its repo and mode note, and spawns in one call; with a `config/crew-dispatch.json` present, any resolution that is not `clear` stops before filing and hands the profile back to you to re-run with explicit `--harness/--model/--effort`; the intake above still owns every judgment and that script owns only the mechanics.
 
 ### Dispatch and supervision handoff
 
