@@ -121,6 +121,14 @@ fm_now() {  # [output-variable]
   fi
 }
 
+# Do NOT use the `stat -f <fmt> ... || stat -c <fmt> ...` fallback form: on Linux
+# `stat -f` is *filesystem* stat and writes a partial filesystem dump ("File: ...",
+# "Blocks: ...") to stdout before failing, so the fallback's correct output gets
+# appended to that garbage. Arithmetic under `set -u` then aborts on the stray
+# token (e.g. the word "File" read as an unset variable), which silently killed
+# the watcher mid-cycle. Detect the platform once and pick the right form.
+# On Darwin, call /usr/bin/stat rather than PATH-resolved stat so GNU coreutils
+# cannot shadow the BSD `-f` syntax.
 fm_path_mtime() {
   if [ "$_FM_UNAME" = Darwin ]; then
     /usr/bin/stat -f %m "$1" 2>/dev/null
