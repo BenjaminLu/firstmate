@@ -164,9 +164,8 @@ Only the exact answer value `merge` authorizes a merge; an answer carrying a fre
 These hold for every surface the captain reads or acts on - the board, a card, a packet page, a report - not only for a `/bearings` invocation.
 
 - The board is the captain's one surface, so render a packet, report, or decision inside its card rather than sending them somewhere else to look.
-  `bin/fm-packet.sh card` composes that card, and `serve` publishes the packet page under the stable session name `packet-<task-id>` when the installed `lavish-axi` advertises `--name`, falling back to a keyed session when it does not; the card carries whichever URL results as `packet_url`.
-  That fallback is the one place this rule is not enforceable by the tooling, so say so when it applies rather than letting a losable URL pass as a stable one.
-  Never hand the captain a one-shot session URL whose content is lost when the tab closes; reopening the same URL must bring the content back.
+  The card carries the packet itself, drawings included, as the composing step above states, so there is no second address to hand over and `bin/fm-packet.sh serve` is not the way to show a packet.
+  Never hand the captain a one-shot session URL whose content is lost when the tab closes; where a surface genuinely must live outside the board, reopening the same URL has to bring the content back.
   One bounded exception is authorized: a live scout may host its own review session while it iterates with the captain on a visual deliverable, because the iteration needs the scout's own context.
   It holds only while that scout is alive; the durable record stays the report and the board card, and nothing the captain needs after the scout ends may live only in that session.
   Revisit this exception once the redesigned board can host that iteration itself, which is already in flight.
@@ -175,7 +174,7 @@ These hold for every surface the captain reads or acts on - the board, a card, a
   Only packet figures are actually checked: `bin/fm-packet.sh verify` requires `data-en`, `data-hant` and `data-hans` on every `<text>` in a drawing.
   The board is not: its `{TRANSLATE: ...}` slots carry the `hant` translation, `hans` is added beside them by hand, and `bin/fm-bearings-board.sh`'s payload validator requires only `en` and `hant` - it accepts a copy object with no `hans`, and a plain English string with no translation at all.
   So on every captain-facing surface except a packet figure this rule rests on the composer following it, and saying that is the point: a check that cannot verify something reports that rather than passing by silence.
-  `bin/fm-packet.sh`'s header owns the one decided exception: packet prose and a figure's heading and caption stay in the single language the worker wrote, because the packet renders inside its trilingual card.
+  `bin/fm-packet.sh`'s header owns the one decided exception: packet prose and a figure's heading and caption stay in the single language the worker wrote, because the packet renders inside its card.
 - Build a captain-facing prototype from the shipped surface, never as a fresh mock.
   `AGENTS.md` section 7 owns the gate that holds a task queued until the prototype is approved; what belongs here is how to build one: copy the shipped template and a live payload, apply the proposed change to that copy, and show that.
   A hand-drawn mock cannot tell the captain whether the direction is right, because they cannot recognize it as the surface they actually use - which is the whole reason the gate exists.
