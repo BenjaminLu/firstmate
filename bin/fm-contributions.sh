@@ -30,9 +30,9 @@
 # the head, and both check lanes in a single snapshot, so the checks are bound
 # to that head without a separate recheck; comments, reviews and inline review
 # comments stay on their REST list endpoints so their event tokens are
-# unchanged. A commit with more than one page of check contexts
-# pages the same document with an after cursor, costing five, so one
-# normalization rule defines a check lane and one commit cannot read two ways.
+# unchanged. A commit with more than one page of check contexts pages the same
+# document with an after cursor, costing five, so one normalization rule
+# defines a check lane and one commit cannot read two ways.
 # Lane equivalence is deliberate: the lanes reported here are exactly the lanes
 # the REST check-runs and statuses reads reported, so a required context the
 # forge only expects and nobody has posted is no lane. Checks are normalized
