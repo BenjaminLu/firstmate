@@ -437,6 +437,15 @@ EOF
 
   [ "$has_write_verb" -eq 1 ] || return 0
 
+  # A help invocation carries the write verb but performs no write. Refusing
+  # `gh pr create --help` would deny the caller the very flag the refusal below
+  # tells them to add.
+  for ((i = 0; i < n; i++)); do
+    case "$(unquote "${toks[i]}")" in
+      --help|-h) return 0 ;;
+    esac
+  done
+
   # The write names a protected repository only in a repository-selector
   # position: after --repo/-R, or as an api path segment. Matching the slug
   # anywhere in the command would refuse a pull request body that merely

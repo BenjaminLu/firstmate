@@ -71,6 +71,7 @@ The guard **allows** everything else, including these forms that must never be b
 - The same writes aimed at our own fork, by `--repo`, by remote name, or by URL.
 - The upstream slug appearing as prose rather than as a repository selector, which a pull request body legitimately does: `--body "ports originalauthor/widget#4937"` is allowed.
 - The word `push`, or a forge noun-verb pair, appearing anywhere other than command position: `echo git push upstream main`, `grep -rn 'gh pr create' docs/`, and a `release create` belonging to some unrelated tool.
+- A help invocation carrying a write verb: `gh pr create --help` performs no write, and refusing it would deny the caller the very flag the bare-write refusal tells them to add.
 
 ### Accepted non-goals
 

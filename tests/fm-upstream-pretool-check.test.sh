@@ -152,6 +152,11 @@ matrix_case A31 allow "echo git push upstream main"
 matrix_case A32 allow "grep -rn 'gh pr create' docs/"
 
 # ALLOW: an unrelated command that merely contains a trigger word.
+# ALLOW: a help invocation carries the write verb but performs no write.
+matrix_case A35 allow 'gh pr create --help'
+matrix_case A36 allow 'gh issue create -h'
+matrix_case A37 allow "gh pr create --repo $UP_SLUG --help"
+
 matrix_case A40 allow 'ls -la'
 matrix_case A41 allow 'cargo release create'
 matrix_case A42 allow 'npm run push'
