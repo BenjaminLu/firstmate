@@ -5,8 +5,11 @@
 # instead of wedging on the trust dialog. In worktree mode it also carries
 # forward the external-CLAUDE.md-import approval, but only when the primary
 # checkout already holds standing consent for it - see the consent-gating
-# block below for why that dialog is otherwise left for the worker to wedge
-# on rather than answered on the human's behalf.
+# block below for why that dialog is otherwise left unanswered rather than
+# answered on the human's behalf. Because it is left unanswered, this script
+# then DECIDES whether a launch here actually meets it and says so, so a
+# dialog firstmate cannot answer is never walked into in silence - see the
+# external-imports gate at the end of this file.
 #
 # Usage: fm-claude-trust.sh <worktree> <project>
 #        fm-claude-trust.sh --secondmate-home <home> <id>
@@ -14,7 +17,11 @@
 #   <project>   the primary checkout that worktree belongs to
 #   <home>      the seeded secondmate home this spawn launches into
 #   <id>        the secondmate id that home must already be marked for
-# Prints one line naming what it registered; refuses loudly on anything else.
+# Prints one line naming what it registered plus one naming the external-imports
+# verdict; refuses loudly on anything else.
+# Exit: 0 registered and nothing else blocks the launch; 1 nothing was
+#       registered; 2 usage; 3 registered, but a launch here meets the
+#       external-imports dialog; 4 registered, and that could not be decided.
 #
 # WHY THIS EXISTS. Claude Code gates a folder it has never seen behind an
 # interactive workspace-trust dialog, and --dangerously-skip-permissions does
@@ -27,15 +34,29 @@
 # and must not try - pressing Enter would select exit. The agent wedges before
 # it ever reads the brief. Registering the trust before launch is the only
 # control that reaches an interactive pane. The same reasoning covers Claude
-# Code's separate "Allow external CLAUDE.md file imports?" dialog, which
-# `--setting-sources project,local` (firstmate PR 10's minimal worker tool
-# surface) stopped suppressing: it renders whenever a loaded CLAUDE.md chain
-# reaches outside the project tree - which every crewmate's does, through the
-# captain's own `~/.claude/CLAUDE.md` importing `~/.claude/RTK.md` - and it is
-# gated the same fail-closed way as trust: cursor on "No, disable", no arrow
-# navigation from firstmate's steering plane. Only worktree mode reaches this
-# second dialog's flags: a secondmate home has no separate "project" entry to
-# carry consent forward from, so its registration stays trust-only.
+# Code's separate "Allow external CLAUDE.md file imports?" dialog: it is gated
+# the same way as trust - cursor on "No, disable external imports", no arrow
+# navigation from firstmate's steering plane - so firstmate cannot answer it
+# either. What renders it was measured, not inferred: the project memory chain
+# of the directory the pane starts in, importing a path outside that directory
+# (the gate at the end of this file records the reproduction and its version).
+# An earlier revision of this comment attributed it instead to the operator's
+# own `~/.claude/CLAUDE.md` importing `~/.claude/RTK.md`; that file did not
+# exist on the machine the reproduction was run on, so the user memory chain is
+# not scanned here - and, because an unscanned dimension must not read as a
+# checked one, the scan-derived `clear` verdict says out loud which dimensions
+# it did not examine - and says it on STDERR, the stream the spawn actually
+# shows, because a caveat written where the caller discards it is not said at
+# all. It goes out on a clean verdict, not only on a failure, because a clean
+# verdict is exactly when the unexamined part matters - that is when someone
+# acts on it - but only where one of those files actually EXISTS on the host: a
+# caveat about a file that is not there warns of a risk that cannot occur, and
+# that is what teaches an operator to skip the one that matters. Existence is
+# all that is read; no byte of those files is opened. Stdout keeps the full
+# record either way; stderr carries the operator's one clause.
+# Only worktree mode reaches this second dialog's flags: a
+# secondmate home has no separate "project" entry to carry consent forward
+# from, so its registration stays trust-only.
 #
 # TWO PROJECT-CONFIG ENTRIES IN WORKTREE MODE, NOT ONE. Registering both flags
 # on the worktree entry alone (the original trust-only design) leaves the
@@ -70,9 +91,9 @@
 # rather than flipping it, because doing so would grant every future
 # interactive session in that checkout silent external-file inclusion the
 # human declined, permanently and without being asked. The worktree entry is
-# left unwritten too: the spawn wedges on the dialog, which is the honest
-# outcome given a standing decline, not registered trust with a stripped
-# consent record. Approved===false with WarningShown false or absent is NOT
+# left unwritten too, so the refusal stops the spawn outright: that is the
+# honest outcome given a standing decline, not registered trust with a
+# stripped consent record. Approved===false with WarningShown false or absent is NOT
 # that decision: Claude Code's default project entry carries both flags as
 # false before the dialog was ever shown, so that pair means "never asked" and
 # is treated like an absent flag - trust registered, no import consent.
@@ -219,6 +240,36 @@ common_dir_of() {
   (cd -P -- "$dir" && real_dir "$common")
 }
 
+# The primary checkout a directory collapses to under Claude Code's own git-root
+# canonicalization, or empty when there is none to derive. One rule, one copy:
+# a checkout whose own git dir already equals the common dir IS the primary
+# checkout; a linked worktree's primary checkout is the common dir's parent in
+# the standard non-bare, non-GIT_DIR-overridden layout this script requires
+# elsewhere - derived structurally and then VERIFIED, never assumed, because the
+# candidate's own resolved git dir must equal that same common dir. A directory
+# outside a repository, or one whose derived candidate fails that verification,
+# answers empty; each caller decides what an empty answer means, since refusing
+# is right for the project argument and reporting `unknown` is right for the
+# import-entry lookup.
+primary_checkout_of() {
+  local dir=$1 common git_dir candidate candidate_git_dir
+  common=$(common_dir_of "$dir") || true
+  [ -n "$common" ] || return 0
+  git_dir=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null) || true
+  git_dir=$(real_dir "${git_dir:-}") || true
+  [ -n "$git_dir" ] || return 0
+  if [ "$git_dir" = "$common" ]; then
+    printf '%s\n' "$dir"
+    return 0
+  fi
+  candidate=$(real_dir "$(dirname -- "$common")") || true
+  [ -n "$candidate" ] || return 0
+  candidate_git_dir=$(git -C "$candidate" rev-parse --absolute-git-dir 2>/dev/null) || true
+  candidate_git_dir=$(real_dir "${candidate_git_dir:-}") || true
+  [ "${candidate_git_dir:-}" = "$common" ] || return 0
+  printf '%s\n' "$candidate"
+}
+
 TARGET_REAL=$(real_dir "$TARGET_ARG") || true
 [ -n "$TARGET_REAL" ] || refuse "$SCOPE_NOUN '$TARGET_ARG' is not an accessible directory"
 if [ "$MODE" = worktree ]; then
@@ -280,29 +331,13 @@ if [ "$MODE" = worktree ]; then
   # own git-root canonicalization collapses every linked worktree to. When
   # <project> is itself a linked worktree (a secondmate home spawned from,
   # rather than as, the primary checkout), refusing outright would wedge a
-  # relaunch that is otherwise perfectly valid: PROJ_COMMON already IS that
-  # primary checkout's own git dir (git's git-common-dir answer never changes
-  # by which worktree asks), so the checkout is derived structurally from it -
-  # its parent directory in the standard non-bare, non-GIT_DIR-overridden
-  # layout this script already requires elsewhere - and verified, never
-  # assumed: the candidate's own resolved git dir must equal PROJ_COMMON, the
-  # same primary-checkout definition used above, or this refuses rather than
-  # guess.
-  PROJ_GIT_DIR=$(git -C "$PROJ_REAL" rev-parse --absolute-git-dir 2>/dev/null) || true
-  [ -n "$PROJ_GIT_DIR" ] || refuse "project '$PROJ_REAL' has no resolvable git directory"
-  PROJ_GIT_DIR=$(real_dir "$PROJ_GIT_DIR") || true
-  [ -n "$PROJ_GIT_DIR" ] || refuse "project '$PROJ_REAL' has an unresolvable git directory"
-  if [ "$PROJ_GIT_DIR" = "$PROJ_COMMON" ]; then
-    PROJ_CANON=$PROJ_REAL
-  else
-    PROJ_CANON=$(real_dir "$(dirname -- "$PROJ_COMMON")") || true
-    [ -n "$PROJ_CANON" ] \
-      || refuse "project '$PROJ_REAL' is a linked worktree whose primary checkout could not be resolved"
-    CANON_GIT_DIR=$(git -C "$PROJ_CANON" rev-parse --absolute-git-dir 2>/dev/null) || true
-    CANON_GIT_DIR=$(real_dir "${CANON_GIT_DIR:-}") || true
-    [ -n "$CANON_GIT_DIR" ] && [ "$CANON_GIT_DIR" = "$PROJ_COMMON" ] \
-      || refuse "project '$PROJ_REAL' is a linked worktree whose primary checkout could not be resolved"
-  fi
+  # relaunch that is otherwise perfectly valid, so primary_checkout_of derives
+  # and verifies that checkout; an answer it cannot verify refuses here rather
+  # than guess, because writing the flags at a key Claude Code never reads
+  # would silently reproduce the bug this script exists to close.
+  PROJ_CANON=$(primary_checkout_of "$PROJ_REAL") || true
+  [ -n "$PROJ_CANON" ] \
+    || refuse "project '$PROJ_REAL' is a linked worktree whose primary checkout could not be resolved"
 else
   # The seed evidence, in the order that names the most useful reason first: the
   # marker decides whether this is a secondmate home at all, the id decides
@@ -407,10 +442,12 @@ fi
 # common case for a project claude has never asked about), the import flags
 # are left untouched on both entries: writing them to the worktree entry alone
 # would be a pure no-op (the imports check never reads it) that only obscures
-# the real state, so trust still registers normally but the import dialog is
-# left exactly as undecided as it already was - the worker wedges on it, the
-# same honest outcome as an explicit decline, rather than a spawn spending
-# consent the human was never asked for.
+# the real state, so trust still registers normally and the import dialog is
+# left exactly as undecided as it already was, rather than a spawn spending
+# consent the human was never asked for. Leaving it undecided is not the same
+# as leaving it silent: the gate at the end of this file then decides whether
+# this particular launch would actually meet that dialog, and refuses with the
+# one-time human approval named rather than letting a worker wedge on it.
 TRUST_FLAG='hasTrustDialogAccepted'
 IMPORT_FLAGS='["hasClaudeMdExternalIncludesApproved","hasClaudeMdExternalIncludesWarningShown"]'
 if [ "$MODE" = worktree ]; then
@@ -550,3 +587,465 @@ echo "trusted: $TARGET_REAL"
 if [ "$MODE" = worktree ]; then
   echo "trusted (project root): $PROJ_CANON"
 fi
+
+# THE IMPORT DIALOG THIS REGISTRATION COULD NOT REMOVE IS REPORTED, NEVER LEFT
+# SILENT. Everything above either registers a flag or refuses; neither outcome
+# says anything about the OTHER dialog a launch into this directory can still
+# meet. Without consent already on record the import flags are deliberately not
+# written (see the consent-gating block above), and until this gate existed the
+# spawn went ahead with no word anywhere: the pane renders "Allow external
+# CLAUDE.md file imports?", firstmate cannot answer it (cursor on "No, disable
+# external imports", no arrow navigation from the key plane), and the worker
+# reaches supervision as an ordinary stale wake with nothing naming the cause.
+# A silent wedge is the one outcome this script exists to prevent, so the same
+# launch-blocking dialog is now decided BEFORE the launch and said out loud.
+#
+# WHAT ACTUALLY RENDERS IT, measured rather than assumed. Reproduced 2026-09-19
+# on Claude Code 2.1.267 in an isolated lab (a scratch project, a linked
+# worktree, this script run against the real store): with trust registered and
+# the worktree's own CLAUDE.md carrying `@<path outside the worktree>`, the
+# launch stopped at that dialog and listed the imported path. Answering "Yes,
+# allow external imports" IN THE WORKTREE wrote
+# hasClaudeMdExternalIncludesApproved and hasClaudeMdExternalIncludesWarningShown
+# onto the PRIMARY CHECKOUT's entry, never the worktree's - confirming the
+# canonicalization the header above establishes - and a second, brand-new
+# worktree of that same project then launched straight to the composer. That
+# last step is what makes the remedy this gate prints a remedy: one interactive
+# approval per project clears every later worktree.
+#
+# The trigger is the PROJECT memory chain, which is why the scan below starts at
+# CLAUDE.md and CLAUDE.local.md in the directory the pane starts in and follows
+# their @imports. An older note in this repo attributed the dialog to the
+# operator's own ~/.claude/CLAUDE.md importing ~/.claude/RTK.md; that file does
+# not exist on the machine this was measured on, and the lab could not decide
+# the user-memory case either way without modifying the operator's global memory
+# or extracting their credential, so the user chain is deliberately NOT scanned.
+# Neither are ancestor directories, though Claude Code's project-memory loading
+# does read a CLAUDE.md or CLAUDE.local.md found above the launch directory:
+# walking up would refuse every dispatch on every project on a host that keeps
+# one ~/CLAUDE.md with an outside import, on the same unreproduced trigger. Both
+# gaps are named rather than passed over: the scan-derived `clear` line states
+# the project chain of the launch directory as the thing it examined and says
+# those two dimensions were not, because a check that cannot verify a dimension
+# has to report that rather than let a clean-reading verdict imply it looked.
+# The two record-derived clears carry no such note, and must not: a project
+# entry holding Claude Code's own approval or explicit decline means no dialog
+# renders whatever any chain contains, so a caveat there would invent a doubt
+# and teach the reader to skip the one that carries weight.
+#
+# NOTHING UNMEASURED IS EVER TURNED INTO A REFUSAL. `blocks` has exactly one
+# source: a memory file, reached from the launch directory's own chain, whose
+# import spec AS WRITTEN names an existing REGULAR FILE outside the directory -
+# the shape the reproduction below actually observed. Two neighbouring shapes
+# were not measured and so are never refused on. A target that exists but is not
+# a regular file (a directory, a device) loads nothing as memory and is ignored;
+# whether the product lists such a target at all is unknown, and ignoring it is
+# the reading that cannot block a dispatch on a guess. A spec that names a file
+# only once its trailing sentence punctuation is stripped is REPORTED with both
+# spellings and not followed, because whether Claude Code strips that
+# punctuation was never measured either way. The same rule governs markdown
+# non-content: an @path inside a fenced or four-space-indented code block, an
+# inline code span, or an HTML comment is text its author marked as NOT an
+# instruction, so refusing a dispatch over it would refuse over something nobody
+# wrote as an import. The scan's own list of what it does and does not treat that
+# way lives beside the extractor below.
+#
+# WHAT `unknown` IS FOR, and what it is not. It is for a chain this could not
+# read to the end - a memory file it cannot read, a `~` it cannot expand, an
+# outside-looking import that is not on disk, a punctuated spec whose stripped
+# spelling names a file nothing else in the chain reached, a memory path
+# resolving out of the tree - and for a launch whose consent entry could not be
+# identified at all, so the store lookup would answer about the wrong key. It is
+# NOT for the import depth: that bound was MEASURED against the product - the
+# launch directory's own memory file plus at most four imported ones, with an
+# import written in that fourth file not followed at all - so an edge past it
+# cannot raise the dialog and is a known limit rather than an undecided one. One
+# bound decides both an in-tree and an outside target, so the scan can never call
+# the same hop unloaded for one and loading for the other. The clear line names
+# the depth it followed, in those measured terms.
+#
+# THE VERDICT NEVER MANUFACTURES CONSENT. `blocks` refuses the launch and names
+# the one-time human approval; it never writes the approval, exactly as the
+# consent-gating block above requires. Approval already on record, or an
+# explicit decline (which disables external imports without asking again),
+# both mean no dialog renders, so both are `clear`.
+#
+# Exit codes: 3 = registered, but a launch here meets the import dialog.
+#             4 = registered, and the scan could not decide.
+# Both are distinct from the refusals above (1) so a caller can tell "nothing
+# was registered" from "registered, and here is the dialog still in the way".
+IMPORT_ENTRY=$TARGET_REAL
+IMPORT_ENTRY_UNDERIVABLE=
+if [ "$MODE" = worktree ]; then
+  IMPORT_ENTRY=$PROJ_CANON
+else
+  # A seeded secondmate home is either a standalone clone (already the primary
+  # checkout), a leased linked worktree (whose consent entry is its primary
+  # checkout, derived by the same one rule the worktree branch above uses), or
+  # not a git repository at all - Claude Code then has nothing to canonicalize
+  # to and the home's own entry is what it reads. The first two are resolved,
+  # never guessed. A home that IS inside a repository but whose primary checkout
+  # cannot be verified is the case that must not reach a definite verdict: the
+  # entry the scan would read is then not the entry Claude Code reads, so a
+  # standing approval recorded there would be missed and the launch refused on a
+  # question this cannot actually answer. That case is carried to the verdict
+  # below and forced to `unknown`.
+  if [ -n "$(common_dir_of "$TARGET_REAL" || true)" ]; then
+    home_canon=$(primary_checkout_of "$TARGET_REAL") || true
+    if [ -n "$home_canon" ]; then
+      IMPORT_ENTRY=$home_canon
+    else
+      IMPORT_ENTRY_UNDERIVABLE="'$TARGET_REAL' is inside a git repository whose primary checkout could not be resolved, so the project entry Claude Code reads its external-import decision from could not be identified"
+    fi
+  fi
+fi
+
+# The scan runs from a function rather than inline in a command substitution:
+# bash 3.2, which is what /bin/bash still is on macOS, cannot parse a
+# here-document nested inside $( ), and this script has to run there.
+import_scan() {
+  node - "$1" "$2" "$3" "$4" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [dir, home, store, entry] = process.argv.slice(2);
+// The import depth is MEASURED against the product, not read off its docs: the
+// hop-by-hop record is in docs/verification/claude-launch-dialogs.md. Claude Code
+// loads the launch directory's own memory file plus AT MOST FOUR imported files,
+// and an import written in that fourth imported file is not followed at all -
+// an outside import there raised no dialog. "Maximum import depth 5" turned out
+// to mean five files, not five hops. This is the ONE place that bound is
+// written; both classifications below consume it, so "the product never loads
+// this" can never mean one thing for an in-tree target and another for an
+// outside one. Past the bound is a known limit rather than an undecided case,
+// so it is not reported as `unknown` either.
+const MAX_IMPORT_DEPTH = 4;
+// The SCAN-DERIVED clear carries what this could not look at. Two dimensions are
+// deliberately never walked: the operator's own user-global chain
+// (~/.claude/CLAUDE.md and its @imports), and any CLAUDE.md or CLAUDE.local.md
+// in directories ABOVE the launch directory, which Claude Code's project-memory
+// loading does read. Neither was reproduced raising this dialog here
+// (docs/verification/claude-launch-dialogs.md records why), and walking either
+// on a guess would refuse every dispatch on a host that has one file in it. A
+// check that cannot verify a dimension says so instead of passing by silence.
+// The two RECORD-DERIVED clears below carry no such note and must not: they do
+// not rest on the scan at all - once the project entry holds Claude Code's own
+// approval or its explicit decline, no dialog renders whatever any chain
+// contains - and a caveat attached where no residual doubt exists is what
+// teaches an operator to skip the one that matters.
+// Whether there is anything unexamined to warn ABOUT. The clause above is worth
+// an operator's attention only where one of those files actually exists: on a
+// host with neither, the scan-derived clear is genuinely complete and a caveat
+// would be a warning about a risk that cannot occur - which is what teaches
+// someone to skip the one that matters. Existence only; nothing here reads a
+// byte of those files, so this stays outside the content scan that is
+// deliberately not performed (see the block above).
+const unexaminedExists = () => {
+  const names = ["CLAUDE.md", "CLAUDE.local.md"];
+  const configDir = path.dirname(store);
+  for (const name of names) {
+    if (fs.existsSync(path.join(configDir, name))) return true;
+  }
+  let cursor = path.dirname(dir);
+  let previous = dir;
+  while (cursor !== previous) {
+    for (const name of names) {
+      if (fs.existsSync(path.join(cursor, name))) return true;
+    }
+    previous = cursor;
+    cursor = path.dirname(cursor);
+  }
+  return false;
+};
+const UNEXAMINED = `the operator's user-global ~/.claude memory chain and any CLAUDE.md or CLAUDE.local.md in directories above ${dir} were not examined`;
+// A third field carries the sentence an OPERATOR reads, as opposed to the
+// second, which is the record: same fact, no paths, one clause of what was
+// checked and what was not. It is set only where the verdict actually rests on
+// the scan, and the caller puts it where the operator is already looking.
+const say = (verdict, reason, operator) => {
+  const tail = operator === undefined ? "" : `\t${operator}`;
+  process.stdout.write(`${verdict}\t${reason}${tail}\n`);
+  process.exit(0);
+};
+// The vendor's own record, read first: an entry that already carries a decision
+// - approval, or the explicit decline that disables external imports without
+// asking again - means no dialog can render, whatever the chain contains.
+let decided = "";
+try {
+  const root = JSON.parse(fs.readFileSync(store, "utf8"));
+  const e = root && root.projects ? root.projects[entry] : undefined;
+  if (e && e.hasClaudeMdExternalIncludesApproved === true) decided = "approved";
+  else if (
+    e &&
+    e.hasClaudeMdExternalIncludesApproved === false &&
+    e.hasClaudeMdExternalIncludesWarningShown === true
+  ) decided = "declined";
+} catch {
+  // An unreadable or malformed store is not a verdict. The registration above
+  // already read and rewrote this same file successfully, so reaching here means
+  // it changed underneath us; fall through and let the chain decide.
+}
+if (decided === "approved") say("clear", `${entry} already carries Claude Code's external-import approval`);
+if (decided === "declined") say("clear", `${entry} already carries Claude Code's explicit external-import decline, so the dialog does not render`);
+
+const inside = (p) => p === dir || p.startsWith(dir + path.sep);
+const realOrNull = (p) => {
+  try { return fs.realpathSync(p); } catch { return null; }
+};
+// An @import is only an import where a memory file MEANS one. Four markdown
+// forms exist to say "this text is not an instruction", and all four are
+// excluded, so a file that documents the import syntax can never refuse a
+// dispatch: the fenced code block, the inline code span, the four-space indented
+// code block, and the HTML comment (including one that runs across lines - this
+// repository's own CLAUDE.md opens with a comment).
+//
+// Three further forms are deliberately LEFT reading as imports, and this is the
+// whole list: a block quote, a YAML front-matter block, and a link reference
+// definition (`[label]: @path`). None of them marks its text as an example the
+// way a code span or a comment does - quoted and front-matter text is still text
+// the file means - and whether Claude Code skips any of them was not measured
+// either way. Leaving them in cannot manufacture a refusal on its own, because
+// every refusal still has the one measured source: a spec, as written, naming an
+// existing regular file outside the tree.
+//
+// The indented-code rule is CommonMark's own: four spaces open a code block only
+// where no paragraph is already open. One consequence is deliberate - an
+// indented continuation line inside a list item, after a blank line, reads as
+// code here and its @imports are skipped. That is the direction that cannot
+// refuse a dispatch over something nobody wrote as an import.
+const importsIn = (text) => {
+  const found = [];
+  let fence = null;
+  let inComment = false;
+  let paragraph = false;
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/\t/g, "    ");
+    if (!inComment) {
+      const fenceHit = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (fenceHit) {
+        const ch = fenceHit[1][0];
+        if (fence === null) fence = ch;
+        else if (fence === ch) fence = null;
+        paragraph = false;
+        continue;
+      }
+    }
+    if (fence !== null) continue;
+    let body = "";
+    let rest = line;
+    while (rest.length > 0) {
+      if (inComment) {
+        const close = rest.indexOf("-->");
+        if (close === -1) break;
+        inComment = false;
+        rest = rest.slice(close + 3);
+        continue;
+      }
+      const open = rest.indexOf("<!--");
+      if (open === -1) {
+        body += rest;
+        break;
+      }
+      body += rest.slice(0, open);
+      inComment = true;
+      rest = rest.slice(open + 4);
+    }
+    if (body.trim() === "") {
+      paragraph = false;
+      continue;
+    }
+    if (!paragraph && /^ {4,}\S/.test(body)) continue;
+    paragraph = true;
+    const stripped = body.replace(/`[^`]*`/g, " ");
+    const re = /(?:^|\s)@([^\s`]+)/g;
+    let hit;
+    while ((hit = re.exec(stripped)) !== null) found.push(hit[1]);
+  }
+  return found;
+};
+const resolveSpec = (spec, fromDir) => {
+  if (spec === "~" || spec.startsWith("~/")) {
+    if (!home) return null;
+    return spec === "~" ? home : path.join(home, spec.slice(2));
+  }
+  if (path.isAbsolute(spec)) return spec;
+  return path.resolve(fromDir, spec);
+};
+// `@path` in prose carries the sentence's punctuation with it - "rules live in
+// @../house/RULES.md." - so the spec as written names no file while an obvious
+// stripped spelling does. Whether Claude Code strips that punctuation is not
+// something this measured, so the stripped spelling never DECIDES anything: it
+// is reported with both spellings named, and the chain is not followed through
+// it. Deciding it either way would rest a verdict on the vendor's parse - and in
+// the refusing direction that is a dispatch blocked over a guess, which is the
+// one thing this gate must never do.
+const strippedSpec = (spec) => {
+  const trimmed = spec.replace(/[.,;:!?)\]}'"]+$/, "");
+  return trimmed && trimmed !== spec ? trimmed : "";
+};
+// Claude Code loads memory FILES. A target that exists but is not a regular file
+// - a directory, a device, a socket - loads nothing and so can raise no dialog,
+// which is why "See @../outer for details." naming a real directory outside the
+// tree is ignored rather than classified. Whether the product lists such a
+// target in the dialog at all was not measured; ignoring it is the reading that
+// cannot refuse a dispatch over something unmeasured.
+const isRegularFile = (real) => {
+  try { return fs.statSync(real).isFile(); } catch { return false; }
+};
+
+const external = [];
+const undecidable = [];
+const punctuated = [];
+const seen = new Set();
+const queue = [];
+for (const name of ["CLAUDE.md", "CLAUDE.local.md"]) {
+  const candidate = path.join(dir, name);
+  if (fs.existsSync(candidate)) queue.push({ file: candidate, depth: 0 });
+}
+while (queue.length > 0) {
+  const { file, depth } = queue.shift();
+  const real = realOrNull(file);
+  if (real === null || seen.has(real)) continue;
+  seen.add(real);
+  // A memory file that sits at an in-tree path but resolves out of the tree -
+  // CLAUDE.md symlinked at a shared file - is a loaded file outside the
+  // directory without being an import of one. Whether Claude Code counts that
+  // by itself was not measured, so it is reported rather than decided either
+  // way - but the file is still READ, because what it imports is not
+  // undecidable at all: a shared CLAUDE.md carrying its own outside import is
+  // the definite `blocks` case, and skipping it would report `unknown` and
+  // launch a worker straight into the dialog.
+  if (depth === 0 && !inside(real)) {
+    undecidable.push(`${file} resolves to ${real}, outside ${dir}`);
+  }
+  let text;
+  try {
+    text = fs.readFileSync(real, "utf8");
+  } catch (err) {
+    undecidable.push(`${real} could not be read (${err.code || err.message})`);
+    continue;
+  }
+  // An import written in the last file the product loads is not followed by the
+  // product, so it is not followed here - for an in-tree target and an outside
+  // one alike, which is the whole point of there being one bound.
+  if (depth >= MAX_IMPORT_DEPTH) continue;
+  const fromDir = path.dirname(real);
+  for (const spec of importsIn(text)) {
+    const target = resolveSpec(spec, fromDir);
+    if (target === null) {
+      undecidable.push(`${real} imports '${spec}' and HOME is not set, so '~' cannot be expanded`);
+      continue;
+    }
+    const targetReal = realOrNull(target);
+    if (targetReal !== null && !isRegularFile(targetReal)) continue;
+    if (targetReal === null) {
+      const stripped = strippedSpec(spec);
+      const strippedTarget = stripped ? resolveSpec(stripped, fromDir) : null;
+      const strippedReal = strippedTarget === null ? null : realOrNull(strippedTarget);
+      if (strippedReal !== null && isRegularFile(strippedReal)) {
+        punctuated.push({ from: real, spec, stripped, real: strippedReal });
+        continue;
+      }
+      // A missing import contributes nothing to load, but whether Claude Code
+      // still lists one that points outside is not something this measured, so
+      // an outside-looking miss is reported rather than waved through.
+      if (!inside(path.resolve(target))) {
+        undecidable.push(`${real} imports '${spec}', which points outside ${dir} but does not exist`);
+      }
+      continue;
+    }
+    if (!inside(targetReal)) {
+      // The spec AS WRITTEN is what decides this. A spec naming an in-tree path
+      // that only leaves the tree once symlinks are resolved poses the question
+      // this never put to the product - does resolving through a link count as
+      // leaving the directory - so it is reported, never refused. The depth-0
+      // memory file a few lines above is the same question and is already
+      // answered this way; answering it differently here is what made one shape
+      // refuse a dispatch on the vendor's parse.
+      if (inside(path.resolve(target))) {
+        undecidable.push(
+          `${real} imports '${spec}', which names a path inside ${dir} but resolves to ${targetReal}, outside it`,
+        );
+        continue;
+      }
+      const where = targetReal === spec ? "" : ` (${targetReal})`;
+      external.push(`${real} imports '${spec}'${where}`);
+      continue;
+    }
+    queue.push({ file: targetReal, depth: depth + 1 });
+  }
+}
+
+// The punctuated specs are judged once the whole chain has been read, because a
+// stripped spelling pointing at a file this scan ALREADY read by another route
+// leaves nothing unread: the verdict does not rest on the vendor's parse there,
+// so there is nothing to report. Every other one is reported, never decided.
+for (const item of punctuated) {
+  if (seen.has(item.real)) continue;
+  undecidable.push(
+    `${item.from} imports '${item.spec}', which names no file as written; stripped of its trailing punctuation it would name ${item.real}, and whether Claude Code strips that punctuation was not measured`,
+  );
+}
+
+const listOf = (items) => {
+  const shown = items.slice(0, 2).join("; ");
+  return items.length > 2 ? `${shown}; and ${items.length - 2} more` : shown;
+};
+if (external.length > 0) say("blocks", listOf(external));
+if (undecidable.length > 0) say("unknown", listOf(undecidable));
+// The clear line names what it examined - the PROJECT memory chain of the
+// launch directory, followed to the depth the product was measured to load -
+// alongside what it did not.
+say(
+  "clear",
+  `no import in the project memory chain under ${dir} (CLAUDE.md, CLAUDE.local.md and their @imports, followed to the ${MAX_IMPORT_DEPTH + 1} memory files Claude Code was measured to load - this directory's own memory file plus at most ${MAX_IMPORT_DEPTH} imported ones) reaches outside it; ${UNEXAMINED}`,
+  unexaminedExists()
+    ? "checked this project's own instruction files and everything they import; did not check your personal instruction file or any instruction file in a folder above this project"
+    : undefined,
+);
+NODE
+}
+
+if ! IMPORT_SCAN=$(import_scan "$TARGET_REAL" "${HOME:-}" "$STORE" "$IMPORT_ENTRY"); then
+  IMPORT_SCAN=$(printf 'unknown\tthe external-imports scan did not complete')
+fi
+
+IMPORT_LINE=${IMPORT_SCAN%%$'\n'*}
+IMPORT_VERDICT=${IMPORT_LINE%%$'\t'*}
+IMPORT_REST=${IMPORT_LINE#*$'\t'}
+IMPORT_REASON=${IMPORT_REST%%$'\t'*}
+# The third field is optional, so an unsplit rest means there was none.
+IMPORT_OPERATOR=${IMPORT_REST#*$'\t'}
+[ "$IMPORT_OPERATOR" != "$IMPORT_REST" ] || IMPORT_OPERATOR=
+# A scan run against an entry that is not the entry Claude Code reads answers a
+# different question than the one asked, so its verdict is not this gate's to
+# report either way: a standing approval would be missed and the launch refused
+# on it, a decline would be missed just as silently. This is exactly the case
+# the gate must say it could not decide.
+if [ -n "$IMPORT_ENTRY_UNDERIVABLE" ]; then
+  IMPORT_REASON="$IMPORT_ENTRY_UNDERIVABLE (the chain scan itself reported $IMPORT_VERDICT: $IMPORT_REASON)"
+  IMPORT_VERDICT=unknown
+fi
+case "$IMPORT_VERDICT" in
+clear)
+  echo "external imports: clear ($IMPORT_REASON)"
+  # The verdict's record goes to stdout, which the spawn discards. What the
+  # scan did NOT look at has to arrive where the verdict arrives, on the stream
+  # the operator is already reading, every time and not only when something is
+  # wrong: a clean verdict is exactly when the unexamined part matters, because
+  # that is when someone acts on it. Only the scan-derived clear carries it;
+  # the record-derived ones rest on Claude Code's own stored decision instead.
+  [ -z "$IMPORT_OPERATOR" ] || echo "claude imports: clear - $IMPORT_OPERATOR" >&2
+  ;;
+blocks)
+  echo "external imports: blocks ($IMPORT_REASON)"
+  echo "error: a claude agent launched in '$TARGET_REAL' would stop at Claude Code's \"Allow external CLAUDE.md file imports?\" dialog, which firstmate cannot answer: $IMPORT_REASON" >&2
+  echo "error: Claude Code has no external-import decision on record for '$IMPORT_ENTRY'; this script registers workspace trust but never answers that dialog on the human's behalf" >&2
+  echo "error: to clear it once for every future launch of this project, run claude interactively in '$IMPORT_ENTRY', answer \"Yes, allow external imports\", and dispatch again" >&2
+  exit 3
+  ;;
+*)
+  echo "external imports: unknown ($IMPORT_REASON)"
+  echo "warning: could not decide whether a claude agent launched in '$TARGET_REAL' meets Claude Code's \"Allow external CLAUDE.md file imports?\" dialog: $IMPORT_REASON" >&2
+  exit 4
+  ;;
+esac

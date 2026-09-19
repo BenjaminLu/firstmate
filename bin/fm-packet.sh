@@ -325,11 +325,12 @@
 #            once, because serve is an explicit ask for their attention.
 # path       Print the packet path for the task.
 #
-# The worker's contract (bin/fm-dod-lib.sh renders it into every ship brief):
-# scaffold once, fill every placeholder, run verify, and only then append the
-# `done:` or `needs-decision:` line. Firstmate runs verify at the wake and
-# steers the worker back when it fails, so a bare status line never reaches
-# the captain as if it were the whole story.
+# A packet is written when a task's brief asks for one; no brief asks by
+# default and no status line is held back waiting for one, because the captain
+# reads the pull request - its checks, its commits, its review comments - as
+# the ground truth instead of a document composed for him. Where a packet IS
+# written, this script is the whole of its contract: scaffold once, fill every
+# placeholder, run verify, and only then append the status line.
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"

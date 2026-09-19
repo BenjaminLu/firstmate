@@ -17,8 +17,12 @@
 # GitHub PRs and issues are supported; other forges remain visibly unmeasured.
 #
 # This script owns fm-contributions.v1: one atomic file per durable task with
-# task and records[]. Each record contains url, kind, checked_at, error,
+# task and records[]. Each record contains url, kind, checked_at, cut_at, error,
 # observation, verdict, seen event tokens, pending events, and notified tokens.
+# checked_at dates the instant the last completed read finished; cut_at dates
+# the moment the budget cut an attempt short, and only the newest attempt may
+# carry it. A cut is two events and not one, which is why only some cuts are
+# recorded at all: see the budget paragraph below.
 # observation is one coherent forge read. Observing one pull request costs four
 # forge calls, and that count is load-bearing: a slow forge answers each call in
 # 0.9-4.4 seconds, so four fit the default 20s budget while the eight a per-lane
@@ -56,36 +60,52 @@
 #
 # What that closes is the forge whose calls are merely slower than the old
 # five-second bound. What it does not close is a forge slow enough that a whole
-# observation does not fit the budget at all. That URL is not the only one it
-# costs. The poll breaks where the budget ran out, so every row behind it in
-# the queue is skipped, and because its records are left exactly as they were
-# found its checked_at never advances, so it keeps the head of the oldest-first
-# queue and blocks those same rows in every later poll too, until its
-# observation fits. Four calls fit the default twenty-second budget across the
-# whole measured 0.9-4.4 second range, but four counts gh invocations and not
-# forge round trips: the comment, review and inline-comment lists each page
-# inside their one invocation at a hundred items per request, and the check
-# rollup pages by cursor into a fifth invocation. So the figure holds for a
-# pull request whose comment, review and inline-comment lists each fit one page
-# and whose head commit's rollup fits one page. A pull request past any of
-# those pages costs more round trips than the figure allows, and at the
-# 4.4-second upper bound more than the budget holds, so those are the cases
-# this now fires on. The eight calls a per-lane REST observation needed fit no
-# budget in the documented 1..25 range, and an operator could not configure
-# around it - and it paginated these same lists identically. Every blocked row
-# ages out under the ordinary freshness rule below and the board shows it
-# unchecked; none is ever shown as freshly checked when it was not.
-# What stops this firing is fewer forge calls per observation, not a larger
-# fleet-wide FM_CHECK_TIMEOUT.
-# Oldest observations go first, so a large corpus progresses across polls.
+# observation does not fit the budget at all. Four calls fit the default
+# twenty-second budget across the whole measured 0.9-4.4 second range, but four
+# counts gh invocations and not forge round trips: the comment, review and
+# inline-comment lists each page inside their one invocation at a hundred items
+# per request, and the check rollup pages by cursor into a fifth invocation. So
+# the figure holds for a pull request whose comment, review and inline-comment
+# lists each fit one page and whose head commit's rollup fits one page. A pull
+# request past any of those pages costs more round trips than the figure
+# allows, and at the 4.4-second upper bound more than the budget holds, so
+# those are the cases this now fires on. The eight calls a per-lane REST
+# observation needed fit no budget in the documented 1..25 range, and an
+# operator could not configure around it - and it paginated these same lists
+# identically. What stops this firing is fewer forge calls per observation, not
+# a larger fleet-wide FM_CHECK_TIMEOUT.
+#
+# Such a URL must not stop the rest of the corpus, so a cut is recorded rather
+# than discarded - but only the kind of cut that means something. A cut is two
+# different events wearing one name. An attempt that began with the whole budget
+# and still did not fit cannot fit: it is recorded, stamped at the moment it was
+# cut, and so sorts behind every read of its own poll instead of taking the head
+# of the next one and spending that budget before anything else is read. An
+# attempt the budget merely never reached was never given a chance, and sending
+# it to the back would punish it for the queue position it happened to have: it
+# is left exactly as found, so it keeps its place and gets one full-budget
+# attempt on a later poll. Reading one instant for both is what a tiebreak, a
+# counter, or a cleverer ordering key would each be compensating for.
+# The poll still breaks where the budget ran out. A recorded cut writes cut_at
+# and nothing else, leaving checked_at, error, observation, verdict and every
+# signal field as found. Two fields, two jobs: cut_at says the budget stopped an
+# attempt, checked_at says when a read last finished, and the queue is ordered
+# by the later of the two while freshness reads the completed one alone. Writing
+# no error leaves the projection reading the last good observation, so a recent
+# success keeps its freshness, its captain row and its place in the checked and
+# complete counts, and an observation that stops being re-read ages out under
+# the ordinary freshness rule below: none is ever shown as freshly checked when
+# it was not. A successful observation clears cut_at as it clears error, and so
+# does a recorded failure: only the newest attempt may carry the marker.
+# Oldest reads go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
-# final observation applies to every owner without another forge read. When
-# the budget runs out mid-observation, the poll ends with that URL's records
-# untouched; only a genuine forge failure or head change records an error.
+# final observation applies to every owner without another forge read. Only a
+# genuine forge failure or head change records an error.
 # API failure leaves error evidence; an expired or absent observation is not
 # silence. FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # A URL whose last good observation is merged or closed is final: it is
-# never re-read, stays fresh, and a stale error beside it is cleared once.
+# never re-read, stays fresh, and a stale error beside it is cleared once,
+# taking any cut_at with it.
 # A genuine failure prints its unavailable line only when it starts an episode
 # (no prior owner has an error); a successful read ends the episode.
 # FM_CONTRIBUTIONS_NOW supplies an ISO UTC clock for tests, otherwise UTC now.
@@ -122,7 +142,12 @@ fail() { printf 'fm-contributions: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,/^set -eu$/s/^# \{0,1\}//p' "$0"; }
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 command -v jq >/dev/null 2>&1 || fail 'jq is required to measure contribution coverage'
-NOW=${FM_CONTRIBUTIONS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
+# One clock read, so NOW and the instant elapsed time is measured from are the
+# same instant rather than two that can straddle a second boundary. Elapsed time
+# runs from here, not from the later point the poll loop starts: the input
+# gathering between them belongs in a completed read's stamp.
+EPOCH_CLOCK=$(date +%s)
+NOW=${FM_CONTRIBUTIONS_NOW:-$(jq -nr --argjson at "$EPOCH_CLOCK" '$at | todateiso8601')}
 EPOCH=$(jq -nr --arg now "$NOW" '$now | fromdateiso8601') || fail 'invalid observation clock'
 MAX_AGE=${FM_CONTRIBUTIONS_MAX_AGE:-900}
 BUDGET=${FM_CONTRIBUTIONS_BUDGET:-20}
@@ -347,6 +372,17 @@ observe() { # canonical GitHub URL -> normalized JSON
     | valid_record' >/dev/null
 }
 
+load_old() { # task canonical-url kind -> this owner's stored row, or a blank one
+  jq -n --slurpfile saved "$TMP/saved.json" --arg task "$1" --arg url "$2" --arg kind "$3" '
+    ([$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first)
+    // {url:$url,kind:$kind,checked_at:null,cut_at:null,observation:null,verdict:null,seen:[],pending:[],notified:[]}' > "$TMP/old.json"
+}
+
+read_stamp() { # the instant the attempt that just finished completed
+  jq -nr --argjson base "$EPOCH" --argjson start "$EPOCH_CLOCK" --argjson now "$(date +%s)" \
+    '($base + ($now - $start)) | todateiso8601'
+}
+
 publish_pending() { # task canonical-url record-file
   local task=$1 url=$2 record=$3 token key count emitted status
   count=$(jq '.pending | length' "$record")
@@ -383,28 +419,35 @@ settle_final() { # canonical-url task... : copy the URL's final observation to e
       [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first' > "$TMP/old.json"
     if jq -e '. == null' "$TMP/old.json" >/dev/null; then
       jq -n --slurpfile final "$TMP/final.json" '
-        $final[0] + {error:null,pending:[],notified:[]}' > "$TMP/row.json"
+        $final[0] + {error:null,cut_at:null,pending:[],notified:[]}' > "$TMP/row.json"
       write_record "$task" "$TMP/row.json"
-    elif jq -e '.error != null' "$TMP/old.json" >/dev/null; then
-      jq '.error = null' "$TMP/old.json" > "$TMP/row.json"
+    elif jq -e '.error != null or .cut_at != null' "$TMP/old.json" >/dev/null; then
+      jq '.error = null | .cut_at = null' "$TMP/old.json" > "$TMP/row.json"
       write_record "$task" "$TMP/row.json"
     fi
   done
 }
 
 poll() {
-  local task url old kind error observed
+  local task url old kind error observed stamp reads whole_budget
   local -a row
   acquire
   get_input
   read_saved
   [ "$ERRORS" -eq 0 ] || printf 'contributions: %s unreadable durable record(s)\n' "$ERRORS"
-  # One line per distinct URL: the URL, then every owning task.
+  # One line per distinct URL: the URL, then every owning task. Each owner is
+  # keyed by the later of its completed read and the attempt the budget cut
+  # short, so a cut row - and one never observed at all - leaves the head.
   jq_lib -nr --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" '
-    known($input[0];$saved[0]) | map(. as $k | . + {at:([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url) | .checked_at] | first // "")})
+    known($input[0];$saved[0])
+    | map(. as $k
+      | ([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url)] | first) as $record
+      | . + {at:([$record.checked_at,$record.cut_at] | map(select(. != null)) | max // "")})
     | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),tasks:(map(.task) | unique)})
     | sort_by(.at,.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
-  DEADLINE=$(( $(date +%s) + BUDGET ))
+  POLL_START=$(date +%s)
+  DEADLINE=$(( POLL_START + BUDGET ))
+  reads=0
   while IFS=$'\t' read -r -a row; do
     [ "${#row[@]}" -ge 2 ] || continue
     [ "$(date +%s)" -lt "$DEADLINE" ] || break
@@ -416,38 +459,60 @@ poll() {
       settle_final "$url" "${row[@]:1}"
       continue
     fi
+    case "$url" in */issues/*) kind=issue ;; *) kind="pr" ;; esac
     observed=0
     BUDGET_EXHAUSTED=0
+    # Whether this attempt got the whole budget: nothing has been read yet.
+    whole_budget=$reads
     observe "$url" || observed=$?
-    # An observation the budget cut short is unmeasured, not unavailable: keep
-    # every owner's prior record so the URL is observed first next poll.
-    [ "$BUDGET_EXHAUSTED" -eq 0 ] || break
+    reads=$((reads + 1))
+    # An observation the budget cut short is unmeasured, not unavailable. Record
+    # the attempt in cut_at alone so the URL leaves the queue head, and leave
+    # checked_at and every field the projection reads as they were found, so a
+    # good recent observation keeps its freshness and an old one still ages out.
+    if [ "$BUDGET_EXHAUSTED" -ne 0 ]; then
+      # A cut is two events. An attempt that began with the whole budget and
+      # still did not fit cannot fit at all: it is recorded at the moment it was
+      # cut, so it sorts behind the reads of its own poll and stops taking the
+      # head. An attempt the budget merely never reached was never given a
+      # chance, so it is left exactly as found and keeps the place it had.
+      if [ "$whole_budget" -eq 0 ]; then
+        stamp=$(read_stamp)
+        for task in "${row[@]:1}"; do
+          fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
+          load_old "$task" "$url" "$kind"
+          jq --arg now "$stamp" '.cut_at=$now' "$TMP/old.json" > "$TMP/row.json"
+          write_record "$task" "$TMP/row.json"
+        done
+      fi
+      break
+    fi
+    # One observation is one read, so every owner shares the instant it ended:
+    # that keeps checked_at and any synthetic event token identical across them.
+    stamp=$(read_stamp)
     # Wake once per failure episode: only when no owner has a prior error.
     if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
       'all($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
         .error == null)' "${row[@]:1}" >/dev/null; then
       printf 'contributions: observation unavailable for %s\n' "$url"
     fi
-    case "$url" in */issues/*) kind=issue ;; *) kind="pr" ;; esac
     for task in "${row[@]:1}"; do
       fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
+      load_old "$task" "$url" "$kind"
       old="$TMP/old.json"
-      jq -n --slurpfile saved "$TMP/saved.json" --arg task "$task" --arg url "$url" --arg kind "$kind" '
-        ([$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first)
-        // {url:$url,kind:$kind,checked_at:null,observation:null,verdict:null,seen:[],pending:[],notified:[]}' > "$old"
       if [ "$observed" -eq 0 ]; then
-        jq -n --arg now "$NOW" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
+        jq -n --arg now "$stamp" --slurpfile old "$old" --slurpfile observation "$TMP/observation.json" '
           $old[0] as $old | $observation[0] as $o
           | ($o.events + (if $o.ready == true and $old.observation.ready != true and (any($o.events[]; .type == "ready-for-pr") | not) then
               [{token:("ready-for-pr:" + $now),type:"ready-for-pr",source:$old.url,head:null,body:"filed issue reached ready-for-pr"}]
               else [] end)) as $events
-          | $old + {checked_at:$now,error:null,
+          | $old + {checked_at:$now,error:null,cut_at:null,
             observation:($o + {absent_checks:((($old.observation.absent_checks // []) + [($old.observation.checks // [])[] | .name]) - [$o.checks[].name] | unique)}),
             seen:($events | map(.token)),
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
         error='forge observation unavailable or changed during read'
-        jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
+        jq --arg now "$stamp" --arg error "$error" '.checked_at=$now | .error=$error | .cut_at=null' "$old" > "$TMP/row.json"
       fi
       write_record "$task" "$TMP/row.json"
       publish_pending "$task" "$url" "$TMP/row.json"

@@ -1003,6 +1003,11 @@ test_list_scheduled_proven_isolated_uses_serial_weights() {
   pass "proven-isolated scheduling ignores parallel hints"
 }
 
+# The expected order below is longest-serial-hint first, with the three scripts
+# that have no serial hint sharing PORTABLE_SERIAL_DEFAULT_WEIGHT_MS and breaking
+# their tie by path. It is written out rather than derived so the assertion is
+# independent of the runner it checks; a serial weight refresh that reorders these
+# six scripts updates this list, and docs/fm-test-portable-shards.md owns that refresh.
 test_list_scheduled_non_lane_selections_use_serial_weights() {
   local tmp repo script selection
   local -a scripts=(
@@ -1028,11 +1033,11 @@ test_list_scheduled_non_lane_selections_use_serial_weights() {
     printf '\n' >>"$repo/$script"
   done
   printf '%s\n' \
+    tests/fm-kimi-harness.test.sh \
     tests/fm-muse-harness.test.sh \
     tests/fm-brief.test.sh \
     tests/fm-captain-hold-lifecycle.test.sh \
     tests/fm-lint.test.sh \
-    tests/fm-kimi-harness.test.sh \
     tests/fm-operational-input.test.sh >"$tmp/expected"
   for selection in family all changed scripts; do
     case "$selection" in
