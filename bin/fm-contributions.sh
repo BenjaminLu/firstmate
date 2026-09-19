@@ -28,14 +28,16 @@
 # calls at the 0.9-4.4s measured on a slow forge needed 7.2-35.2s, which the
 # default 20s budget could not hold, and left the row unobserved. The one
 # document does five reads' worth of work, so it is legitimately slower than
-# any single REST read it replaced and is held to no per-call constant: every
-# call is bounded by what remains of the poll budget alone. A commit with more
-# than one page of check contexts falls back to the two paginated REST check
-# lanes rather than dropping a lane, so that rare observation costs six. This
-# change holds itself to lane equivalence: the lanes reported here are exactly
-# the lanes the REST check-runs and statuses lanes reported, so a required
-# context the forge only expects and nobody has posted is no lane on either
-# path and one commit cannot read two ways. Checks are normalized by name, id,
+# any single REST read it replaced and is held to no per-call constant: each
+# call gets an equal share of what the budget still has, counting the calls the
+# observation still owes, so one read can neither be capped below what it now
+# is nor spend what the rest of its own observation needs. A commit with more
+# than one page of check contexts pages the same document with an after cursor,
+# costing five, so one normalization rule defines a check lane and one commit
+# cannot read two ways. This change holds itself to lane equivalence: the lanes
+# reported here are exactly the lanes the REST check-runs and statuses lanes
+# reported, so a required context the forge only expects and nobody has posted
+# is no lane. Checks are normalized by name, id,
 # started_at, status and conclusion; projection picks the newest attempt per
 # distinct name. The last observation's lane names also disclose a lane absent
 # from the next head.
@@ -48,13 +50,16 @@
 #
 # poll consumes fm-fleet-snapshot.sh --contribution-input, a local-only read,
 # and spends at most FM_CONTRIBUTIONS_BUDGET seconds on forge reads (default 20,
-# 1..25). Each gh call is bounded by the whole remaining budget, so a read the
-# bound kills leaves the row unmeasured and is never a forge failure.
-# Oldest observations go first, so a large corpus progresses across polls.
+# 1..25). Each gh call is bounded by the remaining budget divided by the calls
+# its observation still owes, so a read the bound kills is unmeasured, never a
+# forge failure. Oldest observations go first, so a large corpus progresses
+# across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
-# final observation applies to every owner without another forge read. When
-# the budget runs out mid-observation, the poll ends with that URL's records
-# untouched; only a genuine forge failure or head change records an error.
+# final observation applies to every owner without another forge read. A URL
+# the budget cut short is still stamped, silently: an attempt that recorded
+# nothing would otherwise stay first in the ordering for ever and starve every
+# other contribution in this home. Only a genuine forge failure or head change
+# wakes.
 # API failure leaves error evidence; an expired or absent observation is not
 # silence. FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # A URL whose last good observation is merged or closed is final: it is
@@ -193,14 +198,19 @@ write_record() { # task record-json-file
 }
 
 forge() {
-  local remaining rc=0
+  local remaining share rc=0
   remaining=$((DEADLINE - $(date +%s)))
   # The budget, not the forge, refused this read.
-  [ "$remaining" -gt 0 ] || { BUDGET_EXHAUSTED=1; return 1; }
-  fm_run_timed "$remaining" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
+  [ "$remaining" -gt 0 ] || { UNMEASURED=1; return 1; }
+  # An equal share of what is left, so no read is capped below what it now is
+  # and none can spend what the rest of its own observation still owes.
+  share=$((remaining / CALLS_OWED))
+  [ "$share" -ge 1 ] || share=1
+  [ "$CALLS_OWED" -le 1 ] || CALLS_OWED=$((CALLS_OWED - 1))
+  fm_run_timed "$share" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
     gh "$@" 2> "$TMP/forge.err" || rc=$?
-  # A read killed at the budget's own deadline is budget exhaustion, not failure.
-  [ "$rc" -ne 124 ] || BUDGET_EXHAUSTED=1
+  # A read killed at its share of the budget is unmeasured, not a forge failure.
+  [ "$rc" -ne 124 ] || UNMEASURED=1
   return "$rc"
 }
 
@@ -208,26 +218,28 @@ forge() {
 # repository's push permission, the forge review decision, the head recheck,
 # and both check lanes. Head and checks come from one snapshot, so the checks
 # are bound to that head without a second head read.
-PR_GRAPHQL='query($o:String!,$r:String!,$n:Int!){
+PR_GRAPHQL='query($o:String!,$r:String!,$n:Int!,$c:String){
   repository(owner:$o,name:$r){
     viewerPermission
     pullRequest(number:$n){
       state isDraft mergeable reviewDecision headRefOid
       author{login __typename}
       commits(last:1){nodes{commit{oid
-        statusCheckRollup{contexts(first:100){pageInfo{hasNextPage}
+        statusCheckRollup{contexts(first:100,after:$c){pageInfo{hasNextPage endCursor}
           nodes{
             __typename
             ... on CheckRun{name databaseId status conclusion startedAt}
             ... on StatusContext{context createdAt state}
           }}}}}}
     }}}'
+PR_ROLLUP='.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts'
 
 observe() { # canonical GitHub URL -> normalized JSON
-  local url=$1 part number kind endpoint head label owner repo
+  local url=$1 part number kind endpoint head label owner repo cursor
   case "$url" in https://github.com/*) ;; *) return 1 ;; esac
   part=${url#https://github.com/}; number=${part##*/}; part=${part%/*}; kind=${part##*/}; part=${part%/*}
   owner=${part%%/*}; repo=${part#*/}
+  case "$kind" in pull) CALLS_OWED=4 ;; *) CALLS_OWED=3 ;; esac
   case "$kind" in
     pull)
       # Owner and repo are raw fields: -F would send an all-digit name as a
@@ -240,6 +252,21 @@ observe() { # canonical GitHub URL -> normalized JSON
       # The rollup is read from the branch tip in the same snapshot as the head.
       jq -e --arg head "$head" '((.data.repository.pullRequest.commits.nodes[0].commit.oid) // $head) == $head' \
         "$TMP/core.json" >/dev/null || { printf 'head changed during observation\n' > "$TMP/forge.err"; return 1; }
+      cp "$TMP/core.json" "$TMP/page.json"
+      jq "$PR_ROLLUP.nodes // []" "$TMP/core.json" > "$TMP/contexts.json" || return 1
+      # More contexts than one page is rare: page the same connection so the
+      # lane rule below stays the only definition of a check lane.
+      while jq -e "$PR_ROLLUP.pageInfo.hasNextPage == true" "$TMP/page.json" >/dev/null; do
+        cursor=$(jq -er "$PR_ROLLUP.pageInfo.endCursor" "$TMP/page.json") || return 1
+        CALLS_OWED=$((CALLS_OWED + 1))
+        forge api graphql -f query="$PR_GRAPHQL" -f o="$owner" -f r="$repo" -F n="$number" -f c="$cursor" \
+          > "$TMP/page.json" || return 1
+        jq -e --arg head "$head" '.data.repository.pullRequest.commits.nodes[0].commit.oid == $head' \
+          "$TMP/page.json" >/dev/null || { printf 'head changed during observation\n' > "$TMP/forge.err"; return 1; }
+        jq --slurpfile page "$TMP/page.json" ". + (\$page[0] | $PR_ROLLUP.nodes // [])" \
+          "$TMP/contexts.json" > "$TMP/contexts.next" || return 1
+        mv "$TMP/contexts.next" "$TMP/contexts.json"
+      done
       ;;
     issues)
       endpoint="repos/$part/issues/$number"
@@ -253,32 +280,19 @@ observe() { # canonical GitHub URL -> normalized JSON
   if [ "$kind" = pull ]; then
     forge api "repos/$part/pulls/$number/reviews?per_page=100" --paginate --slurp > "$TMP/reviews.json" || return 1
     forge api "repos/$part/pulls/$number/comments?per_page=100" --paginate --slurp > "$TMP/inline.json" || return 1
-    # A commit carrying more check contexts than one page is rare; page it
-    # through the two REST lanes rather than silently dropping a lane.
-    if jq -e '.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.pageInfo.hasNextPage == true' \
-      "$TMP/core.json" >/dev/null; then
-      forge api "repos/$part/commits/$head/check-runs?filter=all&per_page=100" --paginate --slurp > "$TMP/checks.json" || return 1
-      forge api "repos/$part/commits/$head/statuses?per_page=100" --paginate --slurp > "$TMP/statuses.json" || return 1
-      jq -n --slurpfile checks "$TMP/checks.json" --slurpfile statuses "$TMP/statuses.json" '
-        [ $checks[0][] | .check_runs[] | {name,id,status,conclusion,started_at} ]
-        + [ $statuses[0][] | .[] | {name:.context,id,started_at:.created_at,
-          status:(if .state == "pending" then "in_progress" else "completed" end),
-          conclusion:(if .state == "pending" then null else .state end)} ]' > "$TMP/rollup.json" || return 1
-    else
-      # A context the forge only expects is unposted: the REST statuses lane
-      # never reported one, so it is no lane here either.
-      jq '[ (.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
-        | select(.state != "EXPECTED")
-        | if .__typename == "CheckRun" then
-            {name,id:.databaseId,status:(.status | ascii_downcase),
-             conclusion:(if .conclusion == null then null else (.conclusion | ascii_downcase) end),
-             started_at:.startedAt}
-          else
-            {name:.context,id:null,started_at:.createdAt,
-             status:(if .state == "PENDING" then "in_progress" else "completed" end),
-             conclusion:(if .state == "PENDING" then null else (.state | ascii_downcase) end)}
-          end ]' "$TMP/core.json" > "$TMP/rollup.json" || return 1
-    fi
+    # A context the forge only expects is unposted: the REST statuses lane
+    # never reported one, so it is no lane here either.
+    jq '[ .[]
+      | select(.state != "EXPECTED")
+      | if .__typename == "CheckRun" then
+          {name,id:.databaseId,status:(.status | ascii_downcase),
+           conclusion:(if .conclusion == null then null else (.conclusion | ascii_downcase) end),
+           started_at:.startedAt}
+        else
+          {name:.context,id:null,started_at:.createdAt,
+           status:(if .state == "PENDING" then "in_progress" else "completed" end),
+           conclusion:(if .state == "PENDING" then null else (.state | ascii_downcase) end)}
+        end ]' "$TMP/contexts.json" > "$TMP/rollup.json" || return 1
     jq -n --slurpfile core "$TMP/core.json" --slurpfile comments "$TMP/comments.json" \
       --slurpfile reviews "$TMP/reviews.json" --slurpfile inline "$TMP/inline.json" --slurpfile checks "$TMP/rollup.json" '
       $core[0].data.repository as $r
@@ -374,7 +388,6 @@ poll() {
     | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),tasks:(map(.task) | unique)})
     | sort_by(.at,.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
   DEADLINE=$(( $(date +%s) + BUDGET ))
-  BUDGET_EXHAUSTED=0
   while IFS=$'\t' read -r -a row; do
     [ "${#row[@]}" -ge 2 ] || continue
     [ "$(date +%s)" -lt "$DEADLINE" ] || break
@@ -387,12 +400,11 @@ poll() {
       continue
     fi
     observed=0
+    UNMEASURED=0
     observe "$url" || observed=$?
-    # An observation the budget cut short is unmeasured, not unavailable: keep
-    # every owner's prior record so the URL is observed first next poll.
-    [ "$BUDGET_EXHAUSTED" -eq 0 ] || break
-    # Wake once per failure episode: only when no owner has a prior error.
-    if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
+    # Wake once per failure episode: only when no owner has a prior error. A
+    # read the budget cut short is unmeasured, not unavailable, and never wakes.
+    if [ "$observed" -ne 0 ] && [ "$UNMEASURED" -eq 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
       'all($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
         .error == null)' "${row[@]:1}" >/dev/null; then
       printf 'contributions: observation unavailable for %s\n' "$url"
@@ -415,7 +427,11 @@ poll() {
             seen:($events | map(.token)),
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
-        error='forge observation unavailable or changed during read'
+        if [ "$UNMEASURED" -eq 0 ]; then
+          error='forge observation unavailable or changed during read'
+        else
+          error='observation did not fit the poll budget'
+        fi
         jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
       fi
       write_record "$task" "$TMP/row.json"
