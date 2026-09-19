@@ -1001,7 +1001,12 @@ test_the_scan_follows_the_documented_import_depth() {
   pass "fm-claude-trust.sh: the import scan follows a chain to the depth Claude Code documents"
 }
 
-test_a_chain_past_the_scanned_depth_is_reported_unfollowed() {
+# Past that depth Claude Code stops loading too, so a further hop cannot raise
+# the dialog: that is a known limit, not an undecided result, and calling it
+# undecided would put every project with a long in-tree chain permanently on a
+# warning no operator could act on. The clear line has to name the depth it
+# followed, so "clear" never reads as an unbounded claim.
+test_a_chain_past_the_scanned_depth_is_cleared_naming_that_depth() {
   local row out status i
   row=$(import_case imports-deeper)
   read_case "$row"
@@ -1011,10 +1016,62 @@ test_a_chain_past_the_scanned_depth_is_reported_unfollowed() {
   done
   printf 'end\n' > "$WT/link7.md"
   out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
-  expect_code 4 "$status" "a chain running past the scanned depth must be reported, not called clean: $out"
-  assert_contains "$out" "import depth this scan follows" \
-    "the report did not say the chain was left unfollowed"
-  pass "fm-claude-trust.sh: a memory chain deeper than the scan follows is reported as unfollowed"
+  expect_code 0 "$status" "an in-tree chain running past the scanned depth must not hold up a launch: $out"
+  assert_contains "$out" "external imports: clear" \
+    "a chain that never leaves the worktree was not cleared"
+  assert_contains "$out" "5-file import depth" \
+    "the clear verdict did not name the depth it followed the chain to"
+  pass "fm-claude-trust.sh: an in-tree chain past the scanned depth is cleared, naming that depth"
+}
+
+# A clear verdict is a report of what was examined, not a blanket all-clear. The
+# project memory chain of the launch directory is what this scans; the
+# operator's own user-global chain is deliberately not, and the line has to say
+# so rather than let silence read as a check that happened.
+test_the_clear_verdict_names_what_it_scanned_and_what_it_did_not() {
+  local row out status
+  row=$(import_case imports-clear-wording)
+  read_case "$row"
+  printf '# p\n\n@AGENTS.md\n' > "$WT/CLAUDE.md"
+  printf 'inside\n' > "$WT/AGENTS.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 0 "$status" "a chain that stays inside the worktree must not block: $out"
+  assert_contains "$out" "project memory chain under $WT" \
+    "the clear verdict did not name the chain it actually examined"
+  assert_contains "$out" "user-global ~/.claude memory chain was not examined" \
+    "the clear verdict did not say which chain it never looked at"
+  pass "fm-claude-trust.sh: a clear verdict names the chain it scanned and the one it did not"
+}
+
+# An @import written in a sentence carries that sentence's punctuation, and a
+# spec with the punctuation glued on names no file - so the real import would
+# degrade to `unknown`, the spawn would warn and launch, and the worker would
+# wedge on the dialog this gate exists to decide.
+test_an_external_import_ending_a_sentence_is_still_decided() {
+  local row out status
+  row=$(import_case imports-punctuation)
+  read_case "$row"
+  printf '# p\n\nShared house rules live in @%s/outside.md.\n' "$CASE_DIR" > "$WT/CLAUDE.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 3 "$status" "an external import written in prose must be decided, not degraded: $out"
+  assert_contains "$out" "$CASE_DIR/outside.md" \
+    "the refusal did not name the import that raises the dialog"
+  pass "fm-claude-trust.sh: an external import ending a sentence is classified, not left undecided"
+}
+
+# The same class in the other direction: a parenthesised in-tree import must
+# still be FOLLOWED, or an external import one hop behind it goes unseen.
+test_a_parenthesised_in_tree_import_is_still_followed() {
+  local row out status
+  row=$(import_case imports-parens)
+  read_case "$row"
+  printf '# p\n\nThe house rules (see @AGENTS.md) apply here.\n' > "$WT/CLAUDE.md"
+  printf '@%s/outside.md\n' "$CASE_DIR" > "$WT/AGENTS.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 3 "$status" "an import written in parentheses must still be followed: $out"
+  assert_contains "$out" "$WT/AGENTS.md" \
+    "the refusal did not name the file reached through the parenthesised import"
+  pass "fm-claude-trust.sh: a parenthesised in-tree import is followed like any other"
 }
 
 # A CLAUDE.md that sits in the worktree but resolves out of it is a loaded file
@@ -1031,6 +1088,22 @@ test_a_memory_file_symlinked_out_of_the_worktree_is_reported() {
   assert_contains "$out" "$CASE_DIR/shared-CLAUDE.md" \
     "the report did not name the file the memory path resolves to"
   pass "fm-claude-trust.sh: a memory file resolving outside the worktree is reported, not assumed"
+}
+
+# The same file, read rather than skipped: a shared CLAUDE.md carrying its own
+# outside import is a DEFINITE dialog, and stopping at the symlink would report
+# `unknown`, let the spawn warn and launch, and put the worker on the modal.
+test_a_memory_file_symlinked_out_of_the_worktree_is_still_read() {
+  local row out status
+  row=$(import_case imports-symlink-chain)
+  read_case "$row"
+  printf '# shared\n\n@%s/outside.md\n' "$CASE_DIR" > "$CASE_DIR/shared-CLAUDE.md"
+  ln -s "$CASE_DIR/shared-CLAUDE.md" "$WT/CLAUDE.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 3 "$status" "an outside-resolving memory file that imports outside must block: $out"
+  assert_contains "$out" "$CASE_DIR/outside.md" \
+    "the refusal did not name the import the shared memory file reaches for"
+  pass "fm-claude-trust.sh: a memory file resolving outside the worktree is still read for its own imports"
 }
 
 # A secondmate home is the other directory a claude launch starts in, and its own
@@ -1050,6 +1123,40 @@ test_secondmate_home_external_import_blocks_the_launch() {
   assert_trusted "$config/.claude.json" "$home" \
     "a blocked secondmate launch must still leave the home's workspace trust registered"
   pass "fm-claude-trust.sh: a secondmate home whose memory chain reaches outside it blocks the launch"
+}
+
+# The consent entry the scan reads has to be the entry Claude Code reads. A home
+# that is a linked worktree in a layout this cannot resolve to a primary checkout
+# - a worktree of a BARE repository, where the common dir's parent is no checkout
+# at all - is exactly that case: the store lookup would answer about the wrong
+# key, so a standing approval would be missed and the launch refused over an
+# import the human already allowed. It must report that it could not decide.
+test_secondmate_home_with_an_underivable_consent_entry_is_undecided() {
+  local case_dir home config bare src out status
+  case_dir="$TMP_ROOT/imports-secondmate-underivable"
+  home="$case_dir/home"
+  config="$case_dir/claude-config"
+  src="$case_dir/src"
+  bare="$case_dir/bare.git"
+  mkdir -p "$case_dir" "$config"
+  fm_git_init_commit "$src"
+  git clone --quiet --bare "$src" "$bare" >/dev/null 2>&1
+  git -C "$bare" worktree add --quiet -b sm-underivable "$home" >/dev/null 2>&1
+  mkdir -p "$home/bin" "$home/data" "$home/state" "$home/config" "$home/projects"
+  printf '# Firstmate\n' > "$home/AGENTS.md"
+  printf 'smunderiv\n' > "$home/.fm-secondmate-home"
+  printf 'outside\n' > "$case_dir/outside.md"
+  printf '@%s/outside.md\n' "$case_dir" > "$home/CLAUDE.md"
+  out=$(CLAUDE_CONFIG_DIR="$config" HOME="$config" \
+    "$TRUST" --secondmate-home "$home" smunderiv 2>&1) && status=0 || status=$?
+  expect_code 4 "$status" "a home whose consent entry cannot be identified must be reported as undecided: $out"
+  assert_contains "$out" "external imports: unknown" \
+    "the gate did not report that it could not decide"
+  assert_contains "$out" "primary checkout could not be resolved" \
+    "the report did not name the entry it could not identify"
+  assert_trusted "$config/.claude.json" "$home" \
+    "an undecided secondmate launch must still leave the home's workspace trust registered"
+  pass "fm-claude-trust.sh: a secondmate home whose consent entry cannot be identified is reported as undecided"
 }
 
 # The spawn half. A launch the gate can see coming must be refused before any
@@ -1153,8 +1260,13 @@ test_a_transitive_import_out_of_the_worktree_blocks
 test_claude_local_md_is_scanned_too
 test_an_unresolvable_external_import_is_reported_as_undecided
 test_the_scan_follows_the_documented_import_depth
-test_a_chain_past_the_scanned_depth_is_reported_unfollowed
+test_a_chain_past_the_scanned_depth_is_cleared_naming_that_depth
+test_the_clear_verdict_names_what_it_scanned_and_what_it_did_not
+test_an_external_import_ending_a_sentence_is_still_decided
+test_a_parenthesised_in_tree_import_is_still_followed
 test_a_memory_file_symlinked_out_of_the_worktree_is_reported
+test_a_memory_file_symlinked_out_of_the_worktree_is_still_read
 test_secondmate_home_external_import_blocks_the_launch
+test_secondmate_home_with_an_underivable_consent_entry_is_undecided
 test_spawn_refuses_a_launch_that_would_meet_the_imports_dialog
 test_spawn_launches_and_warns_when_the_imports_verdict_is_undecided

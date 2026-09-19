@@ -119,6 +119,7 @@ Start `omp` with this checkout as its working directory: it auto-discovers the t
 
 For Grok, `--trust` is needed once per clone so project hooks and the turn-end guard load; `/hooks-trust` inside Grok works too.
 For Pi, approve the project trust prompt once per clone on first launch so the tracked `.pi/extensions/*.ts` files auto-load.
+For Claude Code, nothing is needed to start, and worker panes get their workspace trust registered for them; the one exception is a project whose own `CLAUDE.md` imports a path outside that project's tree, where Claude Code asks "Allow external CLAUDE.md file imports?" - answer that once per project by running `claude` in that project's checkout, and every later worker in it launches straight through. A dispatch that would meet it is refused rather than launched, naming the import and the checkout to approve, so there is nothing to set up in advance.
 The `/calm` toggle on Pi, and on Claude Code behind its default-off early-access function-hooks flag, hides supported transcript chrome, including canonically classified Firstmate operational user rows, and uses a Calm-only animated working boat during active runs while preserving all model context and session data.
 Those Calm-hidden operational inputs remain ordinary user-role messages with unchanged delivery, ordering, authority, persistence, and exports.
 The preference persists for the effective Firstmate home, and toggling it off restores ordinary rendering.

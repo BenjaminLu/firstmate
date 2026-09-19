@@ -42,8 +42,10 @@
 # (the gate at the end of this file records the reproduction and its version).
 # An earlier revision of this comment attributed it instead to the operator's
 # own `~/.claude/CLAUDE.md` importing `~/.claude/RTK.md`; that file did not
-# exist on the machine the reproduction was run on, and the user memory chain
-# is neither scanned nor claimed about here. Only worktree mode reaches this
+# exist on the machine the reproduction was run on, so the user memory chain is
+# not scanned here - and, because an unscanned dimension must not read as a
+# checked one, every `clear` verdict this prints says out loud that it was not
+# examined. Only worktree mode reaches this
 # second dialog's flags: a secondmate home has no separate "project" entry to
 # carry consent forward from, so its registration stays trust-only.
 #
@@ -229,6 +231,36 @@ common_dir_of() {
   (cd -P -- "$dir" && real_dir "$common")
 }
 
+# The primary checkout a directory collapses to under Claude Code's own git-root
+# canonicalization, or empty when there is none to derive. One rule, one copy:
+# a checkout whose own git dir already equals the common dir IS the primary
+# checkout; a linked worktree's primary checkout is the common dir's parent in
+# the standard non-bare, non-GIT_DIR-overridden layout this script requires
+# elsewhere - derived structurally and then VERIFIED, never assumed, because the
+# candidate's own resolved git dir must equal that same common dir. A directory
+# outside a repository, or one whose derived candidate fails that verification,
+# answers empty; each caller decides what an empty answer means, since refusing
+# is right for the project argument and reporting `unknown` is right for the
+# import-entry lookup.
+primary_checkout_of() {
+  local dir=$1 common git_dir candidate candidate_git_dir
+  common=$(common_dir_of "$dir") || true
+  [ -n "$common" ] || return 0
+  git_dir=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null) || true
+  git_dir=$(real_dir "${git_dir:-}") || true
+  [ -n "$git_dir" ] || return 0
+  if [ "$git_dir" = "$common" ]; then
+    printf '%s\n' "$dir"
+    return 0
+  fi
+  candidate=$(real_dir "$(dirname -- "$common")") || true
+  [ -n "$candidate" ] || return 0
+  candidate_git_dir=$(git -C "$candidate" rev-parse --absolute-git-dir 2>/dev/null) || true
+  candidate_git_dir=$(real_dir "${candidate_git_dir:-}") || true
+  [ "${candidate_git_dir:-}" = "$common" ] || return 0
+  printf '%s\n' "$candidate"
+}
+
 TARGET_REAL=$(real_dir "$TARGET_ARG") || true
 [ -n "$TARGET_REAL" ] || refuse "$SCOPE_NOUN '$TARGET_ARG' is not an accessible directory"
 if [ "$MODE" = worktree ]; then
@@ -290,29 +322,13 @@ if [ "$MODE" = worktree ]; then
   # own git-root canonicalization collapses every linked worktree to. When
   # <project> is itself a linked worktree (a secondmate home spawned from,
   # rather than as, the primary checkout), refusing outright would wedge a
-  # relaunch that is otherwise perfectly valid: PROJ_COMMON already IS that
-  # primary checkout's own git dir (git's git-common-dir answer never changes
-  # by which worktree asks), so the checkout is derived structurally from it -
-  # its parent directory in the standard non-bare, non-GIT_DIR-overridden
-  # layout this script already requires elsewhere - and verified, never
-  # assumed: the candidate's own resolved git dir must equal PROJ_COMMON, the
-  # same primary-checkout definition used above, or this refuses rather than
-  # guess.
-  PROJ_GIT_DIR=$(git -C "$PROJ_REAL" rev-parse --absolute-git-dir 2>/dev/null) || true
-  [ -n "$PROJ_GIT_DIR" ] || refuse "project '$PROJ_REAL' has no resolvable git directory"
-  PROJ_GIT_DIR=$(real_dir "$PROJ_GIT_DIR") || true
-  [ -n "$PROJ_GIT_DIR" ] || refuse "project '$PROJ_REAL' has an unresolvable git directory"
-  if [ "$PROJ_GIT_DIR" = "$PROJ_COMMON" ]; then
-    PROJ_CANON=$PROJ_REAL
-  else
-    PROJ_CANON=$(real_dir "$(dirname -- "$PROJ_COMMON")") || true
-    [ -n "$PROJ_CANON" ] \
-      || refuse "project '$PROJ_REAL' is a linked worktree whose primary checkout could not be resolved"
-    CANON_GIT_DIR=$(git -C "$PROJ_CANON" rev-parse --absolute-git-dir 2>/dev/null) || true
-    CANON_GIT_DIR=$(real_dir "${CANON_GIT_DIR:-}") || true
-    [ -n "$CANON_GIT_DIR" ] && [ "$CANON_GIT_DIR" = "$PROJ_COMMON" ] \
-      || refuse "project '$PROJ_REAL' is a linked worktree whose primary checkout could not be resolved"
-  fi
+  # relaunch that is otherwise perfectly valid, so primary_checkout_of derives
+  # and verifies that checkout; an answer it cannot verify refuses here rather
+  # than guess, because writing the flags at a key Claude Code never reads
+  # would silently reproduce the bug this script exists to close.
+  PROJ_CANON=$(primary_checkout_of "$PROJ_REAL") || true
+  [ -n "$PROJ_CANON" ] \
+    || refuse "project '$PROJ_REAL' is a linked worktree whose primary checkout could not be resolved"
 else
   # The seed evidence, in the order that names the most useful reason first: the
   # marker decides whether this is a secondmate home at all, the id decides
@@ -594,9 +610,20 @@ fi
 # operator's own ~/.claude/CLAUDE.md importing ~/.claude/RTK.md; that file does
 # not exist on the machine this was measured on, and the lab could not decide
 # the user-memory case either way without modifying the operator's global memory
-# or extracting their credential, so the user chain is deliberately NOT scanned
-# and NOT claimed about. A chain this cannot read to the end therefore reports
-# `unknown` rather than a clean verdict: an unverifiable case must say so.
+# or extracting their credential, so the user chain is deliberately NOT scanned.
+# It is not passed over in silence either: EVERY `clear` line names the project
+# chain of the launch directory as the thing it examined and states that the
+# user-global chain was not, because a check that cannot verify a dimension has
+# to report that rather than let a clean-reading verdict imply it looked.
+#
+# WHAT `unknown` IS FOR, and what it is not. It is for a chain this could not
+# read to the end - a memory file it cannot read, a `~` it cannot expand, an
+# outside-looking import that is not on disk, a memory path resolving out of the
+# tree - and for a launch whose consent entry could not be identified at all, so
+# the store lookup would answer about the wrong key. It is NOT for the import
+# depth: five files is where Claude Code itself stops loading, so a hop past it
+# cannot raise the dialog and is a known limit rather than an undecided one. The
+# clear line names that depth instead, so nobody has to guess how far it looked.
 #
 # THE VERDICT NEVER MANUFACTURES CONSENT. `blocks` refuses the launch and names
 # the one-time human approval; it never writes the approval, exactly as the
@@ -609,27 +636,27 @@ fi
 # Both are distinct from the refusals above (1) so a caller can tell "nothing
 # was registered" from "registered, and here is the dialog still in the way".
 IMPORT_ENTRY=$TARGET_REAL
+IMPORT_ENTRY_UNDERIVABLE=
 if [ "$MODE" = worktree ]; then
   IMPORT_ENTRY=$PROJ_CANON
 else
   # A seeded secondmate home is either a standalone clone (already the primary
   # checkout), a leased linked worktree (whose consent entry is its primary
-  # checkout, derived exactly as the worktree branch above derives it), or not a
-  # git repository at all (Claude Code then has nothing to canonicalize to and
-  # the home's own entry is what it reads). Each is resolved, never guessed; an
-  # underivable primary checkout leaves the home's own entry, which the scan
-  # below can still only turn into `unknown` rather than a clean verdict.
-  home_common=$(common_dir_of "$TARGET_REAL") || true
-  if [ -n "$home_common" ]; then
-    home_git_dir=$(git -C "$TARGET_REAL" rev-parse --absolute-git-dir 2>/dev/null) || true
-    home_git_dir=$(real_dir "${home_git_dir:-}") || true
-    if [ -n "$home_git_dir" ] && [ "$home_git_dir" != "$home_common" ]; then
-      home_canon=$(real_dir "$(dirname -- "$home_common")") || true
-      if [ -n "$home_canon" ]; then
-        canon_git_dir=$(git -C "$home_canon" rev-parse --absolute-git-dir 2>/dev/null) || true
-        canon_git_dir=$(real_dir "${canon_git_dir:-}") || true
-        [ "${canon_git_dir:-}" = "$home_common" ] && IMPORT_ENTRY=$home_canon
-      fi
+  # checkout, derived by the same one rule the worktree branch above uses), or
+  # not a git repository at all - Claude Code then has nothing to canonicalize
+  # to and the home's own entry is what it reads. The first two are resolved,
+  # never guessed. A home that IS inside a repository but whose primary checkout
+  # cannot be verified is the case that must not reach a definite verdict: the
+  # entry the scan would read is then not the entry Claude Code reads, so a
+  # standing approval recorded there would be missed and the launch refused on a
+  # question this cannot actually answer. That case is carried to the verdict
+  # below and forced to `unknown`.
+  if [ -n "$(common_dir_of "$TARGET_REAL" || true)" ]; then
+    home_canon=$(primary_checkout_of "$TARGET_REAL") || true
+    if [ -n "$home_canon" ]; then
+      IMPORT_ENTRY=$home_canon
+    else
+      IMPORT_ENTRY_UNDERIVABLE="'$TARGET_REAL' is inside a git repository whose primary checkout could not be resolved, so the project entry Claude Code reads its external-import decision from could not be identified"
     fi
   fi
 fi
@@ -642,10 +669,19 @@ import_scan() {
 const fs = require("node:fs");
 const path = require("node:path");
 const [dir, home, store, entry] = process.argv.slice(2);
-// Claude Code documents five as the maximum import depth. A chain deeper than
-// that is not followed here either, so this scan cannot claim an import the
-// product would never load.
+// Claude Code documents five as the maximum import depth. This scan stops where
+// the product stops: a hop past that depth is not followed, and not reported as
+// something left undecided either, because the product would not load it and so
+// it cannot raise the dialog. The clear verdict below names the depth it
+// followed, so a reader can tell a scanned chain from an unbounded claim.
 const MAX_DEPTH = 5;
+// Every `clear` line carries what this could NOT look at, because the operator's
+// own user-global chain (~/.claude/CLAUDE.md and its @imports) is deliberately
+// never scanned: whether it can raise this dialog was not reproduced here
+// (docs/verification/claude-launch-dialogs.md records why), and scanning it on a
+// guess would refuse every dispatch on a host that has one. A check that cannot
+// verify a dimension says so instead of passing by silence.
+const UNEXAMINED = "the operator's user-global ~/.claude memory chain was not examined";
 const say = (verdict, reason) => {
   process.stdout.write(`${verdict}\t${reason}\n`);
   process.exit(0);
@@ -668,8 +704,8 @@ try {
   // already read and rewrote this same file successfully, so reaching here means
   // it changed underneath us; fall through and let the chain decide.
 }
-if (decided === "approved") say("clear", `${entry} already carries Claude Code's external-import approval`);
-if (decided === "declined") say("clear", `${entry} already carries Claude Code's explicit external-import decline, so the dialog does not render`);
+if (decided === "approved") say("clear", `${entry} already carries Claude Code's external-import approval; ${UNEXAMINED}`);
+if (decided === "declined") say("clear", `${entry} already carries Claude Code's explicit external-import decline, so the dialog does not render; ${UNEXAMINED}`);
 
 const inside = (p) => p === dir || p.startsWith(dir + path.sep);
 const realOrNull = (p) => {
@@ -706,6 +742,23 @@ const resolveSpec = (spec, fromDir) => {
   if (path.isAbsolute(spec)) return spec;
   return path.resolve(fromDir, spec);
 };
+// `@path` in prose carries the sentence's punctuation with it - "rules live in
+// @../house/RULES.md." - and a spec with that punctuation glued on names no
+// file, so the real import would degrade to `unknown` instead of being decided.
+// The punctuation-stripped form is therefore tried as well. It only WINS where
+// it names a real file, so a spec that already resolves is classified exactly as
+// before and stripping can never turn a written path into some neighbouring
+// directory; when no form names a file, the written spec is what gets resolved
+// and reported.
+const specForms = (spec) => {
+  const trimmed = spec.replace(/[.,;:!?)\]}'"]+$/, "");
+  return trimmed && trimmed !== spec ? [spec, trimmed] : [spec];
+};
+const fileOrNull = (p) => {
+  const real = realOrNull(p);
+  if (real === null) return null;
+  try { return fs.statSync(real).isFile() ? real : null; } catch { return null; }
+};
 
 const external = [];
 const undecidable = [];
@@ -723,10 +776,13 @@ while (queue.length > 0) {
   // A memory file that sits at an in-tree path but resolves out of the tree -
   // CLAUDE.md symlinked at a shared file - is a loaded file outside the
   // directory without being an import of one. Whether Claude Code counts that
-  // was not measured, so it is reported rather than decided either way.
+  // by itself was not measured, so it is reported rather than decided either
+  // way - but the file is still READ, because what it imports is not
+  // undecidable at all: a shared CLAUDE.md carrying its own outside import is
+  // the definite `blocks` case, and skipping it would report `unknown` and
+  // launch a worker straight into the dialog.
   if (depth === 0 && !inside(real)) {
     undecidable.push(`${file} resolves to ${real}, outside ${dir}`);
-    continue;
   }
   let text;
   try {
@@ -737,12 +793,24 @@ while (queue.length > 0) {
   }
   const fromDir = path.dirname(real);
   for (const spec of importsIn(text)) {
-    const target = resolveSpec(spec, fromDir);
+    let target = null;
+    let targetReal = null;
+    for (const form of specForms(spec)) {
+      const resolved = resolveSpec(form, fromDir);
+      if (resolved === null) continue;
+      if (target === null) target = resolved;
+      const named = fileOrNull(resolved);
+      if (named !== null) {
+        target = resolved;
+        targetReal = named;
+        break;
+      }
+    }
+    if (targetReal === null && target !== null) targetReal = realOrNull(target);
     if (target === null) {
       undecidable.push(`${real} imports '${spec}' and HOME is not set, so '~' cannot be expanded`);
       continue;
     }
-    const targetReal = realOrNull(target);
     if (targetReal === null) {
       // A missing import contributes nothing to load, but whether Claude Code
       // still lists one that points outside is not something this measured, so
@@ -757,13 +825,13 @@ while (queue.length > 0) {
       external.push(`${real} imports '${spec}'${where}`);
       continue;
     }
+    // Past the documented depth this scan stops where the product stops. That
+    // is a known limit rather than an undecided case - Claude Code does not
+    // load the hop either, so it cannot raise the dialog - and reporting it as
+    // undecided would put every project with a long in-tree chain permanently
+    // on a warning with nothing an operator could do about it.
     if (depth + 1 <= MAX_DEPTH) {
       queue.push({ file: targetReal, depth: depth + 1 });
-    } else {
-      // Past the documented depth this scan stops where the product stops, but
-      // it stops BLIND: an external import one hop further would be missed, and
-      // a missed one is the silent wedge this gate exists to remove.
-      undecidable.push(`${real} imports '${spec}' beyond the ${MAX_DEPTH}-file import depth this scan follows`);
     }
   }
 }
@@ -774,7 +842,13 @@ const listOf = (items) => {
 };
 if (external.length > 0) say("blocks", listOf(external));
 if (undecidable.length > 0) say("unknown", listOf(undecidable));
-say("clear", `no CLAUDE.md import under ${dir} reaches outside it`);
+// The clear line names what it examined - the PROJECT memory chain of the
+// launch directory, followed to the depth the product documents - alongside
+// what it did not.
+say(
+  "clear",
+  `no import in the project memory chain under ${dir} (CLAUDE.md, CLAUDE.local.md and their @imports, followed to Claude Code's documented ${MAX_DEPTH}-file import depth) reaches outside it; ${UNEXAMINED}`,
+);
 NODE
 }
 
@@ -785,6 +859,15 @@ fi
 IMPORT_VERDICT=${IMPORT_SCAN%%$'\n'*}
 IMPORT_REASON=${IMPORT_VERDICT#*$'\t'}
 IMPORT_VERDICT=${IMPORT_VERDICT%%$'\t'*}
+# A scan run against an entry that is not the entry Claude Code reads answers a
+# different question than the one asked, so its verdict is not this gate's to
+# report either way: a standing approval would be missed and the launch refused
+# on it, a decline would be missed just as silently. This is exactly the case
+# the gate must say it could not decide.
+if [ -n "$IMPORT_ENTRY_UNDERIVABLE" ]; then
+  IMPORT_REASON="$IMPORT_ENTRY_UNDERIVABLE (the chain scan itself reported $IMPORT_VERDICT: $IMPORT_REASON)"
+  IMPORT_VERDICT=unknown
+fi
 case "$IMPORT_VERDICT" in
 clear)
   echo "external imports: clear ($IMPORT_REASON)"
