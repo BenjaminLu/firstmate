@@ -447,7 +447,7 @@ test_the_board_styles_a_drawings_box_and_never_its_insides() {
 
   # and no rule in the stylesheet the board actually shipped reaches into it
   board="$home/.lavish/bearings-board.html"
-  python3 - "$board" <<'SCOPE'
+  if ! python3 - "$board" <<'SCOPE'
 import pathlib, re, sys
 html = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 css = re.sub(r"/\*.*?\*/", "", html.split("<style>", 1)[1].split("</style>", 1)[0], flags=re.S)
@@ -479,7 +479,9 @@ if reaches:
 if unscoped:
     print("rules styling a drawing element document-wide: %s" % ", ".join(unscoped)); sys.exit(1)
 SCOPE
-  [ "$?" -eq 0 ] || fail "the board stylesheet reaches inside a drawing"
+  then
+    fail "the board stylesheet reaches inside a drawing"
+  fi
   pass "the board styles a drawing's box and never its insides"
 }
 
@@ -496,7 +498,7 @@ test_a_board_links_own_class_decides_how_it_reads() {
   home=$(make_home link-cascade)
   render_payload "$home" "$(packet_payload en "[$(packet_figure cmp quiet loud)]")" >/dev/null
   board="$home/.lavish/bearings-board.html"
-  python3 - "$board" <<'CASCADE'
+  if ! python3 - "$board" <<'CASCADE'
 import pathlib, re, sys
 html = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 css = re.sub(r"/\*.*?\*/", "", html.split("<style>", 1)[1].split("</style>", 1)[0], flags=re.S)
@@ -569,7 +571,9 @@ for name, (classes, containers) in LINKS.items():
 if bad:
     print("\n".join(bad)); sys.exit(1)
 CASCADE
-  [ "$?" -eq 0 ] || fail "a board link is not styled by its own class"
+  then
+    fail "a board link is not styled by its own class"
+  fi
   pass "a board link's own class decides how it reads"
 }
 

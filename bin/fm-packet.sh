@@ -491,6 +491,7 @@ command_scaffold() {
     if [ -n "$BASE" ]; then printf 'git -C %s log %s..HEAD --stat\n' "$wt" "$BASE"; fi
     if [ -n "$pr" ]; then printf 'gh pr view %s --json body,reviews,comments\n' "$pr"; printf 'gh pr diff %s\n' "$pr"; fi
     printf '%s\n' '```'
+    # shellcheck disable=SC2016  # scaffold text: the backticks are how a worker is told to write a path, not a substitution
     printf '%s\n' '{FILL: optional - the files or docs worth reading first, each `by path` in backticks, or remove this line}'
   } > "$packet" || fail "cannot write $packet"
   printf 'packet: %s\n' "$packet"
