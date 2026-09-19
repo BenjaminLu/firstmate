@@ -441,6 +441,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/upstream-guard.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/verification/agy.md",
       "audience": "maintainer-verification"
     },
