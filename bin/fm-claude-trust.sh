@@ -44,10 +44,10 @@
 # own `~/.claude/CLAUDE.md` importing `~/.claude/RTK.md`; that file did not
 # exist on the machine the reproduction was run on, so the user memory chain is
 # not scanned here - and, because an unscanned dimension must not read as a
-# checked one, every `clear` verdict this prints says out loud that it was not
-# examined. Only worktree mode reaches this
-# second dialog's flags: a secondmate home has no separate "project" entry to
-# carry consent forward from, so its registration stays trust-only.
+# checked one, the scan-derived `clear` verdict says out loud which dimensions
+# it did not examine. Only worktree mode reaches this second dialog's flags: a
+# secondmate home has no separate "project" entry to carry consent forward
+# from, so its registration stays trust-only.
 #
 # TWO PROJECT-CONFIG ENTRIES IN WORKTREE MODE, NOT ONE. Registering both flags
 # on the worktree entry alone (the original trust-only design) leaves the
@@ -611,19 +611,41 @@ fi
 # not exist on the machine this was measured on, and the lab could not decide
 # the user-memory case either way without modifying the operator's global memory
 # or extracting their credential, so the user chain is deliberately NOT scanned.
-# It is not passed over in silence either: EVERY `clear` line names the project
-# chain of the launch directory as the thing it examined and states that the
-# user-global chain was not, because a check that cannot verify a dimension has
-# to report that rather than let a clean-reading verdict imply it looked.
+# Neither are ancestor directories, though Claude Code's project-memory loading
+# does read a CLAUDE.md or CLAUDE.local.md found above the launch directory:
+# walking up would refuse every dispatch on every project on a host that keeps
+# one ~/CLAUDE.md with an outside import, on the same unreproduced trigger. Both
+# gaps are named rather than passed over: the scan-derived `clear` line states
+# the project chain of the launch directory as the thing it examined and says
+# those two dimensions were not, because a check that cannot verify a dimension
+# has to report that rather than let a clean-reading verdict imply it looked.
+# The two record-derived clears carry no such note, and must not: a project
+# entry holding Claude Code's own approval or explicit decline means no dialog
+# renders whatever any chain contains, so a caveat there would invent a doubt
+# and teach the reader to skip the one that carries weight.
+#
+# NOTHING UNMEASURED IS EVER TURNED INTO A REFUSAL. `blocks` has exactly one
+# source: a memory file, reached from the launch directory's own chain, whose
+# import spec AS WRITTEN names an existing REGULAR FILE outside the directory -
+# the shape the reproduction below actually observed. Two neighbouring shapes
+# were not measured and so are never refused on. A target that exists but is not
+# a regular file (a directory, a device) loads nothing as memory and is ignored;
+# whether the product lists such a target at all is unknown, and ignoring it is
+# the reading that cannot block a dispatch on a guess. A spec that names a file
+# only once its trailing sentence punctuation is stripped is REPORTED with both
+# spellings and not followed, because whether Claude Code strips that
+# punctuation was never measured either way.
 #
 # WHAT `unknown` IS FOR, and what it is not. It is for a chain this could not
 # read to the end - a memory file it cannot read, a `~` it cannot expand, an
-# outside-looking import that is not on disk, a memory path resolving out of the
-# tree - and for a launch whose consent entry could not be identified at all, so
-# the store lookup would answer about the wrong key. It is NOT for the import
-# depth: five files is where Claude Code itself stops loading, so a hop past it
-# cannot raise the dialog and is a known limit rather than an undecided one. The
-# clear line names that depth instead, so nobody has to guess how far it looked.
+# outside-looking import that is not on disk, a punctuated spec whose stripped
+# spelling names a file nothing else in the chain reached, a memory path
+# resolving out of the tree - and for a launch whose consent entry could not be
+# identified at all, so the store lookup would answer about the wrong key. It is
+# NOT for the import depth: five files is where Claude Code itself stops
+# loading, so a hop past it cannot raise the dialog and is a known limit rather
+# than an undecided one. The clear line names that depth instead, so nobody has
+# to guess how far it looked.
 #
 # THE VERDICT NEVER MANUFACTURES CONSENT. `blocks` refuses the launch and names
 # the one-time human approval; it never writes the approval, exactly as the
@@ -675,13 +697,20 @@ const [dir, home, store, entry] = process.argv.slice(2);
 // it cannot raise the dialog. The clear verdict below names the depth it
 // followed, so a reader can tell a scanned chain from an unbounded claim.
 const MAX_DEPTH = 5;
-// Every `clear` line carries what this could NOT look at, because the operator's
-// own user-global chain (~/.claude/CLAUDE.md and its @imports) is deliberately
-// never scanned: whether it can raise this dialog was not reproduced here
-// (docs/verification/claude-launch-dialogs.md records why), and scanning it on a
-// guess would refuse every dispatch on a host that has one. A check that cannot
-// verify a dimension says so instead of passing by silence.
-const UNEXAMINED = "the operator's user-global ~/.claude memory chain was not examined";
+// The SCAN-DERIVED clear carries what this could not look at. Two dimensions are
+// deliberately never walked: the operator's own user-global chain
+// (~/.claude/CLAUDE.md and its @imports), and any CLAUDE.md or CLAUDE.local.md
+// in directories ABOVE the launch directory, which Claude Code's project-memory
+// loading does read. Neither was reproduced raising this dialog here
+// (docs/verification/claude-launch-dialogs.md records why), and walking either
+// on a guess would refuse every dispatch on a host that has one file in it. A
+// check that cannot verify a dimension says so instead of passing by silence.
+// The two RECORD-DERIVED clears below carry no such note and must not: they do
+// not rest on the scan at all - once the project entry holds Claude Code's own
+// approval or its explicit decline, no dialog renders whatever any chain
+// contains - and a caveat attached where no residual doubt exists is what
+// teaches an operator to skip the one that matters.
+const UNEXAMINED = `the operator's user-global ~/.claude memory chain and any CLAUDE.md or CLAUDE.local.md in directories above ${dir} were not examined`;
 const say = (verdict, reason) => {
   process.stdout.write(`${verdict}\t${reason}\n`);
   process.exit(0);
@@ -704,8 +733,8 @@ try {
   // already read and rewrote this same file successfully, so reaching here means
   // it changed underneath us; fall through and let the chain decide.
 }
-if (decided === "approved") say("clear", `${entry} already carries Claude Code's external-import approval; ${UNEXAMINED}`);
-if (decided === "declined") say("clear", `${entry} already carries Claude Code's explicit external-import decline, so the dialog does not render; ${UNEXAMINED}`);
+if (decided === "approved") say("clear", `${entry} already carries Claude Code's external-import approval`);
+if (decided === "declined") say("clear", `${entry} already carries Claude Code's explicit external-import decline, so the dialog does not render`);
 
 const inside = (p) => p === dir || p.startsWith(dir + path.sep);
 const realOrNull = (p) => {
@@ -743,25 +772,30 @@ const resolveSpec = (spec, fromDir) => {
   return path.resolve(fromDir, spec);
 };
 // `@path` in prose carries the sentence's punctuation with it - "rules live in
-// @../house/RULES.md." - and a spec with that punctuation glued on names no
-// file, so the real import would degrade to `unknown` instead of being decided.
-// The punctuation-stripped form is therefore tried as well. It only WINS where
-// it names a real file, so a spec that already resolves is classified exactly as
-// before and stripping can never turn a written path into some neighbouring
-// directory; when no form names a file, the written spec is what gets resolved
-// and reported.
-const specForms = (spec) => {
+// @../house/RULES.md." - so the spec as written names no file while an obvious
+// stripped spelling does. Whether Claude Code strips that punctuation is not
+// something this measured, so the stripped spelling never DECIDES anything: it
+// is reported with both spellings named, and the chain is not followed through
+// it. Deciding it either way would rest a verdict on the vendor's parse - and in
+// the refusing direction that is a dispatch blocked over a guess, which is the
+// one thing this gate must never do.
+const strippedSpec = (spec) => {
   const trimmed = spec.replace(/[.,;:!?)\]}'"]+$/, "");
-  return trimmed && trimmed !== spec ? [spec, trimmed] : [spec];
+  return trimmed && trimmed !== spec ? trimmed : "";
 };
-const fileOrNull = (p) => {
-  const real = realOrNull(p);
-  if (real === null) return null;
-  try { return fs.statSync(real).isFile() ? real : null; } catch { return null; }
+// Claude Code loads memory FILES. A target that exists but is not a regular file
+// - a directory, a device, a socket - loads nothing and so can raise no dialog,
+// which is why "See @../outer for details." naming a real directory outside the
+// tree is ignored rather than classified. Whether the product lists such a
+// target in the dialog at all was not measured; ignoring it is the reading that
+// cannot refuse a dispatch over something unmeasured.
+const isRegularFile = (real) => {
+  try { return fs.statSync(real).isFile(); } catch { return false; }
 };
 
 const external = [];
 const undecidable = [];
+const punctuated = [];
 const seen = new Set();
 const queue = [];
 for (const name of ["CLAUDE.md", "CLAUDE.local.md"]) {
@@ -793,25 +827,21 @@ while (queue.length > 0) {
   }
   const fromDir = path.dirname(real);
   for (const spec of importsIn(text)) {
-    let target = null;
-    let targetReal = null;
-    for (const form of specForms(spec)) {
-      const resolved = resolveSpec(form, fromDir);
-      if (resolved === null) continue;
-      if (target === null) target = resolved;
-      const named = fileOrNull(resolved);
-      if (named !== null) {
-        target = resolved;
-        targetReal = named;
-        break;
-      }
-    }
-    if (targetReal === null && target !== null) targetReal = realOrNull(target);
+    const target = resolveSpec(spec, fromDir);
     if (target === null) {
       undecidable.push(`${real} imports '${spec}' and HOME is not set, so '~' cannot be expanded`);
       continue;
     }
+    const targetReal = realOrNull(target);
+    if (targetReal !== null && !isRegularFile(targetReal)) continue;
     if (targetReal === null) {
+      const stripped = strippedSpec(spec);
+      const strippedTarget = stripped ? resolveSpec(stripped, fromDir) : null;
+      const strippedReal = strippedTarget === null ? null : realOrNull(strippedTarget);
+      if (strippedReal !== null && isRegularFile(strippedReal)) {
+        punctuated.push({ from: real, spec, stripped, real: strippedReal });
+        continue;
+      }
       // A missing import contributes nothing to load, but whether Claude Code
       // still lists one that points outside is not something this measured, so
       // an outside-looking miss is reported rather than waved through.
@@ -834,6 +864,17 @@ while (queue.length > 0) {
       queue.push({ file: targetReal, depth: depth + 1 });
     }
   }
+}
+
+// The punctuated specs are judged once the whole chain has been read, because a
+// stripped spelling pointing at a file this scan ALREADY read by another route
+// leaves nothing unread: the verdict does not rest on the vendor's parse there,
+// so there is nothing to report. Every other one is reported, never decided.
+for (const item of punctuated) {
+  if (seen.has(item.real)) continue;
+  undecidable.push(
+    `${item.from} imports '${item.spec}', which names no file as written; stripped of its trailing punctuation it would name ${item.real}, and whether Claude Code strips that punctuation was not measured`,
+  );
 }
 
 const listOf = (items) => {

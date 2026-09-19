@@ -897,6 +897,12 @@ test_external_import_with_standing_consent_is_cleared() {
   expect_code 0 "$status" "a project the human already approved must launch: $out"
   assert_contains "$out" "external imports: clear" \
     "the gate did not report the standing approval as clear"
+  # A verdict that rests on Claude Code's own record does not rest on the scan,
+  # so it must not carry the scan's unexamined-dimension caveat: no dialog can
+  # render here whatever any chain holds, and a caveat with no doubt behind it
+  # is what teaches an operator to ignore the one that has.
+  assert_not_contains "$out" "were not examined" \
+    "a clear decided by the vendor's own record carried the scan's unexamined-dimension caveat"
   assert_all_flags "$CONFIG/.claude.json" "$PROJ" \
     "the standing approval was not carried forward onto the project entry"
   pass "fm-claude-trust.sh: a project carrying the human's standing approval launches with the imports cleared"
@@ -1038,40 +1044,81 @@ test_the_clear_verdict_names_what_it_scanned_and_what_it_did_not() {
   expect_code 0 "$status" "a chain that stays inside the worktree must not block: $out"
   assert_contains "$out" "project memory chain under $WT" \
     "the clear verdict did not name the chain it actually examined"
-  assert_contains "$out" "user-global ~/.claude memory chain was not examined" \
+  assert_contains "$out" "user-global ~/.claude memory chain" \
     "the clear verdict did not say which chain it never looked at"
-  pass "fm-claude-trust.sh: a clear verdict names the chain it scanned and the one it did not"
+  assert_contains "$out" "directories above $WT were not examined" \
+    "the clear verdict did not say that ancestor memory files were never looked at either"
+  pass "fm-claude-trust.sh: a clear verdict names the chain it scanned and the ones it did not"
 }
 
-# An @import written in a sentence carries that sentence's punctuation, and a
-# spec with the punctuation glued on names no file - so the real import would
-# degrade to `unknown`, the spawn would warn and launch, and the worker would
-# wedge on the dialog this gate exists to decide.
-test_an_external_import_ending_a_sentence_is_still_decided() {
+# An @import written in a sentence carries that sentence's punctuation, and the
+# spec with the punctuation glued on names no file while the stripped spelling
+# does. Whether Claude Code strips it was never measured, so this must report
+# the case with both spellings rather than refuse a dispatch on the vendor's
+# parse - a refusal from a guess is the failure this gate exists to remove.
+test_an_external_import_ending_a_sentence_is_reported_not_refused() {
   local row out status
   row=$(import_case imports-punctuation)
   read_case "$row"
   printf '# p\n\nShared house rules live in @%s/outside.md.\n' "$CASE_DIR" > "$WT/CLAUDE.md"
   out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
-  expect_code 3 "$status" "an external import written in prose must be decided, not degraded: $out"
-  assert_contains "$out" "$CASE_DIR/outside.md" \
-    "the refusal did not name the import that raises the dialog"
-  pass "fm-claude-trust.sh: an external import ending a sentence is classified, not left undecided"
+  expect_code 4 "$status" "a punctuated import must be reported, never refused on an unmeasured parse: $out"
+  assert_contains "$out" "external imports: unknown" \
+    "the gate did not report that it could not decide the punctuated spec"
+  assert_contains "$out" "$CASE_DIR/outside.md." \
+    "the report did not name the spec as it was actually written"
+  assert_contains "$out" "whether Claude Code strips that punctuation was not measured" \
+    "the report did not say which vendor behaviour it could not verify"
+  pass "fm-claude-trust.sh: an import ending a sentence is reported with both spellings, not refused"
 }
 
-# The same class in the other direction: a parenthesised in-tree import must
-# still be FOLLOWED, or an external import one hop behind it goes unseen.
-test_a_parenthesised_in_tree_import_is_still_followed() {
+# The same class in the other direction: a parenthesised in-tree import is not
+# followed either, because following it would rest a later verdict on the same
+# unmeasured parse - so it is reported as a piece of chain left unread.
+test_a_parenthesised_in_tree_import_is_reported_unfollowed() {
   local row out status
   row=$(import_case imports-parens)
   read_case "$row"
   printf '# p\n\nThe house rules (see @AGENTS.md) apply here.\n' > "$WT/CLAUDE.md"
   printf '@%s/outside.md\n' "$CASE_DIR" > "$WT/AGENTS.md"
   out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
-  expect_code 3 "$status" "an import written in parentheses must still be followed: $out"
+  expect_code 4 "$status" "a parenthesised import must be reported, not silently followed or refused: $out"
   assert_contains "$out" "$WT/AGENTS.md" \
-    "the refusal did not name the file reached through the parenthesised import"
-  pass "fm-claude-trust.sh: a parenthesised in-tree import is followed like any other"
+    "the report did not name the file the stripped spelling would reach"
+  pass "fm-claude-trust.sh: a parenthesised in-tree import is reported as unfollowed"
+}
+
+# And the case that must stay quiet: a punctuated spelling of a file the chain
+# ALREADY read leaves nothing unread, so there is nothing to report. This repo's
+# own memory files carry exactly that shape, and reporting it would put every
+# dispatch here on a permanent warning no operator could act on.
+test_a_punctuated_spelling_of_an_already_scanned_file_stays_clear() {
+  local row out status
+  row=$(import_case imports-punctuation-seen)
+  read_case "$row"
+  printf '# p\n\n@AGENTS.md\n' > "$WT/CLAUDE.md"
+  printf 'The rules apply to this file too (see @AGENTS.md).\n' > "$WT/AGENTS.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 0 "$status" "a punctuated spelling of an already-scanned file must not raise a warning: $out"
+  assert_contains "$out" "external imports: clear" \
+    "a chain that was read in full was not cleared"
+  pass "fm-claude-trust.sh: a punctuated spelling of an already-scanned file stays clear"
+}
+
+# Claude Code loads memory FILES. An @import naming a real DIRECTORY outside the
+# worktree loads nothing and can raise no dialog, so refusing the dispatch over
+# prose like "See @../outer for details." would block a launch that was fine.
+test_an_import_naming_an_outside_directory_does_not_block() {
+  local row out status
+  row=$(import_case imports-directory)
+  read_case "$row"
+  mkdir -p "$CASE_DIR/outer"
+  printf '# p\n\nSee @%s/outer for details.\n' "$CASE_DIR" > "$WT/CLAUDE.md"
+  out=$(run_trust "$CONFIG" "$WT" "$PROJ") && status=0 || status=$?
+  expect_code 0 "$status" "an import naming a directory must not block a launch: $out"
+  assert_contains "$out" "external imports: clear" \
+    "a directory target was treated as a loadable memory file"
+  pass "fm-claude-trust.sh: an import naming a directory outside the worktree does not block a launch"
 }
 
 # A CLAUDE.md that sits in the worktree but resolves out of it is a loaded file
@@ -1262,8 +1309,10 @@ test_an_unresolvable_external_import_is_reported_as_undecided
 test_the_scan_follows_the_documented_import_depth
 test_a_chain_past_the_scanned_depth_is_cleared_naming_that_depth
 test_the_clear_verdict_names_what_it_scanned_and_what_it_did_not
-test_an_external_import_ending_a_sentence_is_still_decided
-test_a_parenthesised_in_tree_import_is_still_followed
+test_an_external_import_ending_a_sentence_is_reported_not_refused
+test_a_parenthesised_in_tree_import_is_reported_unfollowed
+test_a_punctuated_spelling_of_an_already_scanned_file_stays_clear
+test_an_import_naming_an_outside_directory_does_not_block
 test_a_memory_file_symlinked_out_of_the_worktree_is_reported
 test_a_memory_file_symlinked_out_of_the_worktree_is_still_read
 test_secondmate_home_external_import_blocks_the_launch
