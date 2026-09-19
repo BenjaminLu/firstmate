@@ -68,6 +68,13 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # codex-app remains deliberately absent; see docs/codex-app-backend.md.
 FM_BACKEND_KNOWN="tmux herdr zellij orca cmux"
 FM_BACKEND_SPAWN="tmux herdr zellij orca cmux"
+# The EXPERIMENTAL set, and the single owner of that classification. tmux is the
+# verified reference backend (docs/tmux-backend.md); every other known backend
+# is experimental per the per-backend docs cited above, and herdr's dedicated CI
+# lane makes it better covered than the rest without making it the reference.
+# Callers ask here rather than restating the list, so a backend that graduates
+# is promoted in exactly one place.
+FM_BACKEND_EXPERIMENTAL="herdr zellij orca cmux"
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
 # shell word splitting. fm-backend.sh is normally sourced by bash scripts, but
@@ -85,6 +92,10 @@ fm_backend_list_contains() {  # <list> <name>
 
 fm_backend_is_known() {  # <name>
   fm_backend_list_contains "$FM_BACKEND_KNOWN" "$1"
+}
+
+fm_backend_is_experimental() {  # <name>
+  fm_backend_list_contains "$FM_BACKEND_EXPERIMENTAL" "$1"
 }
 
 # fm_backend_detect: detect the runtime firstmate itself is CURRENTLY executing
@@ -240,40 +251,74 @@ fm_backend_detect_cmux_app_is_ancestor() {
 # notice names the winning signal, so a fallback-detected cmux (bundle id or
 # ancestry, after the claude wrapper stripped CMUX_WORKSPACE_ID) is visibly
 # distinct from the primary-marker case.
-fm_backend_name() {
-  local line v detected marker
+# fm_backend_resolve_selection: the single owner of the precedence above. It
+# resolves WITHOUT printing anything and publishes both halves of the answer -
+# which backend won, and which rung of the precedence it won on - in
+# FM_BACKEND_SELECTED and FM_BACKEND_SELECTED_SOURCE (environment, config,
+# auto-detect, default). fm_backend_name renders the spawn-time notice from it
+# and a session start renders its own statement of the selection; neither
+# re-implements the precedence, so the two can never disagree about what this
+# home is about to spawn into. Must be called directly rather than in a command
+# substitution, both so those globals survive and so fm_backend_detect's own
+# signal globals reach fm_backend_selection_signal below.
+fm_backend_resolve_selection() {
+  local line v
+  FM_BACKEND_SELECTED=
+  FM_BACKEND_SELECTED_SOURCE=
   if [ -n "${FM_BACKEND:-}" ]; then
-    printf '%s' "$FM_BACKEND"
+    FM_BACKEND_SELECTED=$FM_BACKEND
+    FM_BACKEND_SELECTED_SOURCE=environment
     return 0
   fi
   if [ -f "$FM_BACKEND_CONFIG_DIR/backend" ]; then
     while IFS= read -r line || [ -n "$line" ]; do
       v=$(printf '%s' "$line" | tr -d '[:space:]')
       if [ -n "$v" ]; then
-        printf '%s' "$v"
+        FM_BACKEND_SELECTED=$v
+        FM_BACKEND_SELECTED_SOURCE=config
         return 0
       fi
     done < "$FM_BACKEND_CONFIG_DIR/backend"
   fi
-  # Called directly (not in a command substitution) so the detect signal
-  # globals survive into the notice below.
   if fm_backend_detect >/dev/null; then
-    detected=$FM_BACKEND_DETECTED
-    if [ "$detected" = herdr ]; then
-      echo "NOTICE: auto-detected herdr runtime (HERDR_ENV=1) - spawning into the EXPERIMENTAL herdr backend. Set config/backend or pass --backend tmux to opt out." >&2
-    fi
-    if [ "$detected" = cmux ]; then
-      case "$FM_BACKEND_DETECT_SIGNAL" in
-        bundle-id) marker="FALLBACK signal __CFBundleIdentifier=$FM_BACKEND_CMUX_BUNDLE_ID; CMUX_WORKSPACE_ID absent, stripped by cmux's bundled claude wrapper" ;;
-        ancestry) marker="FALLBACK signal process-ancestry reaching the running cmux app; CMUX_WORKSPACE_ID absent, stripped by cmux's bundled claude wrapper" ;;
-        *) marker="CMUX_WORKSPACE_ID" ;;
-      esac
-      echo "NOTICE: auto-detected cmux runtime ($marker) - spawning into the EXPERIMENTAL cmux backend. Set config/backend or pass --backend tmux to opt out." >&2
-    fi
-    printf '%s' "$detected"
+    FM_BACKEND_SELECTED=$FM_BACKEND_DETECTED
+    FM_BACKEND_SELECTED_SOURCE=auto-detect
     return 0
   fi
-  printf 'tmux'
+  FM_BACKEND_SELECTED=tmux
+  FM_BACKEND_SELECTED_SOURCE=default
+  return 0
+}
+
+# Render the winning signal for the CURRENT resolution, so a report never has to
+# restate the detector's internals. Only auto-detect has a signal worth naming,
+# and cmux's fallback signals are named individually because a bundle-id or
+# ancestry match means CMUX_WORKSPACE_ID was stripped by cmux's bundled claude
+# wrapper - a materially different diagnosis from the primary marker.
+fm_backend_selection_signal() {
+  [ "${FM_BACKEND_SELECTED_SOURCE:-}" = auto-detect ] || return 1
+  case "${FM_BACKEND_SELECTED:-}" in
+    herdr) printf 'HERDR_ENV=1' ;;
+    cmux)
+      case "${FM_BACKEND_DETECT_SIGNAL:-}" in
+        bundle-id) printf 'FALLBACK signal __CFBundleIdentifier=%s; CMUX_WORKSPACE_ID absent, stripped by cmux'"'"'s bundled claude wrapper' "$FM_BACKEND_CMUX_BUNDLE_ID" ;;
+        ancestry) printf 'FALLBACK signal process-ancestry reaching the running cmux app; CMUX_WORKSPACE_ID absent, stripped by cmux'"'"'s bundled claude wrapper' ;;
+        *) printf 'CMUX_WORKSPACE_ID' ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_backend_name() {
+  local signal
+  # Called directly (not in a command substitution) so the detect signal
+  # globals survive into the notice below.
+  fm_backend_resolve_selection
+  if signal=$(fm_backend_selection_signal); then
+    echo "NOTICE: auto-detected $FM_BACKEND_SELECTED runtime ($signal) - spawning into the EXPERIMENTAL $FM_BACKEND_SELECTED backend. Set config/backend or pass --backend tmux to opt out." >&2
+  fi
+  printf '%s' "$FM_BACKEND_SELECTED"
 }
 
 # fm_backend_validate: refuse an unknown backend LOUDLY. Silent on success.

@@ -8,7 +8,13 @@
 #          Lines: "MISSING: <tool> (install: <command>)",
 #                 "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=<floor>; install: <command>) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
+#                 "PRESENTATION_UNSTABLE_URL: <why the board gets no stable address>",
+#                 "CLAUDE_PERMISSIONS: <n> of this repository's toolchain commands
+#                 are not pre-approved in <settings> ... merge with: <command>",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
+#                 "BACKEND_EXPERIMENTAL: <name> (<how it was selected>) - <remedy>",
+#                 "ACTIONS_DORMANT: <repo> ... <where to enable>",
+#                 "ACTIONS_UNVERIFIED: <what could not be read>",
 #                 "STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
@@ -64,6 +70,41 @@
 #          Missing or incompatible lavish-axi reports PRESENTATION_UNAVAILABLE:
 #          nonvisual dispatch continues with plain-text decisions and reports,
 #          but Lavish use still requires a compatible build at or above its floor.
+#          A compatible build is then asked the separate CAPABILITY question the
+#          floor cannot answer - whether it accepts --name, which is what gives
+#          the board one stable /s/<slug> address. The published package does not
+#          carry that flag and reports a HIGHER version than the fork build that
+#          does, so a floor cannot stand in for the probe; bin/fm-lavish-lib.sh
+#          owns it. A probe that cannot run reports PRESENTATION_UNSTABLE_URL as
+#          unverified rather than passing silently.
+#          diagram-design is reported MISSING_MANUAL when the skill a decision
+#          packet's figures are drawn through is not installed for this harness:
+#          bootstrap can neither detect it on PATH nor install it. The packet is
+#          an optional deliverable rather than an obligation, so this reports a
+#          dependency a packet WOULD need, not work that is blocked without it.
+#          BACKEND_EXPERIMENTAL states the resolved runtime backend and which
+#          rung of the precedence chose it whenever that backend is experimental,
+#          however it was selected - which covers an explicitly configured zellij
+#          or orca that fm_backend_name's auto-detect NOTICE never mentions. The
+#          verified reference backend is a verbose-only BOOTSTRAP_INFO fact.
+#          ACTIONS_DORMANT reports a repository whose checks will never run, so a
+#          validation run would reach its CI step and wait out the full CI
+#          timeout; ACTIONS_UNVERIFIED reports that this could not be determined.
+#          The repository is resolved from FM_ROOT's origin remote, never from
+#          gh's ambient resolution, which inside a fork answers with UPSTREAM.
+#          An origin that is not on github.com is skipped rather than reported
+#          unverified, because there the trap does not apply; an origin that
+#          cannot be parsed at all IS reported. GitHub Enterprise hosts also run
+#          Actions and are skipped by that rule - a known, stated gap.
+#          CLAUDE_PERMISSIONS reports how many of the toolchain commands in the
+#          tracked assets/claude-permissions.starter.json are not yet pre-approved
+#          in the operator's own Claude settings. Bootstrap NEVER merges it on its
+#          own: the line is the offer, and `fm-bootstrap.sh install-permissions`
+#          is the consent-gated merge, the same detect-then-ask-then-install rule
+#          used for tool installs. The merge is additive and never removes or
+#          narrows a rule the operator already has.
+#          On a primary home the locked mutable path also creates the home data
+#          directory when absent, because the backlog refuses without it.
 #          tasks-axi feature probes remain a separate defense-in-depth check.
 #          tasks-axi and quota-axi are essential bootstrap tools.
 #          A compatible tasks-axi default backend is silent.
@@ -152,6 +193,12 @@
 #          keeps detect-only meaning unlocked, exactly as before.
 #        fm-bootstrap.sh install <tool>...
 #          Install the named tools (only ones the captain approved).
+#        fm-bootstrap.sh install-permissions
+#          Merge the tracked command allow-list into this operator's Claude
+#          settings, after the captain approved the CLAUDE_PERMISSIONS offer.
+#          Additive and idempotent: adds only the rules that are absent, keeps
+#          every other setting, and refuses rather than rewriting a settings file
+#          it cannot parse or that is not a regular file.
 #        fm-bootstrap.sh lavish-compatible
 #          Exit 0 when lavish-axi meets LAVISH_AXI_MIN, 1 otherwise, printing
 #          nothing; bin/fm-brief.sh uses it to gate scout Lavish hosting.
@@ -194,6 +241,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-lavish-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # fm-timing-lib.sh is inert unless FM_TIMING_LOG names a file, which only the
@@ -889,8 +938,54 @@ manual_install_url() {
   case "$1" in
     herdr) echo "https://herdr.dev" ;;
     cursor-agent) echo "https://cursor.com/cli" ;;
+    diagram-design) echo "https://github.com/cathrynlavery/diagram-design" ;;
     *) return 1 ;;
   esac
+}
+
+# The decision packet's figures are drawn through the diagram-design skill, and
+# bin/fm-packet.sh verify REFUSES a needs-decision packet that owes figures and
+# has none - so an absent skill does not degrade the packet, it stops every
+# escalation that needs one. Bootstrap can neither detect it on PATH (it is a
+# harness skill, not an executable) nor install it, which is exactly why it is
+# reported as a manual install here rather than discovered at the first blocked
+# escalation.
+#
+# Resolution follows the path the generated brief names, so the check and the
+# contract cannot disagree: the skills root is the Claude config dir's, which
+# CLAUDE_CONFIG_DIR replaces wholesale when set. Both shipped layouts count as
+# installed - a flat skill directory carrying its own SKILL.md, and a repository
+# checkout that nests one or more SKILL.md files under skills/ (how the upstream
+# project is cloned). Accepting only the flat one would report a working install
+# missing.
+diagram_design_skill_root() {
+  local config_dir=${CLAUDE_CONFIG_DIR:-}
+  if [ -n "$config_dir" ]; then
+    printf '%s/skills/diagram-design' "$config_dir"
+    return 0
+  fi
+  [ -n "${HOME:-}" ] || return 1
+  printf '%s/.claude/skills/diagram-design' "$HOME"
+}
+
+diagram_design_skill_installed() {
+  local root=$1 nested
+  [ -d "$root" ] || return 1
+  [ -f "$root/SKILL.md" ] && return 0
+  for nested in "$root"/skills/*/SKILL.md; do
+    [ -f "$nested" ] && return 0
+  done
+  return 1
+}
+
+detect_diagram_design_skill() {
+  local root
+  if ! root=$(diagram_design_skill_root); then
+    echo "MISSING_MANUAL: diagram-design (instructions: $(manual_install_url diagram-design)) - neither CLAUDE_CONFIG_DIR nor HOME is set, so the skill a decision packet needs could not be located"
+    return 0
+  fi
+  diagram_design_skill_installed "$root" && return 0
+  echo "MISSING_MANUAL: diagram-design (instructions: $(manual_install_url diagram-design)) - install it at $root; without it a decision packet's figures cannot be drawn, and fm-packet.sh verify refuses a packet that owes figures and has none"
 }
 
 missing_tool_diagnostic() {
@@ -908,7 +1003,13 @@ missing_tool_diagnostic() {
 # never told tmux is missing, and only orca drops treehouse. A backend value with
 # no verified dependency set is reported before the universal checks continue.
 COMMON_TOOLS="node git gh no-mistakes gh-axi chrome-devtools-axi tasks-axi quota-axi"
-BACKEND=$(fm_backend_name)
+# Resolved directly rather than through fm_backend_name's command substitution:
+# a session start states the selection itself (detect_backend_selection below),
+# so taking fm_backend_name's spawn-time stderr NOTICE here as well would report
+# the same fact twice and still say nothing about an experimental backend that
+# was chosen explicitly rather than auto-detected.
+fm_backend_resolve_selection
+BACKEND=$FM_BACKEND_SELECTED
 BACKEND_VALID=1
 if ! BACKEND_TOOLS=$(fm_backend_required_tools "$BACKEND"); then
   BACKEND_VALID=0
@@ -937,6 +1038,17 @@ treehouse_supports_required_flags() {
 # cannot be parsed into exactly one major.minor.patch triple is incompatible,
 # never assumed current, so a development or vendored build cannot pass a floor
 # it was never checked against.
+# Best-effort version string for a diagnostic, never for a decision: prints the
+# first dotted triple the tool reports, or "unknown" when it reports nothing
+# usable. A message that cannot name a version still has to print.
+tool_version() {  # <tool>
+  local tool=$1 output version
+  output=$("$tool" --version 2>/dev/null) || { printf 'unknown'; return 0; }
+  version=$(printf '%s\n' "$output" | sed -nE 's/.*[vV]?([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -n 1)
+  [ -n "$version" ] || version=unknown
+  printf '%s' "$version"
+}
+
 tool_version_at_least() {  # <tool> <min-version>
   local tool=$1 min=$2 output parts major minor patch extra
   local min_major min_minor min_patch min_extra
@@ -1373,6 +1485,35 @@ backlog_record_reconcile() {
   done
 }
 
+# A fresh clone has no data directory, and the backlog refuses without one:
+# `fm-tasks-axi: data directory cannot be resolved: <home>/data`. Every other
+# durable home directory is materialized by whichever owner first needs it
+# (config/ by the startup-memory-budget default below, state/ by the session
+# lock), so data/ was the one a new home could only get as a side effect of
+# scaffolding a brief. Create it here, beside the config/ materialization, so a
+# clone's first backlog command works instead of teaching its operator a
+# workaround. Never replaces an existing path: a data/ that is not a real
+# directory is reported rather than clobbered, because it may be an operator's
+# deliberate link to a home elsewhere.
+home_data_dir_setup() {
+  if [ -e "$DATA" ] || [ -L "$DATA" ]; then
+    if [ ! -d "$DATA" ]; then
+      echo "BACKLOG_RECONCILE: home data path $DATA exists but is not a directory; the backlog cannot use it until that path is moved aside"
+    fi
+    return 0
+  fi
+  if mkdir -p "$DATA" 2>/dev/null; then
+    # Benign completed setup, so it stays behind the verbose-facts flag like the
+    # other routine confirmations: the actionable half was the backlog refusing,
+    # and that is now fixed rather than announced.
+    if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
+      echo "BOOTSTRAP_INFO: created this home's data directory at $DATA"
+    fi
+    return 0
+  fi
+  echo "BACKLOG_RECONCILE: could not create this home's data directory at $DATA; the backlog will refuse until it exists"
+}
+
 startup_memory_budget_setup() {
   # Primary bootstrap owns default publication. A secondmate is deliberately
   # passive here because its setting must converge from the primary through the
@@ -1385,9 +1526,222 @@ startup_memory_budget_setup() {
   fi
 }
 
+# The tracked command allow-list (assets/claude-permissions.starter.json) and
+# the consent-gated merge of it into the operator's own Claude settings.
+#
+# Bootstrap NEVER writes this on its own. It detects which of the shipped rules
+# the operator's settings are missing and prints one actionable line; the merge
+# happens only when the captain approves and someone runs
+# `bin/fm-bootstrap.sh install-permissions`. That is the same consent rule
+# bootstrap already uses for tool installs - detect, ask, then install - and the
+# reason this is not simply materialized at session start.
+#
+# The merge is additive by construction: rules already present are left alone,
+# nothing is ever removed, no other settings key is touched, and the file is
+# replaced atomically. A home that has deliberately narrowed a rule keeps its
+# version, because the union only ever adds the exact strings that are absent.
+CLAUDE_PERMISSIONS_STARTER="$FM_ROOT/assets/claude-permissions.starter.json"
+
+# WHERE A RULE CAN ALREADY BE. A rule the operator approved through a prompt, or
+# added with /permissions, does not land in the user settings file: it lands in
+# the PROJECT-local one. Comparing the shipped list against the user file alone
+# therefore reports commands as un-approved that in fact never prompt - a claim
+# about observable behaviour that is simply false, and the exact silent-wrong
+# shape this change exists to stop.
+#
+# So detection reads every settings file this session can actually be governed
+# by and asks whether a rule is present in ANY of them, while the merge keeps
+# writing to the user file: that is the only one of the four that survives, as
+# bin/fm-spawn.sh rewrites a worktree's .claude/settings.local.json on every
+# spawn.
+#
+# What this DOES NOT model, and the reported line says so rather than implying
+# otherwise: precedence between the files, `deny` rules that could override an
+# `allow`, and any enterprise or managed policy file, none of which are readable
+# from here.
+claude_settings_path() {
+  local config_dir=${CLAUDE_CONFIG_DIR:-}
+  if [ -n "$config_dir" ]; then
+    printf '%s/settings.json' "$config_dir"
+    return 0
+  fi
+  [ -n "${HOME:-}" ] || return 1
+  printf '%s/.claude/settings.json' "$HOME"
+}
+
+# Every settings file that can carry an allow rule for this session, newline
+# separated, most durable first. The user file is always present in the list
+# even when absent on disk, because it is the merge target.
+claude_settings_read_set() {
+  local user_settings config_dir
+  user_settings=$(claude_settings_path) || return 1
+  printf '%s\n' "$user_settings"
+  config_dir=${CLAUDE_CONFIG_DIR:-"${HOME:-}/.claude"}
+  printf '%s/settings.local.json\n' "$config_dir"
+  printf '%s/.claude/settings.json\n' "$FM_ROOT"
+  printf '%s/.claude/settings.local.json\n' "$FM_ROOT"
+}
+
+# Both halves run the same node program so detection and merge can never
+# disagree about which rules count as present. `report` prints the missing rules
+# and changes nothing; `merge` writes the union and prints what it added.
+claude_permissions_run() {  # <mode> <starter> <settings> <fm-root>
+  node -e '
+const fs = require("fs");
+const path = require("path");
+const [mode, starterPath, settingsPath, fmRoot, readSetRaw] = process.argv.slice(1);
+// Detection reads every file a rule can already be in; the merge still writes
+// only to settingsPath, the one that survives a spawn.
+const readSet = (readSetRaw || settingsPath).split("\n").filter(Boolean);
+
+let starter;
+try {
+  starter = JSON.parse(fs.readFileSync(starterPath, "utf8"));
+} catch (e) {
+  console.error("starter unreadable: " + e.message);
+  process.exit(3);
+}
+const wanted = (starter.permissions && starter.permissions.allow || [])
+  .map((r) => r.split("{{FM_ROOT}}").join(fmRoot));
+
+// readOne returns the allow rules of one settings file. An absent file is
+// simply empty; a file that exists but cannot be read is an ERROR, never an
+// empty one, because treating an unreadable file as carrying no rules is how a
+// home that is fully configured gets told it is not.
+function readOne(path) {
+  if (!fs.existsSync(path)) return { allow: [], settings: null, present: false };
+  const st = fs.lstatSync(path);
+  if (!st.isFile()) throw new Error("settings path is not a regular file: " + path);
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+  } catch (e) {
+    throw new Error("settings is not valid JSON (" + path + "): " + e.message);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("settings is not a JSON object: " + path);
+  }
+  const allow = (parsed.permissions && Array.isArray(parsed.permissions.allow))
+    ? parsed.permissions.allow
+    : [];
+  return { allow, settings: parsed, present: true, mode: st.mode & 0o777 };
+}
+
+let settings = {};
+// Default only for a file this run creates; an existing file keeps its own mode,
+// because silently tightening a settings file nobody asked to tighten is a
+// change the operator would have to discover for themselves.
+let fileMode = 0o600;
+const have = new Set();
+const readPaths = [];
+try {
+  for (const path of readSet) {
+    const got = readOne(path);
+    got.allow.forEach((r) => have.add(r));
+    if (got.present) readPaths.push(path);
+    if (path === settingsPath && got.present) {
+      settings = got.settings;
+      fileMode = got.mode;
+    }
+  }
+} catch (e) {
+  console.error(e.message);
+  process.exit(3);
+}
+
+const missing = wanted.filter((r) => !have.has(r));
+
+if (mode === "report") {
+  // The first line names what was actually read, so the operator line can say
+  // what it checked instead of implying it checked everything.
+  console.log("READ\t" + readPaths.join("\t"));
+  missing.forEach((r) => console.log(r));
+  process.exit(missing.length ? 1 : 0);
+}
+
+if (!missing.length) process.exit(0);
+// Preserve every other key, and every rule already present, by construction.
+settings.permissions = settings.permissions || {};
+settings.permissions.allow = Array.from(have).concat(missing);
+const dir = path.dirname(settingsPath);
+fs.mkdirSync(dir, { recursive: true });
+const tmp = path.join(dir, ".settings.json.fm-perms." + process.pid);
+fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", { mode: fileMode });
+fs.renameSync(tmp, settingsPath);
+missing.forEach((r) => console.log(r));
+process.exit(0);
+' "$@"
+}
+
+# Claude-only by construction: these are Claude Code permission rules. A home
+# whose crewmates run another harness is not told about a file its workers never
+# read. `default` and absent both mean "same harness as firstmate", which on a
+# machine with claude installed is the case this list is for.
+claude_permissions_applicable() {
+  local crew=
+  command -v claude >/dev/null 2>&1 || return 1
+  [ -f "$CONFIG/crew-harness" ] && crew=$(tr -d '[:space:]' < "$CONFIG/crew-harness" || true)
+  case "$crew" in
+    ''|default|claude) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Exit status is the whole contract here, so it is read explicitly rather than
+# with `if`: 0 means every rule is already pre-approved, 1 means the listed rules
+# are missing, and ANYTHING else - a settings file that will not parse, a node
+# that is absent or broken - means the comparison did not happen. That last case
+# must report that it could not tell, because treating a probe that never ran as
+# a clean result is precisely how a home ends up prompting for every command
+# while its session start says all is well.
+detect_claude_permissions() {
+  local settings read_set out missing count status read_line checked
+  claude_permissions_applicable || return 0
+  [ -f "$CLAUDE_PERMISSIONS_STARTER" ] || return 0
+  settings=$(claude_settings_path) || return 0
+  read_set=$(claude_settings_read_set) || return 0
+  out=$(claude_permissions_run report "$CLAUDE_PERMISSIONS_STARTER" "$settings" "$FM_ROOT" "$read_set" 2>/dev/null)
+  status=$?
+  [ "$status" -eq 0 ] && return 0
+  read_line=$(printf '%s\n' "$out" | sed -n '1s/^READ\t//p')
+  missing=$(printf '%s\n' "$out" | sed '1d')
+  if [ "$status" -ne 1 ] || [ -z "$missing" ]; then
+    echo "CLAUDE_PERMISSIONS: could not compare this repository's command allow-list against $settings, so whether workers will prompt for ordinary fleet commands is unknown - merge it deliberately with: $FM_ROOT/bin/fm-bootstrap.sh install-permissions"
+    return 0
+  fi
+  # Name the files actually read, and the thing this comparison does not model,
+  # so the count is a claim the operator can check rather than one they have to
+  # trust.
+  checked=$(printf '%s' "$read_line" | tr '\t' ' ')
+  [ -n "$checked" ] || checked="no existing settings file"
+  count=$(printf '%s\n' "$missing" | wc -l | tr -d ' ')
+  echo "CLAUDE_PERMISSIONS: $count of this repository's toolchain commands are not pre-approved in any settings file this session reads, so a worker will stop and ask before ordinary fleet commands such as the validation pipeline - checked: $checked; not checked: precedence between those files, deny rules, and any managed policy - merge the shipped list into $settings with: $FM_ROOT/bin/fm-bootstrap.sh install-permissions"
+}
+
 if [ "${1:-}" = "lavish-compatible" ]; then
   tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"
   exit
+fi
+
+# The consent half of the detect-then-ask-then-install rule: only ever reached
+# because the captain approved the CLAUDE_PERMISSIONS line above. Adds the
+# missing rules and nothing else; re-running it after a merge is a no-op.
+if [ "${1:-}" = "install-permissions" ]; then
+  [ -f "$CLAUDE_PERMISSIONS_STARTER" ]     || { echo "error: allow-list starter missing at $CLAUDE_PERMISSIONS_STARTER" >&2; exit 1; }
+  PERMISSIONS_SETTINGS=$(claude_settings_path)     || { echo "error: neither CLAUDE_CONFIG_DIR nor HOME is set, so the Claude settings file cannot be located" >&2; exit 1; }
+  PERMISSIONS_READ_SET=$(claude_settings_read_set) \
+    || { echo "error: could not resolve the settings files to compare against" >&2; exit 1; }
+  if PERMISSIONS_ADDED=$(claude_permissions_run merge "$CLAUDE_PERMISSIONS_STARTER" "$PERMISSIONS_SETTINGS" "$FM_ROOT" "$PERMISSIONS_READ_SET"); then
+    if [ -z "$PERMISSIONS_ADDED" ]; then
+      echo "already pre-approved: $PERMISSIONS_SETTINGS carries every command in this repository's allow-list"
+    else
+      echo "pre-approved in $PERMISSIONS_SETTINGS:"
+      printf '%s\n' "$PERMISSIONS_ADDED" | sed 's/^/  /'
+    fi
+    exit 0
+  fi
+  echo "error: could not merge the allow-list into $PERMISSIONS_SETTINGS" >&2
+  exit 1
 fi
 
 if [ "${1:-}" = "install" ]; then
@@ -1449,6 +1803,7 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ] && local_phase; then
       exit 1
     fi
   fi
+  home_data_dir_setup
   startup_memory_budget_setup
   if backlog_record_reconcile; then
     :
@@ -1488,6 +1843,8 @@ detect_local_tools() {
   fi
   if ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
     echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
+  else
+    detect_lavish_named_session
   fi
   if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
     echo "MISSING: quota-axi (install: $(install_cmd quota-axi))"
@@ -1495,6 +1852,127 @@ detect_local_tools() {
   if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
     echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
   fi
+}
+
+# The board's stable /s/<slug> URL needs lavish-axi's --name, and the version
+# floor above cannot answer that question - the published release is NEWER than
+# the fork build that carries the flag, so a floor a feature-less release clears
+# reports a working presentation layer and the board quietly comes up at a URL
+# that changes. fm-lavish-lib.sh owns the probe and why it is a probe.
+#
+# Only reached when the floor already passed, so lavish-axi is present and
+# compatible here and the two lines never both fire for one install. An
+# unverifiable probe is reported as unverifiable rather than folded into either
+# verdict: the board degrades to a plain open in that case too, so a silent pass
+# would be the one outcome that hides a URL the captain's rule depends on.
+detect_lavish_named_session() {
+  fm_lavish_named_session_support
+  case $? in
+    0) return 0 ;;
+    1)
+      echo "PRESENTATION_UNSTABLE_URL: lavish-axi $(tool_version lavish-axi) does not accept --name, so the board opens at a generated session URL that changes instead of one stable address - the published package does not carry that flag; install a build that does before relying on one captain-facing URL"
+      ;;
+    *)
+      echo "PRESENTATION_UNSTABLE_URL: could not read lavish-axi --help, so whether the board gets one stable address could not be verified - re-run once lavish-axi answers --help"
+      ;;
+  esac
+}
+
+# A fork's workflows stay DORMANT until its owner enables them in the Actions
+# tab; no API call substitutes for that click. With them dormant a validation
+# run reaches its CI step, reports no checks yet, and waits out ci_timeout -
+# 168h in the shipped no-mistakes configuration. Seven days of a run that looks
+# alive and is doing nothing, and the only signal is indistinguishable from slow
+# CI until somebody opens the Actions tab. That is the worst failure shape a
+# fresh fork can have, so a session start asks.
+#
+# The repository is resolved from FM_ROOT's own origin remote rather than from
+# `gh`'s ambient resolution, which answers from local configuration that can be
+# changed without touching this code: on one checkout here it resolved to the
+# UPSTREAM slug and would have reported the parent's healthy Actions while the
+# fork's sat dormant, and on the same checkout after reconfiguration it resolves
+# to the fork. A check about THIS repository should not have a verdict that
+# moves when somebody edits a git config, so it reads the remote directly.
+# Note this does not settle which repository is the right one to ask about: a
+# contributor following CONTRIBUTING.md points origin at the parent and pushes
+# to a fork, and the open review finding on that is where that belongs.
+# Returns the owner/repo slug, and returns 2 - distinct from a parse failure -
+# when the origin is simply not on github.com. That distinction matters: a
+# GitHub repository whose slug cannot be read is a check that should have run
+# and did not, while a repository hosted somewhere else is a check that does not
+# apply, and reporting the second as unverified would nag every session forever
+# about a trap that cannot happen there.
+#
+# Known gap, stated rather than hidden: a GitHub Enterprise host also runs
+# Actions and is skipped here, because this cannot tell an Enterprise host from
+# an unrelated forge by its name alone.
+actions_repo_slug() {
+  local url host
+  url=$(git -C "$FM_ROOT" remote get-url origin 2>/dev/null) || return 1
+  url=${url%.git}
+  case "$url" in
+    https://*|http://*) url=${url#*://}; host=${url%%/*}; url=${url#*/} ;;
+    ssh://*) url=${url#ssh://}; host=${url%%/*}; url=${url#*/} ;;
+    *:*) host=${url%%:*}; url=${url#*:} ;;
+    *) return 1 ;;
+  esac
+  # Userinfo and port come off the authority ONCE, for every URL shape, rather
+  # than inside the branches: stripping it per branch is what let the https case
+  # read `user@github.com` as the host, fail the github.com test, and take the
+  # skip-silently path - no ACTIONS_DORMANT and no ACTIONS_UNVERIFIED for a
+  # GitHub origin, which is the one outcome this check forbids. Userinfo first,
+  # because a password inside it may itself contain the port separator.
+  host=${host#*@}
+  host=${host%%:*}
+  [ "$host" = github.com ] || return 2
+  case "$url" in
+    */*/*|'') return 1 ;;
+    */*) printf '%s' "$url" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Two independent signals, because they fail for different reasons and either
+# one alone has a blind spot: repository-level Actions can be switched off
+# wholesale (permissions.enabled), and individually dormant workflows report a
+# disabled_* state instead. A positive reading from EITHER - Actions enabled, or
+# any workflow active - is enough to stay silent, so a home whose token cannot
+# read the admin-scoped permissions endpoint is not nagged while its workflows
+# are visibly running. When neither signal can be read the check says it could
+# not verify, rather than passing by silence.
+detect_actions_dormant() {
+  local slug enabled states
+  command -v gh >/dev/null 2>&1 || return 0
+  [ -d "$FM_ROOT/.github/workflows" ] || return 0
+  # Reads the verdict the caller already paid for. An unauthenticated forge is
+  # the one case this returns silent on, and it is not silence: NEEDS_GH_AUTH is
+  # printed by that same caller on the same run, so the operator is told why the
+  # checks state could not be read.
+  [ "${BOOTSTRAP_GH_AUTH_OK:-0}" = 1 ] || return 0
+  slug=$(actions_repo_slug)
+  case $? in
+    0) ;;
+    2) return 0 ;;
+    *)
+      echo "ACTIONS_UNVERIFIED: could not resolve this repository from its origin remote, so whether its checks are enabled is unknown; a fork with dormant checks leaves every validation run waiting for CI that never reports"
+      return 0
+      ;;
+  esac
+  states=$(gh api "repos/$slug/actions/workflows" --jq '[.workflows[].state] | join(" ")' 2>/dev/null) || states=
+  case " $states " in
+    *" active "*) return 0 ;;
+  esac
+  enabled=$(gh api "repos/$slug/actions/permissions" --jq '.enabled' 2>/dev/null) || enabled=
+  [ "$enabled" = true ] && [ -z "$states" ] && return 0
+  if [ "$enabled" = false ]; then
+    echo "ACTIONS_DORMANT: GitHub Actions is disabled for $slug, so every validation run will reach its CI step and wait out the full CI timeout (168h by default) for checks that never report - enable Actions at https://github.com/$slug/settings/actions"
+    return 0
+  fi
+  if [ -n "$states" ]; then
+    echo "ACTIONS_DORMANT: no workflow is active in $slug (states: $states), so every validation run will wait out the full CI timeout (168h by default) for checks that never report - a fork's workflows stay dormant until its owner enables them at https://github.com/$slug/actions"
+    return 0
+  fi
+  echo "ACTIONS_UNVERIFIED: could not read the checks state of $slug, so whether a validation run will ever get CI results is unknown - re-run once GitHub is reachable"
 }
 
 detect_local_config() {
@@ -1524,12 +2002,60 @@ detect_local_config() {
     echo "MISSING_MANUAL: cursor-agent (instructions: $(manual_install_url cursor-agent))"
   fi
   crew_dispatch_validate
+  detect_diagram_design_skill
+  detect_claude_permissions
+  detect_backend_selection
   if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
     && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
     echo "BOOTSTRAP_INFO: tasks-axi available"
   fi
   detect_code_root_backlog_fork
   detect_home_summary_publication
+}
+
+# Which runtime backend this home is about to spawn into, and how it got chosen.
+# Two clones of this repository launched from different terminals can resolve
+# different backends, because auto-detection reads the runtime firstmate itself
+# is executing inside - so the selection is a property of the environment until
+# somebody records it in config/backend.
+#
+# An EXPERIMENTAL backend is therefore reported unconditionally, whichever rung
+# of the precedence chose it. fm_backend_name's spawn-time NOTICE covers only
+# the two backends auto-detection can pick, which leaves an explicitly
+# configured zellij or orca - neither of which has a dedicated real-backend CI
+# lane - running in complete silence. Reporting the whole experimental set here
+# closes that: the operator learns what they are running at session start rather
+# than from a backend-specific failure later.
+#
+# The verified reference backend stays a verbose-only fact, matching the
+# crew-harness override above: it is the documented default, so saying so every
+# session would be noise rather than news.
+detect_backend_selection() {
+  local signal detail remedy
+  detail=$FM_BACKEND_SELECTED_SOURCE
+  if signal=$(fm_backend_selection_signal); then
+    detail="$detail: $signal"
+  elif [ "$FM_BACKEND_SELECTED_SOURCE" = config ]; then
+    detail="$detail: config/backend"
+  elif [ "$FM_BACKEND_SELECTED_SOURCE" = environment ]; then
+    detail="$detail: FM_BACKEND"
+  fi
+  if fm_backend_is_experimental "$BACKEND"; then
+    # The remedy has to match how this backend was actually chosen. Telling a
+    # home that already records orca in config/backend to "record it in
+    # config/backend" is a remedy for a different case; what that operator can
+    # act on is the opt-out.
+    if [ "$FM_BACKEND_SELECTED_SOURCE" = config ]; then
+      remedy="config/backend records this deliberately; write tmux there to opt out"
+    else
+      remedy="record the deliberate choice by writing it to config/backend, or write tmux there to opt out"
+    fi
+    echo "BACKEND_EXPERIMENTAL: $BACKEND ($detail) - $BACKEND is an EXPERIMENTAL backend; tmux is the verified reference. ${remedy}."
+    return 0
+  fi
+  if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
+    echo "BOOTSTRAP_INFO: runtime backend $BACKEND ($detail)"
+  fi
 }
 
 # Shadow-backlog check. When this home's data directory is not the code root's,
@@ -1615,8 +2141,23 @@ detect_home_summary_publication() {
 local_phase && detect_local_tools
 if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
-  gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
+  # One authentication probe per run, its verdict published for the checks probe
+  # below rather than asked again: `gh auth status` is a round trip to the forge,
+  # and asking twice on consecutive lines bought nothing.
+  if gh auth status >/dev/null 2>&1; then
+    BOOTSTRAP_GH_AUTH_OK=1
+  else
+    BOOTSTRAP_GH_AUTH_OK=0
+    echo "NEEDS_GH_AUTH"
+  fi
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
+  # Its own bracket, because the comment above this block promises that each
+  # network owner is bracketed so a slow stage can be attributed to the phase
+  # that spent the time. Leaving the checks probe inside the gh-auth bracket
+  # charged its forge round trips to authentication.
+  __fm_timing_stamp=$(fm_timing_now_ms)
+  detect_actions_dormant
+  fm_timing_record phase actions-checks "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
 

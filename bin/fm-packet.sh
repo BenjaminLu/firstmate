@@ -343,6 +343,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-lavish-lib.sh
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
 
 PACKET_SCHEMA=fm-packet.v1
 DECISION_SCHEMA=fm-packet-decision.v1
@@ -2248,7 +2250,6 @@ page_session_name() {  # <task-id> -> the stable lavish session slug
   printf 'packet-%s\n' "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
 }
 
-lavish_names_supported() { lavish-axi --help 2>/dev/null | grep -q -- '--name <slug>'; }
 
 lavish_open_url() {  # <canonical-page-path> -> the open session's url, or nothing
   local listing
@@ -2271,7 +2272,7 @@ command_serve() {  # <task-id> ; renders, opens the page, prints `page:` and `ur
   command_render "$id" || exit 1
   page=$(page_path "$id")
   real=$(page_realpath "$page") || fail "cannot resolve the page path: $page"
-  if lavish_names_supported; then
+  if fm_lavish_named_session_support; then
     name=$(page_session_name "$id")
     name_args=(--name "$name")
   fi
