@@ -127,10 +127,22 @@
 #   - at most one `## Figures` section: a second one is a second drawing set
 #     the page has no place for, and the page gives the section one id
 #   - a figure body carries figure:, caption:, one drawing and its `- edge`
-#     lines, and nothing else. Nothing renders a stray line, and a sentence
-#     that verifies and then never reaches the page is worse than a refusal:
-#     one about the drawing goes in the caption, anything longer in the
-#     packet section it belongs to
+#     lines, and nothing else, and the section carries nothing above its first
+#     `### ` heading. Nothing renders a stray line, and a sentence that
+#     verifies and then never reaches the page is worse than a refusal: one
+#     about the drawing goes in the caption, anything longer in the packet
+#     section it belongs to. Above the first heading the cost is higher still,
+#     since no figure clause reads there at all
+#   - a url() inside style="" points at a same-document `#fragment`, like
+#     href and src: a protocol-relative or absolute one fetches when the page
+#     opens or on hover, from a page that must render offline
+#
+# The figure's `### ` heading and its caption render as the worker wrote them,
+# in one language, like the packet's other prose - a decided scope boundary,
+# not an oversight. The captain's trilingual surface is the bearings board,
+# where this packet is rendered inside its card; the packet page's own
+# language story belongs to that task, and a trilingual caption sitting above
+# single-language packet prose would be the inconsistency, not the fix.
 #
 # verify owns the mechanical half of that contract and only that half. It
 # checks absences a script is good at - a missing language attribute, a baked
@@ -429,7 +441,11 @@ if not found and kind == "needs-decision":
                     "declare here")
 
 # ---- split the section into figures at their ### headings -------------------
-figures, cur = [], None
+# Everything in the section belongs to a figure. A line above the first '### '
+# is read by no figure clause - so a drawing parked there would reach the page
+# with nothing having checked it, and prose there renders where the figure
+# body's own stray-line rule says prose may not go.
+figures, cur, preamble = [], None, []
 for l in body:
     h = figure_heading(l)
     if h is not None:
@@ -437,10 +453,19 @@ for l in body:
         figures.append(cur)
     elif cur is not None:
         cur["lines"].append(l)
+    elif l.strip():
+        preamble.append(l)
 
-if found and not figures and kind == "needs-decision":
-    problems.append("the Figures section carries no '### ' figure; a needs-decision packet owes "
-                    "one drawing that puts every option together")
+for l in preamble:
+    problems.append("the line \"%s\" sits above the first '### ' figure, where no figure clause "
+                    "reads it; every line in the section belongs to a figure. A drawing needs "
+                    "its own '### ' heading, a sentence about one goes in that figure's "
+                    "caption, and anything longer goes in the packet section it belongs to"
+                    % l.strip())
+
+if found and not figures:
+    problems.append("the Figures section carries no '### ' figure; a section is the drawings in "
+                    "it, and a needs-decision packet owes one that puts every option together")
 
 # ---- per-figure checks ------------------------------------------------------
 COLOUR_ATTRS = ("fill", "stroke", "color", "stop-color", "flood-color", "lighting-color")
@@ -460,8 +485,19 @@ FIG_FIELD = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
 FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 TEXT_ELEMENT = re.compile(r"""<\s*text\b(?:[^<>"']|"[^"]*"|'[^']*')*>(.*?)<\s*/\s*text\s*>""", re.S)
 REF_ATTRS = ("href", "xlink:href", "src")
+STYLE_URL = re.compile(r"url\(\s*([^)]*)\)", re.I)
 SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 LINK_SCHEMES = ("http", "https", "mailto")
+
+VAR_REF = re.compile(r"^var\(\s*(--[A-Za-z0-9_-]+)")
+
+def colour_advice(value):
+    """why this colour was refused, in the terms the value is already written in"""
+    m = VAR_REF.match(value.strip())
+    if m:
+        return ("the page binds no %s for a figure to draw against; the palette is %s"
+                % (m.group(1), ", ".join("--" + name for name in PALETTE)))
+    return "colours come from the page's CSS variables, as var(--...)"
 
 def attrs_of(text):
     out = {}
@@ -584,8 +620,7 @@ for n, fig in enumerate(figures, 1):
                 bad("id=\"%s\" is not prefixed \"%s-\"; two figures on one page share one id "
                     "namespace" % (v, slug))
             if k in COLOUR_ATTRS and not COLOUR_OK.match(v.strip()):
-                bad("<%s> has %s=\"%s\"; colours come from the page's CSS variables, as "
-                    "var(--...)" % (tag, k, v))
+                bad("<%s> has %s=\"%s\"; %s" % (tag, k, v, colour_advice(v)))
             if k in REF_ATTRS:
                 ref = v.strip()
                 m_scheme = SCHEME.match(ref)
@@ -599,8 +634,12 @@ for n, fig in enumerate(figures, 1):
             if k == "style":
                 for prop, val in style_decls(v):
                     if prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
-                        bad("<%s> styles %s: %s; colours come from the page's CSS variables, as "
-                            "var(--...)" % (tag, prop, val))
+                        bad("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
+                    for ref in STYLE_URL.findall(val):
+                        if not ref.strip().strip("\"'").startswith("#"):
+                            bad("<%s> styles %s: %s; a url() in a drawing points at a "
+                                "same-document #fragment, or the page fetches it and stops "
+                                "rendering offline" % (tag, prop, val))
         if tag == "text":
             missing = [a for a in ("data-en", "data-hant", "data-hans") if not at.get(a)]
             if missing:
@@ -1007,16 +1046,14 @@ def top_level_svgs(text):
 
 
 def figures_html(body):
-    head, figures, cur = [], [], None
+    figures, cur = [], None
     for line in body:
         h = figure_heading(line)
         if h is not None:
             cur = (h, []); figures.append(cur)
         elif cur is not None:
             cur[1].append(line)
-        else:
-            head.append(line)
-    out = [md(head)] if "\n".join(head).strip() else []
+    out = []
     for heading, lines in figures:
         chunk = "\n".join(lines)
         fields = {}

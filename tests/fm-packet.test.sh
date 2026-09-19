@@ -267,7 +267,7 @@ test_verify_checks_the_decision_block_field_by_field() {
 }
 
 test_verify_holds_a_figure_to_the_svg_contract() {
-  local home packet out svg body styled foreign wrapped plain masked
+  local home packet out svg body styled foreign wrapped plain masked cursored
   home=$(make_home figures)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -306,10 +306,20 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     'styles fill: rgb(20,20,20)' "an rgb() fill in a style attribute"
   # A variable the page never binds resolves to nothing and the shape falls
-  # back to black on --card, so only the bound palette passes.
+  # back to black on --card, so only the bound palette passes - and the
+  # refusal names the palette, since "use var(--...)" is what was written.
   svg=${GOOD_SVG/fill=\"var(--accent-tint)\"/fill=\"var(--ink)\"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    'colours come from the page' "a variable outside the page's palette"
+    'the page binds no --ink' "a variable outside the page's palette"
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'the palette is --fg, --muted' "a palette refusal that does not say what to use"
+
+  # A url() in a style declaration fetches like an href does, so it points at
+  # a same-document fragment or the page stops rendering offline.
+  cursored='style="cursor:url(//evil.example/c.cur),auto"'
+  svg=${GOOD_SVG/style=\"font-family:var(--sans)\"/"$cursored"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a url() in a drawing points at a same-document #fragment" "a style that fetches off-origin"
   # Every attribute clause must see an unquoted value too, or it is one
   # missing pair of quotes away from being unenforced.
   svg=${GOOD_SVG/fill=\"var(--accent-tint)\"/fill=#f4d8c9}
@@ -387,6 +397,16 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   body=$(good_figures)$'\n''- edge ghost: nothing draws this'
   assert_figure_refused "$home" "$packet" "$body" \
     'evidence names edge "ghost"' "evidence for a line the drawing does not have"
+
+  # No figure clause reads above the first '### ', so a drawing parked there
+  # would reach the page with nothing having checked it - and render escapes
+  # it into source text rather than drawing it.
+  body=$(printf '%s\n\n%s\n' "$GOOD_SVG" "$(good_figures)")
+  assert_figure_refused "$home" "$packet" "$body" \
+    "sits above the first '### ' figure" "a drawing parked above the first figure"
+  body=$(printf '%s\n\n%s\n' 'Drawn through the diagram-design skill; look before you report.' "$(good_figures)")
+  assert_figure_refused "$home" "$packet" "$body" \
+    "sits above the first '### ' figure" "prose parked above the first figure"
 
   # A drawing whose closing tag was lost has one true reason, and a worker is
   # told to fix what verify reports: reporting its every line as prose to move
@@ -492,6 +512,19 @@ test_a_done_packet_is_not_refused_for_having_no_figures() {
   # A done packet may carry figures, and they are held to the same contract.
   fill_figures "$packet"
   out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a good figure on a done packet: $out"
+  # A section is the drawings in it, whatever the packet kind: an empty one
+  # says a worker meant to draw and did not, and it is refused rather than
+  # counted as nothing.
+  python3 - "$packet" <<'PY2'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(re.sub(r"## Figures\n.*?\n## Evidence", "## Figures\n\n## Evidence", s, flags=re.S))
+PY2
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an empty Figures section on a done packet verified: $out"
+  assert_contains "$out" "carries no '### ' figure" "the empty section was not named: $out"
+  fill_figures "$packet"
+
   assert_figure_refused "$home" "$packet" "$(good_figures "${GOOD_SVG/fill=\"var(--card)\"/fill=\"#ffffff\"}")" \
     "colours come from the page" "a broken figure on a done packet"
 
