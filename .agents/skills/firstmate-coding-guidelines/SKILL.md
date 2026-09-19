@@ -118,13 +118,28 @@ Never configure a deterministic suite-walk `commands.test` in any repository's n
 Targeted validation belongs to the no-mistakes evidence path, while CI owns broad deterministic regression coverage.
 Firstmate PR #3644 demonstrated the cost: pinning a 75-162-script walk took 32.7 minutes per validation, while removing it restored the 3.6-minute targeted-validation posture.
 
+## Defect classes
+
+Check a change against these four before calling it done, and check a review against the same list.
+Each is a rule about the artifact, not a judgment about the author.
+
+- A fixture may not carry a field its contract does not define.
+  A test that invents the key it asserts on cannot fail, so it reads as coverage while proving nothing, which is worse than having no test.
+  Build fixtures from what the producer actually emits, and make the test fail once against the real contract before trusting it.
+- A message or help text may not state what the code cannot deliver.
+  A refusal that prints a remedy which does not fix the case it was printed for, and a help line advertising a default the code always reduces, are defects in the message even when the behavior behind it is right.
+- A check that accepts content the renderer drops or shows wrongly is a defect in the check, not a gap in the content.
+  Verify against what reaches the reader rather than against what parses: content silently discarded at render, a document scanned only as far as its first nested element, and a label that verifies clean and then renders in the wrong language all pass a check that is asking the wrong question.
+- Content rendered onto a captain-facing surface must not be able to alter that surface.
+  Styling and layout embedded in rendered content are not scoped to it and can escape onto the page the captain decides on.
+  Refuse the construct outright rather than teaching the checker to parse it.
+
 ## Repo style rules
 
 - Put one full sentence per line in tracked Markdown.
 - Never wrap multiple sentences onto one physical line.
 - Plain dash `-`, never an em dash.
 - Never add an agent name as a commit co-author.
-- `bin/*.sh` and `bin/backends/*.sh` must pass `shellcheck`.
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition that CI and the no-mistakes pre-push gate both invoke, its own header owns what that definition covers, and it refuses to run under any other version of either linter.
 - When a task names a specific tool, implement the work with that tool, or explicitly flag the substitution and its new dependency footprint for review before shipping.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.

@@ -28,6 +28,18 @@ Use the tool's exact skill form, or natural language only when no separate comma
 A successful send or key return is not proof of submission; require the tool-specific postcondition.
 Popup, queued-input, and readiness handling belongs to `../../../bin/fm-composer-lib.sh` and the selected backend.
 
+## Worker directory permissions
+
+A worker legitimately reads four directories outside its own worktree, because its own brief sends it to each of them:
+
+- the active Firstmate home, which carries its brief, steering inbox, status file, and packet
+- the harness's own scratch root for that session
+- the validation tool's data root, which `no-mistakes doctor` prints
+- the user skills directory `~/.claude/skills`, where the skills a brief names live
+
+When one of them raises a permission prompt, add that directory in the worker's own pane and clear the dialog there, then inspect the pane under the completion postcondition above to confirm it cleared.
+A directory the worker's own brief already requires is not a captain call, so none of these prompts is escalated.
+
 ## Interrupt and exit
 
 Use the control plane so capabilities are checked first.
