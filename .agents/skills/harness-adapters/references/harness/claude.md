@@ -30,13 +30,16 @@ Both flags `false` is Claude Code's default entry for a project never asked, not
 The why-two-entries mechanism and the consent-gating logic live in the script's own header comment, which is the one owner for that contract; the fact worth repeating here is that `../../../bin/fm-spawn.sh` refuses the spawn when the trust flag fails to land, rather than launching a worker that would wedge on that dialog.
 
 Never try to answer either dialog with a key.
-Firstmate's key plane carries only Enter, Escape, and C-c with no arrow navigation, so it cannot move a dialog's selection at all, and both dialogs render with the cursor on their declining option, which means a sent Enter ends the session instead of accepting.
+Firstmate's key plane carries only Enter, Escape, and C-c with no arrow navigation, so it can never move a dialog's selection: an option is reachable only where the dialog numbers its options and that option's own digit selects it directly, and a dialog numbering no options cannot be answered from the key plane at all.
+Both dialogs here are in the unanswerable class - neither numbers its options, and both render with the cursor on their declining option, which means a sent Enter ends the session instead of accepting.
+Numbered prompts are the other class, and the digit is what makes them answerable: firstmate cleared several worker permission prompts on 2026-09-19 by sending the wanted option's own digit, observed behaviour whose confirmations are in those workers' own panes, with no version or transcript captured.
+The digit is load-bearing there for the same reason Enter is refused here, since a bare Enter takes whichever option is resting under the cursor rather than the one intended.
 A visible trust dialog means pre-registration did not take effect (or the project entry already carries an explicit decline) - inspect the store and the spawn's error output rather than sending keys.
 A visible external-imports dialog is expected, not a failure signal, whenever the project entry has no prior explicit approval on record - the common first-spawn case; `fm-control.sh <id> interrupt` delivers Escape, which dismisses whichever of the two is on screen without answering it, and is the safe way to clear a wedged pane for inspection.
 
 The once-per-machine bypass-permissions confirmation is a third, separate dialog, scoped to the machine rather than the path, and pre-registration does not address it.
 Never send Enter to that one either: it was observed rendering in the same shape as the trust dialog, with the selection on `No, exit` and the footer `Enter to confirm . Esc to cancel`, so Enter ends the session rather than accepting.
-Firstmate cannot move a selection with Enter, Escape, and C-c alone, so it cannot accept this dialog at all, and an operator accepts it once per machine instead.
+It numbers no options either, so the key plane cannot reach its accepting option at all, and an operator accepts it once per machine instead.
 Inspect the pane to identify which dialog is on screen, and report it rather than answering it.
 A launch under `config/claude-permission-mode=auto` never meets the bypass confirmation, because it does not request bypass mode: on 2.1.269 `claude --permission-mode auto` reached the composer directly with the footer `⏵⏵ auto mode on (shift+tab to cycle)`, so a captain who refuses the bypass dialog selects `auto` there instead of accepting it.
 The workspace-trust dialog is unaffected by the permission mode and still needs the pre-registration above.

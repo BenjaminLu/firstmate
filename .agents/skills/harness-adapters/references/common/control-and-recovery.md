@@ -37,7 +37,9 @@ A worker legitimately reads four directories outside its own worktree, because i
 - the validation tool's data root, which `no-mistakes doctor` prints
 - the user skills directory `~/.claude/skills`, where the skills a brief names live
 
-When one of them raises a permission prompt, add that directory in the worker's own pane and clear the dialog there, then inspect the pane under the completion postcondition above to confirm it cleared.
+When one of them raises a permission prompt, firstmate is the one who answers it: it adds that directory in the worker's own pane, then inspects the pane under the completion postcondition above to confirm the dialog cleared.
+Such a prompt reaching the captain is a firstmate failure, not his work.
+Which keys can answer a dialog is the selected tool's fact rather than a common one, so take it from the running harness reference; on Claude, `../harness/claude.md` under "Workspace trust" records that a numbered option is reachable by sending its own digit while a dialog numbering no options stays unanswerable from the key plane.
 None of these four prompts is escalated, because the captain settled them on 2026-09-19 to stop a stream of them reaching him; that is his standing decision, not a grant firstmate makes on its own judgment.
 Two of the four are wider than the brief's own need, and the record has to say what they expose: granting the Firstmate home root exposes `.env` with the Relay pairing token, the mail-plane credentials, and `TYPESAFE_API_KEY`, plus `config/cmux-socket-password` and every other task's briefs, reports, and backlog under `data/`, while granting the validation tool's data root exposes every project's runs and worktrees rather than this task's alone.
 A home holding material it does not want a worker to read narrows the grant to that worker's own task data directory `data/<id>/` and its flat per-task state records `state/<id>.*`, including `state/<id>.status` and the steering inbox `state/<id>.inbox/`, instead of granting the root.
