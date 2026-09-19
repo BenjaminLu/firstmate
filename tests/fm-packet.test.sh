@@ -266,7 +266,7 @@ test_verify_checks_the_decision_block_field_by_field() {
 }
 
 test_verify_holds_a_figure_to_the_svg_contract() {
-  local home packet out svg body styled
+  local home packet out svg body styled foreign
   home=$(make_home figures)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -339,6 +339,12 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/<title id=\"opt-title\">/<script>void 0;<\/script><title id=\"opt-title\">}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "the svg carries a <script>" "a script inside the drawing"
+  # A <foreignObject> holds HTML the language clause cannot read, so its labels
+  # would stay English when the captain switches the page.
+  foreign='<foreignObject x="0" y="0" width="90" height="20"><div style="font-size:12px">SparkSQL</div></foreignObject><title id="opt-title">'
+  svg=${GOOD_SVG/<title id=\"opt-title\">/"$foreign"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "the svg carries a <foreignObject>" "HTML labels the language switch cannot reach"
   # The svg rides the page unescaped, so a link scheme the page's own prose
   # refuses must not reach it through a drawing, and nothing may fetch on open.
   svg=${GOOD_SVG/<rect id=\"opt-box-end\"/<a href=\"javascript:alert(1)\"><rect id=\"opt-box-end\"}
@@ -368,7 +374,7 @@ test_verify_holds_a_figure_to_the_svg_contract() {
 }
 
 test_a_needs_decision_packet_owes_one_figure_comparing_every_option() {
-  local home packet out body rc
+  local home packet out body rc rect_b circle_b
   home=$(make_home compare)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -381,6 +387,13 @@ test_a_needs_decision_packet_owes_one_figure_comparing_every_option() {
   body=${body//data-node=\"quiet\"/data-node=\"elsewhere\"}
   assert_figure_refused "$home" "$packet" "$body" \
     "no figure puts the options together" "a packet whose figures name no option at all"
+
+  # An option named on any shape counts: the contract requires data-node on
+  # rect and polygon, it does not confine the comparison to those two.
+  rect_b='<rect id="opt-box-b" data-node="quiet" x="24" y="150" width="220" height="80" rx="8" fill="var(--card-2)" stroke="var(--rule)"/>'
+  circle_b='<circle id="opt-box-b" data-node="quiet" cx="134" cy="190" r="40" fill="var(--card-2)" stroke="var(--rule)"/>'
+  fill_figures "$packet" "$(good_figures "${GOOD_SVG/"$rect_b"/"$circle_b"}")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an option drawn as a circle: $out"
 
   # A comparison that omits one option is not a comparison, and it is named.
   body=$(good_figures "${GOOD_SVG/data-node=\"quiet\"/data-node=\"other\"}")
@@ -507,6 +520,45 @@ PY
   [ "$rc" -ne 0 ] || fail "an empty Evidence section followed by figures verified: $out"
   assert_contains "$out" "'Evidence' is empty" "the emptied Evidence section was not caught: $out"
   pass "a packet carries one figures section and render publishes nothing verify refused"
+}
+
+test_the_captains_page_carries_only_what_the_worker_wrote() {
+  local home packet page leftover paras
+  home=$(make_home scaffold-prose)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+
+  # Every line the scaffold writes into the Figures section is a placeholder
+  # the worker is asked to replace; it authors no prose of its own, so nothing
+  # the fleet says to itself can survive onto the captain's decision surface.
+  leftover=$(python3 - "$packet" <<'PY'
+import pathlib, sys
+inside, out = False, []
+for l in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if l.startswith("## "):
+        inside = l[3:].strip() == "Figures"
+    elif inside and l.strip() and "{FILL" not in l:
+        out.append(l)
+print("\n".join(out))
+PY
+)
+  [ -z "$leftover" ] || fail "the scaffold wrote Figures prose nothing asks the worker to remove: $leftover"
+
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed"
+  # The section carries the drawings, their headings and their captions. Prose
+  # above the first figure would arrive as a paragraph; there is none to arrive.
+  paras=$(python3 - "$page" <<'PY'
+import pathlib, re, sys
+m = re.search(r'<section[^>]*id="s_figures".*?</section>', pathlib.Path(sys.argv[1]).read_text(), re.S)
+print(m.group(0).count("<p>") if m else "no-figures-section")
+PY
+)
+  [ "$paras" = 0 ] || fail "the rendered figures section carries $paras paragraph(s) beside the drawings"
+  pass "the captain's page carries only what the worker wrote"
 }
 
 test_card_emits_a_board_ready_decision_item() {
@@ -744,6 +796,7 @@ test_verify_holds_a_figure_to_the_svg_contract
 test_a_needs_decision_packet_owes_one_figure_comparing_every_option
 test_a_done_packet_is_not_refused_for_having_no_figures
 test_a_packet_carries_one_figures_section_and_render_publishes_nothing_else
+test_the_captains_page_carries_only_what_the_worker_wrote
 test_card_emits_a_board_ready_decision_item
 test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet

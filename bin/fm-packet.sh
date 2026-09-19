@@ -83,16 +83,23 @@
 #     font-family. Figures sit on --card, so paper and label masks are
 #     fill="var(--card)"
 #   - every selectable shape (`<rect>`, `<polygon>`) carries data-node, the
-#     latin identity from the source, never the reader's wording
+#     latin identity from the source, never the reader's wording. Any other
+#     tag may carry one too, and a data-node anywhere names its option for
+#     the comparison rule below
 #   - every id inside the svg is prefixed `<slug>-`, and no two figures in one
 #     packet share a slug, so two figures inlined on one page cannot collide
 #     over a marker id and break each other's arrows
-#   - no external font reference, and no <script>, <style> or on* handler: the
-#     page must render offline inside a sandboxed iframe, and the drawing is
-#     static markup. An inline <style> is not scoped to the svg it sits in -
-#     it restyles the whole served page - so a drawing may not carry one at
-#     all; the `style="..."` attribute form the contract asks for is what the
-#     per-attribute check reads. For the same reason every href, xlink:href
+#   - no external font reference, and no <script>, <style>, <foreignObject> or
+#     on* handler: the page must render offline inside a sandboxed iframe, and
+#     the drawing is static markup. An inline <style> is not scoped to the svg
+#     it sits in - it restyles the whole served page - so a drawing may not
+#     carry one at all; the `style="..."` attribute form the contract asks for
+#     is what the per-attribute check reads. A <foreignObject> is refused for
+#     both reasons at once: it holds HTML the language clause cannot read, so
+#     its labels would stay English when the page switches, and its layout is
+#     the page's rather than the drawing's. Labels are <text> nodes, so a
+#     diagram-design type that emits one is re-drawn rather than lifted.
+#     For the same reason every href, xlink:href
 #     and src points at a same-document `#fragment`; only an `<a>` may leave
 #     the page, and only through http, https or mailto - the schemes the
 #     page's prose links already allow, since the svg rides the page unescaped
@@ -293,14 +300,10 @@ command_scaffold() {
       printf '%s\n' '}'
       printf '%s\n' '```'
       printf '\n## Figures\n\n'
-      # shellcheck disable=SC2016  # markdown code spans in the packet, not shell expansions
-      printf '%s\n' 'Drawn through the diagram-design skill, never hand-written SVG; `fm-packet.sh --help` owns the contract verify enforces.'
-      printf '%s\n' 'If that skill is not installed where this task runs, that is a blocker to escalate to firstmate, not a line you write here.'
-      printf '%s\n\n' 'verify checks the contract, not the picture: render the page and look at the drawing before you report.'
       printf '%s\n' '### {FILL: the heading - what this drawing shows}'
       printf '%s\n' 'figure: {FILL: slug, lowercase, used to prefix every id inside the svg}'
       printf '%s\n\n' 'caption: {FILL: one sentence - what to look at, and what the drawing proves}'
-      printf '%s\n\n' '{FILL: the <svg> lifted out of the diagram-design file and edited to the contract - colours only var(--...), data-en/data-hant/data-hans on every <text>, data-node on every shape, and one shape carrying data-node="<option value>" for EVERY option in the decision above}'
+      printf '%s\n\n' '{FILL: the <svg> lifted out of the file the diagram-design skill wrote, never hand-written, and edited to the contract fm-packet.sh --help states - colours only var(--...), data-en/data-hant/data-hans on every <text>, data-node on every shape, and one shape carrying data-node="<option value>" for EVERY option in the decision above}'
       printf '%s\n' '- edge {FILL: the data-edge id}: {FILL: what proves this connector}'
     fi
     printf '\n## Evidence\n\n'
@@ -486,6 +489,11 @@ for n, fig in enumerate(figures, 1):
     if re.search(r"<\s*style\b", svg, re.I):
         bad("the svg carries a <style>; an inline style element is not scoped to its drawing "
             "and restyles the whole page, so a figure styles itself through style=\"...\"")
+    if re.search(r"<\s*foreignObject\b", svg, re.I):
+        bad("the svg carries a <foreignObject>; it holds HTML the language clause cannot read, "
+            "so its labels stay English when the page switches, and its layout is the page's "
+            "not the drawing's. Re-draw those labels as <text> nodes carrying data-en, "
+            "data-hant and data-hans")
 
     nodes, edges_drawn, edges_declared = set(), set(), set()
     for m in TAG.finditer(svg):
@@ -519,12 +527,11 @@ for n, fig in enumerate(figures, 1):
             if missing:
                 bad("a <text> is missing %s; one missing attribute leaks English onto the "
                     "Chinese page" % ", ".join(missing))
-        if tag in ("rect", "polygon"):
-            if at.get("data-node"):
-                nodes.add(at["data-node"])
-            else:
-                bad("a <%s> carries no data-node; every selectable shape needs its latin "
-                    "identity" % tag)
+        if at.get("data-node"):
+            nodes.add(at["data-node"])
+        elif tag in ("rect", "polygon"):
+            bad("a <%s> carries no data-node; every selectable shape needs its latin "
+                "identity" % tag)
         if at.get("data-edge"):
             edges_drawn.add(at["data-edge"])
         elif tag in ("path", "line", "polyline"):
