@@ -11,10 +11,13 @@
 //   unreadable  a snapshot arrives that this page cannot render
 //   hold        a live payload arrives while an answer is being written
 //   hold-send   the same, and then the answer is sent
+//   hold-stale  a selection is left behind on a card the deck has moved past
+//   write-fails an answer is written, the write is refused, a payload follows
+//   lang        the board's own language switch is used
 //   no-db       the artifact store never hands over a db capability
 //
 // Prints one JSON document:
-//   { badge, gap, gapShown, provenance, note, stack, writes }
+//   { badge, badgeHost, gap, gapHost, gapShown, provenance, note, stack, writes }
 import { readFileSync } from "node:fs";
 
 const [pagePath, scenario] = process.argv.slice(2);
@@ -133,6 +136,11 @@ class Node {
 }
 
 const PRISTINE_MARK = "[the body markup as parsed]";
+// Only the ids the published page's markup declares exist before the page's
+// own scripts run. Anything else - the transport's two badges among them - has
+// to be created and attached by the code under test, which is the behavior
+// worth proving.
+const TEMPLATE_IDS = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
 let body = new Node("body");
 let byId = new Map();
 // The two containers the template's static markup provides; everything else on
@@ -157,13 +165,14 @@ globalThis.document = {
   body,
   createElement: (tag) => new Node(tag),
   getElementById: (id) => {
-    if (!byId.has(id)) {
-      const n = new Node("div");
-      n.id = id;
-      body.appendChild(n);
-      byId.set(id, n);
-    }
-    return byId.get(id);
+    const found = byId.get(id) || body.querySelector("#" + id);
+    if (found) return found;
+    if (!TEMPLATE_IDS.has(id)) return null;
+    const n = new Node("div");
+    n.id = id;
+    body.appendChild(n);
+    byId.set(id, n);
+    return n;
   },
   querySelector: (sel) => {
     const found = body.querySelector(sel);
@@ -210,7 +219,12 @@ let snapshot = null;
 
 const db = {
   doc: (path) => ({
-    set: (record) => { writes.push({ path, record }); return Promise.resolve(); },
+    set: (record) => {
+      writes.push({ path, record });
+      return scenario === "write-fails"
+        ? Promise.reject(new Error("the store refused this write"))
+        : Promise.resolve();
+    },
     onSnapshot: (cb) => { if (path === "board/current") snapshot = cb; },
   }),
 };
@@ -261,19 +275,43 @@ if (scenario === "live") {
   typeNote("wait for me");
   push(LIVE);
   if (scenario === "hold-send") submitAnswer();
+} else if (scenario === "hold-stale") {
+  // A radio tapped to read its consequence, then left behind by dealing the
+  // next card: the captain is answering nothing, so nothing may hold the board.
+  const first = document.querySelectorAll("form[data-lavish-question]")[0];
+  const radio = first.querySelector("input[type=radio]");
+  radio.checked = true;
+  fire(radio, "change", {});
+  document.getElementById("bb-stack-next").onclick();
+  document.activeElement = null;
+  push(LIVE);
+} else if (scenario === "write-fails") {
+  typeNote("this write is refused");
+  submitAnswer();
+  await tick();
+  push(LIVE);
+} else if (scenario === "lang") {
+  push(LIVE);
+  await tick();
+  fire(document.getElementById("bb-lang-hant"), "click", {});
 } else if (scenario === "no-db") {
   typeNote("goes nowhere");
   submitAnswer();
 }
 await tick();
 
-const gapNode = byId.get("bb-remote-answer-gap");
+const shown = (id) => body.querySelector("#" + id);
+const hostOf = (node) => (node && node.parentNode ? node.parentNode.className : "");
+const linkNode = shown("bb-remote-link");
+const gapNode = shown("bb-remote-answer-gap");
 process.stdout.write(JSON.stringify({
-  badge: (byId.get("bb-remote-link") || {}).textContent || "",
+  badge: linkNode ? linkNode.textContent : "",
+  badgeHost: hostOf(linkNode),
   gap: gapNode ? gapNode.textContent : "",
+  gapHost: hostOf(gapNode),
   gapShown: gapNode ? gapNode.style.display !== "none" : false,
-  provenance: (byId.get("bb-provenance") || {}).textContent || "",
+  provenance: (shown("bb-provenance") || {}).textContent || "",
   note: noteField() ? noteField().value : null,
-  stack: (byId.get("bb-stack-count") || {}).textContent || "",
+  stack: (shown("bb-stack-count") || {}).textContent || "",
   writes,
 }) + "\n");

@@ -304,16 +304,16 @@ test_publish_prepares_and_refuses_to_claim_it_published() {
   pass "publish prepares and refuses to claim it published"
 }
 
-# A published wrapper whose head carries more than document metadata.
-publish_with_head() {  # <derived.html> <head-extra> <out.html>
+# A published page under a wrapper of the caller's choosing.
+publish_wrapped() {  # <derived.html> <open-wrapper> <out.html>
   {
-    printf '<!doctype html><html><head><meta charset=utf8>%s</head><body>\n' "$2"
+    printf '%s\n' "$2"
     cat "$1"
     printf '\n</body></html>'
   } > "$3"
 }
 
-test_check_refuses_untracked_content_in_the_wrapper_head() {
+test_check_refuses_untracked_content_in_the_wrapper() {
   local d=$TMP_ROOT/head out rc=0
   mkdir -p "$d"
   valid_payload "$d/p.json"
@@ -321,21 +321,41 @@ test_check_refuses_untracked_content_in_the_wrapper_head() {
 
   # The head is not a free space: a script or a stylesheet smuggled into it
   # runs on the captain's phone exactly as one placed beside the board would.
-  publish_with_head "$d/page.html" '<script src="https://example.invalid/x.js"></script>' "$d/script-head.html"
+  publish_wrapped "$d/page.html" \
+    '<!doctype html><html><head><meta charset=utf8><script src="https://example.invalid/x.js"></script></head><body>' \
+    "$d/script-head.html"
   rc=0; out=$("$REMOTE" check "$d/script-head.html" 2>&1) || rc=$?
   expect_code 1 "$rc" "check must refuse a wrapper head carrying a script"
   assert_contains "$out" "untracked content" "the refusal must name the untracked content"
 
-  publish_with_head "$d/page.html" '<style>.bb-decision{display:none}</style>' "$d/style-head.html"
+  publish_wrapped "$d/page.html" \
+    '<!doctype html><html><head><meta charset=utf8><style>.bb-decision{display:none}</style></head><body>' \
+    "$d/style-head.html"
   rc=0; out=$("$REMOTE" check "$d/style-head.html" 2>&1) || rc=$?
   expect_code 1 "$rc" "check must refuse a wrapper head carrying a stylesheet"
 
+  # Nor is an attribute: these two carry script and a redirect without a single
+  # extra tag, so a check that reads tag names alone lets them through.
+  publish_wrapped "$d/page.html" \
+    '<!doctype html><html><head><meta charset=utf8></head><body onload="fetch(https://example.invalid)">' \
+    "$d/onload-body.html"
+  rc=0; out=$("$REMOTE" check "$d/onload-body.html" 2>&1) || rc=$?
+  expect_code 1 "$rc" "check must refuse a wrapper body carrying an event handler"
+
+  publish_wrapped "$d/page.html" \
+    '<!doctype html><html><head><meta charset=utf8><meta http-equiv="refresh" content="0;url=https://example.invalid"></head><body>' \
+    "$d/refresh-head.html"
+  rc=0; out=$("$REMOTE" check "$d/refresh-head.html" 2>&1) || rc=$?
+  expect_code 1 "$rc" "check must refuse a wrapper head carrying a meta refresh"
+
   # The host's own metadata skeleton still passes, or the check would refuse
   # every real publish.
-  publish_with_head "$d/page.html" '<title>bearings</title><meta name="viewport" content="width=device-width">' "$d/ok-head.html"
+  publish_wrapped "$d/page.html" \
+    '<!doctype html><html lang="en"><head><meta charset=utf8><title>bearings</title><meta name="viewport" content="width=device-width"></head><body>' \
+    "$d/ok-head.html"
   rc=0; out=$("$REMOTE" check "$d/ok-head.html" 2>&1) || rc=$?
-  expect_code 0 "$rc" "check must still accept the host's metadata-only head: $out"
-  pass "check refuses untracked content in the wrapper head"
+  expect_code 0 "$rc" "check must still accept the host's metadata-only wrapper: $out"
+  pass "check refuses untracked content in the wrapper"
 }
 
 # ---- the transport's own behavior, executed ------------------------------
@@ -412,6 +432,10 @@ test_a_live_payload_repaints_through_the_shipped_board() {
   assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
     "a live payload must reach the page through the shipped board's own renderer"
   assert_contains "$(jq -r .badge <<<"$out")" "live" "the page must say the link is live"
+  # Computed copy the captain cannot see is no signal at all, so the badge must
+  # hang in the board's own nav bar.
+  assert_equals "bb-nav__inner" "$(jq -r .badgeHost <<<"$out")" \
+    "the link badge must be attached to the board's nav bar"
   pass "a live payload repaints through the shipped board"
 }
 
@@ -431,6 +455,15 @@ test_an_update_waits_while_an_answer_is_in_progress() {
     "the held update must not have painted while the answer was in progress"
   assert_contains "$(jq -r .badge <<<"$out")" "waiting" \
     "the page must say an update is waiting rather than claim it is live"
+
+  # ...and the hold reaches no further than that card. A selection left behind
+  # on a card the deck has moved past is not an answer in progress, or the
+  # board would stay stale for ever with nothing the captain can do about it.
+  out=$(drive "$d" hold-stale)
+  assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
+    "a selection left on a card the captain has moved past must not hold the board"
+  assert_contains "$(jq -r .badge <<<"$out")" "live" \
+    "with nothing in progress the page must say the link is live"
 
   # Held, not dropped: it lands the moment the answer is sent.
   out=$(drive "$d" hold-send)
@@ -464,6 +497,36 @@ test_an_answer_that_cannot_be_sent_is_named_on_the_page() {
   pass "an answer that cannot be sent is named on the page"
 }
 
+test_a_page_that_can_no_longer_send_is_not_repainted_live() {
+  local d=$TMP_ROOT/drive-write-fails out badge
+  transport_page "$d"
+  # The store refuses the answer, then firstmate republishes. Reads working
+  # again does not make the page answerable, and the badge must not say it is.
+  out=$(drive "$d" write-fails)
+  badge=$(jq -r .badge <<<"$out")
+  assert_contains "$badge" "answers cannot be sent" \
+    "a page whose write was refused must keep saying answers cannot be sent"
+  assert_not_contains "$badge" "live" "a later payload must not repaint a live badge over it"
+  assert_equals "false" "$(jq -r .gapShown <<<"$out")" \
+    "the answer-gap notice must stay hidden where no answer can be sent at all"
+  pass "a page that can no longer send is not repainted live"
+}
+
+test_the_badges_follow_the_boards_language_switch() {
+  local d=$TMP_ROOT/drive-lang out
+  transport_page "$d"
+  # The board's own language buttons switch the whole page; a badge left in the
+  # previous language is this file's copy contradicting the board beside it.
+  out=$(drive "$d" lang)
+  assert_contains "$(jq -r .badge <<<"$out")" "即時更新" \
+    "the link badge must follow the language the board switched to"
+  assert_contains "$(jq -r .gap <<<"$out")" "firstmate" \
+    "the answer-gap notice must still name firstmate after the switch"
+  assert_not_contains "$(jq -r .gap <<<"$out")" "answers stay on this board" \
+    "the answer-gap notice must not stay in the previous language"
+  pass "the badges follow the board's language switch"
+}
+
 test_the_page_names_the_answer_route_that_is_not_landed() {
   local d=$TMP_ROOT/drive-gap out
   transport_page "$d"
@@ -474,6 +537,8 @@ test_the_page_names_the_answer_route_that_is_not_landed() {
     "the answer-return gap must be visible wherever an answer can be given"
   assert_contains "$(jq -r .gap <<<"$out")" "firstmate" \
     "the page must name what does not yet reach firstmate"
+  assert_equals "bb-nav__inner" "$(jq -r .gapHost <<<"$out")" \
+    "that notice must be attached to the board's nav bar"
   pass "the page names the answer route that is not landed"
 }
 
@@ -485,7 +550,7 @@ test_a_script_close_in_the_payload_cannot_end_the_data_block
 test_check_accepts_the_board_this_template_derives
 test_check_catches_a_shipped_feature_the_remote_board_never_got
 test_check_refuses_untracked_content_around_the_board
-test_check_refuses_untracked_content_in_the_wrapper_head
+test_check_refuses_untracked_content_in_the_wrapper
 test_the_derived_board_is_renderable_from_the_shipped_assets
 test_the_embedded_board_source_cannot_close_its_own_script
 test_doctor_reports_a_home_with_no_board
@@ -499,6 +564,8 @@ if command -v node >/dev/null 2>&1; then
   test_an_update_waits_while_an_answer_is_in_progress
   test_a_snapshot_the_page_cannot_render_is_not_called_live
   test_an_answer_that_cannot_be_sent_is_named_on_the_page
+  test_a_page_that_can_no_longer_send_is_not_repainted_live
+  test_the_badges_follow_the_boards_language_switch
   test_the_page_names_the_answer_route_that_is_not_landed
 else
   echo "skip: node not found - the remote transport's behavior cases need a JS runtime"

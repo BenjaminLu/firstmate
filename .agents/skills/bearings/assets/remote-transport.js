@@ -31,6 +31,7 @@
   var STATUS_ID = "bb-remote-link";
   var GAP_ID = "bb-remote-answer-gap";
   var linkState = "connecting";
+  var sendState = null;
 
   /* The only copy this file owns: it describes the connection and the answer
      route, the two things the shipped board has no concept of. It follows the
@@ -97,21 +98,34 @@
     return node;
   }
 
+  /* Two separate facts: whether the page is still being updated, and whether an
+     answer can still leave it. Losing the ability to send does not heal when a
+     later payload arrives, so once it is lost it is what the badge says; a
+     readable connection must never repaint "live" over a page that can no
+     longer answer. */
+  function state() { return sendState || linkState; }
+
   /* A board that quietly shows stale data is the complaint this answers, so the
      connection state is on the page rather than in the console. */
   function paintStatus() {
-    var node = pin(STATUS_ID, TONE[linkState] || "neutral");
+    var shown = state();
+    var node = pin(STATUS_ID, TONE[shown] || "neutral");
     if (!node) return;
-    node.textContent = say(SAY[linkState] || SAY.connecting);
+    node.textContent = say(SAY[shown] || SAY.connecting);
     var gap = pin(GAP_ID, "warn");
     gap.textContent = say(ANSWER_GAP);
-    /* In the two states where no answer can leave this page at all, the link
-       badge already says so and this one would only repeat it. */
-    gap.style.display = (linkState === "detached" || linkState === "readonly") ? "none" : "";
+    /* Where no answer can leave this page at all, the link badge already says
+       so and this one would only repeat it. */
+    gap.style.display = sendState ? "none" : "";
   }
 
-  function setLink(state) {
-    linkState = state;
+  function setLink(newState) {
+    linkState = newState;
+    paintStatus();
+  }
+
+  function setSend(newState) {
+    sendState = newState;
     paintStatus();
   }
 
@@ -140,9 +154,13 @@
    * board owns the rendering and cannot be repainted piecewise from here, so
    * the update is held instead: the page says an update is waiting, and it
    * lands the moment the answer is sent or the card is left clean again.
+   * Only the card the captain is looking at can hold the board. The deck deals
+   * one card at a time and hides the rest, so a selection left on a card he
+   * has already moved past is not an answer in progress; that scoping is what
+   * bounds the hold, because dealing the next card releases it on its own.
    * The signals are the template's own - a form it tagged with
-   * data-lavish-question, and the dispatch picker - never a shape this file
-   * invents. */
+   * data-lavish-question, on a card the deck has not hidden - never a shape
+   * this file invents. */
   var held = null;
 
   function answerInProgress() {
@@ -150,17 +168,14 @@
     for (var i = 0; i < forms.length; i++) {
       var form = forms[i];
       var card = form.closest ? form.closest(".bb-decision") : null;
+      if (!card || card.hidden) continue;
       /* An answered card keeps its selection, so it must stop counting as in
          progress or the first answer would hold every later update forever. */
-      if (card && card.className.indexOf("is-queued") >= 0) continue;
+      if (card.className.indexOf("is-queued") >= 0) continue;
       if (form.querySelector("input[type=radio]:checked")) return true;
       var note = form.querySelector(".bb-freeform");
       if (note && note.value && note.value.trim()) return true;
       if (document.activeElement && form.contains(document.activeElement)) return true;
-    }
-    var bar = document.getElementById("bb-dispatch");
-    if (bar && bar.className.indexOf("is-queued") < 0 && document.querySelector(".bb-pick:checked")) {
-      return true;
     }
     return false;
   }
@@ -186,8 +201,15 @@
       if (held === payload && !answerInProgress()) accept(payload);
     }, 0);
   }
+  /* The board's own language buttons re-render the page under these badges, so
+     the language is re-read after the page has finished reacting rather than
+     only when the connection state next changes. */
+  function onActivity() {
+    recheckHeld();
+    setTimeout(paintStatus, 0);
+  }
   ["input", "change", "submit", "click", "focusout"].forEach(function (type) {
-    document.addEventListener(type, recheckHeld, true);
+    document.addEventListener(type, onActivity, true);
   });
 
   /* ---- answers out -------------------------------------------------------
@@ -213,14 +235,14 @@
     if (!db) { pending.push([key, body]); return; }
     db.doc(answerSlot(key)).set(body).catch(function () {
       writable = false;
-      setLink("readonly");
+      setSend("readonly");
     });
   }
 
   function cannotSend() {
     writable = false;
     pending.length = 0;
-    setLink("detached");
+    setSend("detached");
   }
 
   window.lavish = window.lavish || {};

@@ -252,16 +252,36 @@ if at < 0:
 prefix, suffix = published[:at], published[at + len(expected):]
 # The artifact host wraps a published page in its own document skeleton: a
 # doctype, a head carrying nothing but document metadata, and the body tags.
-# That wrapper is the only thing allowed around the derived board. A head is
-# not a free space: a script, a stylesheet, a link or a frame smuggled into it
-# runs on the surface the captain reads and is content this repository does not
-# track, so it is refused exactly like content beside the board.
+# That wrapper is the only thing allowed around the derived board. Neither the
+# head nor a wrapper tag is free space: a script, a stylesheet, a link or a
+# frame smuggled into the head runs on the surface the captain reads, and so
+# does an `onload=` on the body or an `http-equiv="refresh"` on a meta, so the
+# attributes are held to a named list rather than the tag names alone.
 WRAP_OPEN = re.compile(
-    r'\A\s*<!doctype html>\s*<html[^<>]*>\s*<head>(?P<head>.*?)</head>\s*<body[^<>]*>\s*\Z',
-    re.S | re.I)
-HEAD_METADATA = re.compile(
-    r'\A(?:\s*<meta\b[^<>]*>|\s*<title\b[^<>]*>[^<>]*</title>)*\s*\Z', re.I)
+    r'\A\s*<!doctype html>\s*<html(?P<html>[^<>]*)>\s*<head>(?P<head>.*?)</head>'
+    r'\s*<body(?P<body>[^<>]*)>\s*\Z', re.S | re.I)
 WRAP_CLOSE = re.compile(r'\A\s*</body>\s*</html>\s*\Z', re.S | re.I)
+HEAD_ITEM = re.compile(
+    r'\s*(?:<meta(?P<meta>[^<>]*)>|<title\s*>[^<>]*</title>)', re.I)
+ATTR = re.compile(r'''([a-zA-Z_:][-\w:.]*)\s*(?:=\s*("[^"]*"|'[^']*'|[^\s"'>]+))?''')
+ALLOWED = {"html": {"lang", "dir"}, "body": set(),
+           "meta": {"charset", "name", "content", "property"}}
+
+
+def attrs_ok(tag, raw):
+    return all(m.group(1).lower() in ALLOWED[tag] for m in ATTR.finditer(raw or ""))
+
+
+def head_ok(head):
+    pos = 0
+    while pos < len(head):
+        item = HEAD_ITEM.match(head, pos)
+        if not item:
+            return not head[pos:].strip()
+        if item.group("meta") is not None and not attrs_ok("meta", item.group("meta")):
+            return False
+        pos = item.end()
+    return True
 
 
 def wrapped(part, where):
@@ -271,7 +291,9 @@ def wrapped(part, where):
         ok = WRAP_CLOSE.match(part)
     else:
         opened = WRAP_OPEN.match(part)
-        ok = opened and HEAD_METADATA.match(opened.group("head"))
+        ok = (opened and attrs_ok("html", opened.group("html"))
+              and attrs_ok("body", opened.group("body"))
+              and head_ok(opened.group("head")))
     if not ok:
         sys.exit("the published page carries untracked content %s the derived board "
                  "(%d bytes): %r" % (where, len(part), part[:200]))
