@@ -1114,17 +1114,28 @@ command_build() {
     || { [ -z "$derived" ] || rm -f -- "$derived"; fail "cannot stage the board payload"; }
   if ! effective_payload "$data" "$effective"; then
     rm -f -- "$effective"
+    [ -z "$derived" ] || rm -f -- "$derived"
     fail "cannot reconcile the board payload against landed work"
   fi
-  json=$(jq -c . "$effective") || { rm -f -- "$effective"; fail "cannot compact the board data"; }
+  json=$(jq -c . "$effective") || {
+    rm -f -- "$effective"
+    [ -z "$derived" ] || rm -f -- "$derived"
+    fail "cannot compact the board data"
+  }
   rm -f -- "$effective"
   # `<` never appears in JSON syntax outside strings, so escaping every
   # occurrence keeps the payload valid JSON while making </script> inert.
   json=${json//</\\u003c}
 
   board=$(board_path)
-  (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
-  tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || fail "cannot stage the board"
+  (umask 077; mkdir -p "${board%/*}") || {
+    [ -z "$derived" ] || rm -f -- "$derived"
+    fail "cannot create ${board%/*}"
+  }
+  tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || {
+    [ -z "$derived" ] || rm -f -- "$derived"
+    fail "cannot stage the board"
+  }
   if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$source_page" > "$tmp"; then
     rm -f -- "$tmp"
     [ -z "$derived" ] || rm -f -- "$derived"
