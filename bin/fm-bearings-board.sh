@@ -282,6 +282,21 @@
 # reason and is the one ack field that is captain-facing copy, because the
 # first mate writes it. The carrier is state/board-acks/<key>.json.
 #
+# THE CARRIER KEY HAS NO SURFACE IN IT, AND THAT RESTS ON A PARTITION TWO FILES
+# AWAY. A record is keyed by the bare board key, so one `ack <key>` paints one
+# row. A decision card's key and a Charted Next row's id are drawn from the
+# same namespace - both are task ids - and they stay apart only because the
+# snapshot splits them: a card takes `select(.captain_actionable == true)` and
+# a gate takes `select(.captain_actionable != true)`, where captain_actionable
+# is `.hold_bucket == "live"`. Merge cards escape independently, being prefixed
+# `merge.`. So no key can name two rows today. If that partition ever changes -
+# a held task also surfaced as a gate - one `ack` would paint two rows and one
+# `--clear` would wipe both, contradicting "on the row the captain clicked".
+# The key format is deliberately NOT prefixed to guard a collision that cannot
+# currently happen: widening a published format is dear and recording the
+# dependency is cheap. tests/fm-bearings-snapshot.test.sh asserts the partition
+# holds, so a change to it fails there rather than quietly sharing a pill.
+#
 # A Charted Next row MAY carry `filed`, the durable filed date (YYYY-MM-DD, or
 # that date with a UTC timestamp) the template orders the section by, newest
 # first; a row with no comparable date keeps its payload order after every dated

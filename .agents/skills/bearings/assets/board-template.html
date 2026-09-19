@@ -796,6 +796,13 @@ __FM_BEARINGS_BOARD_DATA__
      is what lets a remembered acknowledgement age exactly like a published
      one. */
   var answeredStore = "fm-bearings-answered:" + String(data.generated || "");
+  /* A card key and a Charted Next row id are drawn from the same namespace,
+     so they are stored under the surface the captain clicked rather than bare:
+     a picked row whose id equalled a card's key would otherwise mark that card
+     answered, and the first-open deal SKIPS answered cards - hiding a decision
+     the captain never saw. A duplicate pill would be cosmetic; a card he never
+     sees is not. */
+  function answeredKey(surface, key) { return surface + ":" + String(key); }
   var queuedKeys = (function () {
     try {
       var raw = window.localStorage && window.localStorage.getItem(answeredStore);
@@ -803,8 +810,8 @@ __FM_BEARINGS_BOARD_DATA__
       return parsed && typeof parsed === "object" ? parsed : {};
     } catch (e) { return {}; }
   })();
-  function rememberAnswered(key) {
-    queuedKeys[key] = nowSeconds();
+  function rememberAnswered(surface, key) {
+    queuedKeys[answeredKey(surface, key)] = nowSeconds();
     try { if (window.localStorage) window.localStorage.setItem(answeredStore, JSON.stringify(queuedKeys)); } catch (e) { /* private mode */ }
   }
   /* What this key's row shows: the published acknowledgement or the click this
@@ -813,8 +820,8 @@ __FM_BEARINGS_BOARD_DATA__
      carries a ten-minute-old unsettled record must not bury a click made three
      seconds ago, and an equal stamp goes to the publication because only it
      can carry a refusal's reason. */
-  function ackFor(key, published) {
-    var clicked = queuedKeys[key];
+  function ackFor(surface, key, published) {
+    var clicked = queuedKeys[answeredKey(surface, key)];
     if (typeof clicked !== "number") return published || null;
     if (published && published.at >= clicked) return published;
     return { kind: "acting", at: clicked };
@@ -1305,7 +1312,7 @@ __FM_BEARINGS_BOARD_DATA__
               data: ctxData }
           );
         }
-        rememberAnswered(item.key);
+        rememberAnswered("card", item.key);
         card.classList.add("is-queued");
         ackClicked(pad);
         /* Deal the next card once this one is answered, and once its
@@ -1319,9 +1326,9 @@ __FM_BEARINGS_BOARD_DATA__
         dealTimer = setTimeout(function () { if (active === dealt) showCard(next); }, CARD_DEAL_MS);
       }
 
-      if (queuedKeys[item.key]) card.classList.add("is-queued");
+      if (queuedKeys[answeredKey("card", item.key)]) card.classList.add("is-queued");
       pad.appendChild(form);
-      appendAck(pad, ackFor(item.key, item.ack));
+      appendAck(pad, ackFor("card", item.key, item.ack));
       card.appendChild(pad);
       deck.appendChild(card);
     });
@@ -1335,7 +1342,7 @@ __FM_BEARINGS_BOARD_DATA__
     function showCard(i) {
       active = Math.max(0, Math.min(cards.length - 1, i));
       cards.forEach(function (c, j) { c.hidden = j !== active; });
-      var answered = data.captains_call.filter(function (c) { return queuedKeys[c.key]; }).length;
+      var answered = data.captains_call.filter(function (c) { return queuedKeys[answeredKey("card", c.key)]; }).length;
       stackCount.textContent = t("card_of", { i: active + 1, n: cards.length }) +
         (answered ? " · " + t("answered", { n: answered }) : "");
       stackPrev.disabled = active === 0;
@@ -1352,7 +1359,7 @@ __FM_BEARINGS_BOARD_DATA__
         /* first open: deal the first card that still needs an answer */
         active = 0;
         for (var k = 0; k < data.captains_call.length; k++) {
-          if (!queuedKeys[data.captains_call[k].key]) { active = k; break; }
+          if (!queuedKeys[answeredKey("card", data.captains_call[k].key)]) { active = k; break; }
         }
       }
       showCard(active);
@@ -1445,7 +1452,7 @@ __FM_BEARINGS_BOARD_DATA__
       var chSub = x.repo || x.id;
       var reason = pick(x.reason);
       main.appendChild(el("div", "bb-row__sub", reason ? reason + " · " + chSub : chSub));
-      appendAck(main, ackFor(x.id, x.ack));
+      appendAck(main, ackFor("row", x.id, x.ack));
       row.appendChild(main);
       if (isWarning(x)) row.appendChild(badge("danger", t("needs_repair")));
       else if (reason) row.appendChild(badge("warn", t("waiting")));
@@ -1489,7 +1496,7 @@ __FM_BEARINGS_BOARD_DATA__
            the same pill back on the same row. */
         Array.prototype.forEach.call(ch.querySelectorAll(".bb-pick"), function (c) {
           if (!c.checked || !c.parentNode) return;
-          rememberAnswered(c.value);
+          rememberAnswered("row", c.value);
           var rowMain = c.parentNode.querySelectorAll(".bb-row__main")[0];
           if (rowMain) ackClicked(rowMain);
         });
