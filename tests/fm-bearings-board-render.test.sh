@@ -483,6 +483,96 @@ SCOPE
   pass "the board styles a drawing's box and never its insides"
 }
 
+# Every link the board builds carries a class (link() gives it one), and that
+# class owns its colour and its decoration. A board-wide `a` rule with an
+# exception carved out for drawings is what this refuses: :not() carries its
+# argument's specificity, so such a rule outranks the very class rules it was
+# written around, and the chips lose the one affordance that says they are
+# links. The harness cannot see CSS at all - no getComputedStyle, no
+# stylesheet, innerHTML is a string it never parses - so what is asserted here
+# is the cascade the shipped stylesheet actually resolves to, computed from it.
+test_a_board_links_own_class_decides_how_it_reads() {
+  local home board
+  home=$(make_home link-cascade)
+  render_payload "$home" "$(packet_payload en "[$(packet_figure cmp quiet loud)]")" >/dev/null
+  board="$home/.lavish/bearings-board.html"
+  python3 - "$board" <<'CASCADE'
+import pathlib, re, sys
+html = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+css = re.sub(r"/\*.*?\*/", "", html.split("<style>", 1)[1].split("</style>", 1)[0], flags=re.S)
+
+def spec(sel):
+    base = re.sub(r":(not|where|is)\([^)]*\)", "", sel)
+    a = len(re.findall(r"#[\w-]+", base))
+    b = len(re.findall(r"\.[\w-]+", base)) + len(re.findall(r"(?<!:):(?!:)[a-z-]+", base))
+    c = len(re.findall(r"(?:^|[\s>+~])([a-z][\w-]*)", base))
+    inner = (0, 0, 0)
+    for arg in re.findall(r":not\(([^)]*)\)", sel):   # :not() carries its argument
+        inner = max(inner, spec(arg))
+    return (a + inner[0], b + inner[1], c + inner[2])
+
+rules = []
+for order, m in enumerate(re.finditer(r"([^{}]+)\{([^{}]*)\}", css)):
+    decls = {}
+    for chunk in m.group(2).split(";"):
+        if ":" in chunk:
+            k, v = chunk.split(":", 1)
+            decls[k.strip()] = v.strip()
+    for sel in m.group(1).split(","):
+        sel = " ".join(sel.split())
+        if sel and not sel.startswith("@"):
+            rules.append((order, sel, decls))
+
+# every anchor the board builds, by the classes link() gives it and where it sits
+LINKS = {
+    "pr link on a decision card": (["bb-decision__link"], []),
+    "evidence chip": (["bb-chip"], []),
+    "packet chip": (["bb-chip", "bb-chip--packet"], []),
+    "link inside the packet block": (["bb-packet__link"], ["bb-packet__body"]),
+    "PR link on an underway row": (["bb-row__pr"], []),
+}
+
+def matches(sel, classes, containers):
+    # a functional pseudo-class holds a selector of its own; it decides nothing
+    # about what this rule MATCHES, only what it excludes and how specific it is
+    parts = re.sub(r":(not|where|is)\([^)]*\)", "", sel).split()
+    if not parts:
+        return False
+    key = parts[-1]
+    if key.startswith("."):
+        if key.lstrip(".").split(":")[0] not in classes:
+            return False
+    elif re.match(r"^[a-z]", key):
+        if key.split(":")[0] != "a":
+            return False
+    else:
+        return False
+    for anc in parts[:-1]:
+        if anc in (">", "+", "~"):
+            continue
+        if anc.lstrip(".").split(":")[0] not in containers + classes:
+            return False
+    return True
+
+bad = []
+for name, (classes, containers) in LINKS.items():
+    for prop in ("color", "text-decoration"):
+        cands = sorted((spec(s), o, s) for o, s, d in rules
+                       if prop in d and ":hover" not in s and matches(s, classes, containers))
+        if not cands:
+            bad.append("%s: nothing sets %s, so the browser default decides" % (name, prop))
+            continue
+        winner = cands[-1][2]
+        if "." not in re.sub(r":(not|where|is)\([^)]*\)", "", winner):
+            bad.append("%s: %s is decided by %s, not by the class the board gave it"
+                       % (name, prop, winner))
+if bad:
+    print("\n".join(bad)); sys.exit(1)
+CASCADE
+  [ "$?" -eq 0 ] || fail "a board link is not styled by its own class"
+  pass "a board link's own class decides how it reads"
+}
+
 test_two_cards_drawing_with_the_same_slug_do_not_share_ids() {
   local home out payload figure
   home=$(make_home packet-id-namespace)
@@ -860,6 +950,7 @@ test_the_payload_language_switches_every_visible_string
 test_a_packet_with_figures_opens_its_tabs_inside_the_card
 test_two_cards_drawing_with_the_same_slug_do_not_share_ids
 test_the_board_styles_a_drawings_box_and_never_its_insides
+test_a_board_links_own_class_decides_how_it_reads
 test_a_packet_without_figures_still_renders_its_card
 test_the_packet_body_stays_in_the_language_it_was_written_in
 test_the_packet_block_renders_its_words_as_words
