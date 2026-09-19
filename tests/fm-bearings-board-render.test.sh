@@ -370,7 +370,7 @@ packet_payload() {  # <lang> <figures-json>
       allow_freeform:true,
       packet_url:"https://example.test/packet.html",
       packet:{
-        lang:"en", figures:$figures,
+        figures:$figures,
         sections:[
           {heading:{en:"What only this session knows", hant:"只有這個 session 知道的事",
                     hans:"只有这个 session 知道的事"},
@@ -452,6 +452,9 @@ test_the_packet_body_stays_in_the_language_it_was_written_in() {
         # follow him too - the prototype the captain approved carries all
         # three on every heading in that block
         and (.packet.headings == ["只有這個 session 知道的事", "怎麼再往下挖"])
+        # the block is labelled with the language it is actually rendered in,
+        # which is the one the captain chose
+        and (.packet.lang == "zh-Hant")
         # and so do the lines the worker wrote: the packet carries all three,
         # so no part of the block stands still while the rest of it moves
         and (.packet.items == [["那段判斷沒在 Linux 上跑過", "PR #10"], ["gh pr diff 10"]]))

@@ -818,10 +818,9 @@ caption.hans: 两边都会到 gate，只有一边写到数据输出。
 MD
   out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
   printf '%s' "$out" | jq -e '
-    (.packet.lang == "en")
     # the drawing rides the card with the identities it draws, so the board can
     # tell the comparison from an option drawing without a second declaration
-    and (.packet.figures | length) == 1
+    (.packet.figures | length) == 1
     and (.packet.figures[0]
       | .slug == "cmp" and (.nodes == ["bound", "quiet"])
         and (.svg | startswith("<svg"))
@@ -874,39 +873,28 @@ STRIP
   pass "a needs-decision packet with no drawing is refused, naming what is missing"
 }
 
-test_the_packet_body_declares_the_one_language_it_is_in() {
-  local home out packet
-  home=$(make_home card-packet-lang)
-  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+# A tag is not a language: a continuation line typed with nothing after it is
+# that language missing, and verify has to say so here - the board validator
+# refuses an empty copy field, so an empty line accepted here takes down the
+# composition of the whole board with a message that names nothing.
+test_an_empty_language_line_is_that_language_missing() {
+  local home packet out rc
+  home=$(make_home prose-empty-tag)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
   fill_prose "$packet"
-  fill_decision "$packet" "$GOOD_DECISION"
-  fill_figures "$packet"
-  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
-  printf '%s' "$out" | jq -e '.packet.lang == "en"' >/dev/null \
-    || fail "an undeclared packet did not default to en: $out"
-  # A packet that says which language its prose is in is taken at its word, and
-  # its section headings follow the body instead of switching underneath it.
-  python3 - "$packet" <<'PY'
+  python3 - "$packet" <<'EMPTYTAG'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
-p.write_text(s.replace("kind: needs-decision", "kind: needs-decision\nlang: hant", 1))
-PY
-  out=$(run_packet "$home" card pk-1) || fail "card failed after declaring a language: $out"
-  printf '%s' "$out" | jq -e '.packet.lang == "hant"' >/dev/null \
-    || fail "a declared packet language did not reach the card: $out"
-  # and a language nothing renders is named rather than absorbed into "en"
-  python3 - "$packet" <<'LANGPY'
-import pathlib, sys
-p = pathlib.Path(sys.argv[1]); s = p.read_text()
-p.write_text(s.replace("lang: hant", "lang: zh-Hant", 1))
-LANGPY
-  set +e; out=$(run_packet "$home" card pk-1 2>&1); rc=$?; set -e
-  [ "$rc" -ne 0 ] || fail "a lang the card cannot name was accepted: $out"
-  printf '%s' "$out" | grep -q "lang line must be en, hant or hans" \
-    || fail "the refusal does not name the lang it refused: $out"
-  pass "the packet declares the one language its own words are in, and a typo is refused"
+p.write_text(s.replace("- hant: 15 秒的上限沒有對最慢的 repo 驗證過", "- hant:", 1))
+EMPTYTAG
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a language tag with nothing after it: $out"
+  assert_contains "$out" "written in en but not hant" \
+    "an empty continuation line was not reported as the language missing: $out"
+  pass "a language tag with nothing after it is that language missing"
 }
+
 
 # Every heading in that block is this renderer's own words, and it has all
 # three - so the captain reads it in his language, as the prototype he approved
@@ -1326,6 +1314,12 @@ test_render_writes_a_self_contained_page_for_a_done_packet() {
   python3 - "$packet" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
+s = s.replace("- en: the 15 s bound is unverified against the slowest repo",
+  "- en: the bound is unverified; see [the CI run](https://ci.example.test/run/7)")
+s = s.replace("- hant: 15 秒的上限沒有對最慢的 repo 驗證過",
+  "- hant: 上限沒有驗證過，看 [CI 那一輪](https://ci.example.test/run/7)")
+s = s.replace("- hans: 15 秒的上限没有对最慢的 repo 验证过",
+  "- hans: 上限没有验证过，看 [CI 那一轮](https://ci.example.test/run/7)")
 s = s.replace("- bin/fm-contributions.sh:190 forge() bound",
   "- the **15 s** bound is `unverified` against [the slowest repo](https://example.test/slow); see <b>escaped</b>")
 s = s.replace("- tests/fm-contributions.test.sh: test_bound_hit_is_not_unavailable",
@@ -1351,6 +1345,11 @@ PY
   assert_grep 'tried a retry loop first' "$page" "the session list did not convert"
   assert_grep 'data-hant="先試過重試迴圈' "$page" "a trilingual prose line lost its 繁體"
   assert_grep 'data-hans="先试过重试循环' "$page" "a trilingual prose line lost its 简体"
+  # and the links inside such a line stay links, the way the board card has
+  # them, so the page and the card do not disagree about what the packet says
+  assert_grep 'class="pk-said__link" href="https://ci.example.test/run/7"' "$page" \
+    "a trilingual prose line lost the link it named"
+  assert_grep 'data-hant="CI 那一輪"' "$page" "the link label does not switch with the page"
   assert_no_grep 'id="pk-decision"' "$page" "a done packet rendered a decision card"
   [ "$(section_order "$page")" = 'id="s_changed" id="s_session" id="s_evidence" id="s_more" ' ] \
     || fail "sections are missing or out of packet order: $(section_order "$page")"
@@ -1506,7 +1505,7 @@ test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it
 test_name_support_probe_never_lists_before_the_session_is_opened
 test_the_card_carries_the_packet_itself
 test_a_needs_decision_packet_with_no_figures_is_refused
-test_the_packet_body_declares_the_one_language_it_is_in
+test_an_empty_language_line_is_that_language_missing
 test_the_packet_block_switches_every_heading_it_owns
 test_the_packet_block_reaches_the_card_in_all_three_languages
 test_verify_refuses_prose_the_captain_could_not_read

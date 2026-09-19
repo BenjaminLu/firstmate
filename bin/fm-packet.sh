@@ -205,8 +205,7 @@
 #            bearings board can open the whole thing inside the card instead
 #            of sending the captain to a second page he can lose by closing a
 #            tab:
-#              {lang,
-#               figures: [{slug, svg, nodes, option}],
+#              {figures: [{slug, svg, nodes, option}],
 #               sections: [{heading, items: [{text?, code?, links?}]}]}
 #            `figures` is the "Figures" section's drawings, each with the
 #            `data-node` identities it draws and the option it declares itself
@@ -272,22 +271,23 @@
 #       - hant: 那段判斷只在這台機器試過，Linux 上沒試過。
 #       - hans: 那段判断只在这台机器试过，Linux 上没试过。
 #
-#     One item, three lines, in any order after the `en:` that opens it. A line
-#     with no tag is one language, and verify refuses that in "What only this
-#     session knows" - the section that is nothing but the worker explaining
-#     something in words - and refuses a tagged line written by halves
-#     anywhere. Commands in a fenced block and the generated "What changed"
-#     section are not translated: a command is the same command in every
-#     language, exactly as the approved prototype has it.
+#     One item, three lines, in any order after the `en:` that opens it. A
+#     language is present when it has WORDS: a tag typed over an empty line is
+#     that language missing, and verify says so. A line with no tag at all is
+#     one language, and verify refuses that in "What only this session knows" -
+#     the section that is nothing but the worker explaining something in words
+#     - and refuses a tagged line written by halves anywhere. Commands in a
+#     fenced block and the generated "What changed" section are not translated:
+#     a command is the same command in every language, exactly as the approved
+#     prototype has it.
 #
 # WHO writes them is the worker who writes the packet, the same worker the
 # figure contract already requires to put data-en, data-hant and data-hans on
 # every drawn label. Nothing in this repo can translate, and a renderer that
 # guessed would put its own words in the worker's mouth; the scaffold therefore
-# asks for all three where prose goes. `lang:` in the packet header
-# (en|hant|hans, default en, and verify refuses anything else) names the
-# language an untranslated line - a path, a command, a generated stat - is in,
-# so the block is labelled rather than silently assumed English.
+# asks for all three where prose goes. Nothing declares which language the
+# packet is "in": every surface it reaches switches, so the language a block is
+# rendered in is the one the captain chose, and that is what labels it.
 # render     Verify, then write the packet as ONE self-contained HTML page at
 #            data/<id>/packet.html: no network, no CDN, no external
 #            fonts, sections in packet order, the decision block as a card
@@ -507,13 +507,13 @@ content_lines() {  # stdin -> count of lines that carry content
 prose_problems() {  # <packet> -> one problem per line
   awk '
     function flush(  missing) {
-      if (open == "") return
+      if (!opened) return
       missing = ""
       if (!seen_hant) missing = "hant"
       if (!seen_hans) missing = (missing == "" ? "hans" : missing " and hans")
       if (missing != "")
         printf "\"%s\" is written in en but not %s; a line the captain reads is written in all three, like every label in a drawing\n", open, missing
-      open = ""; seen_hant = 0; seen_hans = 0
+      opened = 0; open = ""; seen_hant = 0; seen_hans = 0
     }
     /^```/ { flush(); fence = !fence; next }
     fence { next }
@@ -525,9 +525,15 @@ prose_problems() {  # <packet> -> one problem per line
       if (line ~ /^(en|hant|hans):/) {
         tag = line; sub(/:.*$/, "", tag)
         rest = line; sub(/^(en|hant|hans):[[:space:]]*/, "", rest)
-        if (tag == "en") { flush(); open = rest }
-        else if (open == "")
+        if (tag == "en") {
+          flush()
+          if (rest == "")
+            printf "an \"en:\" line says nothing; a language is present when it has words, not when its tag is typed\n"
+          else { opened = 1; open = rest }
+        }
+        else if (!opened)
           printf "a \"%s:\" line has no \"en:\" line above it; the three languages of one line are written together\n", tag
+        else if (rest == "") { }
         else if (tag == "hant") seen_hant = 1
         else seen_hans = 1
         next
@@ -998,7 +1004,7 @@ command_svg_check() {  # <svg-file> [slug]
 }
 
 command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
-  local id=${1-} packet kind lang problems=0 n block figcount=0
+  local id=${1-} packet kind problems=0 n block figcount=0
   local -a opts=()
   [ -n "$id" ] || { usage >&2; exit 2; }
   fm_pr_task_id_valid "$id" || fail "invalid task id"
@@ -1008,15 +1014,6 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
   grep -qx "schema: $PACKET_SCHEMA" "$packet" || { echo "fm-packet: missing 'schema: $PACKET_SCHEMA' line" >&2; problems=$((problems + 1)); }
   kind=$(sed -n 's/^kind: //p' "$packet" | head -1)
   case "$kind" in done|needs-decision) ;; *) echo "fm-packet: kind line must be done or needs-decision" >&2; problems=$((problems + 1)) ;; esac
-  # `lang:` names the language the as-written block is in, and the card labels
-  # that block with it. A value nothing renders would be absorbed into a silent
-  # "en", which is a wrong label on the one field whose whole job is the label.
-  # Read from the header only, exactly where the card's own meta reader stops.
-  lang=$(awk '/^## / { exit } /^lang: / { sub(/^lang: /, ""); print; exit }' "$packet")
-  case "$lang" in
-    ''|en|hant|hans) ;;
-    *) echo "fm-packet: lang line must be en, hant or hans (got '$lang')" >&2; problems=$((problems + 1)) ;;
-  esac
   if grep -q '{FILL' "$packet"; then
     echo "fm-packet: placeholders remain: $(grep -c '{FILL' "$packet") x {FILL" >&2; problems=$((problems + 1))
   fi
@@ -1376,11 +1373,19 @@ def md_blocks(body):
     return out
 
 def md_line(value):
-    """one item: three languages become the switch's own span, one stays as written"""
-    if isinstance(value, dict):
-        text, attrs = copy_attrs({l: plain(value.get(l, ""))[0] for l in LANGS})
-        return span("pk-said", text, attrs)
-    return inline(value)
+    """one item, the way the card reads it: a switchable span, then its links"""
+    if not isinstance(value, dict):
+        return inline(value)
+    item = item_of(value)
+    out = []
+    if "text" in item:
+        out.append(span("pk-said", *copy_attrs(item["text"])))
+    for ref in item.get("links", []):
+        text, attrs = copy_attrs(ref["label"])
+        out.append('<a class="pk-said__link" href="%s" target="_blank" rel="noopener" '
+                   'data-lavish-action="open-link"%s>%s</a>'
+                   % (esc(ref["url"]), (" " + attrs) if attrs else "", text))
+    return "".join(out)
 
 def md(body):
     out = []
@@ -1684,9 +1689,6 @@ def figures_words(figs):
     return items
 
 if mode == "card":
-    # verify refuses any other value, so there is nothing to fall back to: a
-    # language the card cannot name is a packet that never reaches this line.
-    packet_lang = meta.get("lang", "en")
     figures, out_sections = [], []
     for heading, body in sections:
         body, _decision = split_decision(body)
@@ -1714,7 +1716,7 @@ if mode == "card":
     drawings = [{"slug": f["slug"], "svg": f["svg"], "nodes": f["nodes"],
                  "option": f["option"]}
                 for f in figures if f["svg"]]
-    print(json.dumps({"lang": packet_lang, "figures": drawings, "sections": out_sections},
+    print(json.dumps({"figures": drawings, "sections": out_sections},
                      ensure_ascii=False))
     sys.exit(0)
 
@@ -1893,6 +1895,7 @@ a { color: var(--ocean-600); }
 .pk-opt__list { margin: 0; padding-left: 18px; font-size: var(--fs-sm); }
 .pk-opt__list li { margin: 2px 0; overflow-wrap: anywhere; }
 .pk-said { display: inline; }
+.pk-said__link { margin-left: 6px; }
 .bb-opt__body { min-width: 0; flex: 1 1 auto; }
 .bb-opt__label { display: block; font-size: var(--fs-sm); font-weight: 700; color: var(--text-strong); line-height: 1.3; }
 .bb-opt__consequence { display: block; font-size: var(--fs-xs); color: var(--text-body); margin-top: 3px; padding-top: 3px; border-top: 1px dashed var(--border-soft); }

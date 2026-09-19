@@ -758,19 +758,11 @@ __FM_BEARINGS_BOARD_DATA__
 
     /* ---- the packet, opened inside the card ----------------------------
        `packet` is what bin/fm-packet.sh card read out of data/<id>/packet.md:
-       the drawings, and the rest of the packet already converted to markup.
+       the drawings, and the rest of the packet as data this file builds.
        Nothing here opens a page or a session - the packet is already in the
-       payload, so closing a tab loses nothing.
-
-       ONE LANGUAGE RULE (bin/fm-packet.sh owns it): a string renders in the
-       switching part of the card when the packet carries it in three
-       languages, and in the as-written part otherwise. So the decision copy
-       and the drawings - whose <text> labels carry all three by the figure
-       contract - sit in the tabs and follow the captain's language, while the
-       worker's prose, the figure headings and the captions sit in one block
-       below that does not switch and says so. No block is ever half-switched.
-       The cost: that block reaches the captain in the language it was
-       written. */
+       payload, so closing a tab loses nothing. Every string in it is copy, so
+       the whole of it follows the captain's language like the rest of the
+       card; the rule and who writes those languages is bin/fm-packet.sh's. */
     function packetOf(item) {
       var pk = item.packet;
       if (!pk || typeof pk !== "object" || !Array.isArray(pk.sections)) return null;
@@ -1014,7 +1006,7 @@ __FM_BEARINGS_BOARD_DATA__
         var more = el("details", "bb-packet");
         more.appendChild(el("summary", "", t("packet_all")));
         var bodyBox = el("div", "bb-packet__body");
-        bodyBox.setAttribute("lang", packet.lang === "en" ? "en" : (packet.lang === "hans" ? "zh-Hans" : "zh-Hant"));
+        bodyBox.setAttribute("lang", lang === "en" ? "en" : (lang === "hans" ? "zh-Hans" : "zh-Hant"));
         packet.sections.forEach(function (s) {
           bodyBox.appendChild(el("h4", "pk-part__h", pick(s.heading)));
           var ul = el("ul", "bb-packet__list");

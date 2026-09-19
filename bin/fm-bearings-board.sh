@@ -183,8 +183,7 @@
 #
 # THE PACKET RIDES THE CARD. A decision card MAY also carry `packet`, the whole
 # decision packet as `bin/fm-packet.sh card` reads it:
-#   {lang,
-#    figures: [{slug, svg, nodes, option}],
+#   {figures: [{slug, svg, nodes, option}],
 #    sections: [{heading, items: [{text, code?, links?}]}]}
 # The template opens it in place - a tab strip whose first tab is the drawing
 # that names every option, one tab per option after it, and the rest of the
@@ -390,7 +389,6 @@ validate_payload() {  # <data.json>
       (has("packet") | not)
       or (.packet
         | type == "object"
-          and (.lang == "en" or .lang == "hant" or .lang == "hans")
           and (.sections | type == "array")
           and ([.sections[] | packet_section] | all)
           and (.figures | type == "array")
@@ -834,7 +832,11 @@ EOF
          if_nothing: ($card.if_nothing | i18n($card.key)),
          about: fill("about"),
          options: [$card.options[] | . as $o
-           | .label |= i18n($o.value) | .consequence |= i18n($o.value)]}
+           | .label |= i18n($o.value) | .consequence |= i18n($o.value)
+           | if has("buys") then .buys |= i18n($o.value) else . end
+           | if has("changes")
+             then .changes |= with_entries(.value |= [.[] | i18n($o.value)])
+             else . end]}
       + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n($card.key))} else {} end)
       + ({recommend_value: recommend_slot([$card.options[].value]),
           reversible: reversible_slot, risk: risk_slot}
