@@ -739,8 +739,11 @@ DRAWING_ELEMENTS = frozenset((
 # The attributes those elements may carry. `data-` and `aria-` are open by
 # prefix: neither loads nor executes, and the contract is built on data-node,
 # data-edge, data-en/hant/hans and the drawing's own accessible name.
+# `class` is NOT here on purpose: an inlined drawing shares the board's own
+# stylesheet, so a class name is a reach into the page's rules rather than into
+# the drawing. A figure styles itself through style="..." and the palette.
 DRAWING_ATTRS = frozenset((
-    "id", "class", "style", "transform", "viewbox", "preserveaspectratio",
+    "id", "style", "transform", "viewbox", "preserveaspectratio",
     "x", "y", "dx", "dy", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry",
     "fx", "fy", "width", "height", "d", "points", "rotate", "pathlength",
     "fill", "stroke", "color", "stop-color", "flood-color", "lighting-color",
@@ -765,6 +768,26 @@ DRAWING_ATTRS = frozenset((
     "begin", "end", "repeatcount", "repeatdur", "keytimes", "keysplines",
     "calcmode", "additive", "accumulate", "restart", "type", "keypoints",
 ))
+# An attribute VALUE can be a language of its own, and naming the elements and
+# the attributes left that language unnamed: `style` could position, size,
+# layer and hide, which is a full-viewport invisible overlay on the board that
+# hosts the answer channel - every click the captain aims at a Choose button
+# landing somewhere else. So the declarations are named too. These are the
+# properties a drawing paints, sets type and clips with; anything that lays
+# out, layers or escapes its box is simply not here.
+DRAWING_STYLE_PROPS = frozenset((
+    "fill", "fill-opacity", "fill-rule", "stroke", "stroke-opacity",
+    "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-dasharray",
+    "stroke-dashoffset", "stroke-miterlimit", "opacity", "color",
+    "stop-color", "stop-opacity", "flood-color", "lighting-color",
+    "clip-path", "clip-rule", "mask", "marker-start", "marker-mid",
+    "marker-end", "paint-order", "vector-effect", "shape-rendering",
+    "text-rendering", "pointer-events", "visibility", "display",
+    "font-family", "font-size", "font-weight", "font-style", "font-variant",
+    "letter-spacing", "word-spacing", "text-anchor", "text-decoration",
+    "dominant-baseline", "alignment-baseline", "baseline-shift",
+    "writing-mode",
+))
 LATIN_ID = re.compile(os.environ["FM_NAME_RE"])
 FIG_FIELD = re.compile(r"^(figure|caption|caption\.hant|caption\.hans|heading\.hant"
                        r"|heading\.hans|option):\s*(\S.*?)\s*$")
@@ -779,6 +802,12 @@ LINK_SCHEMES = ("http", "https", "mailto")
 # the static attribute and the animated one cannot drift apart.
 ANIMATION_TAGS = ("animate", "set", "animatetransform", "animatemotion")
 ANIMATION_VALUES = ("to", "from", "values")
+
+LINK_MD = re.compile(r"\[[^\]]*\]\(([^)\s]*)\)")
+
+def links_of(text):
+    """every markdown link target on the line, in order - the prose rule, here too"""
+    return LINK_MD.findall(text)
 
 def ref_is_local(ref, tag):
     m = SCHEME.match(ref)
@@ -888,6 +917,35 @@ def scan_tags(svg):
             out.append((name, attrs))
     return out
 
+# One reading of an attribute value, wherever the value came from: written on
+# the element, or set by a SMIL animation. Two readings is how the animated
+# spelling stayed open after the written one was closed.
+def value_problems(tag, k, v):
+    out = []
+    if not (k in DRAWING_ATTRS or k.startswith("data-") or k.startswith("aria-")):
+        out.append("<%s> carries %s=\"%s\"; a drawing carries only the attributes it draws "
+                   "with, plus data-* and aria-*. Anything else is a handler, a load, a form "
+                   "control or a page style the board would act on" % (tag, k, v))
+        return out
+    if k in COLOUR_ATTRS and not COLOUR_OK.match(v.strip()):
+        out.append("<%s> has %s=\"%s\"; %s" % (tag, k, v, colour_advice(v)))
+    if k in REF_ATTRS and not ref_is_local(v.strip(), tag):
+        out.append("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
+                   "only an <a> may leave the page, with http, https or mailto" % (tag, k, v.strip()))
+    for ref in URL_REF.findall(v):
+        if not ref.strip().strip("\"'").startswith("#"):
+            out.append("<%s> has %s=\"%s\"; a url() in a drawing points at a same-document "
+                       "#fragment, or the page fetches it and stops rendering offline" % (tag, k, v))
+    if k == "style":
+        for prop, val in style_decls(v):
+            if prop not in DRAWING_STYLE_PROPS:
+                out.append("<%s> styles %s: %s; a drawing styles only what it paints, sets type "
+                           "and clips with. A declaration that lays out, layers or escapes the "
+                           "figure reaches the whole board it was inlined into" % (tag, prop, val))
+            elif prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
+                out.append("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
+    return out
+
 def style_decls(value):
     for decl in value.split(";"):
         if ":" in decl:
@@ -925,6 +983,14 @@ def top_level_svgs(text):
 def svg_problems(svg, slug):
     """-> (problems, the data-node identities it draws, the data-edge ids it draws)"""
     problems, nodes, edges_drawn = [], set(), set()
+    # A missing name is not a clause that passes: the id-prefix rule below is
+    # the only thing keeping two drawings on one page off each other's markers,
+    # and a check that skips itself because the value it needs is absent has
+    # answered the wrong question.
+    if not slug:
+        problems.append("the drawing carries no 'figure: <slug>' name; every id inside a drawing "
+                        "is prefixed with that name, so an unnamed drawing is one nothing keeps "
+                        "off another drawing's markers")
     for m in TEXT_ELEMENT.finditer(svg):
         if re.search(r"<\s*[A-Za-z]", m.group(1)):
             problems.append("a <text> has element children; the language switch replaces a label's whole "
@@ -948,37 +1014,24 @@ def svg_problems(svg, slug):
                             % (tag, ", ".join("<" + e + ">" for e in sorted(DRAWING_ELEMENTS))))
             continue
         for k, v in at.items():
-            if not (k in DRAWING_ATTRS or k.startswith("data-") or k.startswith("aria-")):
-                problems.append("<%s> carries %s=\"%s\"; a drawing carries only the attributes it draws "
-                                "with, plus data-* and aria-*. Anything else is a handler, a load or a "
-                                "form control the page would act on" % (tag, k, v))
-                continue
+            for msg in value_problems(tag, k, v):
+                problems.append(msg)
             if k == "id" and slug and not v.startswith(slug + "-"):
                 problems.append("id=\"%s\" is not prefixed \"%s-\"; two figures on one page share one id "
                                 "namespace" % (v, slug))
-            if k in COLOUR_ATTRS and not COLOUR_OK.match(v.strip()):
-                problems.append("<%s> has %s=\"%s\"; %s" % (tag, k, v, colour_advice(v)))
-            if k in REF_ATTRS and not ref_is_local(v.strip(), tag):
-                problems.append("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
-                                "only an <a> may leave the page, with http, https or mailto"
-                                % (tag, k, v.strip()))
-            for ref in URL_REF.findall(v):
-                if not ref.strip().strip("\"'").startswith("#"):
-                    problems.append("<%s> has %s=\"%s\"; a url() in a drawing points at a same-document "
-                                    "#fragment, or the page fetches it and stops rendering offline"
-                                    % (tag, k, v))
-            if k == "style":
-                for prop, val in style_decls(v):
-                    if prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
-                        problems.append("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
-        if tag in ANIMATION_TAGS and at.get("attributename", "").lower() in REF_ATTRS:
-            for k in ANIMATION_VALUES:
-                for ref in at.get(k, "").split(";"):
-                    if ref.strip() and not ref_is_local(ref.strip(), tag):
-                        problems.append("<%s> animates %s to \"%s\"; an animation reaches the same place "
-                                        "the attribute itself does, so it points at a same-document "
-                                        "#fragment like every other reference in a drawing"
-                                        % (tag, at.get("attributename"), ref.strip()))
+        # A SMIL element SETS an attribute at runtime, so the value it sets has
+        # to answer for itself exactly as the written one does - the same
+        # function, so the two cannot drift. That includes the attribute it
+        # aims at: one outside the vocabulary is refused like any other.
+        if tag in ANIMATION_TAGS:
+            target = at.get("attributename", "").strip().lower()
+            if target:
+                animated = [at[k] for k in ANIMATION_VALUES if at.get(k, "").strip()]
+                for piece in [p for whole in animated for p in whole.split(";")]:
+                    if not piece.strip():
+                        continue
+                    for msg in value_problems(tag, target, piece.strip()):
+                        problems.append("<%s> animates %s: %s" % (tag, target, msg))
         if tag == "text":
             missing = [a for a in ("data-en", "data-hant", "data-hans") if not at.get(a)]
             if missing:
@@ -1117,6 +1170,18 @@ for n, fig in enumerate(figures, 1):
             bad("the %s is written in en but not %s; write '%s.hant:' and '%s.hans:' lines, "
                 "the same three languages the drawing's own labels carry"
                 % (what, " and ".join(missing), what, what))
+            continue
+        # A link is one destination said in three languages, here exactly as in
+        # the packet's prose: the card pairs the languages by position and
+        # carries one url, so three lines naming different links would send the
+        # captain reading 繁體 to the English page.
+        for l in ("hant", "hans"):
+            other = fields["%s.%s" % (what, l)]
+            if links_of(other) != links_of(en):
+                bad("the %s.%s names different links from the %s (%s against %s); the three "
+                    "languages of one line say the same thing about the same places"
+                    % (what, l, what, " ".join(links_of(other)) or "none",
+                       " ".join(links_of(en)) or "none"))
 
     svgs = top_level_svgs(chunk)
     if len(svgs) != 1:
@@ -1800,7 +1865,85 @@ def decision_card(d):
 # restyle or re-script the surface it is rendered on. So a section is a heading
 # plus its items, an item is a line of text with the links it named, and the
 # board decides what tags any of it becomes.
-FIG_NODE = re.compile(r"""data-node\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+# The identities a drawing names, read by the SAME state walk verify reads them
+# with - character for character, like top_level_svgs above, because the two
+# have to agree about what the markup says. A second reader answered
+# differently on an unquoted value and on a label that merely contained the
+# words, which put the comparison drawing in the wrong tab.
+WHITESPACE = "\t\n\f\r "
+
+def scan_tags(svg):
+    """-> [(tag name, {attr: value})] in document order, or None if unreadable"""
+    out, i, n = [], 0, len(svg)
+    while i < n:
+        lt = svg.find("<", i)
+        if lt < 0:
+            return out
+        i = lt + 1
+        if svg.startswith("!--", i):
+            end = svg.find("-->", i + 3)
+            if end < 0:
+                return None
+            i = end + 3; continue
+        if svg.startswith("![CDATA[", i):
+            end = svg.find("]]>", i + 8)
+            if end < 0:
+                return None
+            i = end + 3; continue
+        if i < n and svg[i] in "!?":
+            end = svg.find(">", i)
+            if end < 0:
+                return None
+            i = end + 1; continue
+        closing = i < n and svg[i] == "/"
+        if closing:
+            i += 1
+        if i >= n or not svg[i].isalpha():
+            # a "<" the tokenizer keeps as text, not the start of a tag
+            continue
+        start = i
+        while i < n and svg[i] not in WHITESPACE and svg[i] not in "/>":
+            i += 1
+        name = svg[start:i].lower()
+        attrs, done = {}, False
+        while not done:
+            while i < n and (svg[i] in WHITESPACE or svg[i] == "/"):
+                i += 1
+            if i >= n:
+                return None
+            if svg[i] == ">":
+                i += 1; done = True; break
+            astart = i
+            while i < n and svg[i] not in WHITESPACE and svg[i] not in "/>=":
+                i += 1
+            attr = svg[astart:i].lower()
+            while i < n and svg[i] in WHITESPACE:
+                i += 1
+            if i >= n:
+                return None
+            value = ""
+            if svg[i] == "=":
+                i += 1
+                while i < n and svg[i] in WHITESPACE:
+                    i += 1
+                if i >= n:
+                    return None
+                if svg[i] in "\"'":
+                    quote = svg[i]; i += 1
+                    close = svg.find(quote, i)
+                    if close < 0:
+                        return None
+                    value = svg[i:close]; i = close + 1
+                else:
+                    vstart = i
+                    while i < n and svg[i] not in WHITESPACE and svg[i] != ">":
+                        i += 1
+                    value = svg[vstart:i]
+            if attr:
+                attrs.setdefault(attr, value)
+        if not closing:
+            out.append((name, attrs))
+    return out
 LINK_MD = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 EMPHASIS = re.compile(r"\*\*(.+?)\*\*")
 CODE_SPAN = re.compile(r"`([^`]*)`")
@@ -1906,7 +2049,8 @@ def figures_of(body):
     for heading, fields, drawing in figures_parsed(body):
         if not drawing:
             continue
-        nodes = sorted({(a or b) for a, b in FIG_NODE.findall(drawing) if (a or b)})
+        scanned = scan_tags(drawing) or []
+        nodes = sorted({at["data-node"] for _t, at in scanned if at.get("data-node")})
         out_figs.append({"slug": fields.get("figure", ""),
                          "heading": fig_copy(heading, fields, "heading"),
                          "caption": fig_copy(fields.get("caption", ""), fields, "caption"),

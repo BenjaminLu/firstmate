@@ -373,7 +373,11 @@ validate_payload() {  # <data.json>
     # surface the captain decides on.
     def figure_item($values):
       type == "object"
-      and (.slug | type == "string")
+      # The same shape the packet requires, because a slug that is absent here
+      # is a slug the drawing check would skip its id-namespace clause over -
+      # absence passing for a passed check, at the one boundary whose reason
+      # for existing is that this file is edited after the packet wrote it.
+      and (.slug | type == "string" and test("^[a-z0-9][a-z0-9-]*$"))
       and (.svg | type == "string" and test("^[[:space:]]*<svg\\b"))
       and (.nodes | type == "array") and ([.nodes[] | type == "string"] | all)
       and ((has("option") | not) or (.option == "")
@@ -402,7 +406,11 @@ validate_payload() {  # <data.json>
           and (.sections | type == "array")
           and ([.sections[] | packet_section] | all)
           and (.figures | type == "array")
-          and ([.figures[] | figure_item($values)] | all));
+          and ([.figures[] | figure_item($values)] | all)
+          # and unique within the card, for the same reason the packet makes
+          # them unique within itself: two drawings sharing a slug share an id
+          # namespace once the board inlines them side by side
+          and ([.figures[].slug] | length == (unique | length)));
     def call_item:
       type == "object"
       and (.key | slug(128))

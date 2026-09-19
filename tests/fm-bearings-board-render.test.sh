@@ -580,6 +580,9 @@ test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board() {
     '<style>.bb-decision__foot{display:none}' \
     '<rect onpointerdown=\"alert(1)\"/>' \
     '<rect/onclick=\"alert(1)\"/>' \
+    '<rect style=\"position:fixed;top:0;left:0;width:100vw;height:100vh;opacity:0.01\"/>' \
+    '<set attributeName=\"style\" to=\"position:fixed;width:100vw;height:100vh\"/>' \
+    '<rect class=\"bb-decision__foot\"/>' \
   ; do
     payload=$(packet_payload en "[$(packet_figure cmp quiet loud)]" \
       | jq --arg s "$shape" '.captains_call[0].packet.figures[0].svg |= sub("<text"; $s + "<text")')
@@ -603,25 +606,36 @@ test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board() {
 # A figure need not be named for the board to inline it, and an unnamed one is
 # exactly the drawing a check must not skip: it is still markup going onto the
 # page that hosts the answer channel.
-test_a_drawing_with_no_slug_is_still_checked() {
+# A slug is what the id-namespace clause namespaces WITH, so an absent one is
+# not a clause that passes - it is a clause that skips itself. The board is the
+# boundary that exists because this file is edited after the packet wrote it,
+# so it decides on what the field is, not on whether it happens to be there.
+test_a_drawing_without_a_usable_slug_refuses_the_board() {
   local home payload rc out
   home=$(make_home packet-unnamed-figure)
+  build_it() {  # <payload-json> -> exit status of build, output on stdout
+    printf '%s\n' "$1" > "$home/payload.json"
+    PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+      FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+      "$BOARD" build "$home/payload.json" 2>&1
+  }
+  payload=$(packet_payload en "[$(packet_figure cmp quiet loud)]" \
+    | jq '.captains_call[0].packet.figures[0].slug = ""')
+  set +e; out=$(build_it "$payload"); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "the board inlined a drawing nothing could namespace: $out"
+
+  # and two drawings in one card may not share one, for the same reason the
+  # packet makes them unique within itself
   payload=$(packet_payload en "[$(packet_figure cmp quiet loud)]" | jq '
-    .captains_call[0].packet.figures[0].slug = ""
-    | .captains_call[0].packet.figures[0].svg
-      |= sub("<text"; "<a xlink:href=\"javascript:alert(1)\"></a><text")')
-  printf '%s\n' "$payload" > "$home/payload.json"
-  set +e
-  out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
-    "$BOARD" build "$home/payload.json" 2>&1)
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "an unnamed drawing that can run code was inlined unchecked: $out"
-  printf '%s' "$out" | grep -q "javascript:alert(1)" \
-    || fail "the refusal does not name the href it refused: $out"
-  pass "a drawing with no slug is held to the figure contract like any other"
+    .captains_call[0].packet.figures += [.captains_call[0].packet.figures[0]]')
+  set +e; out=$(build_it "$payload"); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "two drawings on one card shared an id namespace: $out"
+
+  # a named one still builds, so the refusal is about the name and nothing else
+  payload=$(packet_payload en "[$(packet_figure cmp quiet loud)]")
+  build_it "$payload" >/dev/null || fail "a named drawing stopped building"
+  pass "a drawing without a usable slug refuses the board"
 }
 
 # This is a jq script. A board whose cards carry no drawings has nothing for the
@@ -769,7 +783,7 @@ test_a_packet_without_figures_still_renders_its_card
 test_the_packet_body_stays_in_the_language_it_was_written_in
 test_the_packet_block_renders_its_words_as_words
 test_a_payload_drawing_that_breaks_the_figure_contract_refuses_the_board
-test_a_drawing_with_no_slug_is_still_checked
+test_a_drawing_without_a_usable_slug_refuses_the_board
 test_a_board_with_no_drawings_builds_without_python3
 test_a_figure_cannot_name_an_option_the_card_does_not_offer
 test_an_inline_packet_never_offers_a_second_address

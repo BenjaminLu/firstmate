@@ -374,7 +374,7 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   animated='<a href="#opt-box-a"><set attributeName="href" to="javascript:alert(1)" begin="0s"/><rect id="opt-box-a" data-node="bound" x="24" y="24" width="220" height="80" fill="var(--card)"/></a><rect id="opt-box-a2"'
   svg=${GOOD_SVG/<rect id=\"opt-box-a\"/"$animated"}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
-    'animates href to "javascript:alert(1)"' "an animation that repoints a link at a script"
+    'animates href: <set> has href="javascript:alert(1)"' "an animation that repoints a link at a script"
   # An animation that moves a shape, or repoints a reference inside the
   # document, is what the drawing tool emits and is not refused.
   moved='<animate attributeName="opacity" from="0" to="1" begin="0s" dur="1s"/><rect id="opt-box-a"'
@@ -433,6 +433,11 @@ test_verify_holds_a_figure_to_the_svg_contract() {
     '<rect/onclick="alert(1)" id="opt-box-end"' \
     '<rect onclick=a("b")<z id="opt-box-end"' \
     '<rect id="opt-box-end" onclick="alert(1)" onclick="0"' \
+    '<rect class="bb-decision__foot" id="opt-box-end"' \
+    '<rect style="position:fixed;top:0;left:0;width:100vw;height:100vh;opacity:0.01" id="opt-box-end"' \
+    '<set attributeName="style" to="position:fixed;top:0;width:100vw;height:100vh"/><rect id="opt-box-end"' \
+    '<set attributeName="onclick" to="alert(1)"/><rect id="opt-box-end"' \
+    '<animate attributeName="style" values="opacity:1;position:fixed"/><rect id="opt-box-end"' \
   ; do
     svg=${GOOD_SVG/<rect id=\"opt-box-end\"/$shape}
     fill_figures "$packet" "$(good_figures "$svg")"
@@ -1027,6 +1032,33 @@ SUBHEAD
 # A link is one destination said in three languages. The card pairs the
 # languages of a line by position and carries one url, so three lines naming
 # different links would send the captain reading 繁體 to the English page.
+# The same rule on the sibling path: a figure's heading and caption are read
+# by the same pairing, so they owe the same parity. One rule, both call sites
+# that build a copy object from parsed lines.
+test_a_figure_says_the_same_links_in_every_language() {
+  local home packet
+  home=$(make_home fig-link-langs)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  assert_figure_refused "$home" "$packet" \
+    "$(good_figures | sed \
+      -e 's|^caption: .*|caption: read the [design doc](https://ex.test/en/design)|' \
+      -e 's|^caption.hant: .*|caption.hant: 讀[設計文件](https://ex.test/zh/design)|' \
+      -e 's|^caption.hans: .*|caption.hans: 读[设计文件](https://ex.test/zh/design)|')" \
+    "names different links from the caption" \
+    "a caption whose languages point at different pages"
+  # and the same words with the same destination is accepted
+  fill_figures "$packet" "$(good_figures | sed \
+      -e 's|^caption: .*|caption: read the [design doc](https://ex.test/design)|' \
+      -e 's|^caption.hant: .*|caption.hant: 讀[設計文件](https://ex.test/design)|' \
+      -e 's|^caption.hans: .*|caption.hans: 读[设计文件](https://ex.test/design)|')"
+  run_packet "$home" verify pk-1 >/dev/null \
+    || fail "verify refused a caption whose languages name the same link"
+  pass "a figure says the same links in every language"
+}
+
 test_the_three_languages_of_a_line_name_the_same_links() {
   local home packet out rc
   home=$(make_home prose-link-langs)
@@ -1473,6 +1505,36 @@ MD
   pass "a figure opening on the line after the section heading parses like any other"
 }
 
+# The identities the card ships are what decides which drawing leads the
+# Difference tab, so verify and the card have to agree about what the markup
+# says. An unquoted value is an identity to a browser; it was invisible to the
+# second reader the card used to have.
+test_the_card_reads_identities_the_way_verify_does() {
+  local home out packet
+  home=$(make_home card-identities)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  set_figures_from_stdin "$packet" <<'MD'
+### Where the options part
+heading.hant: 選項在哪裡分岔
+heading.hans: 选项在哪里分岔
+figure: cmp
+caption: Both reach the gate; only one writes onto the data stream.
+caption.hant: 兩邊都會到 gate，只有一邊寫到資料輸出。
+caption.hans: 两边都会到 gate，只有一边写到数据输出。
+
+<svg viewBox="0 0 20 20"><rect data-node=bound x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="both here: data-node=&quot;loud&quot;" data-hant="兩個" data-hans="两个">both</text></svg>
+MD
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    # the unquoted identity is one a browser reads, so the card ships it
+    (.packet.figures[0].nodes == ["bound", "quiet"])
+  ' >/dev/null || fail "the card read the drawing differently from verify: $out"
+  pass "the card reads a drawing's identities the way verify does"
+}
+
 test_a_drawing_that_nests_an_icon_is_read_whole() {
   local home out packet
   home=$(make_home card-packet-nested)
@@ -1807,6 +1869,7 @@ test_a_backticked_line_is_code_on_both_surfaces
 test_a_section_the_scaffold_never_wrote_is_refused
 test_no_line_the_captain_reads_is_exempt_from_the_three_languages
 test_the_three_languages_of_a_line_name_the_same_links
+test_a_figure_says_the_same_links_in_every_language
 test_a_heading_inside_a_fence_is_a_line_of_code_to_both_readers
 test_the_packet_block_switches_every_heading_it_owns
 test_the_packet_block_reaches_the_card_in_all_three_languages
@@ -1817,4 +1880,5 @@ test_two_figures_may_share_a_heading
 test_a_figure_cannot_name_an_option_the_decision_never_offers
 test_a_drawing_that_could_run_code_never_produces_a_card
 test_a_figures_section_parses_the_same_without_a_blank_line_after_it
+test_the_card_reads_identities_the_way_verify_does
 test_a_drawing_that_nests_an_icon_is_read_whole
