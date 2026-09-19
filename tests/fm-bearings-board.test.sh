@@ -200,6 +200,195 @@ extract_payload() {  # <board-path>
     | sed '1d;$d'
 }
 
+# ---- the acknowledgement carrier --------------------------------------------
+
+test_ack_records_and_reads_back_what_the_captain_clicked() {
+  local home out
+  home=$(make_home ack-roundtrip)
+  out=$(run_board "$home" ack plain-queued --acting) || fail "recording an acknowledgement failed: $out"
+  [ "$out" = "ack: $home/state/board-acks/plain-queued.json" ] \
+    || fail "the acknowledgement was not written where its carrier says: $out"
+  jq -e '.schema == "fm-board-ack.v1" and .kind == "acting" and (.at | type == "number")
+    and (has("why") | not)' "$home/state/board-acks/plain-queued.json" >/dev/null \
+    || fail "the acknowledgement record is not the documented shape"
+  run_board "$home" ack plain-queued >/dev/null || fail "the stored acknowledgement did not read back"
+  run_board "$home" ack plain-queued --clear >/dev/null || fail "clearing the acknowledgement failed"
+  set +e; run_board "$home" ack plain-queued >/dev/null 2>&1; rc=$?; set -e
+  [ "$rc" -eq 1 ] || fail "a cleared acknowledgement still read back (rc=$rc)"
+  pass "an acknowledgement is recorded, read back, and cleared under its own board key"
+}
+
+test_ack_refuses_a_refusal_with_no_reason_and_a_key_that_is_not_one() {
+  local home out rc
+  home=$(make_home ack-refusals)
+  set +e; out=$(run_board "$home" ack plain-queued --refused 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a refusal with no reason was accepted: $out"
+  printf '%s' "$out" | grep -q -- '--why-file' \
+    || fail "a refusal with no reason did not name what it needs: $out"
+  : > "$home/empty-why"
+  set +e; out=$(run_board "$home" ack plain-queued --refused --why-file "$home/empty-why" 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a refusal with an empty reason was accepted: $out"
+  # The key addresses a file, so only a board routing key may be one.
+  for bad in '../escape' 'has space' '.' ''; do
+    set +e; out=$(run_board "$home" ack "$bad" --acting 2>&1); rc=$?; set -e
+    [ "$rc" -ne 0 ] || fail "'$bad' was accepted as a board key: $out"
+  done
+  [ ! -d "$home/state/board-acks" ] || [ -z "$(ls -A "$home/state/board-acks")" ] \
+    || fail "a refused write still left a record: $(ls -A "$home/state/board-acks")"
+  pass "a refusal needs a reason, and only a board routing key may address one"
+}
+
+test_compose_carries_the_refusal_to_the_row_the_captain_clicked() {
+  local home skeleton
+  home=$(make_compose_home compose-ack-refused)
+  printf 'it is waiting on the board refresh, which is still in review\n' > "$home/why"
+  run_board "$home" ack plain-queued --refused --why-file "$home/why" >/dev/null \
+    || fail "recording the refusal failed"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with a recorded refusal"
+  jq -e '
+    (.charted[] | select(.id == "plain-queued") | .ack
+      | .kind == "refused"
+        and .why == "it is waiting on the board refresh, which is still in review"
+        and (has("elapsed") | not))
+    # Only the row he clicked.
+    and ([.charted[] | select(.ack != null) | .id] == ["plain-queued"])
+    and ([.underway[], .captains_call[] | select(.ack != null)] | length == 0)
+  ' "$skeleton" >/dev/null || fail "the refusal did not reach its row: $(cat "$skeleton")"
+  pass "a recorded refusal reaches the row the captain clicked, with its reason"
+}
+
+test_compose_acknowledges_a_card_and_an_underway_row_by_their_own_keys() {
+  local home skeleton
+  home=$(make_compose_home compose-ack-keys)
+  run_board "$home" ack gated-work --acting >/dev/null || fail "recording the card acknowledgement failed"
+  run_board "$home" ack ship-task --acting >/dev/null || fail "recording the row acknowledgement failed"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with recorded acknowledgements"
+  jq -e '
+    (.captains_call[] | select(.key == "gated-work") | .ack.kind == "acting")
+    and (.underway[] | select(.id == "ship-task") | .ack.kind == "acting")
+  ' "$skeleton" >/dev/null || fail "an acknowledgement missed its card or row: $(cat "$skeleton")"
+  pass "an acknowledgement reaches a decision card and an underway row by their own keys"
+}
+
+test_compose_reports_an_unanswered_acknowledgement_as_still_waiting() {
+  local home skeleton
+  home=$(make_compose_home compose-ack-late)
+  run_board "$home" ack plain-queued --acting >/dev/null || fail "recording the acknowledgement failed"
+  # Age the record past the minute the captain expects the consequence in. The
+  # clock is the record's own stamp, read when the board is published, so
+  # moving the stamp is the whole of it - there is no timer to wind on.
+  jq '.at = (.at - 185)' "$home/state/board-acks/plain-queued.json" > "$home/aged" \
+    && mv "$home/aged" "$home/state/board-acks/plain-queued.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with an aged acknowledgement"
+  jq -e '.charted[] | select(.id == "plain-queued") | .ack
+    | .kind == "late" and .elapsed == "3m"' "$skeleton" >/dev/null \
+    || fail "an overdue acknowledgement did not report itself waiting: $(cat "$skeleton")"
+  pass "an acknowledgement whose consequence never arrived reports how long it has waited"
+}
+
+test_compose_ignores_a_malformed_acknowledgement_instead_of_losing_the_board() {
+  local home skeleton
+  home=$(make_compose_home compose-ack-malformed)
+  mkdir -p "$home/state/board-acks"
+  printf 'not json at all\n' > "$home/state/board-acks/plain-queued.json"
+  printf '{"schema":"something-else","kind":"acting","at":1}\n' > "$home/state/board-acks/live-gate.json"
+  printf '{"schema":"fm-board-ack.v1","kind":"sudo-merge","at":1}\n' > "$home/state/board-acks/later-call.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "a malformed side-band record cost the captain the whole board"
+  jq -e '[.charted[], .underway[], .captains_call[] | select(.ack != null)] | length == 0' \
+    "$skeleton" >/dev/null || fail "a malformed record reached a row: $(cat "$skeleton")"
+  pass "a malformed acknowledgement record is skipped, never rendered and never fatal"
+}
+
+test_the_payload_contract_refuses_an_unknown_acknowledgement_kind() {
+  local home data out rc
+  home=$(make_home ack-validator)
+  data="$home/payload.json"
+  for bad in '{"kind":"sudo-merge"}' '{"kind":"acting","elapsed":""}' '{"kind":"acting","why":""}' '"acting"'; do
+    write_valid_payload "$data"
+    jq --argjson ack "$bad" '.charted[0].ack = $ack' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+    set +e; out=$(run_board "$home" build "$data" 2>&1); rc=$?; set -e
+    [ "$rc" -ne 0 ] || fail "the payload contract accepted the acknowledgement $bad: $out"
+  done
+  write_valid_payload "$data"
+  jq '.charted[0].ack = {kind:"late", elapsed:"3m"}
+    | .captains_call[0].ack = {kind:"refused", why:"no longer qualifies"}' "$data" > "$data.tmp" \
+    && mv "$data.tmp" "$data"
+  run_board "$home" build "$data" >/dev/null 2>&1 \
+    || fail "the payload contract refused a well-formed acknowledgement"
+  pass "the payload contract refuses a malformed acknowledgement and accepts a real one"
+}
+
+# The captain's own answer is the one board refresh trigger the fleet events
+# cannot supply: all of those are consequence-side, so an answer whose
+# consequence has not happened yet used to leave the board looking as if
+# nothing was heard. This asserts the whole chain the captain sees - the
+# captured answer, and an acknowledgement on each key it named - and it
+# asserts the scope, because acknowledging another Lavish review's choices
+# would put pills on rows nobody clicked.
+test_a_captured_board_answer_acknowledges_every_key_it_named() {
+  local home board sid other stub out
+  home=$(make_home ack-capture)
+  board=$(run_board "$home" path)
+  mkdir -p "${board%/*}"
+  printf '<html></html>\n' > "$board"
+  sid=$(PATH="$home/fakebin:$PATH" "$ROOT/bin/fm-procevent-lavish.sh" source-id "$board") \
+    || fail "could not resolve the board's own source id"
+
+  # One poll response carrying both controls the captain clicks: a decision
+  # card's answer, and a dispatch order naming the rows he checked.
+  stub="$home/board-source.sh"
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+cat <<'OUT'
+session:
+  status: feedback
+  session_ended: false
+prompts[2]{tag,text,prompt}:
+  "choice","Take the north route","Context data: {\"schema\":\"fm-bearings-answer.v1\",\"question\":\"gated-work\",\"selection\":\"north\",\"note\":\"\"}"
+  "choice","Dispatch: plain-queued, later-call","Context data: {\"question\":\"dispatch.charted\",\"answer\":\"plain-queued,later-call\"}"
+OUT
+SH
+  chmod +x "$stub"
+  run_procevent "$home" register lavish "$sid" -- "$stub" >/dev/null \
+    || fail "could not register the board source"
+  out=$(run_procevent "$home" start "$sid" 2>&1) \
+    || fail "the board source runner did not complete: $out"
+  assert_contains "$out" "board-acked: $sid" "the captured board answer acknowledged nothing: $out"
+
+  jq -e '.kind == "acting"' "$home/state/board-acks/gated-work.json" >/dev/null \
+    || fail "the decision card's own answer was not acknowledged"
+  # The send button answers for the rows it picked, so each of those is
+  # acknowledged and the pseudo-key it travelled under is not.
+  jq -e '.kind == "acting"' "$home/state/board-acks/plain-queued.json" >/dev/null \
+    || fail "a dispatched row was not acknowledged where the captain checked it"
+  jq -e '.kind == "acting"' "$home/state/board-acks/later-call.json" >/dev/null \
+    || fail "the second dispatched row was not acknowledged"
+  [ ! -e "$home/state/board-acks/dispatch.charted.json" ] \
+    || fail "the dispatch pseudo-key was acknowledged as if it were a row"
+
+  # Another Lavish review is an ephemeral discussion, not this board.
+  other=lavish-00000000deadbe01
+  run_procevent "$home" register lavish "$other" -- "$stub" >/dev/null \
+    || fail "could not register the unrelated source"
+  rm -f "$home"/state/board-acks/*.json
+  out=$(run_procevent "$home" start "$other" 2>&1) \
+    || fail "the unrelated source runner did not complete: $out"
+  if printf '%s' "$out" | grep -q "board-acked:"; then
+    fail "an unrelated Lavish review acknowledged rows on the board: $out"
+  fi
+  [ -z "$(ls -A "$home/state/board-acks" 2>/dev/null)" ] \
+    || fail "an unrelated Lavish review wrote acknowledgements: $(ls -A "$home/state/board-acks")"
+  pass "a captured board answer acknowledges every key it named, and only this board's"
+}
+
 test_path_is_stable_and_home_scoped() {
   local home
   home=$(make_home path)
@@ -1737,3 +1926,11 @@ test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled
 test_url_reads_the_live_session_listing
+test_ack_records_and_reads_back_what_the_captain_clicked
+test_ack_refuses_a_refusal_with_no_reason_and_a_key_that_is_not_one
+test_compose_carries_the_refusal_to_the_row_the_captain_clicked
+test_compose_acknowledges_a_card_and_an_underway_row_by_their_own_keys
+test_compose_reports_an_unanswered_acknowledgement_as_still_waiting
+test_compose_ignores_a_malformed_acknowledgement_instead_of_losing_the_board
+test_the_payload_contract_refuses_an_unknown_acknowledgement_kind
+test_a_captured_board_answer_acknowledges_every_key_it_named

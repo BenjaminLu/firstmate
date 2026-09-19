@@ -12,6 +12,7 @@
 #   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
 #   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
+#   fm-bearings-board.sh ack <key> [--acting | --refused --why-file <path> | --clear]
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh url
 #   fm-bearings-board.sh open
@@ -128,6 +129,17 @@
 #            gone.
 #            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
 #            placeholder as `<path>: <value>` and exits 1 while any remain.
+# ack        Read or write the acknowledgement the board shows on the row the
+#            captain clicked. <key> is the board's own routing key - a
+#            Captain's Call card key, or a Charted Next or Underway row id -
+#            because that is what the captain clicked and what the payload
+#            keys the row by. With no flag it prints the stored record and
+#            exits 1 when there is none. --acting records that the answer was
+#            received and is being acted on. --refused records that the picked
+#            item was verified and NOT set in motion, with the captain-facing
+#            reason read from --why-file (a file, never argv, so a reason may
+#            be prose of any length and any shape). --clear removes the
+#            record. Output is `ack: <path>` or `cleared: <path>`.
 # path       Print the stable board path for this home.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
@@ -219,6 +231,45 @@
 #
 # Every Underway row likewise carries a non-empty `name`: the durable task name
 # when known, otherwise its durable identifier.
+#
+# THE CLICK, ACKNOWLEDGED. A control that sets fleet work in motion - a
+# decision card's answer and the dispatch send button - must say so on the row
+# the captain clicked, immediately, without waiting for what the click set in
+# motion. The template owns the immediate half: the click appends the pill
+# itself. This script owns the durable half, so the acknowledgement survives
+# the next publication and can resolve into something other than success.
+#
+# Any Captain's Call item and any Underway or Charted Next row MAY therefore
+# carry `ack`: {kind, elapsed?, why?}. `kind` is `acting` (received, being
+# acted on), `refused` (verified and not set in motion), or `late` (still
+# acting, and the consequence has not arrived); the template renders each
+# one's words in the captain's language, because a deterministic publication
+# has no translator in the loop. `elapsed` is how long a `late` row has been
+# waiting, carried raw like every other duration in the payload. `why` is the
+# refusal's reason and is the one ack field that is captain-facing copy,
+# because the first mate writes it.
+#
+# THE CARRIER IS state/board-acks/<key>.json, and `ack` above is its ONLY
+# writer. Two callers write it: the captain's own answer, captured from the
+# board, records `acting` for every key that answer names (bin/fm-procevent.sh
+# feeds it at capture, beside the keyed-answer intake); and the first mate
+# records `refused` with its reason whenever it verifies a picked item and
+# does not dispatch it. Nothing else writes an acknowledgement, and compose
+# never invents one - it reads the carrier and attaches what is there.
+#
+# `late` is never stored. It is derived here, at compose time, from the
+# `acting` record's own stamp: an acknowledgement still acting after
+# FM_BOARD_ACK_LATE_SECONDS (default 60) composes as `late` carrying the
+# elapsed time. That is the same clock every other publication runs on - the
+# stamp is read when the board is published - so the page needs no timer of
+# its own and a row cannot age without the board being republished.
+#
+# Retirement belongs to the handler, not to a timer: the first mate clears an
+# acknowledgement it dispatched (`ack <key> --clear`) and replaces one it
+# declined (`ack <key> --refused`). An `acting` record nobody retires keeps
+# counting, which is exactly the report the captain asked for - a row that
+# says how long it has been waiting is how "the first mate is busy" is told
+# apart from "the first mate missed it".
 # A Charted Next row MAY carry `filed`, the durable filed date (YYYY-MM-DD, or
 # that date with a UTC timestamp) the template orders the section by, newest
 # first; a row with no comparable date keeps its payload order after every dated
@@ -236,6 +287,12 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+# How long an acknowledgement may stay `acting` before a publication reports it
+# as still waiting. The captain's own figure: the consequence is expected
+# within about a minute.
+ACK_LATE_SECONDS=${FM_BOARD_ACK_LATE_SECONDS:-60}
+case "$ACK_LATE_SECONDS" in ''|*[!0-9]*) ACK_LATE_SECONDS=60 ;; esac
 
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
@@ -330,6 +387,116 @@ EOF
   return "$status"
 }
 
+# --- the acknowledgement carrier ---------------------------------------------
+# One record per board key, written only through `ack`. The key is a board
+# routing key, so it satisfies the same slug rule the payload validator applies
+# to a card key and a Charted Next id; with no path separator accepted, a key
+# can never address anything outside the carrier directory.
+
+acks_dir() { printf '%s/board-acks\n' "$STATE"; }
+ack_path() { printf '%s/%s.json\n' "$(acks_dir)" "$1"; }
+
+validate_ack_key() {  # <key>
+  case "$1" in
+    ''|.|..) fail "not a board key: $1" ;;
+  esac
+  printf '%s' "$1" | LC_ALL=C grep -Eq '^[A-Za-z0-9._-]{1,128}$' \
+    || fail "not a board key: $1"
+}
+
+write_ack() {  # <key> <kind> <why-file-or-empty>
+  local key=$1 kind=$2 why_file=$3 path dir tmp
+  path=$(ack_path "$key")
+  dir=$(acks_dir)
+  (umask 077; mkdir -p "$dir") || fail "cannot create $dir"
+  tmp=$(umask 077; mktemp "$dir/.board-ack.XXXXXX") || fail "cannot stage the acknowledgement for $key"
+  if ! jq -n --arg kind "$kind" --arg at "$(date -u +%s)" \
+    --rawfile why "${why_file:-/dev/null}" '
+      {schema: "fm-board-ack.v1", kind: $kind, at: ($at | tonumber)}
+      + (($why | sub("\\s+$"; "")) as $w | if $w == "" then {} else {why: $w} end)' > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot stage the acknowledgement for $key"
+  fi
+  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$path"; }; then
+    rm -f -- "$tmp"
+    fail "cannot publish the acknowledgement for $key"
+  fi
+  printf 'ack: %s\n' "$path"
+}
+
+command_ack() {
+  local key=${1-} mode='' why_file=''
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --acting|--clear) [ -z "$mode" ] || { usage >&2; exit 2; }; mode=${1#--}; shift ;;
+      --refused) [ -z "$mode" ] || { usage >&2; exit 2; }; mode=refused; shift ;;
+      --why-file) why_file=${2-}; shift 2 ;;
+      *) usage >&2; exit 2 ;;
+    esac
+  done
+  validate_ack_key "$key"
+  [ -z "$why_file" ] || [ "$mode" = refused ] \
+    || fail "--why-file explains a refusal and means nothing without --refused"
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  case "$mode" in
+    refused)
+      [ -n "$why_file" ] || fail "--refused needs --why-file: a refusal the captain cannot read is not a refusal"
+      [ -f "$why_file" ] && [ ! -L "$why_file" ] || fail "refusal reason does not exist: $why_file"
+      [ -s "$why_file" ] || fail "refusal reason is empty: $why_file"
+      write_ack "$key" refused "$why_file"
+      ;;
+    acting) write_ack "$key" acting '' ;;
+    clear)
+      rm -f -- "$(ack_path "$key")" || fail "cannot clear the acknowledgement for $key"
+      printf 'cleared: %s\n' "$(ack_path "$key")"
+      ;;
+    '')
+      [ -f "$(ack_path "$key")" ] \
+        || { printf 'fm-bearings-board: no acknowledgement for %s\n' "$key" >&2; exit 1; }
+      cat "$(ack_path "$key")"
+      ;;
+  esac
+}
+
+# Every stored acknowledgement, resolved for one publication: {key: {kind,
+# elapsed?, why?}}. This is where `acting` ages into `late` - read at
+# publication time from the record's own stamp, so the page carries no clock.
+# A record that is unreadable or not this schema is skipped rather than
+# refusing the board: a malformed side-band file must never cost the captain
+# every other row.
+board_acks_map() {
+  local dir f key acc='{}' resolved
+  dir=$(acks_dir)
+  [ -d "$dir" ] || { printf '%s\n' "$acc"; return 0; }
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    key=${f##*/}; key=${key%.json}
+    resolved=$(jq -c --arg now "$(date -u +%s)" --arg late "$ACK_LATE_SECONDS" '
+      def duration($s):
+        if $s < 60 then ($s | tostring) + "s"
+        elif $s < 3600 then (($s / 60) | floor | tostring) + "m"
+        elif $s < 86400 then ((($s / 3600) | floor | tostring) + "h"
+          + ((($s % 3600) / 60) | floor | tostring) + "m")
+        else ((($s / 86400) | floor | tostring) + "d"
+          + ((($s % 86400) / 3600) | floor | tostring) + "h") end;
+      select(type == "object" and .schema == "fm-board-ack.v1")
+      | select(.kind == "acting" or .kind == "refused")
+      | ((($now | tonumber) - ((.at // 0) | if type == "number" then . else 0 end))
+         | if . < 0 then 0 else . end) as $age
+      | (.kind == "acting" and $age >= ($late | tonumber)) as $overdue
+      | {kind: (if $overdue then "late" else .kind end)}
+        + (if $overdue then {elapsed: duration($age)} else {} end)
+        + (if (.why | type == "string") and (.why | length) > 0 then {why: .why} else {} end)
+      ' "$f" 2>/dev/null) || continue
+    [ -n "$resolved" ] || continue
+    acc=$(jq -n --argjson acc "$acc" --arg key "$key" --argjson ack "$resolved" \
+      '$acc + {($key): $ack}' 2>/dev/null) || continue
+  done
+  printf '%s\n' "$acc"
+}
+
 validate_payload() {  # <data.json>
   jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     def nonempty_string: type == "string" and length > 0;
@@ -411,6 +578,15 @@ validate_payload() {  # <data.json>
           # them unique within itself: two drawings sharing a slug share an id
           # namespace once the board inlines them side by side
           and ([.figures[].slug] | length == (unique | length)));
+    # The acknowledgement the board shows on the row the captain clicked.
+    # `kind` is a closed vocabulary the template translates, `elapsed` a raw
+    # duration word, and `why` the only captain-facing copy in it.
+    def ack_item:
+      type == "object"
+      and (.kind == "acting" or .kind == "refused" or .kind == "late")
+      and ((has("elapsed") | not) or (.elapsed | nonempty_string))
+      and ((has("why") | not) or (.why | copy));
+    def optional_ack: (has("ack") | not) or (.ack == null) or (.ack | ack_item);
     def call_item:
       type == "object"
       and (.key | slug(128))
@@ -460,10 +636,12 @@ validate_payload() {  # <data.json>
           and (.recommend_value as $recommend
             | ([.options[].value] | index($recommend) != null))))
       and ([.options[].value] | index("reconcile") == null)
-      and (if .type == "merge" then (.risk | nonempty_string) else true end);
+      and (if .type == "merge" then (.risk | nonempty_string) else true end)
+      and optional_ack;
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
-      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string);
+      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string)
+      and optional_ack;
     def landed_item:
       type == "object" and repo_marker and (.id | nonempty_string)
       and (.what | copy) and (.owner | nonempty_string)
@@ -475,7 +653,8 @@ validate_payload() {  # <data.json>
       and (.dispatchable | type == "boolean")
       and ((has("kind") | not) or (.kind == "queued" or .kind == "warning"))
       and optional_filed
-      and (if .kind == "warning" then .dispatchable == false else true end);
+      and (if .kind == "warning" then .dispatchable == false else true end)
+      and optional_ack;
     type == "object"
     and (.schema == $schema)
     and (.home | nonempty_string)
@@ -748,6 +927,7 @@ command_compose_check() {  # <data.json>
 
 command_compose() {
   local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
+  local acks='{}'
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
@@ -790,9 +970,14 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
+  # What the captain has already clicked and has not yet seen the consequence
+  # of. Read once per publication, and attached below to whichever row carries
+  # the key he clicked.
+  acks=$(board_acks_map)
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" \
+    --argjson acks "$acks" \
     --argjson readable "$readable" "$BOARD_JQ_DEFS"'
     . as $snap |
     # Every captain-facing string goes through this one guard: the validator
@@ -815,6 +1000,11 @@ EOF
       gsub("[^A-Za-z0-9._-]"; "-") | .[0:128] | gsub("^-+|-+$"; "")
       | if length == 0 then "row" else . end;
     def record($id): $records[$id] // null;
+    # The acknowledgement rides the key the captain actually clicked, which is
+    # the card key on a Captain'"'"'s Call item and the emitted row id everywhere
+    # else, so this is applied to the built object rather than to the snapshot
+    # row it came from.
+    def with_ack($key): if $acks[$key] == null then . else . + {ack: $acks[$key]} end;
     def repo_of($id): record($id) | if . == null then null else .repo end;
     def owned: .owner == "(main)";
     # The Charted Next id IS the dispatch.charted routing channel, so a row
@@ -910,9 +1100,9 @@ EOF
         + [ merge_ready_prs as $prs | $prs[] | . as $pr
           | select([$prs[] | select(.task == $pr.task)] | length == 1)
           | merge_card ]
-        | first_per_key),
+        | first_per_key | map(with_ack(.key))),
       underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
-        doing: t(.doing; .state)} ],
+        doing: t(.doing; .state)} | with_ack(.id) ],
       landed: [ .landed[]?
         | {id: (if owned then .id else (.owner + "/" + .id) end),
            repo: (if owned then repo_of(.id) else null end),
@@ -963,7 +1153,8 @@ EOF
             title: t("This home cannot read its own backlog"; "backlog-unreadable"),
             reason: t("merge cards are suppressed: no task record can be read to key or route a merge answer";
               "backlog-unreadable"),
-            dispatchable: false, kind: "warning", filed: null}] end))
+            dispatchable: false, kind: "warning", filed: null}] end)
+        | map(with_ack(.id)))
     }
     + (if gates_omitted > 0 then {
         charted_more: more_slot("queued"; "charted_warning_more"),
@@ -1112,6 +1303,7 @@ command_open() {
 case "${1-}" in
   compose) shift; command_compose "$@" ;;
   build) shift; command_build "$@" ;;
+  ack) shift; command_ack "$@" ;;
   path) board_path ;;
   url) command_url ;;
   open) command_open ;;
