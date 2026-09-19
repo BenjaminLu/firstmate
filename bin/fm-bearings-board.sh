@@ -56,12 +56,15 @@
 #            reason; a row whose real id is not a routable key keeps its place
 #            on the board under a display slug but is never offered for
 #            dispatch, because the `dispatch.charted` intake resolves the id
-#            against the backlog and could not resolve a rewritten one; every unavailable or externally held
-#            secondmate home and every secondmate inventory-mismatch notice
+#            against the backlog and could not resolve a rewritten one; every
+#            unavailable or externally held secondmate home and every secondmate inventory-mismatch notice
 #            becomes a non-dispatchable `warning` Charted Next row, so a
 #            repair notice can never go missing from the board; every live
-#            captain hold THIS HOME OWNS becomes exactly one decision
-#            card keyed by its task id; every merge-ready candidate PR (checks
+#            captain hold THIS HOME OWNS whose task id is already a routable
+#            key becomes exactly one decision card keyed by that id, while one
+#            whose id is not becomes a non-dispatchable `warning` Charted Next
+#            row naming it, because a card the keyed intake could not address
+#            is unanswerable; every merge-ready candidate PR (checks
 #            passing, mergeable, review not CHANGES_REQUESTED, present only
 #            under the snapshot's --include-prs) that a task in THIS home's
 #            backlog claims becomes a merge card keyed merge.<task-id> with
@@ -670,6 +673,11 @@ EOF
     # offered for dispatch, because the intake could not resolve the slug.
     def charted_id: if owned then .id else (.owner + "/" + .id) end;
     def routable_id: charted_id | slug(128);
+    # A card key IS the bin/fm-captain-hold.sh intake address, so a hold this
+    # home owns is carded only when its task id is already a routable key; one
+    # that is not becomes a warning row naming it, because an unanswerable hold
+    # must be visible rather than refusing every other row.
+    def held_here: .verb == "captain-hold" and owned;
     def warning_gate: .id | startswith("(");
     def hold_title: (record(.id) | if . == null then null else .title end)
       // (.summary | split(": ") | .[0]);
@@ -727,7 +735,7 @@ EOF
       schema: $schema, home: .home, generated: .generated, lang: $lang,
       prs_live: (.prs | startswith("checked")),
       captains_call: (
-        [ .decisions_open[]? | select(.verb == "captain-hold" and owned) | decision_card ]
+        [ .decisions_open[]? | select(held_here and (.key | slug(128))) | decision_card ]
         + [ .candidate_prs[]?
           | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready)
           | merge_card ]),
@@ -764,6 +772,13 @@ EOF
              title: t("Secondmate home " + .id + " reports an inventory mismatch"; .id),
              reason: t((.kind // "inventory mismatch")
                + (if ((.ids // []) | length) > 0 then ": " + ((.ids // []) | join(", ")) else "" end); .id),
+             dispatchable: false, kind: "warning", filed: null} ]
+        + [ .decisions_open[]?
+          | select(held_here and ((.key | slug(128)) | not))
+          | {id: (("unkeyable-hold/" + .id) | slugify), repo: null,
+             title: t("The captain hold on " + .id + " cannot be answered from the board"; "unkeyable-hold"),
+             reason: t("its task id is not a routable key, so no card can carry an answer back to it";
+               "unkeyable-hold"),
              dispatchable: false, kind: "warning", filed: null} ]
         + (if $readable then [] else
           [{id: "backlog-unreadable", repo: null,

@@ -1402,6 +1402,34 @@ test_compose_never_dispatches_a_charted_row_under_a_rewritten_id() {
   pass "compose never offers a Charted Next row for dispatch under a rewritten id"
 }
 
+test_compose_warns_instead_of_carding_a_hold_it_cannot_key() {
+  local home skeleton
+  home=$(make_compose_home compose-unkeyable-hold)
+  # data/backlog.md is hand-maintained and its row id is any non-space run, so
+  # a captain hold on a slashed or non-ASCII id is ordinary usage - and that id
+  # is the address bin/fm-captain-hold.sh would have to answer to.
+  jq '.decisions_open += [
+        {id: "feat/login", key: "feat/login", verb: "captain-hold",
+         summary: "Pick the login route: the captain decides", owner: "(main)"},
+        {id: "修復登入", key: "修復登入", verb: "captain-hold",
+         summary: "Fix the login: the captain decides", owner: "(main)"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying a hold it cannot key"
+  jq -e '
+    # The rest of the board still composes, and every key stays addressable.
+    ([.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"])
+    and ([.captains_call[].key] | map(select(test("^[A-Za-z0-9._-]{1,128}$") | not)) | length == 0)
+    # Neither unanswerable hold disappears: each is a warning row naming it.
+    and ([.charted[] | select(.kind == "warning") | .title.en]
+      | map(select(test("feat/login") or test("修復登入"))) | length == 2)
+    and (.charted[] | select(.title.en | test("feat/login"))
+      | .dispatchable == false and .repo == null and (.reason.en | test("not a routable key")))
+  ' "$skeleton" >/dev/null || fail "an unkeyable hold was carded or lost: $(cat "$skeleton")"
+  pass "compose warns instead of carding a captain hold it cannot key"
+}
+
 test_compose_validates_the_skeleton_on_stdout_too() {
   local home out rc
   home=$(make_compose_home compose-stdout-validate)
@@ -1509,6 +1537,7 @@ test_compose_seeds_a_packet_card_without_a_recorded_project
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
+test_compose_warns_instead_of_carding_a_hold_it_cannot_key
 test_compose_degrades_a_packet_copy_object_with_a_blank_member
 test_compose_never_dispatches_a_charted_row_under_a_rewritten_id
 test_compose_cards_a_merge_only_for_a_pr_this_backlog_claims
