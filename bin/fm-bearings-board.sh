@@ -173,15 +173,18 @@
 #            composes from a snapshot with no PR view and reuses the merge
 #            cards the last publication stored rather than deleting the
 #            Merge now control the captain opened the board to click. A merge
-#            card retires when its work lands - its PR or its task reaches the
-#            payload's own landed rows, which retires the stored copy too - or
-#            when a compose holding a COMPLETE PR view finds it no longer
-#            merge-ready, because only a complete view decides the merge cards
-#            by itself. A view missing a repo that failed, a repo that was
-#            capped, a repo never queried, or a backlog it could not read is
-#            partial, and a partial view carries the stored cards forward
-#            instead of retiring them: absence of evidence is not evidence the
-#            PR is gone. No forge is read either way. It takes no
+#            card retires on PROOF THAT ITS PULL REQUEST LANDED - its PR or
+#            its task reaching the payload's own landed rows, which retires
+#            the stored copy too - and never on its absence from a view. A
+#            view returns nothing for a repo whose `gh` call failed, a repo
+#            that was capped, a repo the candidate set no longer reaches
+#            because its task was torn down, and a backlog it could not read,
+#            and none of those is distinguishable from a PR that stopped
+#            being merge-ready. So a card whose PR was closed unmerged lingers
+#            until something positive retires it: a stale Merge now costs the
+#            captain a click and an honest refusal, a deleted one costs him
+#            the control with no way back. No forge is read either way.
+#            It takes no
 #            language of its own: the board PAGE it is republishing already
 #            names the language the board was built in, and a refresh reads
 #            that back and carries it forward, so a republication can never
@@ -795,9 +798,10 @@ stored_merge_cards() {
   printf '%s\n' "$acc"
 }
 
-# Retire a stored merge card whose publication just dropped it. The landed
-# rows that prove a merge happened are bounded and recent, so a card left on
-# disk would come back the moment its PR scrolled out of them.
+# Retire a stored merge card. The ONE caller is the landed-rows drop, which
+# holds proof the work landed; nothing retires a card on its absence from a
+# view. The landed rows are bounded and recent, so the file must go at the
+# same moment the card does or it returns once its row scrolls out.
 retire_stored_card() {  # <card-key>
   rm -f -- "$DATA/$1/board-card.json" 2>/dev/null || true
 }
@@ -1031,34 +1035,17 @@ EOF
       [ .candidate_prs[]?
         | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready) ];
     # PR discovery is an opt-in the first mate passes; a fleet event has no
-    # one to pass it, so a refresh sees no candidate_prs at all. Without a
-    # COMPLETE PR view the merge cards the last publication stored are carried
-    # forward unchanged - otherwise the captain would open the board and find
-    # the Merge now control he asked for gone. Only a complete view is
-    # authoritative enough to decide the merge cards alone, and then a PR no
-    # longer ready gets no card and the publication retires its stored copy.
-    # Complete means every one of these, because each is a way the view can be
-    # PARTIAL while still reporting `checked`, and a partial view that dropped
-    # a card is indistinguishable from a full one that retired it:
-    #   - a repo whose `gh pr list` failed or timed out (prs says
-    #     "N repo(s) unavailable")
-    #   - a repo whose rows were capped (prs says "capped in N repo(s)")
-    #   - repos never queried at all, which prs does not mention: the snapshot
-    #     discloses that as an omitted surface instead
-    #   - an unreadable backlog, which suppresses EVERY merge card because
-    #     merge_ready_prs needs the task record - unknown ownership, not
-    #     absent ownership
-    def prs_checked: (.prs | startswith("checked"));
-    def prs_complete:
-      prs_checked
-      and ((.prs | test("repo\\(s\\) unavailable")) | not)
-      and ((.prs | test("capped in ")) | not)
-      and (([.omitted[]? | .surface
-             | select(type == "string" and startswith("PR repositories showing"))]
-            | length) == 0)
-      and $readable;
-    def carried_merge_cards:
-      if prs_complete then [] else [ $merge_cards[] ] end;
+    # one to pass it, so a refresh sees no candidate_prs at all. The merge
+    # cards the last publication stored are therefore ALWAYS carried forward,
+    # and a live row for the same key simply wins over the stored copy below.
+    # A view is never read as evidence against a card it did not return: a
+    # repo whose `gh` call failed, a repo that was capped, a repo the
+    # candidate set no longer reaches because its task was torn down, a
+    # backlog that could not be read - each produces the same empty result as
+    # a PR that genuinely stopped being merge-ready, and none of them is proof
+    # of anything. A stored card leaves only on proof that its pull request
+    # LANDED.
+    def carried_merge_cards: [ $merge_cards[] ];
     # A card key IS one intake address, so the board may never carry two cards
     # under it. A task held more than once consolidates into one card, and the
     # composer is told to answer every one of its questions there; two
@@ -1088,7 +1075,7 @@ EOF
         + $sibling + ", plus any " + $kind + " rows you cut");
     {
       schema: $schema, home: .home, generated: .generated, lang: $lang,
-      prs_live: prs_checked,
+      prs_live: (.prs | startswith("checked")),
       captains_call: (
         [ held_rows as $rows | $rows[] | . as $row
           | decision_card + consolidated([$rows[] | select(.key == $row.key)] | length) ]
@@ -1183,16 +1170,13 @@ EOF
 # is about to see is the durable card a later refresh reuses - a decision card
 # because a refresh has no first mate to write prose, a merge card because a
 # refresh has no PR view to rediscover it with.
-# The store must MIRROR the publication, not only grow with it: a merge card
-# the publication stopped carrying - because its PR closed unmerged, went red,
-# or is simply no longer merge-ready - has to leave the store in the same
-# breath, or the very next fleet event carries the dead Merge now control
-# straight back onto the page. So every stored merge card the publication does
-# not carry is retired here. That is safe only because compose carries the
-# stored cards INTO any payload whose PR view was partial, so a card missing
-# here really was decided against rather than merely unseen. Decision cards are not swept: a call the payload
-# happens not to card this time is still open, and bin/fm-captain-hold.sh
-# retires its card when the hold is re-established.
+# Nothing is retired here. A stored card leaves only on proof that its work
+# landed, which effective_payload has and this does not: a card missing from
+# a publication may simply be one nobody looked for - a repo whose `gh` call
+# failed, a repo the candidate set no longer reaches, a backlog that could
+# not be read, or a composer who trimmed the row while filling the skeleton.
+# Deleting the captain's Merge now control on that is unrecoverable; leaving
+# a stale one costs him a click and an honest refusal.
 # Copy is read from the COMPOSED payload and membership from the PUBLISHED
 # one: the reconcile choice is injected per publication and the validator
 # refuses a card that already carries it, so storing the published decision
@@ -1210,26 +1194,6 @@ persist_composed_cards() {  # <composed.json> <published.json>
   done < <(jq -r '.captains_call[]? | select(.type == "decision" or .type == "merge") | .key' \
     "$published" 2>/dev/null)
   rm -f -- "$tmp"
-  while IFS= read -r key; do
-    [ -n "$key" ] || continue
-    retire_stored_card "$key"
-  done < <(stored_merge_keys_absent_from "$published")
-}
-
-# Every stored merge card key the published payload PROVABLY does not carry.
-# A read that failed is not a key that is absent: only a definite `false` from
-# the payload retires anything, so an unreadable publication keeps every
-# stored card rather than sweeping the lot.
-stored_merge_keys_absent_from() {  # <published.json>
-  local dir key carried
-  for dir in "$DATA"/merge.*; do
-    [ -f "$dir/board-card.json" ] || continue
-    key=${dir##*/}
-    carried=$(jq -r --arg key "$key" 'any(.captains_call[]?; .key == $key)' "$1" 2>/dev/null) \
-      || continue
-    [ "$carried" = false ] || continue
-    printf '%s\n' "$key"
-  done
 }
 
 command_build() {

@@ -429,22 +429,21 @@ store_merge_card() {  # <home> <key> <pr-url>
     "$ROOT/bin/fm-captain-hold.sh" card "$key" --store "$home/merge-card.json" >/dev/null
 }
 
-# A PR view that reports `checked` can still be PARTIAL - a repo whose `gh`
-# call failed or was capped, repos never queried, or a backlog that could not
-# be read. Each of those makes a merge-ready PR contribute no row, so the
-# publication carries no card for it. Treating that as proof the PR is gone
-# would delete the captain's stored Merge now control on an ordinary token
-# expiry, and only a model in the loop could bring it back.
-assert_merge_card_survives_partial_view() {  # <name> <prs> <omitted-json> <backlog:keep|remove>
+# A pull-request view returns nothing for a repo whose `gh` call failed, a
+# repo whose rows were capped, a repo it never queried, and a backlog it
+# could not read - the same nothing a PR that stopped being merge-ready
+# returns. None of it is evidence, so none of it may cost the captain his
+# Merge now control. The card stays until its work is proved landed.
+assert_merge_card_survives() {  # <name> <prs> <omitted-json> <candidate-prs> <backlog:keep|break>
   local home snapshot
   home=$(make_home "$1")
   seed_board "$home"
   store_merge_card "$home" merge.ship-task "https://github.com/example/firstmate/pull/9"
   snapshot="$home/snapshot.json"
-  jq --arg prs "$2" --argjson om "$3" \
-    '.prs = $prs | .omitted = $om | .candidate_prs = []' \
+  jq --arg prs "$2" --argjson om "$3" --argjson prs_rows "$4" \
+    '.prs = $prs | .omitted = $om | .candidate_prs = $prs_rows' \
     "$SNAPSHOT_FIXTURE" > "$snapshot"
-  if [ "$4" != keep ]; then
+  if [ "$5" != keep ]; then
     # A symlinked backlog is bin/fm-tasks-axi.sh's documented refusal: no
     # record can be read, so ownership is unknown rather than absent.
     mv "$home/data/backlog.md" "$home/data/real-backlog.md"
@@ -453,40 +452,33 @@ assert_merge_card_survives_partial_view() {  # <name> <prs> <omitted-json> <back
   run_board "$home" refresh --snapshot "$snapshot" >/dev/null \
     || fail "$1: the refresh failed"
   injected_payload "$home" | jq -e '
-    [.captains_call[] | select(.key == "merge.ship-task")] | length == 1
+    [.captains_call[] | select(.key == "merge.ship-task")
+     | select(.pr_url == "https://github.com/example/firstmate/pull/9")
+     | select([.options[].value] == ["merge", "hold"])] | length == 1
   ' >/dev/null \
-    || fail "$1: a partial PR view dropped the captain's merge card: $(injected_payload "$home")"
+    || fail "$1: the stored merge card did not survive: $(injected_payload "$home")"
 }
 
-test_a_partial_pr_view_never_drops_a_stored_merge_card() {
-  assert_merge_card_survives_partial_view partial-unavailable \
-    'checked (2 repos, 0 open; 1 repo(s) unavailable)' '[]' keep
-  assert_merge_card_survives_partial_view partial-capped \
-    'checked (2 repos; 0 shown, at least 9 open; capped in 1 repo(s))' '[]' keep
-  assert_merge_card_survives_partial_view partial-repos-omitted \
+test_no_pull_request_view_ever_costs_a_stored_merge_card() {
+  assert_merge_card_survives view-unavailable \
+    'checked (2 repos, 0 open; 1 repo(s) unavailable)' '[]' '[]' keep
+  assert_merge_card_survives view-capped \
+    'checked (2 repos; 0 shown, at least 9 open; capped in 1 repo(s))' '[]' '[]' keep
+  assert_merge_card_survives view-repos-omitted \
     'checked (10 repos, 0 open)' \
-    '[{"surface":"PR repositories showing 10 of 25","reveal":"--all-pr-repos"}]' keep
-  assert_merge_card_survives_partial_view partial-backlog \
-    'checked (2 repos, 0 open)' '[]' remove
-  pass "a PR view missing a repo, a cap, or the backlog carries merge cards forward"
-}
-
-test_a_complete_pr_view_retires_a_merge_card_it_no_longer_finds() {
-  local home snapshot
-  home=$(make_home complete-view)
-  seed_board "$home"
-  store_merge_card "$home" merge.ship-task "https://github.com/example/firstmate/pull/9"
-  # Nothing missing: every repo queried, nothing capped, backlog readable,
-  # and no candidate PR. That IS evidence the PR is no longer merge-ready.
-  snapshot="$home/snapshot.json"
-  jq '.prs = "checked (2 repos, 0 open)" | .omitted = [] | .candidate_prs = []' \
-    "$SNAPSHOT_FIXTURE" > "$snapshot"
-  run_board "$home" refresh --snapshot "$snapshot" >/dev/null || fail "the refresh failed"
-  injected_payload "$home" | jq -e '
-    [.captains_call[] | select(.key == "merge.ship-task")] | length == 0
-  ' >/dev/null \
-    || fail "a complete PR view kept a merge card it no longer finds: $(injected_payload "$home")"
-  pass "a complete PR view decides the merge cards by itself"
+    '[{"surface":"PR repositories showing 10 of 25","reveal":"--all-pr-repos"}]' '[]' keep
+  assert_merge_card_survives view-backlog-unreadable \
+    'checked (2 repos, 0 open)' '[]' '[]' break
+  # The sequence the finding names: the task was torn down while its PR sat
+  # open and green, so its repo left the candidate set entirely. Every repo
+  # the snapshot still knows about WAS queried - nothing failed, nothing was
+  # capped, nothing omitted, the backlog reads fine - so this view looks
+  # complete in every way a predicate could test, and it still is not
+  # evidence about a repo nobody asked about.
+  assert_merge_card_survives view-repo-gone 'checked (2 repos, 0 open)' '[]' '[]' keep
+  # And the degenerate case: a view that queried nothing at all.
+  assert_merge_card_survives view-zero-repos 'checked (0 repos, 0 open)' '[]' '[]' keep
+  pass "no pull-request view, however complete it looks, retires a stored merge card"
 }
 
 test_the_merge_carry_forward_resurrects_only_merge_cards() {
@@ -1031,8 +1023,7 @@ test_a_stored_card_the_validator_would_refuse_costs_only_its_own_row
 test_a_stored_card_carrying_a_placeholder_costs_only_its_own_row
 test_a_refresh_carries_the_merge_card_forward_and_retires_it_when_it_lands
 test_the_merge_carry_forward_resurrects_only_merge_cards
-test_a_partial_pr_view_never_drops_a_stored_merge_card
-test_a_complete_pr_view_retires_a_merge_card_it_no_longer_finds
+test_no_pull_request_view_ever_costs_a_stored_merge_card
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run

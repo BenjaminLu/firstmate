@@ -834,37 +834,10 @@ test_build_stores_the_merge_card_it_publishes() {
   pass "a build stores the merge card it publishes, keyed by the card key"
 }
 
-# A pull request that closed unmerged, or went red, never reaches the landed
-# rows - those are the backlog's Done roll-up. The only thing that knows it is
-# no longer merge-ready is a compose that discovered pull requests, and the
-# board it publishes carries no card for it. That publication has to retire
-# the stored copy too, or the next fleet event - which has no PR view of its
-# own - carries the dead Merge now control straight back onto the page.
-test_build_retires_a_merge_card_its_publication_stopped_carrying() {
-  local home data
-  home=$(make_home merge-retire)
-  data="$home/payload.json"
-  write_valid_payload "$data"
-  run_board "$home" build "$data" >/dev/null || fail "the first build failed"
-  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    "$ROOT/bin/fm-captain-hold.sh" card merge.sample-task >/dev/null \
-    || fail "the first build stored no merge card to retire"
-
-  # The PR is no longer merge-ready, so the next published payload carries no
-  # merge card at all - the board is right, and the store must follow it.
-  jq '.captains_call = [.captains_call[] | select(.type != "merge")]' \
-    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
-  run_board "$home" build "$data" >/dev/null || fail "the second build failed"
-  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    "$ROOT/bin/fm-captain-hold.sh" card merge.sample-task >/dev/null 2>&1 \
-    && fail "a merge card the publication stopped carrying stayed in the store"
-  pass "a build retires the stored merge cards its publication no longer carries"
-}
-
-# A build reconciles the payload before it publishes, dropping a merge card
-# whose work already landed. Storing the ORIGINAL payload afterwards would
-# write that card straight back, and it would return to the board as soon as
-# its landed row aged out of the bounded roll-up.
+# Landing is the one thing that retires a merge card, and a build reconciles
+# the payload before it publishes. Storing the ORIGINAL payload afterwards
+# would write the dropped card straight back, and it would return to the
+# board as soon as its landed row aged out of the bounded roll-up.
 test_build_does_not_restore_the_merge_card_it_just_dropped() {
   local home data out
   home=$(make_home merge-dropped)
@@ -1748,7 +1721,6 @@ test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
 test_build_stores_the_merge_card_it_publishes
-test_build_retires_a_merge_card_its_publication_stopped_carrying
 test_build_does_not_restore_the_merge_card_it_just_dropped
 test_build_accepts_trilingual_copy_and_five_question_fields
 test_build_refuses_malformed_copy_and_card_fields
