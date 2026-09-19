@@ -66,15 +66,9 @@
 # observation is its own task, not a larger fleet-wide FM_CHECK_TIMEOUT.
 # Oldest observations go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
-# final observation applies to every owner without another forge read. A URL
-# the budget cut short is still stamped: an attempt that recorded nothing would
-# otherwise keep its old place in the ordering for ever and starve the rest.
-# That stamp wakes nobody, but it is not invisible: the row carries the budget
-# reason instead of an observation, so projection reports it as fleet work to
-# refresh until a later poll reads it. Only a genuine forge failure or head
-# change wakes; a budget stamp never opens a failure episode and never replaces
-# a recorded error, so the failure already suppressing the wake keeps
-# suppressing it until a successful read ends that episode.
+# final observation applies to every owner without another forge read. When
+# the budget runs out mid-observation, the poll ends with that URL's records
+# untouched; only a genuine forge failure or head change records an error.
 # API failure leaves error evidence; an expired or absent observation is not
 # silence. FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # A URL whose last good observation is merged or closed is final: it is
@@ -119,7 +113,6 @@ NOW=${FM_CONTRIBUTIONS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 EPOCH=$(jq -nr --arg now "$NOW" '$now | fromdateiso8601') || fail 'invalid observation clock'
 MAX_AGE=${FM_CONTRIBUTIONS_MAX_AGE:-900}
 BUDGET=${FM_CONTRIBUTIONS_BUDGET:-20}
-BUDGET_ERROR='observation did not fit the poll budget'
 case "$MAX_AGE" in ''|*[!0-9]*) fail 'invalid freshness bound' ;; esac
 case "$BUDGET" in ''|*[!0-9]*) fail 'invalid poll budget' ;; esac
 [ "$BUDGET" -ge 1 ] && [ "$BUDGET" -le 25 ] || fail 'poll budget must be 1..25 seconds'
@@ -395,12 +388,9 @@ poll() {
   [ "$ERRORS" -eq 0 ] || printf 'contributions: %s unreadable durable record(s)\n' "$ERRORS"
   # One line per distinct URL: the URL, then every owning task.
   jq_lib -nr --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" '
-    known($input[0];$saved[0]) | map(. as $k
-      | ([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url)] | first) as $record
-      | . + {at:($record.checked_at // ""),recorded:($record.error == null)})
-    | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),
-        recorded:(map(.recorded) | all),tasks:(map(.task) | unique)})
-    | sort_by(.at,(if .recorded then 1 else 0 end),.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
+    known($input[0];$saved[0]) | map(. as $k | . + {at:([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url) | .checked_at] | first // "")})
+    | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),tasks:(map(.task) | unique)})
+    | sort_by(.at,.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
   DEADLINE=$(( $(date +%s) + BUDGET ))
   while IFS=$'\t' read -r -a row; do
     [ "${#row[@]}" -ge 2 ] || continue
@@ -416,13 +406,13 @@ poll() {
     observed=0
     UNMEASURED=0
     observe "$url" || observed=$?
-    # Wake once per failure episode: only when no owner carries a prior failure.
-    # A read the budget cut short is unmeasured, so it neither wakes nor stands
-    # in for the failure that suppresses the next one.
-    if [ "$observed" -ne 0 ] && [ "$UNMEASURED" -eq 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" \
-      --arg url "$url" --arg budget "$BUDGET_ERROR" --args \
+    # An observation the budget cut short is unmeasured, not unavailable: keep
+    # every owner's prior record so the URL is observed first next poll.
+    [ "$UNMEASURED" -eq 0 ] || break
+    # Wake once per failure episode: only when no owner has a prior error.
+    if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
       'all($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
-        .error == null or .error == $budget)' "${row[@]:1}" >/dev/null; then
+        .error == null)' "${row[@]:1}" >/dev/null; then
       printf 'contributions: observation unavailable for %s\n' "$url"
     fi
     case "$url" in */issues/*) kind=issue ;; *) kind="pr" ;; esac
@@ -443,16 +433,8 @@ poll() {
             seen:($events | map(.token)),
             pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
       else
-        if [ "$UNMEASURED" -eq 0 ]; then
-          error='forge observation unavailable or changed during read'
-          jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
-        else
-          # The budget string never replaces a recorded failure: overwriting one
-          # would end the episode that is suppressing the wake, so the same
-          # unreadable contribution would wake the captain a second time.
-          jq --arg now "$NOW" --arg error "$BUDGET_ERROR" \
-            '.checked_at=$now | .error=(.error // $error)' "$old" > "$TMP/row.json"
-        fi
+        error='forge observation unavailable or changed during read'
+        jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
       fi
       write_record "$task" "$TMP/row.json"
       publish_pending "$task" "$url" "$TMP/row.json"
