@@ -416,11 +416,21 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   assert_grep "the pipeline's fix commit rather than one you are about to submit" "$brief" \
     "no-mistakes DOD must say whose diff the review pass runs over mid-run"
 
-  # The long form stays in the external skill; this repo points at the one
-  # reference that carries the technique, not at the run structure around it.
+  # The long form stays in the external skill, and it is split across two
+  # references: a worker sent to only one of them for the class sweep lands in a
+  # file that opens by disclaiming class coverage and writes a single-pattern
+  # sweep. The run structure around them stays unnamed.
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`references/verify-your-fix.md` in the `greenlight` skill at `~/.claude/skills/greenlight`' "$brief" \
-    "no-mistakes DOD must point at the greenlight long-form reference"
+  assert_grep '`greenlight` skill is installed at `~/.claude/skills/greenlight`' "$brief" \
+    "no-mistakes DOD must say where the greenlight long form lives"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`references/generalize.md` for the long form of what a class is' "$brief" \
+    "no-mistakes DOD must point the class sweep at the reference that covers it"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`references/verify-your-fix.md` for the long form of the pass over your own diff' "$brief" \
+    "no-mistakes DOD must point the self-review pass at the reference that covers it"
+  assert_no_grep "skills/greenlight/SKILL.md" "$brief" \
+    "no-mistakes DOD must not point at the greenlight run structure"
   assert_grep "taking the technique and not its run structure" "$brief" \
     "no-mistakes DOD must bound the greenlight pointer to the technique"
   assert_no_grep "the PR body" "$brief" \
