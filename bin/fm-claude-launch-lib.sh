@@ -55,12 +55,11 @@ set -u
 # actually runs; `bypass` is the deliberate opt-in, not what a clone inherits.
 FM_CLAUDE_PERMISSION_DEFAULT=auto
 FM_CLAUDE_PERMISSION_FILE=claude-permission-mode
-# Bound on the validation tool's doctor call: it contacts its own daemon, and a
-# worker launch must not hang behind an unhealthy one.
-FM_CLAUDE_DOCTOR_TIMEOUT=${FM_CLAUDE_DOCTOR_TIMEOUT:-10}
-# A non-positive or non-numeric bound is not a bound (fm-timeout-lib.sh header),
-# so an unusable value falls back to the default rather than removing the bound.
-case $FM_CLAUDE_DOCTOR_TIMEOUT in '' | *[!0-9]* | 0) FM_CLAUDE_DOCTOR_TIMEOUT=10 ;; esac
+# Bound on the validation tool's doctor call, in seconds: it contacts its own
+# daemon, and a worker launch must not hang behind an unhealthy one. A constant
+# rather than an override, because the requirement is that the call IS bounded,
+# not that the bound is settable; nothing in this repo needs a different one.
+FM_CLAUDE_DOCTOR_TIMEOUT=10
 
 # fm_claude_permission_resolve <config-dir>
 # Sets FM_CLAUDE_PERMISSION_SOURCE to `default`, `config` or `unresolved`, and
