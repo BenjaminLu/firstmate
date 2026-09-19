@@ -198,6 +198,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 PACKET_SCHEMA=fm-packet.v1
 DECISION_SCHEMA=fm-packet-decision.v1
+# The one name an option value and the shape that draws it share: the drawing
+# answers the decision by carrying data-node="<option value>", so a value the
+# decision block accepts has to be a legal identity, and the reverse.
+NAME_RE='^[A-Za-z0-9._-]{1,128}$'
 
 usage() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -362,7 +366,7 @@ decision_jq='
     or (type == "object" and (.en | type == "string" and length > 0)
         and ((has("hant") | not) or (.hant | type == "string"))
         and ((has("hans") | not) or (.hans | type == "string")));
-  def slug: type == "string" and test("^[A-Za-z0-9._-]{1,128}$");
+  def slug: type == "string" and test($name_re);
   def problem(cond; msg): if cond then empty else msg end;
   [ problem(type == "object"; "decision block is not a JSON object"),
     problem(.key == $task; "decision key must be the task id \($task)"),
@@ -385,8 +389,8 @@ decision_jq='
 # scanner would pass a broken drawing. It is called only when the packet has a
 # Figures section or owes one, so a packet without figures never needs python3.
 figures_problems() {  # <packet> <kind> [option-value...] -> one problem per line
-  python3 - "$@" <<'PY'
-import pathlib, re, sys
+  FM_NAME_RE="$NAME_RE" python3 - "$@" <<'PY'
+import os, pathlib, re, sys
 
 packet, kind, options = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
 lines = packet.read_text(encoding="utf-8").splitlines()
@@ -451,7 +455,7 @@ COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)
 ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
 TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
-LATIN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+LATIN_ID = re.compile(os.environ["FM_NAME_RE"])
 FIG_FIELD = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
 FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 TEXT_ELEMENT = re.compile(r"""<\s*text\b(?:[^<>"']|"[^"]*"|'[^']*')*>(.*?)<\s*/\s*text\s*>""", re.S)
@@ -526,32 +530,28 @@ for n, fig in enumerate(figures, 1):
         bad("'caption:' is missing or empty")
 
     svgs = top_level_svgs(chunk)
-
-    # A figure body is figure:, caption:, one drawing and its '- edge' lines.
-    # Anything else renders nowhere, so it is refused by name here rather than
-    # accepted and silently dropped on the way to the page.
-    drawn = set()
-    at = 0
-    for one in svgs:
-        i = chunk.index(one, at)
-        at = i + len(one)
-        first = chunk.count("\n", 0, i)
-        drawn.update(range(first, first + one.count("\n") + 1))
-    for i, l in enumerate(fig["lines"]):
-        if i in drawn or not l.strip() or FIG_FIELD.match(l) or FIG_EDGE.match(l):
-            continue
-        if "{FILL" in l:
-            continue
-        bad("the line \"%s\" is not part of the figure, and nothing renders it; a figure body "
-            "carries figure:, caption:, one drawing and its '- edge' lines. A sentence about "
-            "the drawing goes in the caption; anything longer goes in the packet section it "
-            "belongs to" % l.strip())
-
     if len(svgs) != 1:
         bad("the figure carries %d inline <svg> block(s); it needs exactly one, "
             "drawn through the diagram-design skill" % len(svgs))
         continue
     svg = svgs[0]
+
+    # A figure body is figure:, caption:, one drawing and its '- edge' lines.
+    # Anything else renders nowhere, so it is refused by name rather than
+    # accepted and silently dropped on the way to the page. It reads the lines
+    # the drawing did not claim, so it runs only once the drawing is known: a
+    # figure that failed to parse has one true reason above, and reporting its
+    # every line as prose would bury it.
+    opened = chunk.index(svg)
+    first = chunk.count("\n", 0, opened)
+    drawn = range(first, first + svg.count("\n") + 1)
+    for at, l in enumerate(fig["lines"]):
+        if at in drawn or not l.strip() or FIG_FIELD.match(l) or FIG_EDGE.match(l):
+            continue
+        bad("the line \"%s\" is not part of the figure, and nothing renders it; a figure body "
+            "carries figure:, caption:, one drawing and its '- edge' lines. A sentence about "
+            "the drawing goes in the caption; anything longer goes in the packet section it "
+            "belongs to" % l.strip())
 
     if re.search(r"<\s*script\b", svg, re.I):
         bad("the svg carries a <script>; a figure is static markup")
@@ -684,7 +684,7 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
       while IFS= read -r line; do
         [ -n "$line" ] || continue
         echo "fm-packet: decision: $line" >&2; problems=$((problems + 1))
-      done < <(printf '%s\n' "$block" | jq -r --arg task "$id" "$decision_jq")
+      done < <(printf '%s\n' "$block" | jq -r --arg task "$id" --arg name_re "$NAME_RE" "$decision_jq")
       while IFS= read -r line; do
         [ -n "$line" ] || continue
         opts+=("$line")

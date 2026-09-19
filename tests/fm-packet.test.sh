@@ -388,6 +388,18 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   assert_figure_refused "$home" "$packet" "$body" \
     'evidence names edge "ghost"' "evidence for a line the drawing does not have"
 
+  # A drawing whose closing tag was lost has one true reason, and a worker is
+  # told to fix what verify reports: reporting its every line as prose to move
+  # elsewhere would have it delete the drawing line by line.
+  body=$(good_figures "${GOOD_SVG/<\/svg>/}")
+  assert_figure_refused "$home" "$packet" "$body" \
+    "carries 0 inline <svg> block(s)" "a drawing whose closing tag was lost"
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  case "$out" in
+    *"is not part of the figure"*)
+      fail "verify reported the drawing's own lines as prose to move elsewhere: $out" ;;
+  esac
+
   # Nothing renders a line the figure body does not recognise, so verify
   # refuses it by name rather than letting it verify and then vanish.
   body=$(good_figures)$'\n''The left path re-uses the existing queue; the right one adds a second.'
@@ -407,7 +419,7 @@ test_verify_holds_a_figure_to_the_svg_contract() {
 }
 
 test_a_needs_decision_packet_owes_one_figure_comparing_every_option() {
-  local home packet out body rc rect_b circle_b
+  local home packet out body rc rect_b circle_b under
   home=$(make_home compare)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -427,6 +439,14 @@ test_a_needs_decision_packet_owes_one_figure_comparing_every_option() {
   circle_b='<circle id="opt-box-b" data-node="quiet" cx="134" cy="190" r="40" fill="var(--card-2)" stroke="var(--rule)"/>'
   fill_figures "$packet" "$(good_figures "${GOOD_SVG/"$rect_b"/"$circle_b"}")"
   out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an option drawn as a circle: $out"
+
+  # An option value the decision block accepts is always drawable as the
+  # matching identity: the two are one name, not two spellings of one.
+  under=$(printf '%s' "$GOOD_DECISION" | jq -c '.options[0].value = "_baseline" | .recommend_value = "_baseline"')
+  fill_decision "$packet" "$under"
+  fill_figures "$packet" "$(good_figures "${GOOD_SVG/data-node=\"bound\"/data-node=\"_baseline\"}")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an option value it accepts in the decision block: $out"
+  fill_decision "$packet" "$GOOD_DECISION"
 
   # A comparison that omits one option is not a comparison, and it is named.
   body=$(good_figures "${GOOD_SVG/data-node=\"quiet\"/data-node=\"other\"}")
