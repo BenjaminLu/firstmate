@@ -31,13 +31,14 @@
 # an eligible merge remains a captain call, never an automatic forge action.
 #
 # poll consumes fm-fleet-snapshot.sh --contribution-input, a local-only read,
-# and spends at most FM_CONTRIBUTIONS_BUDGET seconds on forge reads (default 45,
-# 1..50). Each gh call is bounded by the remaining budget and by
-# FM_CONTRIBUTIONS_CALL_BOUND seconds (default 12, 1..25). Both numbers come
-# from measured GitHub latency on a slow repository: 0.9 to 4.4 seconds per
-# call, samples 4.35, 2.83 and 3.39, with one read per URL regularly past five
-# seconds. The 12-second per-call bound sits well above the slowest measured
-# call, so a merely slow forge finishes its read instead of being killed.
+# and spends at most FM_CONTRIBUTIONS_BUDGET seconds on forge reads (default 25,
+# 1..25 - exactly what the watcher bound below can grant, so the number it
+# advertises is the number it uses). Each gh call is bounded by the remaining
+# budget and by twelve seconds. That bound comes from measured GitHub latency on
+# a slow repository: 0.9 to 4.4 seconds per call, samples 4.35, 2.83 and 3.39,
+# with one read per URL regularly past five seconds. Twelve sits well above the
+# slowest measured call, so a merely slow forge finishes its read instead of
+# being killed.
 #
 # The whole poll must finish inside the watcher's per-check bound, because a
 # poll the watcher kills prints nothing and writes no record and would repeat
@@ -121,13 +122,11 @@ command -v jq >/dev/null 2>&1 || fail 'jq is required to measure contribution co
 NOW=${FM_CONTRIBUTIONS_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 EPOCH=$(jq -nr --arg now "$NOW" '$now | fromdateiso8601') || fail 'invalid observation clock'
 MAX_AGE=${FM_CONTRIBUTIONS_MAX_AGE:-900}
-BUDGET=${FM_CONTRIBUTIONS_BUDGET:-45}
+BUDGET=${FM_CONTRIBUTIONS_BUDGET:-25}
 case "$MAX_AGE" in ''|*[!0-9]*) fail 'invalid freshness bound' ;; esac
 case "$BUDGET" in ''|*[!0-9]*) fail 'invalid poll budget' ;; esac
-[ "$BUDGET" -ge 1 ] && [ "$BUDGET" -le 50 ] || fail 'poll budget must be 1..50 seconds'
-CALL_BOUND=${FM_CONTRIBUTIONS_CALL_BOUND:-12}
-case "$CALL_BOUND" in ''|*[!0-9]*) fail 'invalid per-call forge bound' ;; esac
-[ "$CALL_BOUND" -ge 1 ] && [ "$CALL_BOUND" -le 25 ] || fail 'per-call forge bound must be 1..25 seconds'
+[ "$BUDGET" -ge 1 ] && [ "$BUDGET" -le 25 ] || fail 'poll budget must be 1..25 seconds'
+CALL_BOUND=12
 # The watcher's per-check bound, read from this check's own environment: the
 # watcher runs the check as a direct child, so an operator who raised it is seen
 # here too, and when it is unset both sides resolve the same default.
@@ -412,7 +411,7 @@ report_unreached() {
 }
 
 poll() {
-  local task url old kind error observed
+  local task url old kind error observed now
   local -a row
   acquire
   get_input
@@ -424,17 +423,22 @@ poll() {
     --argjson now "$EPOCH" --argjson max_age "$MAX_AGE" '
     known($input[0];$saved[0])
     | map(. as $k | ([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url)] | first) as $record
-      | . + {at:($record.checked_at // ""),
+      | . + {at:($record.checked_at // ""),terminal:observation_terminal($record),
              unchecked:(($k.url | startswith("https://github.com/"))
                         and (observation_fresh($record; $k.url; $now; $max_age) | not))})
     | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),
-        unchecked:any(.[]; .unchecked),tasks:(map(.task) | unique)})
+        unchecked:(any(.[]; .unchecked) and (any(.[]; .terminal) | not)),
+        tasks:(map(.task) | unique)})
     | sort_by(.at,.tasks[0],.url)[]
     | [.url,(if .unchecked then 1 else 0 end)] + .tasks | @tsv' > "$TMP/known.tsv"
-  DEADLINE=$(( $(date +%s) + BUDGET ))
+  now=$(date +%s)
+  DEADLINE=$((now + BUDGET))
   # Whatever the local work before this really cost comes out of the reads, not
-  # out of the margin the watcher's kill leaves.
+  # out of the margin the watcher's kill leaves - down to the same one-second
+  # floor the budget itself keeps, because a poll that reads nothing at all is
+  # the permanent silence this bound exists to prevent.
   HARD_DEADLINE=$((START_EPOCH + CHECK_TIMEOUT - POST_WORK_SECS - CLOCK_ROUNDING_SECS - KILL_GRACE_SECS))
+  [ "$HARD_DEADLINE" -gt "$now" ] || HARD_DEADLINE=$((now + 1))
   [ "$DEADLINE" -le "$HARD_DEADLINE" ] || DEADLINE=$HARD_DEADLINE
   BUDGET_EXHAUSTED=0
   while IFS=$'\t' read -r -a row; do
@@ -449,9 +453,10 @@ poll() {
       continue
     fi
     # A contribution with a final observation is not re-read for any owner.
-    if jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
-      'any($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
-        . != null and (.observation.state | IN("merged","closed")))' "${row[@]:2}" >/dev/null; then
+    if jq -L "$SCRIPT_DIR" -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
+      'include "fm-contributions";
+       any($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
+        . != null and observation_terminal(.))' "${row[@]:2}" >/dev/null; then
       settle_final "$url" "${row[@]:2}"
       continue
     fi

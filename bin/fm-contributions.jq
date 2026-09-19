@@ -33,9 +33,13 @@ def known($input; $saved):
   | unique_by([.task,.url]);
 def latest_checks:
   group_by(.name) | map(sort_by([(.started_at // ""),(.id // 0)]) | last);
-# A merged or closed observation is final; poll never re-reads it, so it never expires.
+# A merged or closed observation is terminal: poll settles it from the record it
+# already holds and spends no forge call on it, whatever error sits beside it.
+def observation_terminal($record):
+  (($record.observation // {}).state) | IN("merged","closed");
+# A terminal observation with no error beside it is final, so it never expires.
 def observation_final($record):
-  $record.error == null and ((($record.observation // {}).state) | IN("merged","closed"));
+  $record.error == null and observation_terminal($record);
 # The single definition of a measured contribution: the board's freshness rule
 # and the poll's own reading of which contributions it owes an observation.
 def observation_fresh($record; $url; $now; $max_age):
