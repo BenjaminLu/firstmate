@@ -592,10 +592,8 @@ case "$fault:$*" in
   slow:'api repos/o/r/pulls/8/reviews?'*) sleep "$(cat "$FORGE/slow")" ;;
   down:*) printf 'HTTP 502\n' >&2; exit 1 ;;
   hang:'api graphql '*)
-    for hung in $(cat "$FORGE/hang" 2>/dev/null || printf 8); do
-      # Past the twelve-second per-call bound, so the read is killed by it.
-      case "$*" in *"-F n=$hung") sleep 14 ;; esac
-    done ;;
+    # Past the twelve-second per-call bound, so the read is killed by it.
+    case "$*" in *'-F n=8') sleep 14 ;; esac ;;
   head:'api graphql '*)
     # The branch tip moved under the snapshot: its rollup is not this head's.
     "$(dirname "$0")/gh-fixture" "$@" \

@@ -59,15 +59,15 @@
 # the queue is skipped, and because its records are left exactly as they were
 # found its checked_at never advances, so it keeps the head of the oldest-first
 # queue and blocks those same rows in every later poll too, until its
-# observation fits. Four calls at the measured 0.9-4.4 seconds each - five when
-# a commit carries more than one page of check contexts - fit the default
-# twenty-second budget, so at that latency this does not fire; the eight calls
-# a per-lane REST observation needed did not fit any budget in the documented
-# 1..25 range, and an operator could not configure around it. Every blocked row
-# ages out under the ordinary freshness rule below and the board shows it
-# unchecked; none is ever shown as freshly checked when it was not. What stops
-# this firing is fewer forge calls per observation, not a larger fleet-wide
-# FM_CHECK_TIMEOUT.
+# observation fits. Four calls fit the default twenty-second budget across the
+# whole measured 0.9-4.4 second range; the five a paged commit costs do not fit
+# it at the 4.4-second upper bound, so that commit is what this now fires on.
+# The eight calls a per-lane REST observation needed fit no budget in the
+# documented 1..25 range, and an operator could not configure around it. Every
+# blocked row ages out under the ordinary freshness rule below and the board
+# shows it unchecked; none is ever shown as freshly checked when it was not.
+# What stops this firing is fewer forge calls per observation, not a larger
+# fleet-wide FM_CHECK_TIMEOUT.
 # Oldest observations go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. When
