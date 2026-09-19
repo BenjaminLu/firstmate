@@ -32,7 +32,14 @@
 #
 # poll consumes fm-fleet-snapshot.sh --contribution-input, a local-only read,
 # and spends at most FM_CONTRIBUTIONS_BUDGET seconds on forge reads (default 20,
-# 1..25). Each gh call is bounded by the remaining budget and five seconds.
+# 1..25). Each gh call is bounded by the remaining budget and by
+# FM_CONTRIBUTIONS_CALL_BOUND seconds (default 12, 1..25). That default sits
+# well above the latency a real forge exhibits - GitHub measured 0.9 to 4.4
+# seconds per call on a slow repository - so a merely slow forge finishes its
+# read instead of being killed, while the total budget stays the real cap on
+# how long a poll runs. A call killed by that per-call bound rather than by the
+# budget is retried once, and only while the remaining budget still affords
+# another whole bounded call, so a retry can never overrun the budget.
 # Oldest observations go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. When
@@ -42,8 +49,16 @@
 # silence. FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # A URL whose last good observation is merged or closed is final: it is
 # never re-read, stays fresh, and a stale error beside it is cleared once.
-# A genuine failure prints its unavailable line only when it starts an episode
-# (no prior owner has an error); a successful read ends the episode.
+# A failed read leaves durable error evidence on every owner and records why it
+# failed. A call killed by the per-call bound is transient; every other failure,
+# a head change included, is a finding. A finding prints its unavailable line
+# when it starts an episode (no prior owner has an error). A transient failure
+# starts its episode silently and prints only once FM_CONTRIBUTIONS_FAILURE_GRACE
+# seconds (default: the freshness bound) have passed since the episode began, so
+# one slow read is not a wake while a forge that stays slow still reaches the
+# supervisor. Either kind prints at most one line per episode, and a successful
+# read ends the episode. A merged or closed record is never re-read at all, so a
+# transient failure cannot reach a settled contribution in the first place.
 # FM_CONTRIBUTIONS_NOW supplies an ISO UTC clock for tests, otherwise UTC now.
 # FM_CONTRIBUTIONS_READY_LABEL selects the equivalent triage label, default
 # ready-for-pr. Labels are matched case-insensitively and exactly.
@@ -85,6 +100,12 @@ BUDGET=${FM_CONTRIBUTIONS_BUDGET:-20}
 case "$MAX_AGE" in ''|*[!0-9]*) fail 'invalid freshness bound' ;; esac
 case "$BUDGET" in ''|*[!0-9]*) fail 'invalid poll budget' ;; esac
 [ "$BUDGET" -ge 1 ] && [ "$BUDGET" -le 25 ] || fail 'poll budget must be 1..25 seconds'
+CALL_BOUND=${FM_CONTRIBUTIONS_CALL_BOUND:-12}
+case "$CALL_BOUND" in ''|*[!0-9]*) fail 'invalid per-call forge bound' ;; esac
+[ "$CALL_BOUND" -ge 1 ] && [ "$CALL_BOUND" -le 25 ] || fail 'per-call forge bound must be 1..25 seconds'
+FAILURE_GRACE=${FM_CONTRIBUTIONS_FAILURE_GRACE:-$MAX_AGE}
+case "$FAILURE_GRACE" in ''|*[!0-9]*) fail 'invalid transient failure grace' ;; esac
+TRANSIENT=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-contributions.XXXXXX")
 LOCK_HELD=0
 cleanup() {
@@ -176,16 +197,32 @@ write_record() { # task record-json-file
 }
 
 forge() {
-  local remaining bounded=0 rc=0
-  remaining=$((DEADLINE - $(date +%s)))
-  # The budget, not the forge, refused this read.
-  [ "$remaining" -gt 0 ] || { BUDGET_EXHAUSTED=1; return 1; }
-  if [ "$remaining" -le 5 ]; then bounded=1; else remaining=5; fi
-  fm_run_timed "$remaining" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
-    gh "$@" 2> "$TMP/forge.err" || rc=$?
-  # A read killed at the budget's own deadline is budget exhaustion too.
-  [ "$rc" -ne 124 ] || [ "$bounded" -eq 0 ] || BUDGET_EXHAUSTED=1
-  return "$rc"
+  local remaining bounded rc attempt=0
+  while :; do
+    remaining=$((DEADLINE - $(date +%s)))
+    # The budget, not the forge, refused this read.
+    [ "$remaining" -gt 0 ] || { BUDGET_EXHAUSTED=1; return 1; }
+    bounded=0
+    if [ "$remaining" -le "$CALL_BOUND" ]; then bounded=1; else remaining=$CALL_BOUND; fi
+    rc=0
+    TRANSIENT=0
+    # Only a completed call's bytes reach the caller, so the bytes a killed
+    # attempt already wrote cannot be prefixed to what its retry returns.
+    fm_run_timed "$remaining" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
+      gh "$@" > "$TMP/forge.out" 2> "$TMP/forge.err" || rc=$?
+    [ "$rc" -ne 0 ] || { cat "$TMP/forge.out"; return 0; }
+    if [ "$rc" -eq 124 ]; then
+      # A read killed at the budget's own deadline is budget exhaustion too.
+      [ "$bounded" -eq 0 ] || { BUDGET_EXHAUSTED=1; return "$rc"; }
+      # Retry a bound-hit once, and only while a whole further call still fits.
+      if [ "$attempt" -eq 0 ] && [ "$((DEADLINE - $(date +%s)))" -gt "$CALL_BOUND" ]; then
+        attempt=1
+        continue
+      fi
+      TRANSIENT=1
+    fi
+    return "$rc"
+  done
 }
 
 observe() { # canonical GitHub URL -> normalized JSON
@@ -281,17 +318,18 @@ settle_final() { # canonical-url task... : copy the URL's final observation to e
       [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first' > "$TMP/old.json"
     if jq -e '. == null' "$TMP/old.json" >/dev/null; then
       jq -n --slurpfile final "$TMP/final.json" '
-        $final[0] + {error:null,pending:[],notified:[]}' > "$TMP/row.json"
+        $final[0] + {error:null,pending:[],notified:[]}
+        | del(.error_kind,.error_since,.error_escalated)' > "$TMP/row.json"
       write_record "$task" "$TMP/row.json"
     elif jq -e '.error != null' "$TMP/old.json" >/dev/null; then
-      jq '.error = null' "$TMP/old.json" > "$TMP/row.json"
+      jq '.error = null | del(.error_kind,.error_since,.error_escalated)' "$TMP/old.json" > "$TMP/row.json"
       write_record "$task" "$TMP/row.json"
     fi
   done
 }
 
 poll() {
-  local task url old kind error observed
+  local task url old kind error observed escalated error_kind
   local -a row
   acquire
   get_input
@@ -316,15 +354,29 @@ poll() {
       continue
     fi
     observed=0
+    TRANSIENT=0
     observe "$url" || observed=$?
     # An observation the budget cut short is unmeasured, not unavailable: keep
     # every owner's prior record so the URL is observed first next poll.
     [ "$BUDGET_EXHAUSTED" -eq 0 ] || break
-    # Wake once per failure episode: only when no owner has a prior error.
-    if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
-      'all($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
-        .error == null)' "${row[@]:1}" >/dev/null; then
+    escalated=false
+    error_kind=failure
+    [ "$TRANSIENT" -eq 0 ] || error_kind=transient
+    # Wake at most once per failure episode, across every owner of the URL: a
+    # finding opens its episode loudly, while a transient failure waits out the
+    # grace so one slow read never becomes a captain-facing wake.
+    if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" \
+      --argjson now "$EPOCH" --argjson grace "$FAILURE_GRACE" --argjson transient "$TRANSIENT" --args '
+      [$ARGS.positional[] as $task
+        | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first] as $owners
+      | if any($owners[]; .error_escalated == true) then false
+        elif $transient == 0 then true
+        else ([$owners[] | select(.error != null) | .error_since // .checked_at
+               | select(. != null) | fromdateiso8601] | min) as $since
+          | $since != null and ($now - $since) >= $grace
+        end' "${row[@]:1}" >/dev/null; then
       printf 'contributions: observation unavailable for %s\n' "$url"
+      escalated=true
     fi
     case "$url" in */issues/*) kind=issue ;; *) kind="pr" ;; esac
     for task in "${row[@]:1}"; do
@@ -342,10 +394,17 @@ poll() {
           | $old + {checked_at:$now,error:null,
             observation:($o + {absent_checks:((($old.observation.absent_checks // []) + [($old.observation.checks // [])[] | .name]) - [$o.checks[].name] | unique)}),
             seen:($events | map(.token)),
-            pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}' > "$TMP/row.json"
+            pending:(($old.pending // []) + [$events[] | select(.token as $t | ($old.seen // [] | index($t)) == null)] | unique_by(.token))}
+          | del(.error_kind,.error_since,.error_escalated)' > "$TMP/row.json"
       else
         error='forge observation unavailable or changed during read'
-        jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
+        # An owner joining an episode already under way inherits its start, so a
+        # late owner can neither restart nor extend the grace.
+        jq --arg now "$NOW" --arg error "$error" --arg kind "$error_kind" --argjson escalated "$escalated" '
+          . as $old
+          | $old + {checked_at:$now,error:$error,error_kind:$kind,
+            error_since:(if $old.error == null then $now else ($old.error_since // $old.checked_at // $now) end),
+            error_escalated:(($old.error_escalated == true) or $escalated)}' "$old" > "$TMP/row.json"
       fi
       write_record "$task" "$TMP/row.json"
       publish_pending "$task" "$url" "$TMP/row.json"
