@@ -65,12 +65,21 @@ fm_control_harnesses() {
   printf '%s\n' claude codex opencode pi pi-signed grok kimi cursor gemini muse rovo omp agy
 }
 
+# Drain the whole list rather than returning on the first match. Returning
+# early closes the process-substitution pipe while the writer is still in it,
+# and where SIGPIPE is ignored - some CI runners ignore it - the writer's
+# printf reports "write error: Broken pipe" on stderr instead of dying
+# silently. That text then contaminates every caller that captures stderr,
+# which is how this surfaced: a test comparing an exact error string saw the
+# broken-pipe line prepended to it, intermittently and only under load.
 fm_control_harness_supported() {  # <harness>
-  local harness
+  local harness found=1
   while read -r harness; do
-    [ "$harness" = "${1-}" ] && return 0
+    if [ "$harness" = "${1-}" ]; then
+      found=0
+    fi
   done < <(fm_control_harnesses)
-  return 1
+  return "$found"
 }
 
 # The verified adapter a RECORDED harness value belongs to. Every table below

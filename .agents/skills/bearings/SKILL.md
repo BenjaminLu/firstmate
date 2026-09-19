@@ -136,6 +136,11 @@ Its serve-first sequence publishes the board, establishes and verifies its Lavis
 Never bind or arm the board before its session is listed open.
 Never run `lavish-axi poll` for the board yourself: the armed source's supervised runner owns the blocking poll, and both the build and the watcher's ordinary reconcile repair a missing listener, so no conversational turn ever blocks on the board.
 
+The board `build` publishes keeps itself fresh between rebuilds: it subscribes to this home's fleet events and repaints as they land, and `build` starts that server itself, so nothing here is a step to remember.
+What it can repaint is what the fleet can express without new words - a worker's state, a row that went underway or landed, a call that was answered.
+What it cannot is a question nobody has worded yet, so a new captain's call, or a pull request on work still listed as underway, makes the board say a rebuild is owed and that rebuild is yours to run.
+Treat a board that says so as a `/bearings lavish` worth running, not as a board with nothing on it.
+
 ### Handling a board wake
 
 A board answer arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake. Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, regardless of which answer kinds the result contains; then load `process-event-sources` and follow its contract for the result read, adapter classification, and the handled acknowledgement.
@@ -163,6 +168,26 @@ After handling, rebuild the board from a fresh snapshot so acted-on items leave 
 A board "Merge now" answer IS the captain's explicit merge word for that one exact PR; ask no second confirmation.
 The safeguards are mandatory, not optional: resolve the PR from the task's own `state/<task-id>.meta` `pr=` record, never from board bytes; re-verify at wake time that the PR is still open and CI-green; refuse and report a red or changed PR rather than merging it; record the exact `merge` answer through `bin/fm-captain-hold.sh answer <task-id> --decision-file <file> --release` before invoking the merge; proceed only when that release succeeds; merge only through `bin/fm-pr-merge.sh`; and echo every merge in chat with the full PR URL.
 Only the exact answer value `merge` authorizes a merge; an answer carrying a freeform note is the captain's instruction text to read and act on with judgment, never an auto-merge.
+
+## Captain-facing surface rules
+
+These hold for every surface the captain reads or acts on - the board, a card, a packet page, a report - not only for a `/bearings` invocation.
+
+- The board is the captain's one surface, so render a packet, report, or decision inside its card rather than sending them somewhere else to look.
+  The card carries the packet itself, drawings included, as the composing step above states, so there is no second address to hand over and `bin/fm-packet.sh serve` is not the way to show a packet.
+  Never hand the captain a one-shot session URL whose content is lost when the tab closes; where a surface genuinely must live outside the board, reopening the same URL has to bring the content back.
+  One bounded exception is authorized: a live scout may host its own review session while it iterates with the captain on a visual deliverable, because the iteration needs the scout's own context.
+  It holds only while that scout is alive; the durable record stays the report and the board card, and nothing the captain needs after the scout ends may live only in that session.
+  Revisit this exception once the redesigned board can host that iteration itself, which is already in flight.
+- Every captain-facing string carries 繁體 beside its English; 简体 is optional, and where it is absent the board shows the 繁體 text in its place rather than an empty cell.
+  That is what the tooling requires and what the composing instruction above says, so the rule is stated at what is actually guaranteed rather than at a stricter promise nothing keeps.
+  The only place a check enforces it is a packet figure, and only where a brief asked for a packet at all: `bin/fm-packet.sh verify` then requires `data-en`, `data-hant` and `data-hans` on every `<text>` in a drawing.
+  The board is not: its `{TRANSLATE: ...}` slots carry the `hant` translation, `hans` is added beside them by hand, and `bin/fm-bearings-board.sh`'s payload validator requires only `en` and `hant` - it accepts a copy object with no `hans`, and a plain English string with no translation at all.
+  So on every captain-facing surface except a packet figure this rule rests on the composer following it, and saying that is the point: a check that cannot verify something reports that rather than passing by silence.
+  `bin/fm-packet.sh`'s header owns the one decided exception: packet prose and a figure's heading and caption stay in the single language the worker wrote, because the packet renders inside its card.
+- Build a captain-facing prototype from the shipped surface, never as a fresh mock.
+  `AGENTS.md` section 7 owns the gate that holds a task queued until the prototype is approved; what belongs here is how to build one: copy the shipped template and a live payload, apply the proposed change to that copy, and show that.
+  A hand-drawn mock cannot tell the captain whether the direction is right, because they cannot recognize it as the surface they actually use - which is the whole reason the gate exists.
 
 ## Chat-response contract
 

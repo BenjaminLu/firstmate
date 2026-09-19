@@ -104,15 +104,18 @@ fm_quota_single_provider_table() {
     'muse meta'
 }
 
+# Drains its table for the same reason fm_control_harness_supported does; see
+# that function in bin/fm-control-lib.sh for the broken-pipe mechanism.
 fm_quota_single_provider_for_harness() {
-  local harness provider
+  local harness provider match="" found=1
   while read -r harness provider; do
-    if [ "$harness" = "$1" ]; then
-      printf '%s\n' "$provider"
-      return 0
+    if [ "$harness" = "$1" ] && [ "$found" -ne 0 ]; then
+      match=$provider
+      found=0
     fi
   done < <(fm_quota_single_provider_table)
-  return 1
+  [ "$found" -eq 0 ] || return 1
+  printf '%s\n' "$match"
 }
 
 fm_quota_provider_for_harness() {
