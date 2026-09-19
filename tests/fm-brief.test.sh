@@ -418,6 +418,8 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     "no-mistakes DOD lost the close-the-whole-class practice"
   assert_grep "detect it at least two independent ways" "$brief" \
     "no-mistakes DOD lost the two-detector requirement that keeps a sweep from reporting clean"
+  assert_grep "re-run that sweep over your own fix's diff before you answer the round" "$brief" \
+    "no-mistakes DOD lost the re-sweep requirement that catches a site the fix itself creates"
   assert_grep "name any site you deliberately leave unfixed" "$brief" \
     "no-mistakes DOD lost the stated-split requirement"
   assert_grep "Your fix is the next candidate" "$brief" \
