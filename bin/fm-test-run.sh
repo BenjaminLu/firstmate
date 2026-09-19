@@ -1625,6 +1625,14 @@ families_for_changed_path() {
           || printf '%s\n' "__unmapped__:$path"
       fi
       ;;
+    tests/assets/*)
+      # A shared test asset belongs to whichever suites name it, found by the
+      # same reference scan the shared helpers use. Kept above the shared
+      # top-level arm below, whose globs span / and would otherwise swallow an
+      # asset whose name happens to end in -helpers.sh or -fixture.sh.
+      families_for_test_reference "$(basename "$path")" \
+        || printf '%s\n' "__unmapped__:$path"
+      ;;
     tests/lib.sh|tests/*-helpers.sh|tests/fixtures.sh|tests/*-fixture.sh)
       # Shared top-level test files, selected by the suites that name them.
       # Must stay below the tests/fixtures/*/* arm: a case glob's * spans /, so

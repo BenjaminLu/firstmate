@@ -103,6 +103,10 @@ When this home cannot read its own backlog at all, compose suppresses every merg
 A hold whose task id is not a routable key gets the same treatment: no card, and one non-dispatchable warning row naming it, because `bin/fm-captain-hold.sh` could not address an answer to it.
 Two merge-ready PRs claiming the same task get the same treatment too: no merge card, and one warning row naming both PRs, because a merge answer keyed to that task resolves to only one of them.
 Pass the snapshot's live-PR opt-in to the snapshot command yourself when the captain asked for PRs; compose reads a fresh snapshot without it unless you hand it one with `--snapshot`.
+The board then refreshes itself on fleet events with no model in the loop, so write each card's copy ONCE.
+A captain call the board has already shown carries a stored card (`bin/fm-captain-hold.sh card <task-id>`), written by whatever `build` last published; a task held AGAIN after its last hold was resolved drops that card, because its question is not the new call's question; compose reuses a stored card as-is, so only a captain hold with no stored card still needs copy written - and where that task has a verified packet the skeleton already seeds the card from it.
+Everything below is about that one writing.
+
 Then apply your judgment to the skeleton and nothing else:
 
 - Fill every `{TRANSLATE: <english>}` slot with the 繁體 translation of the English beside it, and add `hans` (简体) alongside each `hant` you write, so the board's language switch has all three; never re-type or reword the English the skeleton carried over.
@@ -136,6 +140,17 @@ Its serve-first sequence publishes the board, establishes and verifies its Lavis
 Never bind or arm the board before its session is listed open.
 Never run `lavish-axi poll` for the board yourself: the armed source's supervised runner owns the blocking poll, and both the build and the watcher's ordinary reconcile repair a missing listener, so no conversational turn ever blocks on the board.
 
+### The board stays fresh by itself
+
+After a build, the board republishes on every fleet event this home already republishes its structured summary on - a locked session start, a watcher-observed status change, a spawn, a teardown, and the watcher's recurring cadence - through `bin/fm-bearings-board.sh refresh`, detached and best effort.
+That refresh recomposes deterministically and injects in place: it never re-establishes, rebinds, or re-arms anything, so the session URL, the armed source, and the answer binding all survive it, and the page follows the fleet within a supervision poll whenever the refresh completes. One that runs out of its deadline publishes nothing and leaves the previous page, whose own timestamp then says how old it is.
+Your build and that refresh take the same home-local publication lock, so a fleet event can never land on top of the board you are publishing; a build waits for a refresh already under way rather than racing it.
+Do not run it yourself as part of a digest, and do not treat a refreshed board as a rebuild: a captain hold whose copy has never been written shows as a degraded card (its durable title, the held row's own snapshot summary as the question, reconcile and free-form answers) until the next `/bearings lavish` writes that copy once.
+A refresh also states no `charted_more` or `charted_warning_more` at all - only you can divide that one omitted total by kind - and carries the omission as a single warning row naming the total instead.
+It never discovers pull requests - that is the opt-in you pass - so it carries forward the merge cards your last build published instead of dropping the captain's Merge now control. A stored merge card retires only on proof its pull request landed - the PR or its task reaching the payload's landed rows - never because a PR view came back without it, since a failed, capped or narrowed query returns the same nothing as a PR that stopped being merge-ready. A card whose PR was closed unmerged therefore lingers until a merge answer verifies it and retires it (below).
+Each Underway row also carries its own progress - the phase, the validation step it is on with the steps already passed, how long that step has run, its last activity and age, and the row's own refreshed-at time - from `bin/fm-task-progress.sh`, which reads structured state only.
+A refresh also takes no language of its own: it reads the language back out of the board page it is republishing, so the board never moves off the language you built it in.
+
 ### Handling a board wake
 
 A board answer arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake. Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, regardless of which answer kinds the result contains; then load `process-event-sources` and follow its contract for the result read, adapter classification, and the handled acknowledgement.
@@ -156,7 +171,7 @@ After handling, rebuild the board from a fresh snapshot so acted-on items leave 
 ### The merge-click ruling (captain-decided)
 
 A board "Merge now" answer IS the captain's explicit merge word for that one exact PR; ask no second confirmation.
-The safeguards are mandatory, not optional: resolve the PR from the task's own `state/<task-id>.meta` `pr=` record, never from board bytes; re-verify at wake time that the PR is still open and CI-green; refuse and report a red or changed PR rather than merging it; record the exact `merge` answer through `bin/fm-captain-hold.sh answer <task-id> --decision-file <file> --release` before invoking the merge; proceed only when that release succeeds; merge only through `bin/fm-pr-merge.sh`; and echo every merge in chat with the full PR URL.
+The safeguards are mandatory, not optional: resolve the PR from the task's own `state/<task-id>.meta` `pr=` record, never from board bytes; re-verify at wake time that the PR is still open and CI-green; refuse and report a red or changed PR rather than merging it, and when that verification finds the PR TERMINAL rather than open - merged elsewhere, or closed unmerged - retire its card with `bin/fm-captain-hold.sh card merge.<task-id> --retire` so the control the captain just pressed does not come back on the next refresh, while a verification that could not complete retires nothing; record the exact `merge` answer through `bin/fm-captain-hold.sh answer <task-id> --decision-file <file> --release` before invoking the merge; proceed only when that release succeeds; merge only through `bin/fm-pr-merge.sh`; and echo every merge in chat with the full PR URL.
 Only the exact answer value `merge` authorizes a merge; an answer carrying a freeform note is the captain's instruction text to read and act on with judgment, never an auto-merge.
 
 ## Chat-response contract

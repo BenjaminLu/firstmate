@@ -626,6 +626,139 @@ SH
   pass "captain-hold mutations address the beads backend without a markdown override"
 }
 
+# --- the stored board card --------------------------------------------------
+# The captain reads a call as one board card, and the board republishes on
+# fleet events with no model in the loop, so the card's copy has to be durable
+# rather than re-composed prose every time.
+
+test_a_stored_board_card_round_trips_and_survives_restating_the_same_hold() {
+  local home id first stored again
+  home=$(make_home card-roundtrip)
+  id=written-call
+  tasks_in "$home" add "$id" "Route choice" --kind captain --repo sample >/dev/null \
+    || fail "could not create the held task"
+  run_captain "$home" hold "$id" --reason "captain must pick the route" >/dev/null \
+    || fail "holding the task failed"
+  # `hold` never writes a card; the board's build is what stores one.
+  run_captain "$home" card "$id" >/dev/null 2>&1 \
+    && fail "holding a task stored a board card"
+
+  first="$home/composed.json"
+  jq -n --arg id "$id" '{key:$id, type:"decision", repo:"sample",
+    title:{en:"Route choice", hant:"路線選擇"},
+    decide:{en:"Which route ships?", hant:"要走哪條路線？"},
+    options:[{value:"north", label:{en:"North", hant:"北"}},
+             {value:"south", label:{en:"South", hant:"南"}}],
+    allow_freeform:true}' > "$first"
+  run_captain "$home" card "$id" --store "$first" >/dev/null \
+    || fail "storing a composed card failed"
+  stored=$(run_captain "$home" card "$id") || fail "the stored card could not be read back"
+  printf '%s' "$stored" | jq -e '.title.hant == "路線選擇" and (.options | length) == 2' >/dev/null \
+    || fail "the stored card did not round-trip: $stored"
+
+  # Re-stating a hold that is STILL ACTIVE is the same call, so the copy the
+  # captain has already been shown must survive it.
+  run_captain "$home" hold "$id" --reason "captain must still pick the route" >/dev/null \
+    || fail "re-stating the active hold failed"
+  again=$(run_captain "$home" card "$id") || fail "an unchanged hold lost its stored card"
+  [ "$again" = "$stored" ] || fail "re-stating an active hold rewrote its card: $again"
+  pass "a stored board card round-trips and survives re-stating the same hold"
+}
+
+# A merge card is stored under its own `merge.<task-id>` key and no hold ever
+# covers it, so `hold` cannot retire it and landing is the only proof the
+# board itself can see. A pull request closed WITHOUT merging never reaches a
+# landed row, so its Merge now control would come back on every refresh for
+# ever - a button that refuses every time it is pressed. The second proof is
+# the firstmate verification the merge answer already performs, and `--retire`
+# is how it is recorded. Absence is still never proof: only this explicit call
+# drops the card.
+test_a_merge_card_retires_on_an_explicit_verification_not_on_absence() {
+  local home key card out
+  home=$(make_home merge-card-retire)
+  key=merge.ship-task
+  card="$home/merge-card.json"
+  jq -n --arg key "$key" '{key:$key, type:"merge", repo:"sample",
+    title:"Merge: ship the thing", risk:"low",
+    pr_url:"https://github.com/example/sample/pull/9",
+    options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}],
+    allow_freeform:true}' > "$card"
+  run_captain "$home" card "$key" --store "$card" >/dev/null \
+    || fail "storing the merge card failed"
+  run_captain "$home" card "$key" >/dev/null \
+    || fail "the stored merge card could not be read back"
+
+  out=$(run_captain "$home" card "$key" --retire) \
+    || fail "retiring the merge card failed: $out"
+  assert_contains "$out" "retired:" "retiring did not name the card it dropped: $out"
+  run_captain "$home" card "$key" >/dev/null 2>&1 \
+    && fail "the merge card survived an explicit retirement"
+
+  # Retiring one that is already gone is not an error: the verification proved
+  # the same thing either way, and a merge answer must not fail on a card a
+  # landed row already dropped.
+  run_captain "$home" card "$key" --retire >/dev/null \
+    || fail "retiring an already-retired card failed"
+  pass "a merge card retires on an explicit verification and nothing else drops it"
+}
+
+test_holding_a_task_again_retires_the_previous_holds_card() {
+  local home id stored out rc=0
+  home=$(make_home card-rehold)
+  id=rehold-call
+  tasks_in "$home" add "$id" "Rollout order" --kind captain --repo sample >/dev/null \
+    || fail "could not create the held task"
+  run_captain "$home" hold "$id" --reason "captain must pick the rollout order" >/dev/null \
+    || fail "holding the task failed"
+  # The copy the board published for THAT hold, exactly as a build stores it.
+  jq -n --arg id "$id" '{key:$id, type:"decision", repo:"sample",
+    title:{en:"Rollout order", hant:"\u4e0a\u7dda\u9806\u5e8f"},
+    decide:{en:"Which rollout order ships first?", hant:"\u5148\u4e0a\u54ea\u4e00\u7a2e\u9806\u5e8f\uff1f"},
+    options:[{value:"canary", label:{en:"Canary first", hant:"\u5148\u91d1\u7d72\u96c0"}},
+             {value:"all", label:{en:"All at once", hant:"\u4e00\u6b21\u5168\u4e0a"}}],
+    allow_freeform:true}' > "$home/composed.json"
+  run_captain "$home" card "$id" --store "$home/composed.json" >/dev/null \
+    || fail "storing the composed card failed"
+  stored=$(run_captain "$home" card "$id") || fail "the stored card could not be read back"
+  printf '%s' "$stored" | jq -e '.decide.en == "Which rollout order ships first?"' >/dev/null \
+    || fail "the first hold's card did not round-trip: $stored"
+
+  # The call is answered and released, then the task is held again. That
+  # answer resolved the FIRST hold; the second hold's answer routes to the
+  # second hold, so the first hold's question must no longer be on the board.
+  printf 'Ship the canary first.\n' > "$home/answer.txt"
+  run_captain "$home" answer "$id" --decision-file "$home/answer.txt" --release >/dev/null \
+    || fail "answering the first call failed"
+  run_captain "$home" hold "$id" --reason "captain must pick the region" >/dev/null \
+    || fail "re-holding the task failed"
+  set +e
+  out=$(run_captain "$home" card "$id" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] \
+    || fail "the re-held call still carries the answered hold's question: $out"
+  [ ! -e "$home/data/$id/board-card.json" ] \
+    || fail "the previous hold's stored card survived the re-hold"
+  pass "a task held again retires the card its answered hold was written for"
+}
+
+test_a_stored_card_must_address_the_task_that_holds_it() {
+  local home id out rc=0
+  home=$(make_home card-key)
+  id=keyed-call
+  tasks_in "$home" add "$id" "Keyed" --kind captain --repo sample >/dev/null \
+    || fail "could not create the held task"
+  jq -n '{key:"some-other-task", type:"decision", repo:"sample", title:"Wrong",
+    options:[], allow_freeform:true}' > "$home/wrong.json"
+  set +e
+  out=$(run_captain "$home" card "$id" --store "$home/wrong.json" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a card keyed to another task was stored anyway"
+  assert_contains "$out" "$id" "the refusal did not name the task it must address: $out"
+  pass "a stored card keyed to another task is refused"
+}
+
 # Reproduces the loss exactly with privacy-safe synthetic names: the investigation
 # and visual review have ended, the only genuine unresolved captain call is report
 # prose, no held backlog item or open status exists, and the authoritative
@@ -4042,3 +4175,7 @@ test_complete_accepts_a_migrated_inventory_on_beads
 test_verify_names_the_unresolvable_legacy_id_once
 test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
 test_captain_hold_mutations_address_the_beads_backend
+test_a_stored_board_card_round_trips_and_survives_restating_the_same_hold
+test_holding_a_task_again_retires_the_previous_holds_card
+test_a_stored_card_must_address_the_task_that_holds_it
+test_a_merge_card_retires_on_an_explicit_verification_not_on_absence

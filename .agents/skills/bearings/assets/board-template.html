@@ -264,6 +264,31 @@ body {
 }
 .bb-empty { padding: 18px; font-size: var(--fs-sm); color: var(--text-muted); }
 
+/* ---- Underway progress ---- */
+.bb-row--stacked { align-items: flex-start; }
+.bb-prog { margin-top: 7px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bb-prog__ladder { display: flex; flex-wrap: wrap; gap: 4px; }
+.bb-step {
+  font-size: var(--fs-2xs); font-weight: 700; line-height: 1.2; white-space: nowrap;
+  border: 1.5px solid var(--border-default); border-radius: var(--radius-pill); padding: 2px 8px;
+  color: var(--text-muted); background: var(--surface-card);
+}
+.bb-step--done { color: var(--status-online); border-color: var(--sea-200); background: var(--status-online-soft); }
+.bb-step--now { color: var(--rust-500); border-color: var(--rust-400); }
+.bb-step--bad { color: var(--status-danger); border-color: var(--status-danger); }
+.bb-step--skip { color: var(--text-faint); border-style: dashed; }
+.bb-step--ask { color: var(--status-warn); border-color: var(--status-warn); background: var(--status-warn-soft); }
+.bb-step--wait { color: var(--text-faint); }
+.bb-step--here { box-shadow: var(--focus-ring); }
+.bb-prog__meta { font-size: var(--fs-2xs); color: var(--text-muted); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; }
+.bb-prog__meta--quiet { color: var(--status-warn); }
+.bb-prog__activity { font-size: var(--fs-2xs); color: var(--text-muted); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-prog__activity--quiet { color: var(--status-warn); }
+.bb-prog__detail { font-size: var(--fs-2xs); color: var(--text-faint); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---- Charted Next dispatch picker ---- */
 /* margin:0 kills the UA default checkbox margin so picker rows and spacer rows
    share one text left edge */
@@ -517,6 +542,15 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "pick queued work to dispatch", pick_n: "{n} picked for dispatch",
       pick_limit: "Selection limit reached (512 bytes maximum). ", pick_too_long: "Selection is too long to queue (512 bytes maximum). ",
       dispatch: "Queue dispatch order",
+      risk_unassessed: "unassessed",
+      p_step: "step", p_for: "for", p_activity: "last", p_quiet: "quiet", p_asof: "as of",
+      p_working: "working", p_parked: "waiting on a decision", p_done: "done",
+      p_blocked: "blocked", p_paused: "paused", p_failed: "failed", p_unknown: "unknown",
+      s_intent: "intent", s_rebase: "rebase", s_review: "review", s_test: "tests",
+      s_document: "docs", s_lint: "lint", s_push: "push", s_pr: "pull request", s_ci: "CI",
+      st_completed: "passed", st_running: "running", st_fixing: "fixing",
+      st_failed: "failed", st_pending: "not started", st_skipped: "skipped",
+      st_awaiting_approval: "waiting on you",
       err_title: "This board could not load", err_ask: " - ask firstmate to rebuild the board."
     },
     hant: {
@@ -545,6 +579,15 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "勾選排隊中的工作來派工", pick_n: "已選 {n} 項派工",
       pick_limit: "已達選取上限（512 bytes）。", pick_too_long: "選取內容太長，無法排入（上限 512 bytes）。",
       dispatch: "送出派工順序",
+      risk_unassessed: "未評估",
+      p_step: "步驟", p_for: "已跑", p_activity: "最後動靜", p_quiet: "沒動靜", p_asof: "更新於",
+      p_working: "進行中", p_parked: "等你決定", p_done: "完成",
+      p_blocked: "卡住", p_paused: "暫停", p_failed: "失敗", p_unknown: "不明",
+      s_intent: "意圖", s_rebase: "rebase", s_review: "審查", s_test: "測試",
+      s_document: "文件", s_lint: "lint", s_push: "推送", s_pr: "PR", s_ci: "CI",
+      st_completed: "已過", st_running: "執行中", st_fixing: "修正中",
+      st_failed: "失敗", st_pending: "未開始", st_skipped: "略過",
+      st_awaiting_approval: "等你批准",
       err_title: "這個看板無法載入", err_ask: "，請 firstmate 重建看板。"
     },
     hans: {
@@ -573,6 +616,15 @@ __FM_BEARINGS_BOARD_DATA__
       pick_none: "勾选排队中的工作来派工", pick_n: "已选 {n} 项派工",
       pick_limit: "已达选取上限（512 bytes）。", pick_too_long: "选取内容太长，无法排入（上限 512 bytes）。",
       dispatch: "提交派工顺序",
+      risk_unassessed: "未评估",
+      p_step: "步骤", p_for: "已跑", p_activity: "最后动静", p_quiet: "没动静", p_asof: "更新于",
+      p_working: "进行中", p_parked: "等你决定", p_done: "完成",
+      p_blocked: "卡住", p_paused: "暂停", p_failed: "失败", p_unknown: "不明",
+      s_intent: "意图", s_rebase: "rebase", s_review: "审查", s_test: "测试",
+      s_document: "文档", s_lint: "lint", s_push: "推送", s_pr: "PR", s_ci: "CI",
+      st_completed: "已过", st_running: "执行中", st_fixing: "修正中",
+      st_failed: "失败", st_pending: "未开始", st_skipped: "略过",
+      st_awaiting_approval: "等你批准",
       err_title: "这个看板无法加载", err_ask: "，请 firstmate 重建看板。"
     }
   };
@@ -666,6 +718,57 @@ __FM_BEARINGS_BOARD_DATA__
     a.href = url; a.target = "_blank"; a.rel = "noopener"; a.title = url;
     a.setAttribute("data-lavish-action", "open-link");
     return a;
+  }
+  /* ---- Underway progress -------------------------------------------------
+     The payload carries the pipeline's own machine vocabulary (step ids,
+     status words, duration words), never translated prose, so the ladder is
+     rendered here in whichever language the captain picked. A word this
+     template has no label for renders as the pipeline wrote it rather than
+     disappearing. */
+  function vocab(prefix, word) {
+    if (!word) return "";
+    var key = prefix + String(word).replace(/[^A-Za-z0-9_]/g, "_");
+    var out = t(key);
+    return out === key ? String(word) : out;
+  }
+  var STEP_TONE = {
+    completed: "bb-step--done", running: "bb-step--now", fixing: "bb-step--now",
+    failed: "bb-step--bad", skipped: "bb-step--skip",
+    awaiting_approval: "bb-step--ask"
+  };
+  function progressBlock(p) {
+    var box = el("div", "bb-prog");
+    if (p.steps && p.steps.length) {
+      var ladder = el("div", "bb-prog__ladder");
+      p.steps.forEach(function (s) {
+        var cls = "bb-step " + (STEP_TONE[s.status] || "bb-step--wait");
+        if (p.step && s.step === p.step) cls += " bb-step--here";
+        var chip = el("span", cls, vocab("s_", s.step));
+        chip.title = vocab("s_", s.step) + " · " + vocab("st_", s.status);
+        ladder.appendChild(chip);
+      });
+      box.appendChild(ladder);
+    }
+    var bits = [vocab("p_", p.state)];
+    if (p.step) bits.push(t("p_step") + " " + vocab("s_", p.step));
+    if (p.active_for) bits.push(t("p_for") + " " + p.active_for);
+    if (!p.last_activity && p.quiet) bits.push(t("p_quiet"));
+    if (p.activity) bits.push(p.activity);
+    if (p.refreshed) bits.push(t("p_asof") + " " + p.refreshed);
+    var meta = el("div", "bb-prog__meta", bits.join(" · "));
+    if (p.quiet) meta.className += " bb-prog__meta--quiet";
+    box.appendChild(meta);
+    /* The pipeline's last_activity column carries the whole message - the age
+       and the line it is reporting - so it gets its own truncating line
+       instead of a token inside the compact timing strip. */
+    if (p.last_activity) {
+      var act = el("div", "bb-prog__activity",
+        t("p_activity") + " " + p.last_activity + (p.quiet ? " (" + t("p_quiet") + ")" : ""));
+      if (p.quiet) act.className += " bb-prog__activity--quiet";
+      box.appendChild(act);
+    }
+    if (p.detail) box.appendChild(el("div", "bb-prog__detail", p.detail));
+    return box;
   }
   function clear(n) { n.textContent = ""; }
   function setText(id, text) { document.getElementById(id).textContent = text; }
@@ -1237,7 +1340,7 @@ __FM_BEARINGS_BOARD_DATA__
     clear(uw);
     if (!data.underway.length) uw.appendChild(el("div", "bb-empty", t("empty_underway")));
     data.underway.forEach(function (x) {
-      var row = el("div", "bb-row");
+      var row = el("div", "bb-row bb-row--stacked");
       row.appendChild(badge(x.state === "working" ? "online" : "info", x.state));
       var main = el("div", "bb-row__main");
       /* the snapshot's durable name-or-id label leads the row so a scan says
@@ -1246,6 +1349,9 @@ __FM_BEARINGS_BOARD_DATA__
       /* captain-facing rows name the repo; the internal task id shows only when
          no repo is known */
       main.appendChild(el("div", "bb-row__sub", pick(x.doing) + " · " + x.kind + " · " + (x.repo || x.id)));
+      /* how far along this worker actually is, from its own structured
+         progress projection: the step ladder, then the timing line */
+      if (x.progress) main.appendChild(progressBlock(x.progress));
       row.appendChild(main);
       uw.appendChild(row);
     });

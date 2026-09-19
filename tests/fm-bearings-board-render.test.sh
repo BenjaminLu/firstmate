@@ -311,6 +311,201 @@ test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order() 
   pass "charted rows with no filed date follow the dated rows in payload order"
 }
 
+
+test_an_underway_row_renders_its_step_ladder_trilingually() {
+  local home out payload
+  home=$(make_home progress-ladder)
+  payload=$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"en", captains_call:[], landed:[], charted:[],
+    underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
+      name:"Ship the thing", doing:"validating",
+      progress:{state:"working", detail:"validating (fixing)", step:"review",
+        steps:[{step:"intent",status:"completed"},{step:"review",status:"fixing"},
+               {step:"test",status:"pending"}],
+        active_for:"12m3s", last_activity:"31m2s", quiet:true,
+        activity:"auto-fix 1/3", refreshed:"2026-09-19T00:00:00Z"}}]}')
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the fleet: $out"
+  printf '%s' "$out" | jq -e '
+    (.underway | length) == 1
+    and (.underway[0].progress
+      | ([.steps[] | .text] == ["intent", "review", "tests"])
+        and (.steps[0].cls | test("bb-step--done"))
+        and (.steps[1].cls | test("bb-step--now")) and (.steps[1].cls | test("bb-step--here"))
+        and (.steps[2].cls | test("bb-step--wait"))
+        and .quiet == true
+        and (.meta | test("working")) and (.meta | test("step review"))
+        and (.meta | test("for 12m3s"))
+        and (.activity | test("last 31m2s"))
+        and (.meta | test("auto-fix 1/3"))
+        and (.meta | test("as of 2026-09-19T00:00:00Z"))
+        and (.detail == "validating (fixing)"))
+  ' >/dev/null || fail "the English step ladder did not render: $out"
+
+  home=$(make_home progress-ladder-hant)
+  out=$(render_payload "$home" "$(printf '%s' "$payload" | jq '.lang = "hant"')")
+  printf '%s' "$out" | jq -e '
+    (.underway[0].progress
+      | ([.steps[] | .text] == ["意圖", "審查", "測試"])
+        and (.meta | test("進行中")) and (.meta | test("步驟 審查"))
+        and (.meta | test("已跑 12m3s")) and (.activity | test("沒動靜"))
+        and (.meta | test("更新於")))
+  ' >/dev/null || fail "the step ladder did not switch language: $out"
+  pass "an Underway row renders its step ladder, timing, and freshness trilingually"
+}
+
+# The pipeline's real step ids, recorded from the CLI itself in
+# tests/captures/no-mistakes-v1.70.1/*.toon and read onto the row by
+# bin/fm-task-progress.sh. A ladder chip must carry this template's own label
+# for every one of them; a chip that reads back as the raw step id means the
+# label map is keyed on a name the pipeline never emits.
+PIPELINE_STEPS='["intent","rebase","review","test","document","lint","push","pr","ci"]'
+# Every status word the same captures record on a step, plus `fixing`, which
+# the review step reports while it is applying its own findings. A chip whose
+# tooltip reads back as one of these raw words has no label for it.
+PIPELINE_STATUSES='["completed","running","fixing","failed","pending","skipped","awaiting_approval","completed","completed"]'
+
+test_every_pipeline_step_renders_as_a_label_in_every_language() {
+  local home out payload
+  payload=$(jq -n --argjson steps "$PIPELINE_STEPS" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"en", captains_call:[], landed:[], charted:[],
+    underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
+      name:"Ship the thing", doing:"validating",
+      progress:{state:"working", detail:"validating", step:"document",
+        steps:[$steps[] | {step:., status:"pending"}], quiet:false,
+        refreshed:"2026-09-19T00:00:00Z"}}]}')
+
+  home=$(make_home steps-en)
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '
+    [.underway[0].progress.steps[] | .text]
+      == ["intent", "rebase", "review", "tests", "docs", "lint", "push", "pull request", "CI"]
+  ' >/dev/null || fail "the English ladder did not label every pipeline step: $out"
+
+  home=$(make_home steps-hant)
+  out=$(render_payload "$home" "$(printf '%s' "$payload" | jq '.lang = "hant"')")
+  printf '%s' "$out" | jq -e '
+    ([.underway[0].progress.steps[] | .text]
+      == ["意圖", "rebase", "審查", "測試", "文件", "lint", "推送", "PR", "CI"])
+    and (.underway[0].progress.meta | test("步驟 文件"))
+  ' >/dev/null || fail "the 繁體 ladder fell back to a raw pipeline step word: $out"
+
+  home=$(make_home steps-hans)
+  out=$(render_payload "$home" "$(printf '%s' "$payload" | jq '.lang = "hans"')")
+  printf '%s' "$out" | jq -e '
+    [.underway[0].progress.steps[] | .text]
+      == ["意图", "rebase", "审查", "测试", "文档", "lint", "推送", "PR", "CI"]
+  ' >/dev/null || fail "the 简体 ladder fell back to a raw pipeline step word: $out"
+  pass "every pipeline step renders as this template's own label in all three languages"
+}
+
+test_a_step_waiting_on_the_captain_never_looks_like_one_not_started() {
+  local home out payload titles
+  # The parked capture's own shape: review passed, test is held at a gate
+  # awaiting the captain, everything after it has not started. If the two read
+  # the same, the board cannot answer "how far along is this worker".
+  payload=$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"hant", captains_call:[], landed:[], charted:[],
+    underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"parked",
+      name:"Ship the thing", doing:"parked at the test gate",
+      progress:{state:"parked", detail:"awaiting approval", step:null,
+        steps:[{step:"review",status:"completed"},{step:"test",status:"awaiting_approval"},
+               {step:"document",status:"pending"}],
+        quiet:false, refreshed:"2026-09-19T00:00:00Z"}}]}')
+  home=$(make_home awaiting-approval)
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '
+    (.underway[0].progress.steps
+      | (.[1].cls != .[2].cls)
+        and (.[1].cls | test("bb-step--ask"))
+        and (.[2].cls | test("bb-step--wait"))
+        and (.[1].title | test("等你批准")))
+  ' >/dev/null || fail "a step awaiting the captain rendered like one not started: $out"
+  titles=$(printf '%s' "$out" | jq -r '.underway[0].progress.steps[1].title')
+  case "$titles" in *awaiting_approval*) fail "the chip fell back to the raw status word: $titles" ;; esac
+  pass "a step waiting on the captain reads and tones differently from one not started"
+}
+
+test_every_pipeline_step_status_renders_as_a_label_in_every_language() {
+  local home out payload
+  payload=$(jq -n --argjson steps "$PIPELINE_STEPS" --argjson statuses "$PIPELINE_STATUSES" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"en", captains_call:[], landed:[], charted:[],
+    underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
+      name:"Ship the thing", doing:"validating",
+      progress:{state:"working", detail:"validating", step:null,
+        steps:[range(0; $steps | length) | {step: $steps[.], status: $statuses[.]}],
+        quiet:false, refreshed:"2026-09-19T00:00:00Z"}}]}')
+
+  home=$(make_home statuses-en)
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e '
+    [.underway[0].progress.steps[] | .title | split(" · ") | .[1]]
+      == ["passed", "running", "fixing", "failed", "not started", "skipped",
+          "waiting on you", "passed", "passed"]
+  ' >/dev/null || fail "an English status chip fell back to a raw status word: $out"
+
+  home=$(make_home statuses-hant)
+  out=$(render_payload "$home" "$(printf '%s' "$payload" | jq '.lang = "hant"')")
+  printf '%s' "$out" | jq -e '
+    [.underway[0].progress.steps[] | .title | split(" · ") | .[1]]
+      == ["已過", "執行中", "修正中", "失敗", "未開始", "略過", "等你批准", "已過", "已過"]
+  ' >/dev/null || fail "a 繁體 status chip fell back to a raw status word: $out"
+
+  home=$(make_home statuses-hans)
+  out=$(render_payload "$home" "$(printf '%s' "$payload" | jq '.lang = "hans"')")
+  printf '%s' "$out" | jq -e '
+    [.underway[0].progress.steps[] | .title | split(" · ") | .[1]]
+      == ["已过", "执行中", "修正中", "失败", "未开始", "略过", "等你批准", "已过", "已过"]
+  ' >/dev/null || fail "a 简体 status chip fell back to a raw status word: $out"
+  pass "every recorded step status renders as this template's own label in all three languages"
+}
+
+test_a_long_last_activity_message_gets_its_own_truncating_line() {
+  local home out payload message
+  # The pipeline's last_activity column carries the whole message, age and
+  # line together - see tests/captures/no-mistakes-v1.70.1/replacement.toon -
+  # so it must not sit inside the compact timing strip as if it were a
+  # duration.
+  message="2h58m ago: log: all CI checks passed - still monitoring until merged or closed"
+  payload=$(jq -n --arg msg "$message" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:"hant", captains_call:[], landed:[], charted:[],
+    underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
+      name:"Ship the thing", doing:"validating",
+      progress:{state:"working", detail:"validating", step:"ci",
+        steps:[{step:"ci",status:"running"}], active_for:"4h28m",
+        last_activity:$msg, quiet:true, activity:"starting",
+        refreshed:"2026-09-19T00:00:00Z"}}]}')
+  home=$(make_home activity-line)
+  out=$(render_payload "$home" "$payload")
+  printf '%s' "$out" | jq -e --arg msg "$message" '
+    (.underway[0].progress.activity | test("最後動靜"))
+    and (.underway[0].progress.activity | contains($msg))
+    and (.underway[0].progress.activity | test("沒動靜"))
+    and ((.underway[0].progress.meta | contains($msg)) | not)
+    and (.underway[0].progress.meta | test("已跑 4h28m"))
+    and (.underway[0].progress.meta | test("starting"))
+  ' >/dev/null || fail "the last-activity message did not get its own line: $out"
+  pass "the pipeline's whole last-activity message reads on its own line, not as a timing token"
+}
+
+test_an_underway_row_without_progress_renders_exactly_as_before() {
+  local home out
+  home=$(make_home progress-absent)
+  out=$(render_board "$home" '[{"id":"ship-task","repo":"sample","kind":"ship","state":"working","name":"Ship the thing","doing":"validating"}]' '[]')
+  printf '%s' "$out" | jq -e '
+    (.underway | length) == 1
+    and (.underway[0].title == "Ship the thing")
+    and (.underway[0].progress == null)
+  ' >/dev/null || fail "a row with no progress did not render plainly: $out"
+  pass "an Underway row with no progress renders exactly as it did before"
+}
+
 # ---- the packet, opened inside the card -------------------------------------
 # The payload carries what bin/fm-packet.sh card reads out of a packet, so these
 # assert what the template does with it, not how the packet is read.
@@ -951,6 +1146,12 @@ test_omitted_warnings_never_count_as_more_queued
 test_an_omitted_kind_keeps_the_existing_queued_rendering
 test_a_decision_card_answers_the_five_questions_in_english_by_default
 test_the_payload_language_switches_every_visible_string
+test_an_underway_row_renders_its_step_ladder_trilingually
+test_every_pipeline_step_renders_as_a_label_in_every_language
+test_a_step_waiting_on_the_captain_never_looks_like_one_not_started
+test_every_pipeline_step_status_renders_as_a_label_in_every_language
+test_a_long_last_activity_message_gets_its_own_truncating_line
+test_an_underway_row_without_progress_renders_exactly_as_before
 test_a_packet_with_figures_opens_its_tabs_inside_the_card
 test_two_cards_drawing_with_the_same_slug_do_not_share_ids
 test_the_board_styles_a_drawings_box_and_never_its_insides
