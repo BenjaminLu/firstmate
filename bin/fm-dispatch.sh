@@ -5,6 +5,7 @@
 # Usage:
 #   fm-dispatch.sh <task-id> --project <dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --ask <file> --spec <file> [options]
 #   fm-dispatch.sh <task-id> --project <dir> --scout --ask <file> --spec <file> [options]
+#   fm-dispatch.sh <task-id> --project <dir> --review <github-pr-url> --ask <file> --spec <file> [options]
 #   options: [--title <text>] [--reason <text>] [--herdr-lab] [--harness <name>] [--model <name>] [--effort <level>] [--backend <name>]
 #
 # --project accepts the same forms as fm-spawn: a directory path, or
@@ -16,6 +17,16 @@
 # fm-spawn refuses an invalid value for), and goes when it would let the filed
 # item and the spawned worker disagree, which is why --kind was removed and the
 # kind follows --scout alone.
+#
+# --review dispatches a reviewer against one open pull request: bin/fm-brief.sh
+# writes the reviewer contract and validates the URL, and the task is then filed
+# and spawned as a scout, because a review is scout-shaped in every mechanical
+# respect (scratch worktree, no branch, no commit, no push, no PR of its own).
+# It is exclusive with --mode and --yolo, and its backlog note records
+# `kind=review pr=<url>`. An existing brief is refused when its review shape and
+# this call's --review disagree, the same way the --mode and --herdr-lab
+# mismatches are refused. AGENTS.md section 7 owns when a review is dispatched
+# and the `pr-review` skill owns what firstmate does with the findings.
 #
 # Mechanics, in order; each step is owned by the script it calls and every
 # refusal of that script is a refusal of this one, exit status and message
@@ -67,9 +78,10 @@
 #      (bin/fm-backlog-transition-lib.sh's fm_backlog_transition_applies, the
 #      same gate fm-spawn consults) and no item exists for the id, add one
 #      through bin/fm-tasks-axi.sh with the title validated in step 1,
-#      kind ship (scout under --scout), --repo set to
+#      kind ship (scout under --scout or --review), --repo set to
 #      the project's basename, and a note recording `mode=<mode> yolo=<yolo>`
-#      (`kind=scout` for a scout) plus a `reason: <text>` line when --reason is
+#      (`kind=scout` for a scout, `kind=review pr=<url>` for a review) plus a
+#      `reason: <text>` line when --reason is
 #      given, which is the deviation note AGENTS.md section 7 asks for. An
 #      existing item is reused as is and no --reason is written into it;
 #      fm-spawn still decides whether it is dispatchable. When the gate does not apply
@@ -126,7 +138,7 @@ RULES_PATH="$CONFIG/crew-dispatch.json"
 
 die() { printf 'error: %s\n' "$1" >&2; exit "${2:-1}"; }
 
-ID='' PROJECT='' MODE='' YOLO='' SCOUT=0 HERDR_LAB=0 ASK='' SPEC='' TITLE='' REASON=''
+ID='' PROJECT='' MODE='' YOLO='' SCOUT=0 REVIEW='' HERDR_LAB=0 ASK='' SPEC='' TITLE='' REASON=''
 HARNESS='' MODEL='' EFFORT='' BACKEND=''
 MODE_SET=0 YOLO_SET=0
 need() { [ $# -ge 2 ] || die "$1 requires a value"; }
@@ -136,6 +148,7 @@ while [ $# -gt 0 ]; do
     --mode) need "$@"; MODE=$2; MODE_SET=1; shift 2 ;;
     --yolo) need "$@"; YOLO=$2; YOLO_SET=1; shift 2 ;;
     --scout) SCOUT=1; shift ;;
+    --review) need "$@"; REVIEW=$2; shift 2 ;;
     --herdr-lab) HERDR_LAB=1; shift ;;
     --ask) need "$@"; ASK=$2; shift 2 ;;
     --spec) need "$@"; SPEC=$2; shift 2 ;;
@@ -160,7 +173,15 @@ esac
 [ -d "$PROJECT" ] || die "--project directory not found: $PROJECT"
 PROJECT_ABS=$(CDPATH='' cd -- "$PROJECT" && pwd -P) || die "--project directory cannot be resolved: $PROJECT"
 REPO=$(basename "$PROJECT_ABS")
-if [ "$SCOUT" -eq 1 ]; then
+if [ -n "$REVIEW" ]; then
+  # A review is scout-shaped machinery with a different deliverable, so it is
+  # briefed with --review, filed and spawned as a scout, and torn down by the
+  # scout gate. bin/fm-brief.sh validates the URL and owns that contract.
+  [ "$MODE_SET" -eq 0 ] && [ "$YOLO_SET" -eq 0 ] || die "--review cannot be combined with --mode or --yolo; a review posts findings on an existing PR and delivers no change of its own"
+  SCOUT=1
+  KIND=scout
+  NOTE="kind=review pr=$REVIEW"
+elif [ "$SCOUT" -eq 1 ]; then
   [ "$MODE_SET" -eq 0 ] && [ "$YOLO_SET" -eq 0 ] || die "--scout cannot be combined with --mode or --yolo; a scout delivers a report, not a merge"
   KIND=scout
   NOTE="kind=scout"
@@ -217,6 +238,11 @@ if [ -e "$BRIEF" ]; then
   elif [ "$BRIEF_MODE" != "$MODE" ]; then
     die "$BRIEF records Delivery contract: mode=$BRIEF_MODE but this dispatch passes --mode $MODE; re-scaffold the brief or pass the recorded mode"
   fi
+  if fm_brief_heading_present "$BRIEF" "# The review you post"; then
+    [ -n "$REVIEW" ] || die "$BRIEF is a review brief but this dispatch omits --review; pass --review <pr-url> or move that brief aside"
+  else
+    [ -z "$REVIEW" ] || die "$BRIEF is not a review brief but this dispatch passes --review; move that brief aside to rebuild it as a review, or drop --review"
+  fi
   if fm_brief_heading_present "$BRIEF" "# Herdr isolation - HARD SAFETY CONTRACT"; then
     [ "$HERDR_LAB" -eq 1 ] || die "$BRIEF carries the Herdr isolation contract (scaffolded with --herdr-lab) but this dispatch omits --herdr-lab; pass the flag or re-scaffold the brief"
   else
@@ -238,7 +264,9 @@ fi
 # ---- 2. brief ------------------------------------------------------------------------
 if [ "$BRIEF_EXISTS" -eq 0 ]; then
   BRIEF_ARGS=("$ID" "$REPO")
-  if [ "$SCOUT" -eq 1 ]; then
+  if [ -n "$REVIEW" ]; then
+    BRIEF_ARGS+=(--review "$REVIEW")
+  elif [ "$SCOUT" -eq 1 ]; then
     BRIEF_ARGS+=(--scout)
   else
     BRIEF_ARGS+=(--mode "$MODE")
