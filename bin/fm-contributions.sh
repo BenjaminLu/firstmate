@@ -35,33 +35,47 @@
 # 1..50). Each gh call is bounded by the remaining budget and by
 # FM_CONTRIBUTIONS_CALL_BOUND seconds (default 12, 1..25). Both numbers come
 # from measured GitHub latency on a slow repository: 0.9 to 4.4 seconds per
-# call, samples 4.35, 2.83 and 3.39. One PR observation costs eight calls, so a
-# whole observation at that measured ceiling costs about 35 seconds; the
-# 45-second budget carries it with headroom instead of exhausting mid-read, and
-# the 12-second per-call bound sits well above the slowest measured call. A
-# per-call bound that fits inside a watcher timeout that does not is the same
-# defect one level up, so FM_CHECK_TIMEOUT (bin/fm-watch.sh, default 60) allows
-# this budget plus the local snapshot and record writes around it. If the
-# measured latency ever grows past what this budget carries, the next lever is
-# caching an observation's partial progress across polls or cutting the calls
-# one observation costs - both larger changes than these two numbers.
+# call, samples 4.35, 2.83 and 3.39, with one read per URL regularly past five
+# seconds. The 12-second per-call bound sits well above the slowest measured
+# call, so a merely slow forge finishes its read instead of being killed.
+#
+# The whole poll must finish inside the watcher's per-check bound, because a
+# poll the watcher kills prints nothing and writes no record and would repeat
+# that silence forever. That coupling is enforced rather than assumed, the way
+# bin/fm-mail-check.sh and bin/fm-tool-update-check.sh already enforce it: a
+# budget larger than FM_CHECK_TIMEOUT (default 30, read from this check's own
+# environment because the watcher runs the check as a direct child) allows is
+# cut down to what fits, leaving the local snapshot and record writes around the
+# forge reads plus the rounding and kill grace one bounded call can add. At the
+# default bound that cut leaves 23 seconds, which carries an observation of the
+# measured shape above - one slow read and seven quick ones. One PR observation
+# costs eight calls, so a repository where every call runs at the 4.4-second
+# ceiling needs about 35 seconds and therefore a raised FM_CHECK_TIMEOUT; this
+# poll cuts itself to fit a fleet-wide supervision bound rather than raising it.
 # Oldest observations go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. When
-# the budget runs out mid-observation, the poll ends with that URL's records
-# untouched; only a genuine forge failure or head change records an error.
+# the budget runs out mid-observation, that URL's records are left untouched and
+# it is observed first next poll; only a genuine forge failure or head change
+# records an error. A URL the budget did not reach that is also past the
+# freshness bound below shows on the board as unchecked with nothing else to say
+# so, so the poll names one in a single line, reported from
+# state/.contributions-unreached once per change of that set rather than on
+# every poll. Caching an observation's partial progress across polls or cutting
+# the calls one observation costs are the next levers if the measured latency
+# grows; both are larger changes than these numbers.
 # API failure leaves error evidence; an expired or absent observation is not
 # silence. FM_CONTRIBUTIONS_MAX_AGE (default 900 seconds) bounds freshness.
 # A URL whose last good observation is merged or closed is final: it is
 # never re-read, stays fresh, and a stale error beside it is cleared once.
 # A genuine failure prints its unavailable line only when it starts an episode
 # (no prior owner has an error); a successful read ends the episode. No failure
-# is classified or held silent for a grace period: with the budget above sized
-# to carry a whole slow observation, the failures such a silence would have
-# masked are the ones whose cause is removed here, and buying that silence cost
-# a degraded board for the whole grace window. If a genuinely unreachable forge
-# turns out to be noisy after this lands, that is a measured follow-up, not a
-# defense built against a residual nobody has measured.
+# is classified or held silent for a grace period: the noise this poll produced
+# came from a per-call bound below real forge latency, which the bound above
+# removes, and buying silence with a grace window instead would degrade the
+# board for the whole window. If a genuinely unreachable forge turns out to be
+# noisy after this lands, that is a measured follow-up, not a defense built
+# against a residual nobody has measured.
 # FM_CONTRIBUTIONS_NOW supplies an ISO UTC clock for tests, otherwise UTC now.
 # FM_CONTRIBUTIONS_READY_LABEL selects the equivalent triage label, default
 # ready-for-pr. Labels are matched case-insensitively and exactly.
@@ -106,6 +120,26 @@ case "$BUDGET" in ''|*[!0-9]*) fail 'invalid poll budget' ;; esac
 CALL_BOUND=${FM_CONTRIBUTIONS_CALL_BOUND:-12}
 case "$CALL_BOUND" in ''|*[!0-9]*) fail 'invalid per-call forge bound' ;; esac
 [ "$CALL_BOUND" -ge 1 ] && [ "$CALL_BOUND" -le 25 ] || fail 'per-call forge bound must be 1..25 seconds'
+# The watcher's per-check bound, read from this check's own environment: the
+# watcher runs the check as a direct child, so an operator who raised it is seen
+# here too, and when it is unset both sides resolve the same default.
+CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}
+case "$CHECK_TIMEOUT" in ''|*[!0-9]*|0) CHECK_TIMEOUT=30 ;; esac
+# The forge budget has to leave the watcher's bound the local work around the
+# reads - the fleet snapshot and durable records read before the first call, the
+# record writes after the last - plus what fm_run_timed adds to a bounded call:
+# it counts a whole second before it alarms and asks its runner for -k 1.
+LOCAL_WORK_SECS=5
+CLOCK_ROUNDING_SECS=1
+KILL_GRACE_SECS=1
+BUDGET_MAX=$((CHECK_TIMEOUT - LOCAL_WORK_SECS - CLOCK_ROUNDING_SECS - KILL_GRACE_SECS))
+[ "$BUDGET_MAX" -ge 1 ] || BUDGET_MAX=1
+# Cut rather than refuse: a poll that refuses to run leaves the contributions
+# unmeasured, which is the silence this bound exists to prevent.
+[ "$BUDGET" -le "$BUDGET_MAX" ] || BUDGET=$BUDGET_MAX
+UNREACHED_RECORD="$STATE/.contributions-unreached"
+UNREACHED_RECORD_SCHEMA=fm-contributions-unreached-v1
+UNREACHED=
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-contributions.XXXXXX")
 LOCK_HELD=0
 cleanup() {
@@ -311,6 +345,52 @@ settle_final() { # canonical-url task... : copy the URL's final observation to e
   done
 }
 
+# The set of stale URLs this poll could not reach, reported once per change so a
+# standing condition is not reported on every poll.
+unreached_reported() {
+  local line first=1
+  [ -f "$UNREACHED_RECORD" ] || return 0
+  while IFS= read -r line; do
+    if [ "$first" = 1 ]; then
+      first=0
+      [ "$line" = "$UNREACHED_RECORD_SCHEMA" ] || return 0
+      continue
+    fi
+    case "$line" in reported=*) printf '%s\n' "${line#reported=}" ;; esac
+  done < "$UNREACHED_RECORD"
+  return 0
+}
+
+write_unreached_record() { # reported-set
+  local tmp
+  tmp=$(mktemp "$UNREACHED_RECORD.XXXXXX" 2>/dev/null) || return 1
+  chmod 0600 "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  { printf '%s\n' "$UNREACHED_RECORD_SCHEMA"; printf 'reported=%s\n' "$1"; } > "$tmp" \
+    || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$UNREACHED_RECORD" || { rm -f -- "$tmp"; return 1; }
+  return 0
+}
+
+report_unreached() {
+  local current previous
+  local -a urls
+  current=${UNREACHED# }
+  previous=$(unreached_reported)
+  [ "$current" != "$previous" ] || return 0
+  if [ -n "$current" ]; then
+    read -r -a urls <<< "$current"
+    # Report before recording, so a record that cannot be written costs a
+    # repeated report rather than a lost one.
+    if [ "${#urls[@]}" -gt 1 ]; then
+      printf 'contributions: the poll budget did not reach %s and %s more unchecked contribution(s)\n' \
+        "${urls[0]}" "$(( ${#urls[@]} - 1 ))"
+    else
+      printf 'contributions: the poll budget did not reach %s\n' "${urls[0]}"
+    fi
+  fi
+  write_unreached_record "$current" || true
+}
+
 poll() {
   local task url old kind error observed
   local -a row
@@ -318,37 +398,48 @@ poll() {
   get_input
   read_saved
   [ "$ERRORS" -eq 0 ] || printf 'contributions: %s unreadable durable record(s)\n' "$ERRORS"
-  # One line per distinct URL: the URL, then every owning task.
-  jq_lib -nr --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" '
+  # One line per distinct URL: the URL, whether the board already shows it
+  # unchecked, then every owning task.
+  jq_lib -nr --slurpfile input "$TMP/input.json" --slurpfile saved "$TMP/saved.json" \
+    --argjson now "$EPOCH" --argjson max_age "$MAX_AGE" '
     known($input[0];$saved[0]) | map(. as $k | . + {at:([$saved[0][] | select(.task == $k.task) | .records[] | select(.url == $k.url) | .checked_at] | first // "")})
     | group_by(.url) | map({url:.[0].url,at:(map(.at) | min),tasks:(map(.task) | unique)})
-    | sort_by(.at,.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
+    | sort_by(.at,.tasks[0],.url)[]
+    | [.url,(if .at == "" or ($now - (.at | fromdateiso8601)) >= $max_age then 1 else 0 end)] + .tasks | @tsv' > "$TMP/known.tsv"
   DEADLINE=$(( $(date +%s) + BUDGET ))
   BUDGET_EXHAUSTED=0
   while IFS=$'\t' read -r -a row; do
-    [ "${#row[@]}" -ge 2 ] || continue
-    [ "$(date +%s)" -lt "$DEADLINE" ] || break
+    [ "${#row[@]}" -ge 3 ] || continue
     url=${row[0]}
+    # Past the deadline every remaining URL is only counted, never read, so the
+    # ones the budget never reached are as visible as the one it cut short.
+    if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+      [ "${row[1]}" = 0 ] || UNREACHED="$UNREACHED $url"
+      continue
+    fi
     # A contribution with a final observation is not re-read for any owner.
     if jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
       'any($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
-        . != null and (.observation.state | IN("merged","closed")))' "${row[@]:1}" >/dev/null; then
-      settle_final "$url" "${row[@]:1}"
+        . != null and (.observation.state | IN("merged","closed")))' "${row[@]:2}" >/dev/null; then
+      settle_final "$url" "${row[@]:2}"
       continue
     fi
     observed=0
     observe "$url" || observed=$?
     # An observation the budget cut short is unmeasured, not unavailable: keep
     # every owner's prior record so the URL is observed first next poll.
-    [ "$BUDGET_EXHAUSTED" -eq 0 ] || break
+    if [ "$BUDGET_EXHAUSTED" -ne 0 ]; then
+      [ "${row[1]}" = 0 ] || UNREACHED="$UNREACHED $url"
+      continue
+    fi
     # Wake once per failure episode: only when no owner has a prior error.
     if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
       'all($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
-        .error == null)' "${row[@]:1}" >/dev/null; then
+        .error == null)' "${row[@]:2}" >/dev/null; then
       printf 'contributions: observation unavailable for %s\n' "$url"
     fi
     case "$url" in */issues/*) kind=issue ;; *) kind="pr" ;; esac
-    for task in "${row[@]:1}"; do
+    for task in "${row[@]:2}"; do
       fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
       old="$TMP/old.json"
       jq -n --slurpfile saved "$TMP/saved.json" --arg task "$task" --arg url "$url" --arg kind "$kind" '
@@ -372,6 +463,7 @@ poll() {
       publish_pending "$task" "$url" "$TMP/row.json"
     done
   done < "$TMP/known.tsv"
+  report_unreached
 }
 
 arm() {

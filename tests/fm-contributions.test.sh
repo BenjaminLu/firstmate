@@ -584,7 +584,9 @@ test_budget_exhaustion_keeps_prior_record() { # exhaust|hang
   home=$(new_home "budget-$mode")
   forge_home "$home"
   wrap_forge "$home"
-  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
+  # Still inside the freshness bound, so the budget simply moves this URL to the
+  # next poll and has nothing to disclose about it.
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-16T07:50:00Z"'
   cp "$home/data/delivery/contributions.json" "$home/prior.json"
   # Both modes run on the fixture clock: on a real one the 1s budget can expire
   # before the first forge call, leaving the observation unstarted.
@@ -598,7 +600,7 @@ test_budget_exhaustion_keeps_prior_record() { # exhaust|hang
   cmp -s "$home/prior.json" "$home/data/delivery/contributions.json" \
     || fail "budget exhaustion ($mode) rewrote the prior record: $(cat "$home/data/delivery/contributions.json")"
   [ ! -s "$home/state/.wake-queue" ] || fail "budget exhaustion ($mode) enqueued a wake"
-  pass "budget exhausted mid-observation ($mode) keeps the prior record and stays silent"
+  pass "budget exhausted mid-observation ($mode) keeps a fresh prior record and stays silent"
 }
 
 test_budget_refusal_between_calls() { test_budget_exhaustion_keeps_prior_record exhaust; }
@@ -792,30 +794,34 @@ test_late_owner_keeps_failure_episode_suppressed() {
   pass 'a late owner does not restart a shared forge failure episode'
 }
 
-test_slow_forge_crosses_the_old_call_bound() {
+test_slow_forge_straddles_the_shipped_call_bound() {
   local home out line='contributions: observation unavailable for https://github.com/o/r/pull/8'
   home=$(new_home slow-forge-bound)
   forge_home "$home"
   wrap_forge "$home"
   printf 'slow\n' > "$home/forge/fault"
+  # Six seconds is past the five-second bound this poll used to impose and
+  # inside the one it ships, so the shipped number is what decides here.
   printf '6\n' > "$home/forge/slow"
-  # Five seconds - the bound this poll used to impose - kills a read a real forge completes.
-  out=$(with_home "$home" env FM_CONTRIBUTIONS_CALL_BOUND=5 "$ROOT/bin/fm-contributions.sh" poll) \
-    || fail 'poll failed against a forge slower than the old bound'
-  [ "$out" = "$line" ] || fail "a read killed by the per-call bound did not report its failure: $out"
-  [ "$(grep -cF 'pulls/8/reviews' "$home/forge/calls")" = 1 ] \
-    || fail 'a read killed by the per-call bound was attempted more than once'
-  : > "$home/forge/calls"
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
   out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) \
-    || fail 'poll failed against the same forge under the current bound'
-  [ -z "$out" ] || fail "a completed observation printed: $out"
+    || fail 'poll failed against a forge slower than the old bound'
+  [ -z "$out" ] || fail "a read the shipped bound allows still woke the supervisor: $out"
   jq -e --arg now "$NOW" '.records[0] | .checked_at == $now and .error == null
     and .observation.state == "open"' \
     "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'the current per-call bound did not let a real forge latency finish'
+    || fail 'the shipped per-call bound did not let a real forge latency finish'
   [ "$(grep -cF 'pulls/8/reviews' "$home/forge/calls")" = 1 ] \
     || fail 'a read that finished inside the bound was issued twice'
-  pass 'a read past the old five-second bound completes under the current bound'
+  # Fourteen seconds is past the shipped bound, so the same read is killed.
+  printf '14\n' > "$home/forge/slow"
+  : > "$home/forge/calls"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_NOW=2026-09-16T09:00:00Z "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'poll failed against a forge slower than the shipped bound'
+  [ "$out" = "$line" ] || fail "a read killed by the shipped bound did not report its failure: $out"
+  [ "$(grep -cF 'pulls/8/reviews' "$home/forge/calls")" = 1 ] \
+    || fail 'a read killed by the per-call bound was attempted more than once'
+  pass 'the shipped per-call bound passes a six-second read and kills a fourteen-second one'
 }
 
 test_measured_latency_observation_fits_the_budget() {
@@ -825,12 +831,13 @@ test_measured_latency_observation_fits_the_budget() {
   wrap_forge "$home"
   # A stale record so only an observation completed by this poll can advance it.
   mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
-  # Every call pays the slowest latency the affected repository measured (4.4s),
-  # under the shipped budget and per-call bound - no overrides.
+  # Every one of the eight calls pays the slowest latency the affected
+  # repository measured (4.4s), against the shipped budget and per-call bound.
+  # That ceiling is the case the header says needs a raised watcher bound.
   printf 'latency\n' > "$home/forge/fault"
   printf '4.4\n' > "$home/forge/latency"
   started=$(/bin/date +%s)
-  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) \
+  out=$(with_home "$home" env FM_CHECK_TIMEOUT=60 "$ROOT/bin/fm-contributions.sh" poll) \
     || fail 'poll failed against a forge at the measured latency'
   elapsed=$(( $(/bin/date +%s) - started ))
   [ -z "$out" ] || fail "an observation at the measured latency printed: $out"
@@ -841,11 +848,48 @@ test_measured_latency_observation_fits_the_budget() {
   calls=$(wc -l < "$home/forge/calls" | tr -d ' ')
   [ "$calls" -ge 8 ] || fail "the observation did not issue a whole PR read: $calls calls"
   [ "$elapsed" -ge 30 ] || fail "the forge did not actually pay the measured latency: ${elapsed}s"
+  [ "$elapsed" -lt 60 ] || fail "the observation did not fit the watcher bound it was given: ${elapsed}s"
   pass 'a whole PR observation at the measured forge latency fits the poll budget'
 }
 
+test_budget_cut_to_the_watcher_bound_reports_once() {
+  local home out started elapsed
+  local line='contributions: the poll budget did not reach https://github.com/o/r/pull/8'
+  home=$(new_home budget-cut-unreached)
+  forge_home "$home"
+  wrap_forge "$home"
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
+  cp "$home/data/delivery/contributions.json" "$home/prior.json"
+  printf 'latency\n' > "$home/forge/fault"
+  printf '3\n' > "$home/forge/latency"
+  # A watcher bound of twelve seconds leaves a five-second forge budget, which
+  # no whole observation of this forge fits in.
+  poll_at() { with_home "$home" env FM_CHECK_TIMEOUT=12 FM_CONTRIBUTIONS_NOW="$1" \
+    "$ROOT/bin/fm-contributions.sh" poll || fail "poll at $1 failed"; }
+  started=$(/bin/date +%s)
+  out=$(poll_at 2026-09-16T09:00:00Z)
+  elapsed=$(( $(/bin/date +%s) - started ))
+  [ "$out" = "$line" ] || fail "a contribution the budget could not reach was left silent: $out"
+  [ "$elapsed" -lt 12 ] || fail "the poll did not cut its budget to the watcher bound: ${elapsed}s"
+  cmp -s "$home/prior.json" "$home/data/delivery/contributions.json" \
+    || fail 'an observation the budget cut short rewrote the prior record'
+  out=$(poll_at 2026-09-16T09:05:00Z)
+  [ -z "$out" ] || fail "the same unreached contribution was reported again: $out"
+  # A forge fast enough to fit clears the condition, and it is news again after.
+  printf '0\n' > "$home/forge/latency"
+  out=$(poll_at 2026-09-16T09:10:00Z)
+  [ -z "$out" ] || fail "a completed observation printed: $out"
+  jq -e '.records[0] | .error == null and .checked_at == "2026-09-16T09:10:00Z"' \
+    "$home/data/delivery/contributions.json" >/dev/null \
+    || fail 'a forge inside the cut budget was not observed'
+  printf '3\n' > "$home/forge/latency"
+  out=$(poll_at 2026-09-16T10:00:00Z)
+  [ "$out" = "$line" ] || fail "an unreached contribution was not reported again after it recovered: $out"
+  pass 'a budget cut to the watcher bound names an unreached contribution once per change'
+}
+
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_slow_forge_crosses_the_old_call_bound test_measured_latency_observation_fits_the_budget; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_slow_forge_straddles_the_shipped_call_bound test_measured_latency_observation_fits_the_budget test_budget_cut_to_the_watcher_bound_reports_once; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

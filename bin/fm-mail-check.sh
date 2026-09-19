@@ -36,7 +36,7 @@
 # doorbell.
 #
 # The poll must finish inside the watcher's per-check bound
-# (FM_CHECK_TIMEOUT, default 60, read from this check's own environment
+# (FM_CHECK_TIMEOUT, default 30, read from this check's own environment
 # because the watcher runs it as a direct child). The internal budget
 # FM_MAIL_CHECK_BUDGET (default 15, valid 5..25) is cut down to whatever fits
 # inside that bound before the poll starts. A poll that does not finish is a
@@ -93,9 +93,9 @@ record_epoch_now() {
   esac
 }
 
-CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-60}
+CHECK_TIMEOUT=${FM_CHECK_TIMEOUT:-30}
 case "$CHECK_TIMEOUT" in
-  ''|*[!0-9]*|0) CHECK_TIMEOUT=60 ;;
+  ''|*[!0-9]*|0) CHECK_TIMEOUT=30 ;;
 esac
 
 BUDGET_SECS=${FM_MAIL_CHECK_BUDGET:-15}
