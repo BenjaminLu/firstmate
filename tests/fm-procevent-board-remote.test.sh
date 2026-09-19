@@ -490,12 +490,31 @@ test_an_earlier_rounds_answer_does_not_settle_a_freshly_armed_card() {
   assert_equals "due" "$(run_adapter "$home" classify "$home/rearmed.result")" \
     "the source stopped waking firstmate while the captain still owed an answer"
 
+  # The board keeps one document per key, so this answer OVERWRITES the first
+  # one: from here on the store can no longer show what he answered in round one.
   write_answer "$home" dispatch_charted dispatch.charted second-task "Second task" 2026-09-19T08:00:00.000Z
   out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
   assert_contains "$out" "answer: dispatch.charted	second-task" "this round's answer was not delivered"
   assert_contains "$out" "awaiting: 0" "this round's own answer did not settle its card"
   assert_contains "$out" "retired: yes" "the source stayed armed after its card was answered"
-  pass "a card armed for a new round is settled only by an answer given since it was armed"
+
+  # Round three, with two answers to this key already behind it and the first of
+  # them no longer anywhere in the store. The captain has said nothing yet.
+  run_adapter "$home" arm --documents "$dir" --key dispatch.charted >/dev/null \
+    || fail "could not arm the card for a third round"
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  assert_contains "$out" "new: 0" "an answer from an earlier round was delivered again"
+  assert_contains "$out" "awaiting: 1" "an overwritten answer from an earlier round settled the third round's card"
+  assert_not_contains "$out" "retired: yes" "the source retired with the third round's card unanswered"
+  run_adapter "$home" tick --interval 0.2 > "$home/third.result" || fail "the tick failed while the card was open"
+  assert_equals "due" "$(run_adapter "$home" classify "$home/third.result")" \
+    "the source stopped waking firstmate while the captain still owed a third answer"
+
+  write_answer "$home" dispatch_charted dispatch.charted third-task "Third task" 2026-09-19T09:00:00.000Z
+  out=$(run_adapter "$home" ingest --documents "$dir" 2>/dev/null)
+  assert_contains "$out" "answer: dispatch.charted	third-task" "the third round's answer was not delivered"
+  assert_contains "$out" "retired: yes" "the third round's own answer did not settle its card"
+  pass "a card armed for a new round is settled only by an answer given since it was armed, round after round"
 }
 
 # The keyed lines reach the one intake and close the captain's own tasks. Needs

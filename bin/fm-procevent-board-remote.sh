@@ -76,9 +76,20 @@
 # is asked again on every board round, so "has this key ever been answered" is
 # the wrong question; "was this answer given for the card standing now" is the
 # right one. The only evidence the adapter can have that an answer predates a
-# card is that its document was already in the store when that card was armed,
-# which is why `arm` is given the documents and records the identities it finds:
-# every one of them answers a question that no longer exists. Such an answer is
+# card is that it existed when that card was armed, which is why `arm` is given
+# the documents and records, once, every answer identity that already existed:
+# every one of them answers a question that no longer exists.
+#
+# THAT SET IS TWO HALVES, and it needs both. The store the read returns holds
+# only the captain's LATEST answer under each key, because a changed answer
+# overwrites its document in place - so the store alone forgets an answer the
+# moment he changes it, while the record of having delivered it lives forever.
+# `arm` therefore takes the identities the store holds now together with every
+# identity the cursor already carries, which is exactly "everything that existed
+# before this arm" and is a set nothing can fall out of afterwards: the cursor is
+# append-only and this set is rewritten only by the next `arm`. Whether an answer
+# settles a card is then RECORDED at arming time rather than re-derived later
+# from a store that has moved on. Such an answer is
 # DISCARDED rather than applied - it never reaches the intake and never settles
 # a card - and it is counted and named in the ingest report, because a captain
 # answer that goes nowhere must be visible rather than absent. It is recorded in
@@ -266,7 +277,12 @@ cmd_arm() {
   # between leaves the previous cards guarded by a newer set - they stay awaited
   # and keep waking firstmate - rather than leaving new cards a stale answer
   # could settle.
-  pre_arm=$(snapshot_identities "$dir")
+  pre_arm=$(
+    {
+      snapshot_identities "$dir"
+      read_lines "$DELIVERED" | awk -F'\t' '$1 != "" { print $1 }'
+    } | sort -u
+  )
   staged=$(stage_in_state pre-arm) || die "cannot stage the pre-arm answer set"
   { [ -z "$pre_arm" ] || printf '%s\n' "$pre_arm"; } > "$staged" \
     || { rm -f -- "$staged"; die "cannot write the pre-arm answer set"; }
