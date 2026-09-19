@@ -167,6 +167,9 @@ These hold for every surface the captain reads or acts on - the board, a card, a
   `bin/fm-packet.sh card` composes that card, and `serve` publishes the packet page under the stable session name `packet-<task-id>` when the installed `lavish-axi` advertises `--name`, falling back to a keyed session when it does not; the card carries whichever URL results as `packet_url`.
   That fallback is the one place this rule is not enforceable by the tooling, so say so when it applies rather than letting a losable URL pass as a stable one.
   Never hand the captain a one-shot session URL whose content is lost when the tab closes; reopening the same URL must bring the content back.
+  One bounded exception is authorized: a live scout may host its own review session while it iterates with the captain on a visual deliverable, because the iteration needs the scout's own context.
+  It holds only while that scout is alive; the durable record stays the report and the board card, and nothing the captain needs after the scout ends may live only in that session.
+  Revisit this exception once the redesigned board can host that iteration itself, which is already in flight.
 - Every captain-facing string carries 繁體 beside its English; 简体 is optional, and where it is absent the board shows the 繁體 text in its place rather than an empty cell.
   That is what the tooling requires and what the composing instruction above says, so the rule is stated at what is actually guaranteed rather than at a stricter promise nothing keeps.
   Only packet figures are actually checked: `bin/fm-packet.sh verify` requires `data-en`, `data-hant` and `data-hans` on every `<text>` in a drawing.
