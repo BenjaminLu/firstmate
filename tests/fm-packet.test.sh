@@ -266,7 +266,7 @@ test_verify_checks_the_decision_block_field_by_field() {
 }
 
 test_verify_holds_a_figure_to_the_svg_contract() {
-  local home packet out svg body styled foreign
+  local home packet out svg body styled foreign wrapped plain
   home=$(make_home figures)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -339,6 +339,14 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   svg=${GOOD_SVG/<title id=\"opt-title\">/<script>void 0;<\/script><title id=\"opt-title\">}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "the svg carries a <script>" "a script inside the drawing"
+  # The language switch replaces a label's whole text content, so a <tspan>
+  # inside a <text> is destroyed the first time the captain switches.
+  plain='<text x="34" y="54" style="font-family:var(--sans)" data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限">Raise the bound</text>'
+  wrapped='<text x="34" y="54" data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限"><tspan x="34" dy="0">Raise</tspan><tspan x="34" dy="16">the bound</tspan></text>'
+  svg=${GOOD_SVG/"$plain"/"$wrapped"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a <text> has element children" "a label split into tspans"
+
   # A <foreignObject> holds HTML the language clause cannot read, so its labels
   # would stay English when the captain switches the page.
   foreign='<foreignObject x="0" y="0" width="90" height="20"><div style="font-size:12px">SparkSQL</div></foreignObject><title id="opt-title">'
@@ -559,6 +567,55 @@ PY
 )
   [ "$paras" = 0 ] || fail "the rendered figures section carries $paras paragraph(s) beside the drawings"
   pass "the captain's page carries only what the worker wrote"
+}
+
+# diagram-design nests icon <svg> elements inside the drawing - its own
+# examples ship a dozen - so the figure below is what unmodified skill output
+# looks like once its colours are edited to the page's palette.
+read -r -d '' NESTED_ICON <<'SVG' || true
+  <svg x="34" y="200" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.5" aria-hidden="true">
+    <circle cx="12" cy="12" r="9"/>
+    <path d="M3.6 9h16.8M3.6 15h16.8"/>
+  </svg>
+SVG
+
+test_a_drawing_that_nests_icon_svgs_is_one_figure_checked_end_to_end() {
+  local home packet page out svg inlined
+  home=$(make_home nested-svg)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+  fill_prose "$packet"
+
+  # One drawing, whatever it nests: the icon is part of the element, not a
+  # second figure, and not a place the checker stops reading.
+  svg=${GOOD_SVG/<\/svg>/$NESTED_ICON$'\n'</svg>}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a drawing with a nested icon: $out"
+  assert_contains "$out" "figures: 1 checked against the contract" "the nested icon was counted as a second figure: $out"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed on a nested icon"
+  # The whole element reaches the page, not the bytes before the icon's </svg>.
+  inlined=$(python3 - "$page" <<'PY'
+import pathlib, re, sys
+m = re.search(r'<div class="pk-fig__svg">(.*?)</div>', pathlib.Path(sys.argv[1]).read_text(), re.S)
+svg = m.group(1) if m else ""
+print(svg.count("<svg"), svg.count("</svg>"), "yes" if "opt-box-end" in svg else "no")
+PY
+)
+  [ "$inlined" = "2 2 yes" ] || fail "the page carries a truncated drawing instead of the whole element: $inlined"
+
+  # A drawing nests as many icons as it needs; none of them is a second figure.
+  svg=${GOOD_SVG/<\/svg>/$NESTED_ICON$'\n'$NESTED_ICON$'\n'</svg>}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a drawing with two nested icons: $out"
+  assert_contains "$out" "figures: 1 checked against the contract" "two nested icons were counted as figures: $out"
+
+  # Nothing past the icon goes unread: the clause that would have been in the
+  # unchecked tail still refuses.
+  svg=${GOOD_SVG/<\/svg>/$NESTED_ICON$'\n'<text x=\"500\" y=\"240\" data-en=\"After the icon\">After the icon</text>$'\n'</svg>}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a <text> is missing data-hant, data-hans" "a broken node after the nested icon"
+  pass "a drawing that nests icon svgs is one figure, checked and rendered end to end"
 }
 
 test_card_emits_a_board_ready_decision_item() {
@@ -797,6 +854,7 @@ test_a_needs_decision_packet_owes_one_figure_comparing_every_option
 test_a_done_packet_is_not_refused_for_having_no_figures
 test_a_packet_carries_one_figures_section_and_render_publishes_nothing_else
 test_the_captains_page_carries_only_what_the_worker_wrote
+test_a_drawing_that_nests_icon_svgs_is_one_figure_checked_end_to_end
 test_card_emits_a_board_ready_decision_item
 test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet

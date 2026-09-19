@@ -58,6 +58,10 @@
 #
 #   - edge <data-edge id>: <what proves this connector>
 #
+# One top-level `<svg>` per figure. diagram-design nests icon `<svg>` elements
+# inside the drawing and those are ordinary content: they are counted as part
+# of the one element, and every clause below reads them like the rest of it.
+#
 # The drawing is produced through the diagram-design skill, never hand-written
 # SVG. There is no line a worker can write to be excused the figures: an
 # environment that genuinely cannot draw is a blocker escalated to firstmate,
@@ -72,9 +76,14 @@
 #
 #   - every `<text>` carries data-en, data-hant and data-hans, so a language
 #     switch re-labels the drawing instead of leaking English onto the
-#     Chinese page
-#   - no baked-in colour: fill, stroke, color, stop-color and flood-color -
-#     as attributes or inside style="" - may only be var(--...), none,
+#     Chinese page, and carries no element children: the switch replaces a
+#     label's whole text content, so a `<tspan>` inside it is destroyed the
+#     first time the captain switches. A label that needs two lines is two
+#     positioned `<text>` elements, which also keeps the geometry from
+#     drifting between languages
+#   - no baked-in colour: fill, stroke, color, stop-color, flood-color and
+#     lighting-color - as attributes or inside style="" - may only be
+#     var(--...), none,
 #     currentColor, transparent, inherit or url(#...), so the drawing
 #     inherits the page's theme instead of fighting it.
 #     The rendered page binds the palette a figure draws against: --fg
@@ -432,6 +441,7 @@ COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)
 ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
 TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
+TEXT_ELEMENT = re.compile(r"""<\s*text\b(?:[^<>"']|"[^"]*"|'[^']*')*>(.*?)<\s*/\s*text\s*>""", re.S)
 REF_ATTRS = ("href", "xlink:href", "src")
 SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 LINK_SCHEMES = ("http", "https", "mailto")
@@ -448,6 +458,30 @@ def style_decls(value):
         if ":" in decl:
             k, v = decl.split(":", 1)
             yield k.strip().lower(), v.strip()
+
+# The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
+# elements inside the drawing, and a non-greedy match would stop at the first
+# </svg> and leave the rest of the figure unread. figures_html states this
+# same function, character for character - the two must agree on which bytes
+# are the drawing, or verify checks one thing and the page shows another.
+SVG_TAG = re.compile(r"""<\s*(/?)svg\b((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
+
+def top_level_svgs(text):
+    out, depth, start = [], 0, None
+    for m in SVG_TAG.finditer(text):
+        if m.group(1):
+            if depth > 0:
+                depth -= 1
+                if depth == 0:
+                    out.append(text[start:m.end()]); start = None
+        elif m.group(2).rstrip().endswith("/"):
+            if depth == 0:
+                out.append(m.group(0))
+        else:
+            if depth == 0:
+                start = m.start()
+            depth += 1
+    return out
 
 figure_nodes, slugs_seen = [], {}
 for n, fig in enumerate(figures, 1):
@@ -475,7 +509,7 @@ for n, fig in enumerate(figures, 1):
     if not fields.get("caption"):
         bad("'caption:' is missing or empty")
 
-    svgs = re.findall(r"<svg\b.*?</svg\s*>", chunk, re.S)
+    svgs = top_level_svgs(chunk)
     if len(svgs) != 1:
         bad("the figure carries %d inline <svg> block(s); it needs exactly one, "
             "drawn through the diagram-design skill" % len(svgs))
@@ -494,6 +528,14 @@ for n, fig in enumerate(figures, 1):
             "so its labels stay English when the page switches, and its layout is the page's "
             "not the drawing's. Re-draw those labels as <text> nodes carrying data-en, "
             "data-hant and data-hans")
+
+    for m in TEXT_ELEMENT.finditer(svg):
+        if re.search(r"<\s*[A-Za-z]", m.group(1)):
+            bad("a <text> has element children; the language switch replaces a label's whole "
+                "text content, so they are destroyed the first time the captain switches. "
+                "Write one string per language and split a long label into separate "
+                "positioned <text> elements, which also keeps the geometry from drifting "
+                "between languages")
 
     nodes, edges_drawn, edges_declared = set(), set(), set()
     for m in TAG.finditer(svg):
@@ -900,6 +942,30 @@ def md(body):
 # integrity check verify owns and never page content, as baton has it, so they
 # do not render.
 FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
+# The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
+# elements inside the drawing, and a non-greedy match would stop at the first
+# </svg> and leave the rest of the figure unread. figures_problems states this
+# same function, character for character - the two must agree on which bytes
+# are the drawing, or verify checks one thing and the page shows another.
+SVG_TAG = re.compile(r"""<\s*(/?)svg\b((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
+
+def top_level_svgs(text):
+    out, depth, start = [], 0, None
+    for m in SVG_TAG.finditer(text):
+        if m.group(1):
+            if depth > 0:
+                depth -= 1
+                if depth == 0:
+                    out.append(text[start:m.end()]); start = None
+        elif m.group(2).rstrip().endswith("/"):
+            if depth == 0:
+                out.append(m.group(0))
+        else:
+            if depth == 0:
+                start = m.start()
+            depth += 1
+    return out
+
 
 def figures_html(body):
     head, figures, cur = [], [], None
@@ -919,11 +985,11 @@ def figures_html(body):
             m = FIG_ATTR.match(line)
             if m and m.group(1) not in fields:
                 fields[m.group(1)] = m.group(2)
-        svg = re.search(r"<svg\b.*?</svg\s*>", chunk, re.S)
+        svgs = top_level_svgs(chunk)
         parts = ['<figure class="pk-fig" id="fig-%s">' % esc(fields.get("figure", "")),
                  "<h3 class=\"pk-fig__h\">%s</h3>" % inline(heading)]
-        if svg:
-            parts.append('<div class="pk-fig__svg">%s</div>' % svg.group(0))
+        if svgs:
+            parts.append('<div class="pk-fig__svg">%s</div>' % svgs[0])
         if fields.get("caption"):
             parts.append('<figcaption class="pk-fig__cap">%s</figcaption>' % inline(fields["caption"]))
         parts.append("</figure>")
