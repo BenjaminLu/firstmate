@@ -51,6 +51,7 @@
   var PRISTINE = document.body.innerHTML;
 
   var STATUS_ID = "bb-remote-link";
+  var STRIP_ID = "bb-remote-status";
   var ANSWER_ID = "bb-remote-answers";
   var linkState = "connecting";
   var sendState = null;
@@ -133,14 +134,36 @@
     return say(SAY.stopped).replace("{age}", age());
   }
 
+  /* The connection line sits on its own row UNDER the nav, never inside it.
+     .bb-nav__inner is a fixed-height flex row carrying the brand and the
+     language switch, and .fm-badge is nowrap, so a long status string placed in
+     that row pushes the row wider than a phone screen: measured at 500px, the
+     page overflowed by 483px and a tap on EN / 繁 / 简 landed on the badge
+     instead of the button. The board's own stylesheet is not touched - the two
+     inline properties below style the transport's OWN element so it can wrap. */
+  function strip() {
+    var found = document.getElementById(STRIP_ID);
+    if (found) return found;
+    var nav = document.querySelector(".bb-nav");
+    if (!nav) return null;
+    var el = document.createElement("div");
+    el.id = STRIP_ID;
+    el.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;" +
+      "max-width:var(--container-app);margin:0 auto;padding:0 28px 8px;";
+    nav.appendChild(el);
+    return el;
+  }
+
   function pin(id, tone) {
-    var host = document.querySelector(".bb-nav__inner");
+    var host = strip();
     if (!host) return null;
     var node = document.getElementById(id);
     if (!node) {
       node = document.createElement("span");
       node.id = id;
       node.setAttribute("role", "status");
+      node.style.whiteSpace = "normal";
+      node.style.maxWidth = "100%";
       host.appendChild(node);
     }
     node.className = "fm-badge fm-badge--" + tone;

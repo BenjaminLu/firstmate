@@ -27,7 +27,8 @@
 //   no-db       the artifact store never hands over a db capability
 //
 // Prints one JSON document:
-//   { badge, badgeAtDrop, badgeHost, answers, answersHost, provenance, note,
+//   { badge, badgeAtDrop, badgeHost, langHost, answers, answersHost,
+//     provenance, note,
 //     stack, picks, writes }
 import { readFileSync } from "node:fs";
 
@@ -181,8 +182,20 @@ function attach(parent, node) {
 
 function reseed() {
   body.children = [];
-  const nav = attach(body, new Node("div"));
+  // Mirror the shipped template's real nesting: a .bb-nav header wrapping the
+  // fixed-height .bb-nav__inner row that carries the brand and the language
+  // switch. A flat .bb-nav__inner cannot show where the transport puts its
+  // status line, which is the difference between a tappable language switch and
+  // one covered by a badge on a phone.
+  const navOuter = attach(body, new Node("header"));
+  navOuter.className = "bb-nav";
+  const nav = attach(navOuter, new Node("div"));
   nav.className = "bb-nav__inner";
+  ["bb-lang-en", "bb-lang-hant", "bb-lang-hans"].forEach((id) => {
+    const btn = attach(nav, new Node("button"));
+    btn.id = id;
+    btn.className = "bb-lang__btn";
+  });
   const main = attach(body, new Node("main"));
   main.className = "bb-main";
   TEMPLATE_IDS.forEach((id) => {
@@ -360,13 +373,18 @@ if (scenario === "long-quiet") {
   await tick();
   waitMinutes(90);
 }
-const hostOf = (node) => (node && node.parentNode ? node.parentNode.className : "");
+// Report the host by class OR id: the status line sits in a container the
+// transport creates, which carries an id rather than a board class.
+const hostOf = (node) =>
+  (node && node.parentNode ? (node.parentNode.className || node.parentNode.id || "") : "");
 const linkNode = shown("bb-remote-link");
 const answerNode = shown("bb-remote-answers");
 process.stdout.write(JSON.stringify({
   badge: linkNode ? linkNode.textContent : "",
   badgeAtDrop,
   badgeHost: hostOf(linkNode),
+  statusRowHost: hostOf(shown("bb-remote-status")),
+  langHost: hostOf(shown("bb-lang-en")),
   answers: answerNode ? answerNode.textContent : "",
   answersHost: hostOf(answerNode),
   provenance: (shown("bb-provenance") || {}).textContent || "",

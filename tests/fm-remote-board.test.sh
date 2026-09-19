@@ -425,6 +425,27 @@ drive() {  # <dir> <scenario>
   node "$HARNESS" "$1/page.html" "$2" || fail "the derived board could not be driven: $2"
 }
 
+# Measured on a real page at 500px before this was fixed: the status line sat in
+# .bb-nav__inner, a fixed-height nowrap flex row, so the page overflowed and a
+# tap on EN / 繁 / 简 landed on the badge instead of the button. Both halves are
+# asserted together so neither can go quietly vacuous.
+test_the_status_line_does_not_displace_the_language_switch() {
+  local d=$TMP_ROOT/drive-nav out badge lang
+  transport_page "$d"
+  out=$(drive "$d" live)
+  # The badge's own parent is always the transport's container, so the fact that
+  # decides whether it crowds the language switch is where that CONTAINER hangs.
+  badge=$(jq -r .statusRowHost <<<"$out")
+  lang=$(jq -r .langHost <<<"$out")
+  assert_equals "bb-nav__inner" "$lang" \
+    "the language switch must stay in the board's own nav row"
+  assert_not_equals "$lang" "$badge" \
+    "the status row must not sit inside the nav row that carries the language switch"
+  assert_contains "$(jq -r .badge <<<"$out")" "live" \
+    "the status line must still be rendered where it was moved to"
+  pass "the status line does not displace the language switch"
+}
+
 test_a_live_payload_repaints_through_the_shipped_board() {
   local d=$TMP_ROOT/drive-live out
   transport_page "$d"
@@ -433,9 +454,10 @@ test_a_live_payload_repaints_through_the_shipped_board() {
     "a live payload must reach the page through the shipped board's own renderer"
   assert_contains "$(jq -r .badge <<<"$out")" "live" "the page must say the link is live"
   # Computed copy the captain cannot see is no signal at all, so the badge must
-  # hang in the board's own nav bar.
-  assert_equals "bb-nav__inner" "$(jq -r .badgeHost <<<"$out")" \
-    "the link badge must be attached to the board's nav bar"
+  # reach the board's own nav - but on its own row, never inside the fixed
+  # height flex row that carries the language switch.
+  assert_equals "bb-remote-status" "$(jq -r .badgeHost <<<"$out")" \
+    "the link badge must be attached to the transport's own status row"
   pass "a live payload repaints through the shipped board"
 }
 
@@ -658,8 +680,8 @@ test_the_page_names_the_answer_route_that_is_not_landed() {
   out=$(drive "$d" live)
   assert_contains "$(jq -r .answers <<<"$out")" "firstmate" \
     "the page must name what does not yet reach firstmate"
-  assert_equals "bb-nav__inner" "$(jq -r .answersHost <<<"$out")" \
-    "that notice must be attached to the board's nav bar"
+  assert_equals "bb-remote-status" "$(jq -r .answersHost <<<"$out")" \
+    "that notice must be attached to the transport's own status row"
   pass "the page names the answer route that is not landed"
 }
 
@@ -697,3 +719,4 @@ if command -v node >/dev/null 2>&1; then
 else
   echo "skip: node not found - the remote transport's behavior cases need a JS runtime"
 fi
+test_the_status_line_does_not_displace_the_language_switch
