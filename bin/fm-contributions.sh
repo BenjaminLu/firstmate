@@ -56,13 +56,7 @@
 # A URL whose last good observation is merged or closed is final: it is
 # never re-read, stays fresh, and a stale error beside it is cleared once.
 # A genuine failure prints its unavailable line only when it starts an episode
-# (no prior owner has an error); a successful read ends the episode. No failure
-# is classified or held silent for a grace period: the noise this poll produced
-# came from a per-call bound below real forge latency, which the bound above
-# removes, and buying silence with a grace window instead would degrade the
-# board for the whole window. If a genuinely unreachable forge turns out to be
-# noisy after this lands, that is a measured follow-up, not a defense built
-# against a residual nobody has measured.
+# (no prior owner has an error); a successful read ends the episode.
 # FM_CONTRIBUTIONS_NOW supplies an ISO UTC clock for tests, otherwise UTC now.
 # FM_CONTRIBUTIONS_READY_LABEL selects the equivalent triage label, default
 # ready-for-pr. Labels are matched case-insensitively and exactly.
