@@ -53,9 +53,10 @@
 # failed. A call killed by the per-call bound is transient; every other failure,
 # a head change included, is a finding. A finding prints its unavailable line
 # when it starts an episode (no prior owner has an error). A transient failure
-# starts its episode silently and prints only once FM_CONTRIBUTIONS_FAILURE_GRACE
-# seconds (default: the freshness bound) have passed since the episode began, so
-# one slow read is not a wake while a forge that stays slow still reaches the
+# starts its episode silently and prints only once the freshness bound above has
+# passed since the episode began - the silence lasts exactly as long as the last
+# good observation still counts as fresh, so nothing downstream is degraded while
+# one slow read stays quiet and a forge that stays slow still reaches the
 # supervisor. Either kind prints at most one line per episode, and a successful
 # read ends the episode. A merged or closed record is never re-read at all, so a
 # transient failure cannot reach a settled contribution in the first place.
@@ -103,8 +104,6 @@ case "$BUDGET" in ''|*[!0-9]*) fail 'invalid poll budget' ;; esac
 CALL_BOUND=${FM_CONTRIBUTIONS_CALL_BOUND:-12}
 case "$CALL_BOUND" in ''|*[!0-9]*) fail 'invalid per-call forge bound' ;; esac
 [ "$CALL_BOUND" -ge 1 ] && [ "$CALL_BOUND" -le 25 ] || fail 'per-call forge bound must be 1..25 seconds'
-FAILURE_GRACE=${FM_CONTRIBUTIONS_FAILURE_GRACE:-$MAX_AGE}
-case "$FAILURE_GRACE" in ''|*[!0-9]*) fail 'invalid transient failure grace' ;; esac
 TRANSIENT=0
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-contributions.XXXXXX")
 LOCK_HELD=0
@@ -366,7 +365,7 @@ poll() {
     # finding opens its episode loudly, while a transient failure waits out the
     # grace so one slow read never becomes a captain-facing wake.
     if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" \
-      --argjson now "$EPOCH" --argjson grace "$FAILURE_GRACE" --argjson transient "$TRANSIENT" --args '
+      --argjson now "$EPOCH" --argjson grace "$MAX_AGE" --argjson transient "$TRANSIENT" --args '
       [$ARGS.positional[] as $task
         | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first] as $owners
       | if any($owners[]; .error_escalated == true) then false

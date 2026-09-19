@@ -865,9 +865,9 @@ test_transient_failure_leaves_a_terminal_record_alone() {
   : > "$home/forge/calls"
   printf 'slow\n' > "$home/forge/fault"
   printf '2\n' > "$home/forge/slow"
-  # No grace at all: even an immediately escalating transient failure must not
+  # No freshness bound at all: even an immediately escalating transient failure must not
   # reach a contribution whose last good observation is terminal.
-  out=$(with_home "$home" env FM_CONTRIBUTIONS_CALL_BOUND=1 FM_CONTRIBUTIONS_FAILURE_GRACE=0 \
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_CALL_BOUND=1 FM_CONTRIBUTIONS_MAX_AGE=0 \
     FM_CONTRIBUTIONS_NOW="$later" "$ROOT/bin/fm-contributions.sh" poll) \
     || fail 'poll of a merged record against a slow forge failed'
   [ -z "$out" ] || fail "a slow forge woke a merged contribution: $out"
@@ -914,10 +914,10 @@ test_head_change_is_a_finding_not_a_transient_failure() {
   forge_home "$home"
   wrap_forge "$home"
   printf 'head\n' > "$home/forge/fault"
-  out=$(with_home "$home" env FM_CONTRIBUTIONS_FAILURE_GRACE=86400 "$ROOT/bin/fm-contributions.sh" poll) \
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_MAX_AGE=86400 "$ROOT/bin/fm-contributions.sh" poll) \
     || fail 'poll failed when the head changed during the read'
   [ "$out" = 'contributions: observation unavailable for https://github.com/o/r/pull/8' ] \
-    || fail "a head change during the read was held behind the transient grace: $out"
+    || fail "a head change during the read was held behind the transient silence: $out"
   jq -e '.records[0] | .error_kind == "failure" and .error_escalated == true' \
     "$home/data/delivery/contributions.json" >/dev/null \
     || fail 'a head change was recorded as a transient failure'
