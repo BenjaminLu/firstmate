@@ -391,6 +391,50 @@ test_a_stored_card_carrying_the_injected_reconcile_choice_still_builds() {
   pass "a stored card carrying the injected reconcile choice still publishes exactly one"
 }
 
+test_refresh_states_only_the_omission_total_the_snapshot_establishes() {
+  local home row
+  home=$(make_home omitted-count)
+  seed_board "$home"
+  # The snapshot reports ONE omitted-gates total and never says how many of
+  # those rows were queued work and how many were repair notices. A refresh has
+  # no composer to divide it, and splitting it itself would assert a count the
+  # evidence does not support - in the harmful direction, since under-reporting
+  # a repair notice hides a repair.
+  jq '.omitted = [{surface: "gates showing 4 of 9", reveal: "--all-gates"}]' \
+    "$SNAPSHOT_FIXTURE" > "$home/snapshot.json"
+  run_board "$home" refresh --snapshot "$home/snapshot.json" --no-progress >/dev/null \
+    || fail "refresh failed on a snapshot that omitted gate rows"
+  jq -e '(has("charted_more") | not) and (has("charted_warning_more") | not)' \
+    "$home/.lavish/bearings-board.json" >/dev/null \
+    || fail "refresh split an omitted total the snapshot never split: $(payload_of "$home")"
+  row=$(jq -c '.charted[] | select(.id == "charted-omitted")' "$home/.lavish/bearings-board.json")
+  [ -n "$row" ] || fail "refresh hid the omission instead of stating it: $(payload_of "$home")"
+  printf '%s' "$row" | jq -e '
+    .kind == "warning" and .dispatchable == false
+    and (.title | tostring | test("5 more"))
+  ' >/dev/null || fail "the omission row did not state the one total the snapshot gives: $row"
+  pass "refresh states the omitted total the snapshot establishes and splits nothing it does not"
+}
+
+test_a_malformed_stored_card_degrades_one_row_instead_of_the_board() {
+  local home card
+  home=$(make_home stored-malformed)
+  seed_board "$home"
+  # Durable state written by an earlier session. Anything the payload validator
+  # would refuse must cost this ONE row, never the whole board.
+  mkdir -p "$home/data/gated-work"
+  jq -n '{key:"gated-work", type:"decision", repo:"firstmate", title:"",
+    options:[{value:"bad value with spaces", label:"x"}], allow_freeform:true}' \
+    > "$home/data/gated-work/board-card.json"
+  refresh "$home" >/dev/null || fail "a malformed stored card refused the whole board"
+  card=$(jq -c '.captains_call[] | select(.key == "gated-work")' \
+    "$home/.lavish/bearings-board.json")
+  [ -n "$card" ] || fail "the malformed stored card dropped its captain call entirely: $(payload_of "$home")"
+  printf '%s' "$card" | jq -e '(.title | tostring | length) > 0' >/dev/null \
+    || fail "the degraded card carried the malformed title through: $card"
+  pass "a malformed stored card degrades its own row instead of refusing the board"
+}
+
 # --- the fleet triggers ------------------------------------------------------
 # The board rides the same events as the home summary. The watcher is the one
 # trigger whose delivery is not obvious from the call site, so it is exercised
@@ -464,6 +508,8 @@ test_refresh_refuses_when_no_board_has_been_built
 test_a_concurrent_refresh_is_a_no_op_rather_than_a_race
 test_refresh_carries_no_placeholder_to_the_captain
 test_refresh_reuses_the_stored_card_verbatim
+test_refresh_states_only_the_omission_total_the_snapshot_establishes
+test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run
 test_progress_reports_no_ladder_without_an_attributable_run
 test_progress_never_reads_a_workers_terminal

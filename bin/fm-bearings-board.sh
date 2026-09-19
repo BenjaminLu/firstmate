@@ -143,10 +143,14 @@
 #            card with no stored or packet-seeded copy degrades to its durable
 #            title plus the hold's own reason as the question to decide and no
 #            invented options, an optional enum or recommendation the evidence
-#            does not supply is omitted rather than guessed, a merge card's
-#            risk reads `unassessed`, and the omitted-gate total the snapshot
-#            reports goes wholly to charted_more with charted_warning_more 0,
-#            because the snapshot never splits that one total. A degraded card
+#            does not supply is omitted rather than guessed, and a merge card's
+#            risk reads `unassessed`. Neither omitted-rows count is emitted at
+#            all, because the snapshot reports ONE omitted total and never says
+#            which of those rows were queued work and which were repair
+#            notices; splitting it here would assert a count the evidence does
+#            not support, and under-reporting a repair notice is the harmful
+#            direction. The omission is stated instead as one non-dispatchable
+#            warning row carrying that single total. A degraded card
 #            is still answerable: the captain can always reconcile it or answer
 #            in free form, and the next full build writes real copy once.
 #            Copy carries no translation slot either: with no translator in the
@@ -675,15 +679,30 @@ packet_card() {  # <task-id>
   printf '%s\n' "$card" | jq -c . 2>/dev/null || printf 'null\n'
 }
 
-# The durable card written once when the hold was created, or null. Only a
-# card the validator would accept is used, so a corrupt stored card degrades
-# that one row to the packet or placeholder path instead of refusing the board.
+# The durable card written once when the hold was created, or null.
+# A stored card is durable state written by an earlier session, so it is
+# checked here against the structural rules the payload validator applies to a
+# Captain's Call item before it is used: the wrong key would answer the wrong
+# call, and any other malformation would refuse the WHOLE board rather than
+# one row. A card that fails degrades this row to the packet or placeholder
+# path instead. The reconcile choice is stripped because it is injected per
+# publication and the validator refuses a card that already carries it.
 stored_card() {  # <task-id>
   local card
   card=$("$SCRIPT_DIR/fm-captain-hold.sh" card "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
   printf '%s\n' "$card" \
-    | jq -c --arg id "$1" '
-      if type == "object" and .key == $id
+    | jq -c --arg id "$1" "$BOARD_JQ_DEFS"'
+      def nonempty_string: type == "string" and length > 0;
+      def i18n: type == "object" and (.en | nonempty_string) and (.hant | nonempty_string)
+        and ((has("hans") | not) or (.hans | type == "string"));
+      def copy: nonempty_string or i18n;
+      if type == "object"
+        and .key == $id
+        and (.key | slug(128))
+        and (.type == "decision" or .type == "merge" or .type == "credential")
+        and (.title | copy)
+        and ((.options // []) | type == "array")
+        and ([(.options // [])[] | type == "object" and (.value | slug(128)) and (.label | copy)] | all)
       then .options = [(.options // [])[] | select(.value != "reconcile")]
       else null end' 2>/dev/null \
     || printf 'null\n'
@@ -930,10 +949,9 @@ EOF
       [ .omitted[]? | .surface | capture("^gates showing (?<shown>[0-9]+) of (?<total>[0-9]+)") ]
       | if length == 0 then 0 else ((.[0].total | tonumber) - (.[0].shown | tonumber)) end;
     def more_slot($kind; $sibling): gates_omitted as $n
-      | if $deterministic then (if $kind == "queued" then $n else 0 end) else
-      fillv($kind + " Charted Next rows not shown: your share of the " + ($n | tostring)
+      | fillv($kind + " Charted Next rows not shown: your share of the " + ($n | tostring)
         + " gate rows the snapshot omitted, the rest of that same total belonging to "
-        + $sibling + ", plus any " + $kind + " rows you cut") end;
+        + $sibling + ", plus any " + $kind + " rows you cut");
     {
       schema: $schema, home: .home, generated: .generated, lang: $lang,
       prs_live: (.prs | startswith("checked")),
@@ -993,6 +1011,14 @@ EOF
              reason: t("no merge card is offered, because a merge answer keyed to that task names only "
                + "one pull request: " + ([.[] | .url] | join(", ")); "merge-collision"),
              dispatchable: false, kind: "warning", filed: null} ]
+        + (if $deterministic and gates_omitted > 0 then gates_omitted as $n
+          | [{id: "charted-omitted", repo: null,
+             title: t(($n | tostring) + " more Charted Next rows are not shown here";
+               "charted-omitted"),
+             reason: t("the fleet snapshot omitted that many rows and does not say which are "
+               + "queued work and which are repair notices, so neither count is stated; "
+               + "ask firstmate for the full chart"; "charted-omitted"),
+             dispatchable: false, kind: "warning", filed: null}] else [] end)
         + (if $readable then [] else
           [{id: "backlog-unreadable", repo: null,
             title: t("This home cannot read its own backlog"; "backlog-unreadable"),
@@ -1000,7 +1026,7 @@ EOF
               "backlog-unreadable"),
             dispatchable: false, kind: "warning", filed: null}] end))
     }
-    + (if gates_omitted > 0 then {
+    + (if gates_omitted > 0 and ($deterministic | not) then {
         charted_more: more_slot("queued"; "charted_warning_more"),
         charted_warning_more: more_slot("warning"; "charted_more")}
       else {} end)' > "$tmp" || { rm -f -- "$tmp"; fail "cannot compose the board skeleton"; }
