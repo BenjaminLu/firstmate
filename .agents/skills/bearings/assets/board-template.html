@@ -846,11 +846,12 @@ __FM_BEARINGS_BOARD_DATA__
       var form = document.createElement("form");
       form.setAttribute("data-lavish-question", item.key);
       var packet = packetOf(item);
-      /* The choose button inside an option's own tab carries that option's
-         value; it is the same value the decision block defines and the same
-         answer channel below records it, so the tabs change where the captain
-         reads, never what he answers. */
-      var picked = null;
+      /* Every answer goes through queueAnswer with the value it is answering
+         with, passed in. A choose button inside an option's own tab passes
+         that option's value - the same value the decision block defines, down
+         the same channel - and the form passes whatever the form itself holds,
+         so the tabs change where the captain reads, never what he answers, and
+         no answer can pick up a value some earlier click left lying around. */
       if (packet) {
         var compare = comparisonFigure(packet, item.options);
         var drawable = packet.figures.length > 0;
@@ -911,9 +912,12 @@ __FM_BEARINGS_BOARD_DATA__
           var choose = el("button", "fm-btn fm-btn--sm " +
             (o.value === item.recommend_value ? "fm-btn--primary" : "fm-btn--gold"),
             t("choose", { x: pick(o.label) }));
-          choose.type = "submit";
-          choose.setAttribute("data-value", o.value);
-          choose.addEventListener("click", function () { picked = o.value; });
+          /* never a submit button: the first submit button in a form is the one
+             the browser presses when the captain hits Enter in the free-form
+             field, and that must stay the foot button, which answers in his
+             own words rather than choosing an option for him */
+          choose.type = "button";
+          choose.addEventListener("click", function () { queueAnswer(o.value); });
           panel.appendChild(choose);
           addTab(pick(o.label), DOTS[i % DOTS.length], panel);
         });
@@ -997,9 +1001,6 @@ __FM_BEARINGS_BOARD_DATA__
       var foot = el("div", "bb-decision__foot");
       var btn = el("button", "fm-btn fm-btn--sm " + (item.type === "merge" ? "fm-btn--gold" : "fm-btn--primary"), t("queue_answer"));
       btn.type = "submit";
-      /* the foot button answers in the captain's own words, so it clears a
-         choice a tab's button made earlier rather than sending it again */
-      btn.addEventListener("click", function () { picked = null; });
       foot.appendChild(btn);
       var q = el("span", "bb-queued");
       q.innerHTML = CHECK_SVG + " " + t("queued");
@@ -1011,10 +1012,12 @@ __FM_BEARINGS_BOARD_DATA__
 
       form.addEventListener("submit", function (ev2) {
         ev2.preventDefault();
+        queueAnswer(new FormData(form).get("answer"));
+      });
+
+      function queueAnswer(value) {
         answerLimit.className = "bb-limit";
-        var fd = new FormData(form);
-        var value = picked || fd.get("answer");
-        var note = (fd.get("note") || "").trim();
+        var note = (new FormData(form).get("note") || "").trim();
         var displayAnswer = value ? (note ? value + " - " + note : value) : note;
         if (!displayAnswer) return;
         if (utf8ByteLength(displayAnswer) > 512) {
@@ -1045,7 +1048,7 @@ __FM_BEARINGS_BOARD_DATA__
         card.classList.add("is-queued");
         /* deal the next card once this one is answered */
         setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, 450);
-      });
+      }
 
       if (queuedKeys[item.key]) card.classList.add("is-queued");
       pad.appendChild(form);

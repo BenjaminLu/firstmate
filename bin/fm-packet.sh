@@ -189,26 +189,30 @@
 #            own drawing without a second declaration; `body` is the rest of
 #            the packet - every section except the decision block, already
 #            converted to HTML by the same converter the page uses. Nothing a
-#            figure SAYS is repeated in `figures`: its heading, its caption and
-#            its per-connector evidence reach the card through `body`, which is
-#            where the language rule below puts them, so the card carries one
-#            copy of every string and renders every field it carries. The
+#            figure SAYS is repeated in `figures`: its heading and its caption
+#            reach the card through `body`, which is where the language rule
+#            below puts them, so the card carries one copy of every string and
+#            renders every field it carries. Its `- edge` lines are an
+#            integrity check the drawing has to satisfy, never page content, so
+#            they render nowhere - exactly as the figure contract has it. The
 #            reader never opens a session and never writes a file for this:
 #            `fm-packet.sh serve` stays the one explicit way to put a packet
 #            on its own address.
 #            A drawing is inlined into the BOARD, which is not the packet's own
 #            page, so what may be inlined is decided when the card is built
 #            rather than inherited from a check that runs elsewhere: a drawing
-#            carrying a script, an event handler, or foreign markup is dropped
-#            whole, and a <style> block is removed from the one that is kept,
-#            because inside an inlined svg it is page-wide CSS that would
-#            restyle the board around it.
+#            carrying a script, an event handler, foreign markup, an animation
+#            that can retarget a link, or a link to anything but http, https,
+#            mailto or a place inside the same drawing is dropped whole, and a
+#            closed <style> block is removed from the one that is kept, because
+#            inside an inlined svg it is page-wide CSS that would restyle the
+#            board around it.
 #
 # ONE LANGUAGE RULE, FOR THE WHOLE PACKET. The captain reads EN / 繁體 / 简体
 # and every captain-facing surface owes him all three. A packet cannot give
 # him all three of everything: the decision block's fields are copy objects,
-# and so are a drawing's own <text> labels, but the prose sections, a figure's
-# heading, its caption and its per-connector evidence are one language - the
+# and so are a drawing's own <text> labels, but the prose sections and a
+# figure's heading and caption are one language - the
 # one the worker wrote. Translating them here is not on the table; nothing in
 # this repo can translate. So the rule is where a string renders, not what it
 # says:
@@ -218,7 +222,7 @@
 #
 # That puts the decision's own copy and the drawings in the switching part,
 # where the captain's language moves all of it together, and the prose, the
-# figure headings, the captions and the evidence lines in one block below,
+# figure headings and the captions in one block below,
 # which does not move at all. No block is ever half-switched - a drawing whose
 # labels follow the captain while the sentence under it stands still is the
 # exact failure this rule exists to prevent - and the card says which block is
@@ -1255,78 +1259,79 @@ def decision_card(d):
 # as-written part gets everything else, in one language, headings included, so
 # the block never moves by halves.
 FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
-FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 FIG_SVG = re.compile(r"<svg\b.*?</svg\s*>", re.S)
 FIG_NODE = re.compile(r"""data-node\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 FIG_TAG = re.compile(r"""<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
 FIG_ON = re.compile(r"(?:^|\s)on[a-z]+\s*=", re.I)
 FIG_STYLE = re.compile(r"<\s*style\b.*?</\s*style\s*>", re.S | re.I)
+FIG_URL = re.compile(r"""(?:^|\s)(?:xlink:)?(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))""", re.I)
+FIG_URL_OK = re.compile(r"\A(?:#|https?://|mailto:)", re.I)
+FIG_BLANK = re.compile(r"[\s\x00-\x20]")
 
 # The card inlines a drawing into the BOARD, a page the packet knows nothing
 # about, so what is safe to inline is decided here and never assumed from a
-# check that runs somewhere else. A drawing that can run code or draw foreign
-# markup is dropped whole - the tab then says the packet carries no drawing for
-# that option, which is true. A <style> block is removed rather than dropping
-# the drawing: inside an inlined svg it is page-wide CSS and would restyle the
-# board around it, and the figure contract already keeps colour out of it, so
-# what is lost is presentation and what is kept is the board.
+# check that runs somewhere else. A drawing that can run code, navigate the
+# board, restyle it or draw foreign markup is dropped whole - the tab then says
+# the packet carries no drawing for that option, which is true. A <style> block
+# is removed rather than dropping the drawing: inside an inlined svg it is
+# page-wide CSS and would restyle the board around it, and the figure contract
+# already keeps colour out of it, so what is lost is presentation and what is
+# kept is the board. That removal only knows where a block ENDS when it is
+# closed, so this runs on what the removal left: a <style> still standing here
+# is one with no end, and the drawing goes rather than the block.
 def figure_unsafe(svg):
     for m in FIG_TAG.finditer(svg):
-        if m.group(1).lower() in ("script", "foreignobject"):
+        if m.group(1).lower() in ("script", "foreignobject", "style", "animate", "set"):
             return True
         if FIG_ON.search(m.group(2)):
             return True
+        for u in FIG_URL.finditer(m.group(2)):
+            raw = next(g for g in u.groups() if g is not None)
+            if not FIG_URL_OK.match(FIG_BLANK.sub("", html.unescape(raw))):
+                return True
     return False
 
 def figures_of(body):
     """-> (the lines before the first drawing, the drawings in packet order)"""
-    text = "\n".join(body)
-    head, sep, rest = text.partition("\n### ")
-    if not sep:
-        return head.splitlines(), []
+    # A figure starts where a line starts with "### ", which is how verify
+    # reads the same section: a packet that verify accepts parses the same way
+    # here, whether or not a blank line follows the section heading.
+    head, chunks = [], []
+    for line in body:
+        if line.startswith("### "):
+            chunks.append([line[4:].strip(), []])
+        elif chunks:
+            chunks[-1][1].append(line)
+        else:
+            head.append(line)
     out_figs = []
-    for chunk in ("### " + rest).split("\n### "):
-        chunk = chunk[4:] if chunk.startswith("### ") else chunk
-        chunk_lines = chunk.splitlines()
-        heading = chunk_lines[0].strip() if chunk_lines else ""
-        fields, edges = {}, []
-        for line in chunk_lines[1:]:
+    for heading, chunk_lines in chunks:
+        fields = {}
+        for line in chunk_lines:
             m = FIG_ATTR.match(line)
             if m and m.group(1) not in fields:
                 fields[m.group(1)] = m.group(2)
-                continue
-            m = FIG_EDGE.match(line)
-            if m:
-                edges.append({"id": m.group(1), "why": inline(m.group(2))})
-        svg = FIG_SVG.search(chunk)
+        svg = FIG_SVG.search("\n".join(chunk_lines))
         if not svg:
             continue
-        # The drawing rides the card as written. verify has already refused a
-        # <script>, an on* handler and a baked colour, and the board never
-        # renders a packet that failed verify - that is what makes inlining it
-        # safe, and the only thing that does.
-        drawing = svg.group(0)
         # An unsafe drawing loses its drawing, not its place: what it SAYS is
         # still true and still reaches the card, so the reader keeps the figure
         # and drops only the markup the board cannot take.
-        drawing = None if figure_unsafe(drawing) else FIG_STYLE.sub("", drawing)
+        drawing = FIG_STYLE.sub("", svg.group(0))
+        drawing = None if figure_unsafe(drawing) else drawing
         nodes = sorted({(a or b) for a, b in FIG_NODE.findall(drawing) if (a or b)}) if drawing else []
         out_figs.append({"slug": fields.get("figure", ""), "heading": inline(heading),
                          "caption": inline(fields.get("caption", "")),
-                         "svg": drawing, "nodes": nodes, "edges": edges})
-    return head.splitlines(), out_figs
+                         "svg": drawing, "nodes": nodes})
+    return head, out_figs
 
 def figures_words(lead, figs):
-    """what a figure says in words: its heading, its caption, its evidence"""
+    """what a figure says in words: its heading and its caption"""
     parts = [md(lead)] if "".join(lead).strip() else []
     for fig in figs:
         parts.append("<h5>%s</h5>" % fig["heading"])
         if fig["caption"]:
             parts.append('<p class="pk-fig__cap">%s</p>' % fig["caption"])
-        if fig["edges"]:
-            parts.append('<ul class="pk-fig__edges">%s</ul>'
-                         % "".join("<li><code>%s</code> %s</li>" % (esc(e["id"]), e["why"])
-                                   for e in fig["edges"]))
     return "".join(parts)
 
 if mode == "card":
@@ -1341,8 +1346,8 @@ if mode == "card":
         key = SECTION_KEYS.get(heading)
         h = T[packet_lang][key] if key else heading
         # The drawings move up into the switching part of the card; their
-        # headings, captions and evidence lines stay down here, where one
-        # language is the rule rather than a leak.
+        # headings and captions stay down here, where one language is the
+        # rule rather than a leak.
         inner = figures_words(lead, figures) if heading == "Figures" else md(body)
         # "The decision" is the card itself; a section left with nothing but
         # the block that moved into the card is not worth a heading.
@@ -1350,8 +1355,8 @@ if mode == "card":
             parts.append('<section class="pk-part"><h4 class="pk-part__h">%s</h4>'
                          '<div class="pk-prose">%s</div></section>' % (esc(h), inner))
     # The card carries a drawing and the identities it draws, and nothing else:
-    # what a figure SAYS - its heading, its caption, its evidence - is already
-    # in the body, which is where the language rule puts it. One copy of every
+    # what a figure SAYS - its heading and its caption - is already in the
+    # body, which is where the language rule puts it. One copy of every
     # string, and every field the card carries is a field the board renders.
     drawings = [{"slug": f["slug"], "svg": f["svg"], "nodes": f["nodes"]}
                 for f in figures if f["svg"]]

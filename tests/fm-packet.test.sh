@@ -800,9 +800,11 @@ MD
     and (.packet.body | test("tried a retry loop first"))
     and (.packet.body | test("<svg") | not)
     and (.packet.body | test("fm-packet-decision") | not)
-    # a figure still says in words what it is and what proves it
+    # a figure still says in words what it is, while its per-connector check
+    # on the drawing renders nowhere - it was never page content
     and (.packet.body | test("Where the options part"))
-    and (.packet.body | test("the gate reads the error stream"))
+    and (.packet.body | test("the gate reads the error stream") | not)
+    and (.packet.body | test("edge a-b") | not)
   ' >/dev/null || fail "the card did not carry the packet: $out"
   pass "the card carries the packet itself: its drawings, and the rest as markup"
 }
@@ -866,6 +868,20 @@ caption: this one must not reach the board.
 
 <svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><script>window.top.location = "https://example.test"</script></svg>
 
+### A drawing that runs code when the reader clicks it
+
+figure: linked
+caption: an inline link runs its href in the page that inlined it.
+
+<svg viewBox="0 0 20 20"><a xlink:href="javascript:alert(1)"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></a></svg>
+
+### A drawing whose style block is never closed
+
+figure: unclosed
+caption: nothing pairs this one, so removing the block cannot find its end.
+
+<svg viewBox="0 0 20 20"><style>.bb-decision__foot { display: none }<rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/></svg>
+
 ### A drawing that restyles the page around it
 
 figure: styled
@@ -875,14 +891,49 @@ caption: its style block is page-wide CSS once inlined.
 MD
   out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
   printf '%s' "$out" | jq -e '
-    # the one that can run code is dropped whole
+    # the ones that can run code, navigate the board, or restyle it with a
+    # block nothing closes are dropped whole
     ([.packet.figures[] | .slug] == ["styled"])
-    # the one that can restyle the board keeps its drawing and loses the block
+    # the one whose style block is closed keeps its drawing and loses the block
     and (.packet.figures[0].svg | test("<style") | not)
     and (.packet.figures[0].svg | test("data-node=\"quiet\""))
     and (.packet.figures[0].svg | test("data-hant=\"留著\""))
+    # and every one of them still says in words what it was for
+    and (.packet.body | test("an inline link runs its href"))
+    and (.packet.body | test("removing the block cannot find its end"))
   ' >/dev/null || fail "an unsafe drawing reached the card: $out"
-  pass "a drawing that can run code or restyle the board never reaches the card as it was written"
+  pass "a drawing that can run code, navigate or restyle the board never reaches the card as it was written"
+}
+
+test_a_figures_section_parses_the_same_without_a_blank_line_after_it() {
+  local home out packet
+  home=$(make_home card-packet-tight)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  # verify reads this section per line, so a figure that opens on the line
+  # straight after the section heading is a packet verify accepts - and the
+  # card has to read it the same way rather than losing the first drawing.
+  cat >> "$packet" <<'MD'
+
+## Figures
+### Where the options part
+figure: cmp
+caption: Both reach the gate; only one writes onto the data stream.
+<svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="one path" data-hant="一條路" data-hans="一条路">one path</text></svg>
+MD
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    ([.packet.figures[] | .slug] == ["cmp"])
+    and (.packet.figures[0].nodes == ["bound", "quiet"])
+    # and the drawing left the body rather than being dumped into it as text
+    and (.packet.body | test("<svg") | not)
+    and (.packet.body | test("figure: cmp") | not)
+    and (.packet.body | test("Where the options part"))
+    and (.packet.body | test("only one writes"))
+  ' >/dev/null || fail "a Figures section with no blank line after it did not parse: $out"
+  pass "a figure opening on the line after the section heading parses like any other"
 }
 
 test_path_and_bad_ids_are_refused() {
@@ -1103,3 +1154,4 @@ test_the_card_carries_the_packet_itself
 test_a_packet_with_no_figures_still_cards
 test_the_packet_body_declares_the_one_language_it_is_in
 test_a_drawing_the_board_cannot_safely_inline_never_reaches_the_card
+test_a_figures_section_parses_the_same_without_a_blank_line_after_it

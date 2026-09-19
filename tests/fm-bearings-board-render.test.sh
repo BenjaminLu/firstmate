@@ -375,11 +375,14 @@ test_a_packet_with_figures_opens_its_tabs_inside_the_card() {
           and (.panels[1].figures[0] | test("data-node=\"quiet\"") and (test("data-node=\"loud\"") | not))
           and (.panels[2].figures == [])
           and (.panels[2].notes | map(test("no drawing")) | any)
-          # each option answers from inside its own tab, with its own value
+          # each option answers from inside its own tab, and what its button
+          # sends down the answer channel is the value that option carries
           and (.panels[1] | .label == "Error stream only" and .cost == "Two lines of code leave."
-            and ([.buttons[] | .value] == ["quiet"]) and (.buttons[0].text | test("Choose Error stream only")))
-          and (.panels[2] | .label == "Both streams" and ([.buttons[] | .value] == ["loud"]))
-          and (.panels[3] | [.buttons[] | .value] == ["reconcile"]))
+            and ([.buttons[] | .queues.selection] == ["quiet"])
+            and (.buttons[0].queues | .schema == "fm-bearings-answer.v1" and .question == "stream-choice")
+            and (.buttons[0].text | test("Choose Error stream only")))
+          and (.panels[2] | .label == "Both streams" and ([.buttons[] | .queues.selection] == ["loud"]))
+          and (.panels[3] | [.buttons[] | .queues.selection] == ["reconcile"]))
   ' >/dev/null || fail "the packet did not open as tabs inside the card: $out"
   pass "a packet with figures opens one tab per option, each with its own drawing and button"
 }
@@ -394,7 +397,7 @@ test_a_packet_without_figures_still_renders_its_card() {
     (.cards[0]
       | ([.tabs[] | .label] == ["Difference", "Error stream only", "Both streams", "Reconcile"])
         and ([.panels[] | .figures] | flatten | length) == 0
-        and ([.panels[] | .buttons[] | .value] == ["quiet", "loud", "reconcile"])
+        and ([.panels[] | .buttons[] | .queues.selection] == ["quiet", "loud", "reconcile"])
         and (.packet.body | test("the probe never ran on Linux")))
   ' >/dev/null || fail "a packet with no drawings lost its tabs or its body: $out"
   pass "a packet with no figures still renders its tabs, its answers and its body"
@@ -450,6 +453,22 @@ test_a_card_with_no_packet_renders_exactly_as_it_did() {
   pass "a card whose task has no packet renders exactly as it does today"
 }
 
+test_a_free_form_answer_never_counts_as_choosing_an_option() {
+  local home out figures
+  home=$(make_home packet-freeform)
+  figures=$(packet_figure cmp quiet loud)
+  out=$(render_payload "$home" "$(packet_payload en "[$figures]")")
+  # The captain types his own words and presses Enter. A browser answers that
+  # by pressing the form's first submit button, so no option's button may be
+  # one: what goes down the channel is the note, chosen by nobody.
+  printf '%s' "$out" | jq -e '
+    (.cards[0].on_enter
+      | .schema == "fm-bearings-answer.v1" and .question == "stream-choice"
+        and .selection == "" and .note == "in my own words")
+  ' >/dev/null || fail "a free-form answer was recorded as choosing an option: $out"
+  pass "a free-form answer with no option chosen is queued as a note, not a vote"
+}
+
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first
@@ -466,3 +485,4 @@ test_a_packet_without_figures_still_renders_its_card
 test_the_packet_body_stays_in_the_language_it_was_written_in
 test_an_inline_packet_never_offers_a_second_address
 test_a_card_with_no_packet_renders_exactly_as_it_did
+test_a_free_form_answer_never_counts_as_choosing_an_option
