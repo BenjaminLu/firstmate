@@ -10,11 +10,11 @@
 #
 # Usage:
 #   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
-#                                [--deterministic] [--progress-map <file>] [--no-progress]
+#                                [--deterministic]
 #   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
-#   fm-bearings-board.sh refresh [--lang ...] [--snapshot <file>] [--progress-map <file>]
-#                                [--no-progress] [--payload-out <file>] [--best-effort]
+#   fm-bearings-board.sh refresh [--lang ...] [--snapshot <file>] [--payload-out <file>]
+#                                [--best-effort]
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh payload-path
 #   fm-bearings-board.sh url
@@ -158,9 +158,6 @@
 #            the payload contract already accepts, which the board shows in
 #            every language, while copy that arrived already translated (a
 #            stored or packet-seeded card) keeps its own translations.
-#            --progress-map <file> supplies the Underway progress projection as
-#            a JSON object keyed by task id, instead of reading it here;
-#            --no-progress omits the projection entirely.
 # refresh    Recompose the board deterministically and inject it in place at
 #            the stable path, WITHOUT establishing, reopening, binding, or
 #            arming anything. It is the no-model-in-the-loop republication: it
@@ -170,8 +167,14 @@
 #            so a consumer other than the local page can pick it up without
 #            recomposing. Safe to run on every fleet event: it touches no Lavish
 #            session, so the board's URL, its process-event source, and its
-#            keyed-answer binding all survive untouched, and a home-local lock
-#            makes a concurrent trigger a no-op rather than a race. It refuses
+#            keyed-answer binding all survive untouched, and a home-local
+#            exclusive lock makes a concurrent trigger a no-op rather than a
+#            race. That lock records its holder, so a refresh killed mid-flight
+#            is reclaimed by the next trigger instead of wedging the board, and
+#            every stand-down is logged. The whole refresh runs in a child under
+#            one FM_BEARINGS_REFRESH_TIMEOUT deadline (default 90 seconds),
+#            because a compose costs one bounded read per Underway row and the
+#            lock is held for all of them. It refuses
 #            when no board has been built yet; with --best-effort that refusal,
 #            and every other failure, becomes a silent exit 0 with the reason
 #            appended to the bounded state/.bearings-board-refresh.log, so a
@@ -283,6 +286,8 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 REFRESH_LOG_MAX_BYTES=${FM_BEARINGS_REFRESH_LOG_MAX_BYTES:-65536}
 case "$REFRESH_LOG_MAX_BYTES" in ''|*[!0-9]*|0) REFRESH_LOG_MAX_BYTES=65536 ;; esac
+REFRESH_TIMEOUT=${FM_BEARINGS_REFRESH_TIMEOUT:-90}
+case "$REFRESH_TIMEOUT" in ''|*[!0-9]*|0) REFRESH_TIMEOUT=90 ;; esac
 
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
@@ -749,7 +754,7 @@ command_compose_check() {  # <data.json>
 
 command_compose() {
   local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
-  local deterministic=false progress_map='' progress='{}' no_progress=0 row
+  local deterministic=false progress='{}' row
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
@@ -757,8 +762,6 @@ command_compose() {
       --out) out=${2-}; shift 2 ;;
       --snapshot) snapshot_file=${2-}; shift 2 ;;
       --deterministic) deterministic=true; shift ;;
-      --progress-map) progress_map=${2-}; shift 2 ;;
-      --no-progress) no_progress=1; shift ;;
       *) usage >&2; exit 2 ;;
     esac
   done
@@ -806,21 +809,15 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
-  if [ -n "$progress_map" ]; then
-    [ -f "$progress_map" ] || fail "progress map does not exist: $progress_map"
-    progress=$(jq -e 'type == "object"' "$progress_map" >/dev/null 2>&1 \
-      && jq -c . "$progress_map") || fail "progress map is not a JSON object: $progress_map"
-  elif [ "$no_progress" -eq 0 ]; then
-    while IFS= read -r row; do
-      [ -n "$row" ] || continue
-      card=$(task_progress "$row") || continue
-      [ -n "$card" ] || continue
-      progress=$(jq -n --argjson acc "$progress" --arg id "$row" --argjson p "$card" \
-        '$acc + {($id): $p}')
-    done <<EOF
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    card=$(task_progress "$row") || continue
+    [ -n "$card" ] || continue
+    progress=$(jq -n --argjson acc "$progress" --arg id "$row" --argjson p "$card" \
+      '$acc + {($id): $p}')
+  done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.in_flight[]? | select(.id | contains("/") | not) | .id')
 EOF
-  fi
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" \
@@ -1174,10 +1171,31 @@ refresh_log() {  # <message>
 
 REFRESH_BEST_EFFORT=0
 REFRESH_LOCK=
+
+# The lock and the deadline owner are loaded only for a refresh: every other
+# subcommand needs neither, and sourcing the wake library creates state/.
+refresh_require_libs() {
+  # The wake library creates the state directory at source time, and this
+  # script's errexit would turn that failure into a bare abort no --best-effort
+  # caller could absorb, so the condition is named here instead.
+  mkdir -p "$STATE" 2>/dev/null \
+    || refresh_fail "the state directory is unavailable: $STATE"
+  if ! command -v fm_run_timed >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-timeout-lib.sh
+    # shellcheck disable=SC1091
+    . "$SCRIPT_DIR/fm-timeout-lib.sh"
+  fi
+  if ! command -v fm_lock_try_acquire >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-wake-lib.sh
+    # shellcheck disable=SC1091
+    . "$SCRIPT_DIR/fm-wake-lib.sh"
+  fi
+}
+
 # shellcheck disable=SC2329 # Invoked by the EXIT trap below.
 refresh_unlock() {
   [ -n "$REFRESH_LOCK" ] || return 0
-  rmdir "$REFRESH_LOCK" 2>/dev/null || true
+  fm_lock_release "$REFRESH_LOCK" || true
   REFRESH_LOCK=
 }
 
@@ -1225,15 +1243,42 @@ publish_payload_file() {  # <payload.json> <dest>
   fi
 }
 
+# The deadline owner. A compose reads a fresh snapshot and one progress
+# projection per Underway row, each individually bounded but O(N) in total, and
+# it holds the exclusive lock while it does, so a refresh that cannot finish
+# would keep every later fleet trigger standing down. The work therefore runs
+# in a child under one overall deadline, exactly as the home summary's refresh
+# bounds itself; the lock records its owner, so a worker killed at the deadline
+# is reclaimed by the next trigger rather than wedging the board for good.
 command_refresh() {
+  local arg rc=0
+  # Read before anything can fail, so every failure below - in either role -
+  # already knows whether --best-effort must absorb it.
+  for arg in "$@"; do
+    if [ "$arg" = --best-effort ]; then REFRESH_BEST_EFFORT=1; fi
+  done
+  refresh_require_libs
+  if [ "${FM_BEARINGS_BOARD_REFRESH_WORKER:-0}" = 1 ]; then
+    refresh_worker "$@"
+    return
+  fi
+  fm_run_timed "$REFRESH_TIMEOUT" env FM_BEARINGS_BOARD_REFRESH_WORKER=1 \
+    "$SCRIPT_DIR/fm-bearings-board.sh" refresh "$@" || rc=$?
+  [ "$rc" -ne 0 ] || return 0
+  [ "$rc" -ne 124 ] \
+    || refresh_fail "refresh exceeded its ${REFRESH_TIMEOUT}-second deadline"
+  # Any other failure was already reported - and, under --best-effort, already
+  # absorbed - by the worker itself; the parent only carries its status.
+  exit "$rc"
+}
+
+refresh_worker() {
   local board payload_out='' lock='' skeleton effective leftover
   local -a compose_args=(--deterministic)
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --lang) compose_args+=(--lang "${2-}"); shift 2 ;;
       --snapshot) compose_args+=(--snapshot "${2-}"); shift 2 ;;
-      --progress-map) compose_args+=(--progress-map "${2-}"); shift 2 ;;
-      --no-progress) compose_args+=(--no-progress); shift ;;
       --payload-out) payload_out=${2-}; shift 2 ;;
       --best-effort) REFRESH_BEST_EFFORT=1; shift ;;
       *) usage >&2; exit 2 ;;
@@ -1247,14 +1292,20 @@ command_refresh() {
   [ -f "$board" ] && [ ! -L "$board" ] \
     || refresh_fail "no board has been built yet at $board (run /bearings lavish)"
   lock="$STATE/.bearings-board-refresh.lock"
-  mkdir -p "$STATE" 2>/dev/null || true
-  if ! mkdir "$lock" 2>/dev/null; then
-    # Another trigger is already publishing a payload at least as fresh.
+  if ! fm_lock_try_acquire "$lock"; then
+    # Another trigger is already publishing a payload at least as fresh. The
+    # stand-down is logged as well as printed, because every fleet trigger
+    # sends this stdout to /dev/null: a lock that stopped clearing has to leave
+    # a trace somewhere a diagnosis can find it.
+    refresh_log "refresh: busy (lock held by pid ${FM_LOCK_HELD_PID:-unknown})"
     printf 'refresh: busy\n'
     return 0
   fi
   REFRESH_LOCK=$lock
   trap refresh_unlock EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   skeleton=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-refresh.XXXXXX") \
     || refresh_fail "cannot stage the refreshed payload"
   effective=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-refresh-eff.XXXXXX") \

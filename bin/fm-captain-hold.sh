@@ -42,12 +42,15 @@
 # refreshed on fleet events with no model in the loop, so the card's own
 # captain-facing copy must be durable rather than re-composed prose. `hold`
 # therefore writes the call's composed card to data/<task-id>/board-card.json
-# ONCE, seeded from `bin/fm-packet.sh card <task-id>` when the task carries a
-# verified needs-decision packet. A stored card is never overwritten by a later
-# hold: the copy the captain has already been shown stays put, and a re-held
-# task keeps the card its question was written for. Seeding is best effort -
-# a task with no verified packet simply has no stored card yet, and the board's
-# composing rules own who writes that copy once.
+# ONCE PER HOLD, seeded from `bin/fm-packet.sh card <task-id>` when the task
+# carries a verified needs-decision packet. A stored card is valid only for the
+# hold it was seeded from: re-stating a hold that is still active keeps the copy
+# the captain has already been shown, but holding a task AGAIN after its last
+# hold was resolved is a new call, so the previous hold's card is dropped and
+# re-seeded. The captain must never be shown one question while his answer
+# routes to another. Seeding is best effort - a task with no verified packet
+# simply has no stored card yet, and the board's composing rules own who writes
+# that copy once.
 # `card <task-id>` prints the stored card, exiting 1 when there is none;
 # `card <task-id> --store <path>` stores one (replacing any stored card), which
 # is how a board build persists the copy its composer wrote so every later
@@ -849,18 +852,25 @@ store_board_card() {  # <task-id> <source-file>
   fi
 }
 
-# Seed the stored card from a verified needs-decision packet, once. Every
-# failure here is silent by design: a call with no packet yet is the ordinary
-# case, and a hold must never fail because its card could not be pre-written.
-seed_board_card() {  # <task-id>
-  local id=$1 card tmp
+# Seed the stored card from a verified needs-decision packet, once per hold.
+# <new-hold> is 1 when this call begins a hold the captain has not been shown
+# yet, which retires the previous hold's card: a card outlives the question it
+# was written for otherwise, while the keyed answer resolves the CURRENT hold.
+# Every failure here is silent by design: a call with no packet yet is the
+# ordinary case, and a hold must never fail because its card could not be
+# pre-written - store_board_card exits on failure, so it runs in a subshell.
+seed_board_card() {  # <task-id> <new-hold:0|1>
+  local id=$1 new_hold=$2 card tmp
   command -v jq >/dev/null 2>&1 || return 0
   card=$(board_card_path "$id")
+  if [ "$new_hold" -eq 1 ]; then
+    rm -f -- "$card" 2>/dev/null || true
+  fi
   [ ! -e "$card" ] || return 0
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-captain-hold-card.XXXXXX") || return 0
   if "$SCRIPT_DIR/fm-packet.sh" card "$id" > "$tmp" 2>/dev/null \
     && jq -e --arg id "$id" 'type == "object" and .key == $id' "$tmp" >/dev/null 2>&1; then
-    store_board_card "$id" "$tmp" 2>/dev/null || true
+    ( store_board_card "$id" "$tmp" ) 2>/dev/null || true
   fi
   rm -f -- "$tmp"
 }
@@ -891,7 +901,7 @@ command_card() {
 
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
-  local existing_hold_kind='' existing_held='' preserve_hold_set=0
+  local existing_hold_kind='' existing_held='' preserve_hold_set=0 new_hold
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -980,8 +990,12 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
-  # The board card is written once per call and never re-composed by a refresh.
-  seed_board_card "$id"
+  # The board card is written once per hold and never re-composed by a refresh.
+  # A hold that was already active is the same call, so its card stays; any
+  # other hold begins a call whose question the captain has not been shown.
+  new_hold=1
+  [ "$preserve_hold_set" -eq 0 ] || new_hold=0
+  seed_board_card "$id" "$new_hold"
   printf '%s\n' "$id"
 }
 

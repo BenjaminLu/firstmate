@@ -44,11 +44,16 @@ seed_board() {  # <home>
   cp "$TEMPLATE" "$1/.lavish/bearings-board.html"
 }
 
+# The progress projection stamps each row with its own read time, so the
+# projection's clock is pinned here exactly as the hold clock is pinned
+# elsewhere: a test comparing two publications compares the board, not the wall
+# clock. Every read still goes through the real bin/fm-task-progress.sh.
 run_board() {  # <home> <args...>
   local home=$1
   shift
   PATH="$home/fakebin:$PATH" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_TASK_PROGRESS_NOW_EPOCH="${FM_TASK_PROGRESS_NOW_EPOCH:-1758240000}" \
     LAVISH_FAKE_CALLS="$home/lavish-calls" \
     "$BOARD" "$@"
 }
@@ -56,7 +61,7 @@ run_board() {  # <home> <args...>
 refresh() {  # <home> [extra args]
   local home=$1
   shift
-  run_board "$home" refresh --snapshot "$SNAPSHOT_FIXTURE" --no-progress "$@"
+  run_board "$home" refresh --snapshot "$SNAPSHOT_FIXTURE" "$@"
 }
 
 payload_of() {  # <home>
@@ -149,18 +154,66 @@ test_refresh_refuses_when_no_board_has_been_built() {
   pass "refresh refuses an unbuilt board, and stays silent about it under --best-effort"
 }
 
+# The holder must stay ALIVE for the contention to exist at all: the refresh
+# lock records its owner precisely so a lock whose owner is gone is reclaimed.
+hold_refresh_lock() {  # <home> -> echoes the holder pid
+  local home=$1 lock="$1/state/.bearings-board-refresh.lock" holder i=0
+  mkdir -p "$home/state"
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    sleep 30
+  ) >/dev/null 2>&1 &
+  holder=$!
+  while [ ! -e "$lock" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$lock" ] || {
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    return 1
+  }
+  printf '%s\n' "$holder"
+}
+
 test_a_concurrent_refresh_is_a_no_op_rather_than_a_race() {
-  local home out
+  local home out holder
   home=$(make_home concurrent)
   seed_board "$home"
-  mkdir -p "$home/state/.bearings-board-refresh.lock"
+  holder=$(FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" hold_refresh_lock "$home") \
+    || { echo "skip: could not hold the refresh lock in this environment"; return 0; }
   out=$(refresh "$home") || fail "a locked-out refresh failed instead of standing down"
   assert_contains "$out" "refresh: busy" "a locked-out refresh did not say it stood down: $out"
   [ ! -e "$home/.lavish/bearings-board.json" ] \
     || fail "a locked-out refresh published anyway"
-  rmdir "$home/state/.bearings-board-refresh.lock"
-  refresh "$home" >/dev/null || fail "refresh failed once the lock cleared"
+  # Every fleet trigger discards this stdout, so the stand-down must also be
+  # readable afterwards or a board that stopped refreshing is undiagnosable.
+  assert_grep "refresh: busy" "$home/state/.bearings-board-refresh.log" \
+    "the stand-down left no trace a diagnosis could find"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
   pass "a concurrent refresh stands down instead of racing the one under way"
+}
+
+test_a_refresh_lock_whose_owner_is_gone_is_reclaimed() {
+  local home holder
+  home=$(make_home stale-lock)
+  seed_board "$home"
+  holder=$(FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" hold_refresh_lock "$home") \
+    || { echo "skip: could not hold the refresh lock in this environment"; return 0; }
+  # The refresh is spawned detached by every fleet trigger, so its process can
+  # be killed by a session shutdown or a reboot with the lock still taken. The
+  # board must not stop refreshing for good because of it.
+  kill -9 "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ -e "$home/state/.bearings-board-refresh.lock" ] \
+    || fail "the killed holder released the lock, so there is nothing to reclaim"
+  refresh "$home" >/dev/null || fail "a refresh behind a dead owner's lock failed"
+  jq -e '.schema == "fm-bearings-board.v1"' "$home/.lavish/bearings-board.json" >/dev/null \
+    || fail "the refresh behind a dead owner's lock published nothing"
+  pass "a refresh lock left by a dead owner is reclaimed instead of wedging the board"
 }
 
 test_refresh_carries_no_placeholder_to_the_captain() {
@@ -352,23 +405,6 @@ test_the_board_carries_each_underway_rows_progress() {
   pass "an Underway row carries the step it is on, the steps it passed, and when it was read"
 }
 
-test_a_progress_map_is_used_as_given() {
-  local home row
-  home=$(make_home progress-map)
-  seed_board "$home"
-  jq -n '{"ship-task": {state:"parked", detail:"parked at review: 2 finding(s)",
-    step:"review", steps:[{step:"intent",status:"completed"},{step:"review",status:"running"}],
-    active_for:"3m", last_activity:"9s", quiet:false, activity:null,
-    refreshed:"2026-09-19T00:00:00Z"}}' > "$home/progress.json"
-  run_board "$home" refresh --snapshot "$SNAPSHOT_FIXTURE" \
-    --progress-map "$home/progress.json" >/dev/null || fail "refresh failed"
-  row=$(jq -c '.underway[] | select(.id == "ship-task") | .progress' \
-    "$home/.lavish/bearings-board.json")
-  printf '%s' "$row" | jq -e '.state == "parked" and .refreshed == "2026-09-19T00:00:00Z"' \
-    >/dev/null || fail "the supplied progress map was not used: $row"
-  pass "a supplied progress map reaches the board unchanged"
-}
-
 test_a_stored_card_carrying_the_injected_reconcile_choice_still_builds() {
   local home card
   home=$(make_home stored-reconcile)
@@ -402,7 +438,7 @@ test_refresh_states_only_the_omission_total_the_snapshot_establishes() {
   # a repair notice hides a repair.
   jq '.omitted = [{surface: "gates showing 4 of 9", reveal: "--all-gates"}]' \
     "$SNAPSHOT_FIXTURE" > "$home/snapshot.json"
-  run_board "$home" refresh --snapshot "$home/snapshot.json" --no-progress >/dev/null \
+  run_board "$home" refresh --snapshot "$home/snapshot.json" >/dev/null \
     || fail "refresh failed on a snapshot that omitted gate rows"
   jq -e '(has("charted_more") | not) and (has("charted_warning_more") | not)' \
     "$home/.lavish/bearings-board.json" >/dev/null \
@@ -506,6 +542,7 @@ test_a_stored_card_carrying_the_injected_reconcile_choice_still_builds
 test_refresh_never_touches_the_session_or_its_armed_source
 test_refresh_refuses_when_no_board_has_been_built
 test_a_concurrent_refresh_is_a_no_op_rather_than_a_race
+test_a_refresh_lock_whose_owner_is_gone_is_reclaimed
 test_refresh_carries_no_placeholder_to_the_captain
 test_refresh_reuses_the_stored_card_verbatim
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
@@ -514,5 +551,4 @@ test_progress_reads_the_ladder_from_the_attributed_run
 test_progress_reports_no_ladder_without_an_attributable_run
 test_progress_never_reads_a_workers_terminal
 test_the_board_carries_each_underway_rows_progress
-test_a_progress_map_is_used_as_given
 test_a_watcher_observed_status_change_republishes_the_board

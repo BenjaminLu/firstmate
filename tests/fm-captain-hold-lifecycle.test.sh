@@ -633,17 +633,17 @@ SH
 
 # Turn a scaffolded needs-decision packet into one that verifies, with a real
 # decision block, so a hold can seed its board card from it.
-fill_packet() {  # <packet.md> <task-id>
-  python3 - "$1" "$2" <<'PY2'
+fill_packet() {  # <packet.md> <task-id> [decide-text]
+  python3 - "$1" "$2" "${3:-Which rollout order ships first?}" <<'PY2'
 import sys, re, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 decision = ('{"key":"%s","title":{"en":"Rollout order","hant":"\u4e0a\u7dda\u9806\u5e8f"},'
-            '"decide":"Which rollout order ships first?","if_nothing":"the release waits",'
+            '"decide":"%s","if_nothing":"the release waits",'
             '"reversible":"partly","risk":"medium",'
             '"options":[{"value":"canary","label":"Canary first","consequence":"slower, safer"},'
             '{"value":"all","label":"All at once","consequence":"faster, riskier"}],'
             '"recommend_value":"canary","recommend_why":"the canary caught the last regression"}'
-            % sys.argv[2])
+            % (sys.argv[2], sys.argv[3]))
 s = re.sub(r"\{FILL: every path you tried.*?\}",
            "- tried a flag; dropped it\n- the bound is unverified\n- the order assumes one region",
            s, flags=re.S)
@@ -682,8 +682,8 @@ test_hold_seeds_the_board_card_from_a_verified_packet() {
   pass "a hold seeds its board card from the verified packet"
 }
 
-test_a_stored_board_card_round_trips_and_is_never_overwritten_by_a_rehold() {
-  local home id first second stored
+test_a_stored_board_card_round_trips_and_survives_restating_the_same_hold() {
+  local home id first stored again
   home=$(make_home card-roundtrip)
   id=written-call
   tasks_in "$home" add "$id" "Route choice" --kind captain --repo sample >/dev/null \
@@ -708,16 +708,46 @@ test_a_stored_board_card_round_trips_and_is_never_overwritten_by_a_rehold() {
   printf '%s' "$stored" | jq -e '.title.hant == "路線選擇" and (.options | length) == 2' >/dev/null \
     || fail "the stored card did not round-trip: $stored"
 
-  # Re-holding the same call must not silently replace the copy the captain has
-  # already been shown.
-  printf 'Take the north route.\n' > "$home/answer.txt"
+  # Re-stating a hold that is STILL ACTIVE is the same call, so the copy the
+  # captain has already been shown must survive it.
+  run_captain "$home" hold "$id" --reason "captain must still pick the route" >/dev/null \
+    || fail "re-stating the active hold failed"
+  again=$(run_captain "$home" card "$id") || fail "an unchanged hold lost its stored card"
+  [ "$again" = "$stored" ] || fail "re-stating an active hold rewrote its card: $again"
+  pass "a stored board card round-trips and survives re-stating the same hold"
+}
+
+test_holding_a_task_again_re_seeds_the_card_for_the_new_question() {
+  local home id first second
+  home=$(make_home card-rehold)
+  id=rehold-call
+  tasks_in "$home" add "$id" "Rollout order" --kind captain --repo sample >/dev/null \
+    || fail "could not create the held task"
+  fm_write_meta "$home/state/$id.meta" "worktree=$home" "project=sample" "kind=ship"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    FM_DATA_OVERRIDE="$home/data" "$ROOT/bin/fm-packet.sh" scaffold "$id" \
+    --kind needs-decision --worktree "$home" >/dev/null \
+    || fail "could not scaffold the packet"
+  fill_packet "$home/data/$id/packet.md" "$id" "Which rollout order ships first?"
+  run_captain "$home" hold "$id" --reason "captain must pick the rollout order" >/dev/null \
+    || fail "holding the task failed"
+  first=$(run_captain "$home" card "$id") || fail "the first hold stored no board card"
+  printf '%s' "$first" | jq -e '.decide == "Which rollout order ships first?"' >/dev/null \
+    || fail "the first hold did not card its own question: $first"
+
+  # The call is answered and released, the worker writes a NEW packet, and the
+  # task is held again. The answer the captain gives now resolves the SECOND
+  # hold, so the question he is shown has to be the second hold's question.
+  printf 'Ship the canary first.\n' > "$home/answer.txt"
   run_captain "$home" answer "$id" --decision-file "$home/answer.txt" --release >/dev/null \
-    || fail "answering the call failed"
-  run_captain "$home" hold "$id" --reason "captain must pick the route again" >/dev/null \
+    || fail "answering the first call failed"
+  fill_packet "$home/data/$id/packet.md" "$id" "Which region goes first?"
+  run_captain "$home" hold "$id" --reason "captain must pick the region" >/dev/null \
     || fail "re-holding the task failed"
-  second=$(run_captain "$home" card "$id") || fail "the re-held call lost its stored card"
-  [ "$second" = "$stored" ] || fail "a re-hold rewrote the stored card: $second"
-  pass "a stored board card round-trips and survives a re-hold"
+  second=$(run_captain "$home" card "$id") || fail "the re-held call has no board card"
+  printf '%s' "$second" | jq -e '.decide == "Which region goes first?"' >/dev/null \
+    || fail "the re-held call still shows the previous hold's question: $second"
+  pass "a task held again is carded for the new question, not the answered one"
 }
 
 test_a_stored_card_must_address_the_task_that_holds_it() {
@@ -4154,5 +4184,6 @@ test_verify_names_the_unresolvable_legacy_id_once
 test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
 test_captain_hold_mutations_address_the_beads_backend
 test_hold_seeds_the_board_card_from_a_verified_packet
-test_a_stored_board_card_round_trips_and_is_never_overwritten_by_a_rehold
+test_a_stored_board_card_round_trips_and_survives_restating_the_same_hold
+test_holding_a_task_again_re_seeds_the_card_for_the_new_question
 test_a_stored_card_must_address_the_task_that_holds_it
