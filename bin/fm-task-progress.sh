@@ -47,7 +47,11 @@
 #                    from the pipeline's `round` column, or null
 #
 # Only a ship task can own a validation run, so a scout or secondmate row
-# reports run: null without asking the pipeline anything.
+# reports run: null without asking the pipeline anything. A selected run is
+# used only after the identity proofs bin/fm-nm-run-lib.sh requires of its
+# callers - the same ones bin/fm-crew-state.sh applies - so a run whose id,
+# branch, status class or code identity cannot be established yields no ladder
+# rather than an unproven one.
 #
 # Bounds: the crew-state read and each no-mistakes read are bounded by
 # FM_TASK_PROGRESS_TIMEOUT (default 20) and FM_TASK_PROGRESS_NM_TIMEOUT
@@ -145,20 +149,26 @@ toon_table_json() {  # <axi-status-output> <table-name>
       return out
     }
     function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
-    function unquote(s) {
-      s = trim(s)
-      if (s ~ /^".*"$/) s = substr(s, 2, length(s) - 2)
-      return s
-    }
-    function split_row(s, out,   i, ch, n, inq) {
+    # A TOON quoted field is json.dumps-encoded, so a backslash escapes the
+    # character after it: a field carrying a log line with its own quotes and
+    # commas is one field, not several. This is the same state machine
+    # row_fields keeps in bin/fm-nm-run-lib.sh, and it yields decoded fields -
+    # the delimiters and their escapes are consumed here, never handed on.
+    # An unterminated quote or a trailing escape means the row cannot be read,
+    # and 0 fields says so rather than inventing column boundaries.
+    function split_row(s, out,   i, ch, n, quoted, escaped) {
       for (i in out) delete out[i]
-      n = 1; out[n] = ""; inq = 0
+      n = 1; out[n] = ""; quoted = 0; escaped = 0
       for (i = 1; i <= length(s); i++) {
         ch = substr(s, i, 1)
-        if (ch == "\"") { inq = !inq; out[n] = out[n] ch; continue }
-        if (ch == "," && !inq) { n++; out[n] = ""; continue }
-        out[n] = out[n] ch
+        if (escaped) { out[n] = out[n] ch; escaped = 0 }
+        else if (quoted && ch == "\\") escaped = 1
+        else if (ch == "\"") quoted = !quoted
+        else if (!quoted && ch == ",") { n++; out[n] = "" }
+        else out[n] = out[n] ch
       }
+      if (quoted || escaped) return 0
+      for (i = 1; i <= n; i++) out[i] = trim(out[i])
       return n
     }
     BEGIN { printf "[" ; first = 1 }
@@ -170,7 +180,6 @@ toon_table_json() {  # <axi-status-output> <table-name>
           sub(/^[^{]*\{/, "", cols)
           sub(/\}.*$/, "", cols)
           ncols = split_row(cols, colname)
-          for (i = 1; i <= ncols; i++) colname[i] = unquote(colname[i])
           inblock = 1
         }
         next
@@ -179,11 +188,12 @@ toon_table_json() {  # <axi-status-output> <table-name>
       match($0, /[^ \t]/)
       if (RSTART <= hdr) { inblock = 0; next }
       nf = split_row(trim($0), field)
+      if (nf == 0) next
       printf "%s{", (first ? "" : ",")
       first = 0
       for (i = 1; i <= ncols; i++) {
         printf "%s\"%s\":\"%s\"", (i > 1 ? "," : ""), jesc(colname[i]), \
-          jesc(i <= nf ? unquote(field[i]) : "")
+          jesc(i <= nf ? field[i] : "")
       }
       printf "}"
     }
@@ -197,8 +207,30 @@ toon_table_json() {  # <axi-status-output> <table-name>
 # a guessed one.
 RUN_JSON=null
 
+# What bin/fm-nm-run-lib.sh requires of every caller before it may use a
+# selected run's steps: fetch the full status BY ID, then prove branch and head
+# or active pipeline custody. bin/fm-crew-state.sh applies exactly these proofs
+# to exactly this selection; the primitives are the library's, so there is one
+# attribution rule in the repo rather than a second one here. An unproven
+# identity means NO ladder: a run that finished on code this worktree has moved
+# past would otherwise render as nine passed steps beside a worker mid-rework.
+run_verified() {  # <worktree> <branch> <selected-id> <selected-status> <status-toon>
+  local wt=$1 branch=$2 selected_id=$3 selected_status=$4 run_out=$5 run_class
+  [ "$(strip_quotes "$(fm_nm_field "$run_out" id)")" = "$selected_id" ] || return 1
+  [ "$(strip_quotes "$(fm_nm_field "$run_out" branch)")" = "$branch" ] || return 1
+  case "$(strip_quotes "$(fm_nm_field "$run_out" status)")" in
+    pending|running|fixing|ci|awaiting_approval|fix_review|completed|failed|cancelled) ;;
+    *) return 1 ;;
+  esac
+  if fm_nm_run_is_active "$run_out"; then run_class=live; else run_class=terminal; fi
+  [ "$(fm_nm_run_status_class "$selected_status")" = "$run_class" ] || return 1
+  fm_nm_head_matches_worktree "$wt" "$(strip_quotes "$(fm_nm_field "$run_out" head)")" \
+    || fm_nm_run_is_pipeline_owned_active "$run_out"
+}
+
 read_run() {
-  local wt kind branch overview choice selected_id run_out status steps active step
+  local wt kind branch overview choice selected_id selected_status run_out status
+  local steps active step run_class
   local active_for='' last_activity='' quiet=false activity=''
   wt=$(meta_value worktree)
   kind=$(meta_value kind)
@@ -216,10 +248,11 @@ read_run() {
     selected\|*) ;;
     *) return 0 ;;
   esac
-  IFS='|' read -r _ selected_id _ _ <<< "$choice"
+  IFS='|' read -r _ selected_id selected_status _ <<< "$choice"
   [ -n "$selected_id" ] || return 0
   run_out=$(fm_nm_run_checked "$wt" "$NM_TIMEOUT" axi status --run "$selected_id") || return 0
   [ -n "$run_out" ] || return 0
+  run_verified "$wt" "$branch" "$selected_id" "$selected_status" "$run_out" || return 0
   status=$(strip_quotes "$(fm_nm_field "$run_out" status)")
   steps=$(toon_table_json "$run_out" steps)
   active=$(toon_table_json "$run_out" active_steps)

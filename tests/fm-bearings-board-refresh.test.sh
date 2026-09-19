@@ -375,7 +375,10 @@ CAPTURED_RUN_ID=01M2GAWMSDQK4B5EA9GZW35RXE
 CAPTURED_LAST_ACTIVITY="2h58m ago: log: all CI checks passed - still monitoring until merged or closed"
 
 # A worktree on a branch, plus a no-mistakes that replays <capture> for it.
-make_run_home() {  # <name> <capture>
+# <overview-status> is the status the run inventory reports for the row, which
+# the projection checks against the run's own status class before it will use
+# the ladder; it defaults to the live word the replacement capture records.
+make_run_home() {  # <name> <capture> [overview-status]
   local home head short
   home=$(make_home "$1")
   mkdir -p "$home/wt"
@@ -397,7 +400,7 @@ if [ "\${1-}" = axi ]; then
   cat <<'EOF'
 count: 1 of 1 total
 runs[1]{id,branch,status,head,pr}:
-  "$CAPTURED_RUN_ID",fm/ship-task,running,$short,""
+  "$CAPTURED_RUN_ID",fm/ship-task,${3:-running},$short,""
 EOF
   exit 0
 fi
@@ -435,6 +438,24 @@ test_progress_reads_the_ladder_from_the_attributed_run() {
   pass "the progress projection reads phase, ladder, timing, and activity from structured state"
 }
 
+test_a_run_that_is_not_this_worktrees_code_carries_no_ladder() {
+  local home doc
+  # The recorded completed run, and then the worker moves past the commit it
+  # validated - an amend or a follow-up commit. bin/fm-nm-run-lib.sh requires
+  # a caller to prove branch and head, or active pipeline custody, before
+  # using a run's steps; nothing here proves either any more.
+  home=$(make_run_home progress-stale-head completed completed)
+  git -C "$home/wt" -c user.email=t@t -c user.name=t commit -q --allow-empty -m rework
+  doc=$(run_progress "$home" ship-task) || fail "the progress read failed"
+  printf '%s' "$doc" | jq -e '.run == null' >/dev/null \
+    || fail "a run whose head this worktree has moved past was published as its ladder: $doc"
+  # The row still reports what IS established - the task's own state - so the
+  # captain loses the ladder, not the row.
+  printf '%s' "$doc" | jq -e '.schema == "fm-task-progress.v1" and (.state | type == "string")' \
+    >/dev/null || fail "dropping the ladder cost the row its projection: $doc"
+  pass "a run whose code identity is unproven carries no ladder rather than an unproven one"
+}
+
 test_progress_carries_the_pipelines_whole_last_activity_message() {
   local home doc
   # The pipeline puts the age AND the line it is reporting in one column
@@ -449,6 +470,31 @@ test_progress_carries_the_pipelines_whole_last_activity_message() {
     and .run.quiet == true
   ' >/dev/null || fail "the last-activity message was cut down or kept its prefix: $doc"
   pass "the projection hands on the pipeline's whole last-activity message, quiet lifted out"
+}
+
+test_a_last_activity_carrying_quotes_and_commas_stays_one_field() {
+  local home doc message encoded
+  # The pipeline's last_activity column is a json.dumps-encoded log line, so
+  # it can carry its own quotes and commas. Both are taken from the recorded
+  # replacement capture's own row; only that one column's text changes.
+  message='quiet 5m ago: log: applied "add a test, then fix"'
+  home=$(make_run_home progress-quoted replacement)
+  encoded=$(printf '%s' "$message" \
+    | python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read()))')
+  python3 - "$home/axi-status.toon" "\"quiet $CAPTURED_LAST_ACTIVITY\"" "$encoded" <<'PY2'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); text = p.read_text()
+assert sys.argv[2] in text, "the capture no longer carries the recorded last_activity field"
+p.write_text(text.replace(sys.argv[2], sys.argv[3]))
+PY2
+  doc=$(run_progress "$home" ship-task) || fail "the progress read failed"
+  printf '%s' "$doc" | jq -e '
+    .run.last_activity == "5m ago: log: applied \"add a test, then fix\""
+    and .run.quiet == true
+    and .run.activity == "starting"
+    and .run.active_for == "4h28m"
+  ' >/dev/null || fail "a quoted last-activity line was split or left escaped: $doc"
+  pass "a last-activity line carrying quotes and commas stays one decoded field"
 }
 
 test_progress_reads_a_gate_that_is_waiting_on_the_captain() {
@@ -666,6 +712,8 @@ test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run
 test_progress_carries_the_pipelines_whole_last_activity_message
+test_a_last_activity_carrying_quotes_and_commas_stays_one_field
+test_a_run_that_is_not_this_worktrees_code_carries_no_ladder
 test_progress_reads_a_gate_that_is_waiting_on_the_captain
 test_progress_reports_no_ladder_without_an_attributable_run
 test_progress_never_reads_a_workers_terminal
