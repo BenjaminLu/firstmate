@@ -595,6 +595,10 @@ case "$fault:$*" in
     printf '%s\n' "$(( $(cat "$FORGE/clock") + 100 ))" > "$FORGE/clock" ;;
   tail-cut:'api repos/o/r/issues/21/comments?'*)
     printf '%s\n' "$(( $(cat "$FORGE/clock") + 100 ))" > "$FORGE/clock" ;;
+  head-cut:'api repos/o/r/issues/20/comments?'*)
+    printf '%s\n' "$(( $(cat "$FORGE/clock") + 100 ))" > "$FORGE/clock" ;;
+  head-cut:'api graphql '*)
+    printf '%s\n' "$(( $(cat "$FORGE/clock") + 1 ))" > "$FORGE/clock" ;;
   tail-cut:'api graphql '*)
     # A real read takes time; let the clock show it so each one stamps its own end.
     printf '%s\n' "$(( $(cat "$FORGE/clock") + 1 ))" > "$FORGE/clock" ;;
@@ -642,8 +646,8 @@ test_budget_exhaustion_keeps_prior_record() { # exhaust|hang
   # The cut is recorded in its own field and changes nothing else: the attempt
   # stamp rotates this URL out of the queue head, checked_at still dates the
   # last completed read, so nothing the projection reads has moved.
-  jq -e --arg now "$NOW" --slurpfile prior "$home/prior.json" '.records[0] as $r | $prior[0].records[0] as $p
-    | $r.cut_at == $now and ($r | del(.cut_at)) == ($p | del(.cut_at))' \
+  jq -e --arg started "$NOW" --slurpfile prior "$home/prior.json" '.records[0] as $r | $prior[0].records[0] as $p
+    | $r.cut_at >= $started and ($r | del(.cut_at)) == ($p | del(.cut_at))' \
     "$home/data/delivery/contributions.json" >/dev/null \
     || fail "budget exhaustion ($mode) did not record a cut-short attempt: $(cat "$home/data/delivery/contributions.json")"
   [ ! -s "$home/state/.wake-queue" ] || fail "budget exhaustion ($mode) enqueued a wake"
@@ -677,7 +681,7 @@ test_budget_cut_keeps_the_last_good_observation() {
     and .contributions.captain[0].reason == "checks green; merge approval needed"' >/dev/null \
     || fail 'a budget cut took the captain row and the measured counts off the board'
   jq -e --arg now "$NOW" --arg cut "$cut" --slurpfile prior "$home/prior.json" '.records[0] as $r | $prior[0].records[0] as $p
-    | $r.observation == $p.observation and $r.checked_at == $now and $r.cut_at == $cut' \
+    | $r.observation == $p.observation and $r.checked_at == $now and $r.cut_at >= $cut' \
     "$home/data/delivery/contributions.json" >/dev/null \
     || fail "a cut re-read moved or discarded the earlier read: $(cat "$home/data/delivery/contributions.json")"
   pass 'a budget cut after a good read keeps the observation, the captain row and the counts'
@@ -719,7 +723,7 @@ test_never_observed_url_rotates_after_a_cut() {
     "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'poll failed when the issue was cut short'
   grep -Fx 'api repos/o/r/issues/9' "$home/forge/calls" >/dev/null \
     || fail 'the never-observed issue did not hold the queue head to begin with'
-  jq -e --arg cut "$cut" '.records[0] | .cut_at == $cut and .checked_at == null and .observation == null' \
+  jq -e --arg cut "$cut" '.records[0] | .cut_at >= $cut and .checked_at == null and .observation == null' \
     "$home/data/filed/contributions.json" >/dev/null \
     || fail "the cut issue recorded no attempt to be ordered by: $(cat "$home/data/filed/contributions.json")"
   : > "$home/forge/calls"
@@ -1067,8 +1071,10 @@ test_cut_row_is_observed_first_next_poll() {
     || fail 'the first URL was not read successfully'
   jq -e '.records[0] | .checked_at != null and .cut_at == null' "$home/data/delivery/contributions.json" >/dev/null \
     || fail 'the second URL was not read successfully'
-  jq -e '.records[0] | .checked_at == null and .cut_at != null' "$home/data/zzz/contributions.json" >/dev/null \
-    || fail "the third URL was not cut short: $(cat "$home/data/zzz/contributions.json")"
+  # The third URL was reached with a sliver rather than given the whole budget,
+  # so the cut is deliberately NOT recorded: it keeps its place and a fair retry.
+  [ ! -e "$home/data/zzz/contributions.json" ] \
+    || fail "a sliver-cut URL was recorded instead of left alone: $(cat "$home/data/zzz/contributions.json")"
   # The next poll is what proves the order, not the stamps it sorted on.
   : > "$home/forge/calls"
   : > "$home/forge/fault"
@@ -1085,8 +1091,39 @@ test_cut_row_is_observed_first_next_poll() {
   pass 'a cut row is observed before the rows read in its own poll'
 }
 
+test_full_budget_cut_is_read_last_next_poll() {
+  local home first other n
+  home=$(new_home budget-cut-whole-budget)
+  forge_home "$home"
+  wrap_forge "$home"
+  # Task "aaa" sorts first, so URL 20 is attempted with the whole budget and is
+  # the one the fault cuts. The other two are never reached in that poll.
+  rm -f "$home/data/delivery/contributions.json"
+  printf -- '- [ ] aaa - First https://github.com/o/r/pull/20 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
+  printf -- '- [ ] zzz - Last https://github.com/o/r/pull/21 (repo: sample) (kind: ship)\n' >> "$home/data/backlog.md"
+  printf 'head-cut\n' > "$home/forge/fault"
+  /bin/date +%s > "$home/forge/clock"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'the whole-budget poll failed'
+  jq -e '.records[0] | .checked_at == null and .cut_at != null' "$home/data/aaa/contributions.json" >/dev/null \
+    || fail "a cut that began with the whole budget was not recorded: $(cat "$home/data/aaa/contributions.json" 2>/dev/null)"
+  # The next poll is what proves it went to the back, not the stamp it sorted on.
+  : > "$home/forge/calls"
+  : > "$home/forge/fault"
+  /bin/date +%s > "$home/forge/clock"
+  with_home "$home" "$ROOT/bin/fm-contributions.sh" poll >/dev/null || fail 'the poll after the whole-budget cut failed'
+  first=$(grep -nF -- '-F n=20' "$home/forge/calls" | head -1 | cut -d: -f1)
+  [ -n "$first" ] || fail 'the poll after the cut never re-read the cut contribution'
+  for n in 21 8; do
+    other=$(grep -nF -- "-F n=$n" "$home/forge/calls" | head -1 | cut -d: -f1)
+    [ -n "$other" ] || fail "the poll after the cut never reached the contribution numbered $n"
+    [ "$other" -lt "$first" ] \
+      || fail "a URL that cannot fit the whole budget was read before the one numbered $n instead of after it"
+  done
+  pass 'a cut that had the whole budget goes behind the rows read in its own poll'
+}
+
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_one_read_cannot_spend_the_whole_budget test_observation_call_budget test_paged_check_contexts_keep_every_lane test_expected_context_is_no_lane test_numeric_repository_name_is_observed test_slow_forge_straddles_the_shipped_call_bound test_budget_cut_keeps_the_last_good_observation test_budget_cut_row_ages_out test_never_observed_url_rotates_after_a_cut test_cut_row_is_observed_first_next_poll; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_one_read_cannot_spend_the_whole_budget test_observation_call_budget test_paged_check_contexts_keep_every_lane test_expected_context_is_no_lane test_numeric_repository_name_is_observed test_slow_forge_straddles_the_shipped_call_bound test_budget_cut_keeps_the_last_good_observation test_budget_cut_row_ages_out test_never_observed_url_rotates_after_a_cut test_cut_row_is_observed_first_next_poll test_full_budget_cut_is_read_last_next_poll; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

@@ -20,9 +20,9 @@
 # task and records[]. Each record contains url, kind, checked_at, cut_at, error,
 # observation, verdict, seen event tokens, pending events, and notified tokens.
 # checked_at dates the instant the last completed read finished; cut_at dates
-# the poll start of the last attempt the budget cut short, and only the newest
-# attempt may carry it. The two differ so the ordering key below needs no
-# tiebreak: a cut lands at its poll's start, every read of that poll after it.
+# the moment the budget cut an attempt short, and only the newest attempt may
+# carry it. A cut is two events and not one, which is why only some cuts are
+# recorded at all: see the budget paragraph below.
 # observation is one coherent forge read. Observing one pull request costs four
 # forge calls, and that count is load-bearing: a slow forge answers each call in
 # 0.9-4.4 seconds, so four fit the default 20s budget while the eight a per-lane
@@ -75,21 +75,28 @@
 # identically. What stops this firing is fewer forge calls per observation, not
 # a larger fleet-wide FM_CHECK_TIMEOUT.
 #
-# Such a URL must not stop the rest of the corpus, so a cut-short attempt is
-# recorded instead of discarded. The poll still breaks where the budget ran out,
-# but first stamps that URL's cut_at, leaving checked_at, error, observation,
-# verdict and every signal field exactly as it found them. Two fields, two jobs:
-# cut_at says the budget stopped an attempt, checked_at still says when a read
-# last finished. The queue is ordered by the later of the two, so a cut row -
-# and a URL never once observed, whose completed-read key is empty - rotates out
-# of the oldest-first head instead of pinning it there for every later poll,
-# while freshness reads the completed one alone. Writing no error leaves the
-# projection reading the last good observation, so a recent success keeps its
-# freshness, its captain row and its place in the checked and complete counts,
-# and an observation that stops being re-read ages out under the ordinary
-# freshness rule below: none is ever shown as freshly checked when it was not.
-# A successful observation clears cut_at as it clears error, and so does a
-# recorded failure: only the newest attempt may carry the marker.
+# Such a URL must not stop the rest of the corpus, so a cut is recorded rather
+# than discarded - but only the kind of cut that means something. A cut is two
+# different events wearing one name. An attempt that began with the whole budget
+# and still did not fit cannot fit: it is recorded, stamped at the moment it was
+# cut, and so sorts behind every read of its own poll instead of taking the head
+# of the next one and spending that budget before anything else is read. An
+# attempt the budget merely never reached was never given a chance, and sending
+# it to the back would punish it for the queue position it happened to have: it
+# is left exactly as found, so it keeps its place and gets one full-budget
+# attempt on a later poll. Reading one instant for both is what a tiebreak, a
+# counter, or a cleverer ordering key would each be compensating for.
+# The poll still breaks where the budget ran out. A recorded cut writes cut_at
+# and nothing else, leaving checked_at, error, observation, verdict and every
+# signal field as found. Two fields, two jobs: cut_at says the budget stopped an
+# attempt, checked_at says when a read last finished, and the queue is ordered
+# by the later of the two while freshness reads the completed one alone. Writing
+# no error leaves the projection reading the last good observation, so a recent
+# success keeps its freshness, its captain row and its place in the checked and
+# complete counts, and an observation that stops being re-read ages out under
+# the ordinary freshness rule below: none is ever shown as freshly checked when
+# it was not. A successful observation clears cut_at as it clears error, and so
+# does a recorded failure: only the newest attempt may carry the marker.
 # Oldest reads go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. Only a
@@ -422,7 +429,7 @@ settle_final() { # canonical-url task... : copy the URL's final observation to e
 }
 
 poll() {
-  local task url old kind error observed stamp
+  local task url old kind error observed stamp reads whole_budget
   local -a row
   acquire
   get_input
@@ -440,6 +447,7 @@ poll() {
     | sort_by(.at,.tasks[0],.url)[] | [.url] + .tasks | @tsv' > "$TMP/known.tsv"
   POLL_START=$(date +%s)
   DEADLINE=$(( POLL_START + BUDGET ))
+  reads=0
   while IFS=$'\t' read -r -a row; do
     [ "${#row[@]}" -ge 2 ] || continue
     [ "$(date +%s)" -lt "$DEADLINE" ] || break
@@ -454,18 +462,29 @@ poll() {
     case "$url" in */issues/*) kind=issue ;; *) kind="pr" ;; esac
     observed=0
     BUDGET_EXHAUSTED=0
+    # Whether this attempt got the whole budget: nothing has been read yet.
+    whole_budget=$reads
     observe "$url" || observed=$?
+    reads=$((reads + 1))
     # An observation the budget cut short is unmeasured, not unavailable. Record
     # the attempt in cut_at alone so the URL leaves the queue head, and leave
     # checked_at and every field the projection reads as they were found, so a
     # good recent observation keeps its freshness and an old one still ages out.
     if [ "$BUDGET_EXHAUSTED" -ne 0 ]; then
-      for task in "${row[@]:1}"; do
-        fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
-        load_old "$task" "$url" "$kind"
-        jq --arg now "$NOW" '.cut_at=$now' "$TMP/old.json" > "$TMP/row.json"
-        write_record "$task" "$TMP/row.json"
-      done
+      # A cut is two events. An attempt that began with the whole budget and
+      # still did not fit cannot fit at all: it is recorded at the moment it was
+      # cut, so it sorts behind the reads of its own poll and stops taking the
+      # head. An attempt the budget merely never reached was never given a
+      # chance, so it is left exactly as found and keeps the place it had.
+      if [ "$whole_budget" -eq 0 ]; then
+        stamp=$(read_stamp)
+        for task in "${row[@]:1}"; do
+          fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }
+          load_old "$task" "$url" "$kind"
+          jq --arg now "$stamp" '.cut_at=$now' "$TMP/old.json" > "$TMP/row.json"
+          write_record "$task" "$TMP/row.json"
+        done
+      fi
       break
     fi
     # One observation is one read, so every owner shares the instant it ended:
