@@ -429,10 +429,11 @@ poll() {
       else
         if [ "$UNMEASURED" -eq 0 ]; then
           error='forge observation unavailable or changed during read'
+          jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
         else
-          error=$BUDGET_ERROR
+          jq --arg now "$NOW" --arg error "$BUDGET_ERROR" \
+            '.checked_at=$now | .error=(.error // $error)' "$old" > "$TMP/row.json"
         fi
-        jq --arg now "$NOW" --arg error "$error" '.checked_at=$now | .error=$error' "$old" > "$TMP/row.json"
       fi
       write_record "$task" "$TMP/row.json"
       publish_pending "$task" "$url" "$TMP/row.json"

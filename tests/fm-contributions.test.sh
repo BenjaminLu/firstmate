@@ -714,6 +714,33 @@ test_budget_stamp_does_not_suppress_the_next_failure() {
   pass 'an unmeasured read does not stand in for the failure that suppresses the next one'
 }
 
+test_budget_stamp_does_not_reopen_a_failure_episode() {
+  local home out error='forge observation unavailable or changed during read'
+  local line='contributions: observation unavailable for https://github.com/o/r/pull/8'
+  home=$(new_home budget-inside-failure)
+  forge_home "$home"
+  wrap_forge "$home"
+  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
+  printf 'down\n' > "$home/forge/fault"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_NOW=2026-09-16T09:00:00Z \
+    "$ROOT/bin/fm-contributions.sh" poll) || fail 'the failing poll failed'
+  [ "$out" = "$line" ] || fail "the first failure of an episode did not wake: $out"
+  # The same PR is cut short next poll, while its failure episode is still open.
+  /bin/date +%s > "$home/forge/clock"
+  printf 'hang\n' > "$home/forge/fault"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_NOW=2026-09-16T10:00:00Z FM_CONTRIBUTIONS_BUDGET=1 \
+    "$ROOT/bin/fm-contributions.sh" poll) || fail 'the cut-short poll failed'
+  [ -z "$out" ] || fail "a cut-short attempt printed a wake line: $out"
+  jq -e --arg error "$error" '.records[0] | .checked_at == "2026-09-16T10:00:00Z" and .error == $error' \
+    "$home/data/delivery/contributions.json" >/dev/null \
+    || fail "a budget stamp erased the recorded failure: $(cat "$home/data/delivery/contributions.json")"
+  printf 'down\n' > "$home/forge/fault"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_NOW=2026-09-16T11:00:00Z \
+    "$ROOT/bin/fm-contributions.sh" poll) || fail 'the second failing poll failed'
+  [ -z "$out" ] || fail "an unbroken failure episode woke a second time: $out"
+  pass 'a cut-short attempt inside a failure episode neither erases it nor wakes again'
+}
+
 test_unobservable_url_does_not_starve_the_others() {
   local home out later=2026-09-17T08:00:00Z
   home=$(new_home budget-rotation)
@@ -1001,6 +1028,7 @@ test_numeric_repository_name_is_observed() {
 failures=0
 for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_one_read_cannot_spend_the_whole_budget test_unobservable_url_does_not_starve_the_others \
   test_cut_short_attempts_are_observed_first_next_poll test_budget_stamp_does_not_suppress_the_next_failure \
+  test_budget_stamp_does_not_reopen_a_failure_episode \
   test_observation_call_budget test_paged_check_contexts_keep_every_lane test_expected_context_is_no_lane \
   test_numeric_repository_name_is_observed; do
   ( "$test_name" ) || failures=$((failures + 1))
