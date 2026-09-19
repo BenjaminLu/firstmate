@@ -215,6 +215,22 @@ The bound is required rather than cosmetic because churn and pane staleness read
 The flag is a home-local supervision-noise preference and is not inherited by secondmate homes, which run their own crew mix.
 [`architecture.md`](architecture.md) owns the triage contract and `bin/fm-watch.sh`'s `signal_turnend_panes_churned` owns the exact evidence and fail-closed boundaries.
 
+## Live bearings board (config/board-live-port / FM_BOARD_LIVE_PORT)
+
+The bearings board subscribes to this home's fleet events over a websocket and repaints the instant one lands, instead of being as fresh as the last time anyone rebuilt it.
+Nothing has to be set up for that: `bin/fm-bearings-board.sh build` derives the subscribing board and starts the server, and a board opened with no server running still renders from the payload built into it and says on the page that it is not updating.
+The server is Node against its standard library only, with no package to install, because a clone on a machine configured with nothing must get the working board.
+
+`state/board-live.jsonl` is the append-only event log every publisher writes to, and it is the durability: an event published while the server is down is read at the next start rather than lost.
+`state/board-live.endpoint` records the URL the running server took, `state/board-live.pid` its process, and `state/board-live.log` whatever it said if it could not start.
+The server exits when its home's `state/` directory is gone, so a removed home never leaves one behind.
+
+The port is derived from the home's own path, which keeps it stable across restarts so a board built yesterday still reconnects today, and distinct per home so a secondmate or a second clone never contends for it.
+A derived port already in use falls back to one the system assigns, recorded in the endpoint file.
+The optional local, gitignored `config/board-live-port` pins a port instead, and `FM_BOARD_LIVE_PORT` overrides both; a pinned port that is taken is an error rather than a silent move, because a pin exists to be honored.
+
+`bin/fm-board-live.sh`'s header owns the publish kinds and the lifecycle commands, and `bin/fm-board-live.mjs`'s header owns what an event may change, why the wire carries whole board state rather than deltas, and why a change needing new prose marks the board behind instead of being guessed at.
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` sets `test.evidence.store_in_repo: true` and pins `commands.lint` to `bin/fm-lint.sh`, the same owner CI invokes.

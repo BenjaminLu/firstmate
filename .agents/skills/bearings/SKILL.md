@@ -136,6 +136,11 @@ Its serve-first sequence publishes the board, establishes and verifies its Lavis
 Never bind or arm the board before its session is listed open.
 Never run `lavish-axi poll` for the board yourself: the armed source's supervised runner owns the blocking poll, and both the build and the watcher's ordinary reconcile repair a missing listener, so no conversational turn ever blocks on the board.
 
+The board `build` publishes keeps itself fresh between rebuilds: it subscribes to this home's fleet events and repaints as they land, and `build` starts that server itself, so nothing here is a step to remember.
+What it can repaint is what the fleet can express without new words - a worker's state, a row that went underway or landed, a call that was answered.
+What it cannot is a question nobody has worded yet, so a new captain's call, or a pull request on work still listed as underway, makes the board say a rebuild is owed and that rebuild is yours to run.
+Treat a board that says so as a `/bearings lavish` worth running, not as a board with nothing on it.
+
 ### Handling a board wake
 
 A board answer arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake. Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, regardless of which answer kinds the result contains; then load `process-event-sources` and follow its contract for the result read, adapter classification, and the handled acknowledgement.

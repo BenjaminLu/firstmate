@@ -12,6 +12,7 @@
 #   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
 #   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
+#   fm-bearings-board.sh derive <data.json> [--out <file>] [--endpoint <ws-url>]
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh url
 #   fm-bearings-board.sh open
@@ -30,6 +31,8 @@
 #            here rather than left to agent memory). Output starts with
 #            `board: <path>`, then includes lavish-axi's session output and
 #            the remaining status:
+#              live: <ws endpoint>           (the board subscribes to fleet
+#                                            events and repaints as they land)
 #              session: live | reopened
 #              served: <path>
 #              bound: <source-id>
@@ -128,6 +131,12 @@
 #            gone.
 #            --check <data.json> lists every remaining {FILL} or {TRANSLATE}
 #            placeholder as `<path>: <value>` and exits 1 while any remain.
+# derive     Write the LIVE board - the same derivation build performs, with
+#            the payload injected - without establishing a Lavish session,
+#            arming anything, or touching the board at its stable path.
+#            --endpoint pins the endpoint instead of starting this home's
+#            server. This is how the derivation is inspected and tested; build
+#            is how the captain gets a board.
 # path       Print the stable board path for this home.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
@@ -240,6 +249,15 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
+# The live transport, and the two seams it is anchored on. The board has ONE
+# definition - the shipped template - and the live board is that same board
+# subscribing to fleet events, DERIVED here rather than re-authored, so every
+# card type, badge, picker and packet reaches it without anyone maintaining a
+# list of them. If either seam moves, build stops and names it instead of
+# emitting a board that would look right and never update.
+LIVE_TRANSPORT="${FM_BOARD_LIVE_TRANSPORT:-$SCRIPT_DIR/../.agents/skills/bearings/assets/live-transport.js}"
+LIVE_ANCHOR='<script id="bearings-data" type="application/json">'
+LIVE_ENDPOINT_SLOT='__FM_BOARD_LIVE_ENDPOINT__'
 BOARD_SCHEMA=fm-bearings-board.v1
 PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
 # The one definition of a routable key, an acceptable captain-facing link, and
@@ -279,6 +297,74 @@ fail() {
 }
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
+
+# --- the live board ----------------------------------------------------------
+# The board the captain reads goes stale between rebuilds, and nothing about
+# that was ever the transport's fault: nothing wrote. The derivation below adds
+# the one thing a built page cannot do for itself - subscribe to the fleet's
+# own events and repaint the instant one lands - and adds nothing else.
+# bin/fm-board-live.mjs owns what an event may change; the transport owns what
+# the page says about its own freshness.
+
+# Start this home's live server and print the endpoint a page should use.
+# Prints nothing and returns 1 when there is none: a board with no live server
+# still renders from the payload built into it and says it is not updating, so
+# this can never be the reason a board is not built.
+live_endpoint() {
+  local out
+  out=$("$SCRIPT_DIR/fm-board-live.sh" start 2>/dev/null) || return 1
+  printf '%s\n' "$out" | grep -m1 '^ws://' || return 1
+}
+
+# Write the shipped template with the live transport inserted above the data
+# slot, carrying <endpoint>. Above the slot is where the transport must sit: it
+# captures the board's markup BEFORE the shipped script renders into it, which
+# is what lets a repaint restore first paint exactly and lets the board's own
+# error card be undone. Fails rather than emitting a board that cannot update.
+derive_live_board() {  # <endpoint> <destination>
+  local endpoint=$1 dest=$2 anchors
+  [ -f "$LIVE_TRANSPORT" ] && [ ! -L "$LIVE_TRANSPORT" ] \
+    || { printf 'the live transport is missing: %s\n' "$LIVE_TRANSPORT" >&2; return 1; }
+  grep -qF "$LIVE_ENDPOINT_SLOT" "$LIVE_TRANSPORT" \
+    || { printf 'the live transport carries no endpoint slot\n' >&2; return 1; }
+  anchors=$(grep -cxF "$LIVE_ANCHOR" "$TEMPLATE")
+  [ "$anchors" -eq 1 ] \
+    || { printf 'board template does not carry exactly one data slot opening: %s\n' "$TEMPLATE" >&2; return 1; }
+
+  local filled
+  filled=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-board-live-transport.XXXXXX") || return 1
+  if ! FM_LIVE_ENDPOINT="$endpoint" perl -pe \
+      "s/\\Q$LIVE_ENDPOINT_SLOT\\E/\$ENV{FM_LIVE_ENDPOINT}/g" "$LIVE_TRANSPORT" > "$filled"; then
+    rm -f -- "$filled"
+    printf 'cannot set the live endpoint on the transport\n' >&2
+    return 1
+  fi
+  # getline reads the transport verbatim, so nothing in it is interpreted as a
+  # pattern or a replacement however it is punctuated.
+  if ! awk -v anchor="$LIVE_ANCHOR" -v tfile="$filled" '
+      $0 == anchor && !done {
+        print "<script id=\"fm-board-live\">";
+        while ((getline line < tfile) > 0) print line;
+        print "</script>";
+        done = 1;
+      }
+      { print }
+    ' "$TEMPLATE" > "$dest"; then
+    rm -f -- "$filled"
+    printf 'cannot derive the live board\n' >&2
+    return 1
+  fi
+  rm -f -- "$filled"
+  if ! grep -qxF '<script id="fm-board-live">' "$dest"; then
+    printf 'the live transport did not reach the derived board\n' >&2
+    return 1
+  fi
+  if grep -qF "$LIVE_ENDPOINT_SLOT" "$dest"; then
+    printf 'the live endpoint slot survived derivation\n' >&2
+    return 1
+  fi
+  return 0
+}
 
 # The board INLINES a packet's drawings into the captain's page, beside the
 # answer channel, so the bytes it inlines are held to the figure contract that
@@ -1001,8 +1087,31 @@ command_build() {
   [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \
     || fail "board template does not carry exactly one data slot: $TEMPLATE"
 
+  # The page is derived before the payload goes into it, so the payload is
+  # injected into the live board rather than into a page the transport is
+  # bolted onto afterwards. A home that cannot run the server still gets its
+  # board - built from the same template, painting the same payload - and the
+  # build SAYS the board will not update rather than leaving that to be
+  # discovered at the surface the captain reads.
+  local endpoint="" source_page="$TEMPLATE" derived=""
+  if endpoint=$(live_endpoint); then
+    derived=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-live.XXXXXX") \
+      || fail "cannot stage the live board"
+    if derive_live_board "$endpoint" "$derived"; then
+      source_page=$derived
+      printf 'live: %s\n' "$endpoint"
+    else
+      rm -f -- "$derived"
+      derived=""
+      printf 'live: no - the board was built without live updates; see the reason above\n' >&2
+    fi
+  else
+    endpoint=""
+    printf 'live: no - this home has no live board server, so the board will not update between builds (bin/fm-board-live.sh doctor)\n' >&2
+  fi
+
   effective=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-payload.XXXXXX") \
-    || fail "cannot stage the board payload"
+    || { [ -z "$derived" ] || rm -f -- "$derived"; fail "cannot stage the board payload"; }
   if ! effective_payload "$data" "$effective"; then
     rm -f -- "$effective"
     fail "cannot reconcile the board payload against landed work"
@@ -1016,10 +1125,12 @@ command_build() {
   board=$(board_path)
   (umask 077; mkdir -p "${board%/*}") || fail "cannot create ${board%/*}"
   tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || fail "cannot stage the board"
-  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
+  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$source_page" > "$tmp"; then
     rm -f -- "$tmp"
+    [ -z "$derived" ] || rm -f -- "$derived"
     fail "cannot inject the board data"
   fi
+  [ -z "$derived" ] || rm -f -- "$derived"
   if grep -qxF "$PLACEHOLDER" "$tmp"; then
     rm -f -- "$tmp"
     fail "the board data slot survived injection"
@@ -1109,9 +1220,52 @@ command_open() {
   fi
 }
 
+command_derive() {
+  local data="" out="" endpoint="" derived tmp json
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --out) out=${2-}; shift 2 ;;
+      --endpoint) endpoint=${2-}; shift 2 ;;
+      -*) usage >&2; exit 2 ;;
+      *) [ -z "$data" ] || { usage >&2; exit 2; }; data=$1; shift ;;
+    esac
+  done
+  [ -n "$data" ] || { usage >&2; exit 2; }
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  [ -f "$data" ] || fail "board data does not exist: $data"
+  jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
+  validate_payload "$data" || fail "board data does not satisfy $BOARD_SCHEMA: $data"
+  [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "board template is missing: $TEMPLATE"
+  if [ -z "$endpoint" ]; then
+    endpoint=$(live_endpoint) || fail "no live board server in this home (bin/fm-board-live.sh doctor)"
+  fi
+  derived=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-derive.XXXXXX") \
+    || fail "cannot stage the live board"
+  derive_live_board "$endpoint" "$derived" || { rm -f -- "$derived"; fail "cannot derive the live board"; }
+  json=$(jq -c . "$data") || { rm -f -- "$derived"; fail "cannot compact the board data"; }
+  json=${json//</\\u003c}
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-derived.XXXXXX") \
+    || { rm -f -- "$derived"; fail "cannot stage the derived board"; }
+  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$derived" > "$tmp"; then
+    rm -f -- "$derived" "$tmp"
+    fail "cannot inject the board data"
+  fi
+  rm -f -- "$derived"
+  if [ -n "$out" ]; then
+    if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$out"; }; then
+      rm -f -- "$tmp"
+      fail "cannot write the derived board: $out"
+    fi
+  else
+    cat "$tmp"
+    rm -f -- "$tmp"
+  fi
+}
+
 case "${1-}" in
   compose) shift; command_compose "$@" ;;
   build) shift; command_build "$@" ;;
+  derive) shift; command_derive "$@" ;;
   path) board_path ;;
   url) command_url ;;
   open) command_open ;;

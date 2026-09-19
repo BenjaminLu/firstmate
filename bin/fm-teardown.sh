@@ -3619,6 +3619,11 @@ fi
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
 fi
+# Cleanup is the moment the work is known to have landed, so it is the moment
+# the captain's board should stop showing it underway. One append; see
+# bin/fm-board-live.sh for why this can never fail a teardown.
+"$SCRIPT_DIR/fm-board-live.sh" event landed "$ID" --repo "$PROJ" --owner "$KIND" || true
+
 if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
   echo "teardown $ID complete (window $T, worktree $WT, legacy record accepted without spawn_gen: endpoint $TEARDOWN_LEGACY_ENDPOINT, incarnation $TEARDOWN_META_SPAWN_GEN)"
 elif teardown_owns_worktree; then
