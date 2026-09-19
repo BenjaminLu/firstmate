@@ -941,7 +941,11 @@ test_compose_maps_every_section_from_the_recorded_snapshot() {
     and (.charted | length == 4)
     and (.charted[0] | .id == "plain-queued" and .kind == "queued" and .dispatchable == true
       and .reason == "" and .filed == "2026-09-16" and .repo == "sample")
-    and (.charted[1] | .id == "live-gate" and .kind == "queued" and .dispatchable == false)
+    # A gate blocked by another task carries no hold reason, so the skeleton
+    # words the blocker itself; a blank reason renders with no badge and no
+    # explanation.
+    and (.charted[1] | .id == "live-gate" and .kind == "queued" and .dispatchable == false
+      and .reason.en == "waiting on ship-task" and .reason.hant == "{TRANSLATE: waiting on ship-task}")
     and (.charted[2] | .id == "later-call" and .kind == "queued" and .dispatchable == false
       and (.reason.en | startswith("until 2030-01-01")) and (.reason.hant | startswith("{TRANSLATE: until")))
     and (.charted[3] | .id == "main-inventory" and .kind == "warning" and .dispatchable == false
@@ -1129,6 +1133,98 @@ test_build_names_the_unfilled_card_slot_it_refuses() {
   pass "build names the unfilled card slot instead of a validator enum error"
 }
 
+test_compose_cards_only_the_holds_this_home_owns() {
+  local home skeleton
+  home=$(make_compose_home compose-mate-hold)
+  # The snapshot keys a secondmate-owned hold by the mate BARE local task id,
+  # so carding it would either collide with this home's live hold of the same
+  # name or be unanswerable through the keyed intake.
+  jq '.decisions_open += [{id: "mate-a/pick-route", key: "pick-route", verb: "captain-hold",
+        summary: "Pick the route: the mate needs a call", owner: "mate-a"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying a secondmate-owned hold"
+  jq -e '
+    ([.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"])
+    and ([.captains_call[] | select(.key == "pick-route")] | length == 1)
+    and (.captains_call[1].title.en == "Pick the route")
+  ' "$skeleton" >/dev/null || fail "a secondmate-owned hold was carded: $(cat "$skeleton")"
+  pass "compose cards only the captain holds this home can route"
+}
+
+test_compose_never_dispatches_a_charted_row_this_home_does_not_own() {
+  local home skeleton
+  home=$(make_compose_home compose-mate-gate)
+  jq '.gates += [{id: "tidy-docs", title: "Tidy the docs", blocked_by: "-", reason: "-",
+        owner: "mate-a", filed: "2026-09-17"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying a secondmate-owned gate"
+  # The row stays on the board, but nothing about it can enter dispatch.charted
+  # or borrow this home's repo for the mate bare local id.
+  jq -e '
+    (.charted | map(select(.dispatchable)) | map(.id)) == ["plain-queued"]
+    and ([.charted[] | select(.title.en == "Tidy the docs")] | length == 1)
+    and (.charted[] | select(.title.en == "Tidy the docs")
+      | .dispatchable == false and .repo == null and (.id | contains("mate-a"))
+      and .id != "tidy-docs")
+  ' "$skeleton" >/dev/null || fail "a secondmate-owned gate was offered for dispatch: $(cat "$skeleton")"
+  pass "compose never dispatches a Charted Next row this home does not own"
+}
+
+test_compose_carries_the_secondmate_integrity_warnings() {
+  local home skeleton
+  home=$(make_compose_home compose-mate-warnings)
+  jq '.secondmates = [
+        {id: "mate-a", state: "unknown", doing: "Current home state unavailable",
+         provenance: "registered-table", freshness: "stale", age_seconds: 900,
+         contradiction: false, reason: "home ledger unreadable"},
+        {id: "mate-b", state: "no_active_work", doing: "No active child work",
+         provenance: "structured-home", freshness: "fresh", age_seconds: 5,
+         contradiction: false, reason: "-"}]
+      | .secondmate_reconcile = [
+        {id: "mate-c", spawn_gen: 3, host: "box", kind: "orphan_in_flight", ids: ["t-1", "t-2"]}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying secondmate integrity rows"
+  jq -e '
+    # The unavailable home and the mismatch notice are warning rows; a healthy
+    # home is not an alarm and stays off Charted Next.
+    ([.charted[] | select(.kind == "warning") | .title.en]
+      == ["in-flight backlog item has no child metadata",
+          "Secondmate home mate-a is unavailable",
+          "Secondmate home mate-c reports an inventory mismatch"])
+    and ([.charted[] | select(.title.en | test("mate-b"))] | length == 0)
+    and (.charted[] | select(.title.en | test("mate-a"))
+      | .dispatchable == false and .filed == null and .repo == null
+      and .reason.en == "Current home state unavailable")
+    and (.charted[] | select(.title.en | test("mate-c"))
+      | .dispatchable == false and .reason.en == "orphan_in_flight: t-1, t-2")
+  ' "$skeleton" >/dev/null || fail "the secondmate integrity notices are missing: $(cat "$skeleton")"
+  pass "compose carries unavailable secondmate homes and mismatch notices as warnings"
+}
+
+test_compose_badges_a_warning_only_for_a_synthesized_gate() {
+  local home skeleton
+  home=$(make_compose_home compose-warning-id)
+  # An ordinary queued item whose hand-written hold reason happens to read like
+  # a synthesized notice is still queued work, not a repair notice.
+  jq '.gates += [{id: "audit-stock", title: "Audit the stock", blocked_by: "-",
+        reason: "main inventory", owner: "(main)", filed: "2026-09-14"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose gate reason reads like a notice"
+  jq -e '
+    (.charted[] | select(.id == "audit-stock") | .kind == "queued")
+    and (.charted[] | select(.id == "main-inventory") | .kind == "warning")
+  ' "$skeleton" >/dev/null || fail "a hold reason badged an ordinary row as a warning: $(cat "$skeleton")"
+  pass "compose badges a warning from the synthesized gate id alone"
+}
+
 test_compose_validates_the_skeleton_on_stdout_too() {
   local home out rc
   home=$(make_compose_home compose-stdout-validate)
@@ -1236,6 +1332,10 @@ test_compose_seeds_a_packet_card_without_a_recorded_project
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
+test_compose_cards_only_the_holds_this_home_owns
+test_compose_never_dispatches_a_charted_row_this_home_does_not_own
+test_compose_carries_the_secondmate_integrity_warnings
+test_compose_badges_a_warning_only_for_a_synthesized_gate
 test_compose_leaves_the_omitted_charted_counts_to_the_composer
 test_compose_slots_the_risk_a_packet_leaves_out
 test_build_names_the_unfilled_card_slot_it_refuses

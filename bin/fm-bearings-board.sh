@@ -48,17 +48,27 @@
 #            blank); every landed row becomes a Landed row
 #            (pr_url when its artifact is an https link); every gate becomes
 #            a Charted Next row, `warning` and non-dispatchable for the
-#            action-free integrity notices (a parenthesised id, the main
-#            inventory or away-return reasons) and `queued` otherwise, with
-#            dispatchable true only when the gate names no blocker and no
-#            hold reason; every live captain hold becomes exactly one decision
+#            action-free integrity notices (the parenthesised synthesized
+#            gates) and `queued` otherwise, with dispatchable true only when
+#            the gate is this home's own and names no blocker and no hold
+#            reason, and with a reason naming the blocker when the gate has
+#            one but no hold reason; every unavailable or externally held
+#            secondmate home and every secondmate inventory-mismatch notice
+#            becomes a non-dispatchable `warning` Charted Next row, so a
+#            repair notice can never go missing from the board; every live
+#            captain hold THIS HOME OWNS becomes exactly one decision
 #            card keyed by its task id; every merge-ready candidate PR (checks
 #            passing, mergeable, review not CHANGES_REQUESTED, present only
 #            under the snapshot's --include-prs) that an owning task claims
 #            becomes a merge card keyed merge.<task-id> with pr_url set and
-#            risk left for the composer; a PR with no owning task gets no
-#            card, because only a task-keyed merge answer can be routed
-#            through `bin/fm-captain-hold.sh`. A held task's title,
+#            risk left for the composer. Nothing this home cannot route back
+#            to one of its own tasks is dispatched or keyed: a PR with no
+#            owning task gets no card, a secondmate-owned hold gets no card
+#            (its snapshot key is the mate's bare local task id, which
+#            `bin/fm-captain-hold.sh` would resolve against this home's
+#            backlog), and a secondmate-owned gate is emitted
+#            owner-qualified, repo-less, and never dispatchable. A held
+#            task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
@@ -603,7 +613,8 @@ EOF
     def record($id): $records[$id] // null;
     def repo_of($id): record($id) | if . == null then null else .repo end;
     def https: type == "string" and test("^https://");
-    def warning_gate: (.id | startswith("(")) or .reason == "main inventory" or .reason == "away-return catch-up";
+    def owned: .owner == "(main)";
+    def warning_gate: .id | startswith("(");
     def hold_title: (record(.id) | if . == null then null else .title end)
       // (.summary | split(": ") | .[0]);
     def hold_close: record(.id) as $r
@@ -658,18 +669,37 @@ EOF
       schema: $schema, home: .home, generated: .generated, lang: $lang,
       prs_live: (.prs | startswith("checked")),
       captains_call: (
-        [ .decisions_open[]? | select(.verb == "captain-hold") | decision_card ]
+        [ .decisions_open[]? | select(.verb == "captain-hold" and owned) | decision_card ]
         + [ .candidate_prs[]? | select(.task != "-" and merge_ready) | merge_card ]),
       underway: [ .in_flight[]? | {id, repo, name: (.name | t(.)), state, kind,
         doing: ((if .doing == "" then .state else .doing end) | t(.))} ],
       landed: [ .landed[]? | {id, repo: repo_of(.id), what: (.what | t(.)), owner}
         + (if (.artifact | https) then {pr_url: .artifact} else {} end) ],
-      charted: [ .gates[]? | . as $g
-        | {id: (.id | slugify), repo: repo_of(.id), title: (.title | t(.)),
-           reason: (if .reason == "-" then "" else (.reason | t(.)) end),
-           dispatchable: ((warning_gate | not) and .blocked_by == "-" and .reason == "-"),
-           kind: (if warning_gate then "warning" else "queued" end),
-           filed: .filed} ],
+      charted: (
+        [ .gates[]?
+          | {id: (if owned then (.id | slugify) else ((.owner + "/" + .id) | slugify) end),
+             repo: (if owned then repo_of(.id) else null end),
+             title: (.title | t(.)),
+             reason: (if .reason != "-" then (.reason | t(.))
+               elif .blocked_by != "-" then t("waiting on " + (.blocked_by | gsub(","; ", ")))
+               else "" end),
+             dispatchable: (owned and (warning_gate | not) and .blocked_by == "-" and .reason == "-"),
+             kind: (if warning_gate then "warning" else "queued" end),
+             filed: .filed} ]
+        + [ .secondmates[]?
+          | select(.state == "unknown" or .state == "externally_held")
+          | {id: (("secondmate/" + .id) | slugify), repo: null,
+             title: t("Secondmate home " + .id + " is "
+               + (if .state == "unknown" then "unavailable" else "held outside this home" end)),
+             reason: ((if (.doing // "") != "" then .doing else (.reason // "-") end)
+               | if . == "-" or . == "" then t("its current state is unreadable from here") else t(.) end),
+             dispatchable: false, kind: "warning", filed: null} ]
+        + [ .secondmate_reconcile[]?
+          | {id: (("reconcile/" + .id) | slugify), repo: null,
+             title: t("Secondmate home " + .id + " reports an inventory mismatch"),
+             reason: t((.kind // "inventory mismatch")
+               + (if ((.ids // []) | length) > 0 then ": " + ((.ids // []) | join(", ")) else "" end)),
+             dispatchable: false, kind: "warning", filed: null} ]),
       charted_more: more_slot("queued"; "charted_warning_more"),
       charted_warning_more: more_slot("warning"; "charted_more")
     }' > "$tmp" || { rm -f -- "$tmp"; fail "cannot compose the board skeleton"; }
