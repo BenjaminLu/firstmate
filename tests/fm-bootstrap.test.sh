@@ -1700,6 +1700,72 @@ test_dormant_fork_checks_are_reported() {
   pass "dormant repository checks are reported, either positive signal silences the check, and an unreadable state reports unverified"
 }
 
+# `gh auth status` is a round trip to the forge. The checks probe runs right
+# after the authentication probe, and asked again rather than reading the verdict
+# already paid for, so a network-phase session start made the same call twice.
+test_gh_auth_is_probed_once_per_network_phase() {
+  local case_dir out count
+  case_dir=$(clone_truth_case auth-once)
+  mkdir -p "$case_dir/root/.github/workflows"
+  git init -q "$case_dir/root"
+  git -C "$case_dir/root" remote add origin "git@github.com:someone/their-fork.git"
+  # A gh that records every `auth status` invocation, so the count is observed
+  # rather than asserted from reading the source.
+  cat > "$case_dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = auth ] && [ "\${2:-}" = status ]; then
+  printf 'x\n' >> "$case_dir/auth-calls"
+  exit 0
+fi
+if [ "\${1:-}" = api ]; then
+  case "\${2:-}" in
+    *actions/workflows) printf '%s\n' 'active'; exit 0 ;;
+    *actions/permissions) printf '%s\n' 'true'; exit 0 ;;
+  esac
+fi
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/gh"
+
+  : > "$case_dir/auth-calls"
+  out=$(env PATH="$case_dir/fakebin:$BASE_PATH" FM_HOME="$case_dir/home" \
+    FM_ROOT_OVERRIDE="$case_dir/root" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  count=$(wc -l < "$case_dir/auth-calls" | tr -d ' ')
+  [ "$count" -eq 1 ] \
+    || fail "expected exactly one gh auth status per network phase, got $count"
+
+  # And the shared verdict must still gate the checks probe: an unauthenticated
+  # forge reports NEEDS_GH_AUTH and the checks probe stays quiet rather than
+  # claiming anything about a state it could not read.
+  cat > "$case_dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = auth ] && [ "\${2:-}" = status ]; then
+  printf 'x\n' >> "$case_dir/auth-calls"
+  exit 1
+fi
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh"
+  : > "$case_dir/auth-calls"
+  out=$(env PATH="$case_dir/fakebin:$BASE_PATH" FM_HOME="$case_dir/home" \
+    FM_ROOT_OVERRIDE="$case_dir/root" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  case "$out" in
+    *NEEDS_GH_AUTH*) ;;
+    *) fail "an unauthenticated forge should report NEEDS_GH_AUTH, got: $out" ;;
+  esac
+  case "$out" in
+    *ACTIONS_*) fail "the checks probe should not claim a state it could not read, got: $out" ;;
+  esac
+  count=$(wc -l < "$case_dir/auth-calls" | tr -d ' ')
+  [ "$count" -eq 1 ] \
+    || fail "expected one gh auth status even when it fails, got $count"
+  pass "gh auth status is probed once per network phase and its verdict gates the checks probe"
+}
+
 # Inside a fork, gh resolves the UPSTREAM slug, so the repository has to come
 # from this checkout's own origin remote or the check would confidently report
 # the parent's healthy Actions while this fork's sat dormant.
@@ -1832,5 +1898,6 @@ test_claude_permission_starter_is_offered_then_merged_on_consent
 test_claude_permission_probe_counts_every_settings_file
 test_claude_permission_probe_reports_when_it_cannot_compare
 test_dormant_fork_checks_are_reported
+test_gh_auth_is_probed_once_per_network_phase
 test_actions_check_uses_this_repositorys_own_origin
 test_claude_permission_offer_is_scoped_to_claude_homes

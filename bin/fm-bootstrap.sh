@@ -1938,7 +1938,11 @@ detect_actions_dormant() {
   local slug enabled states
   command -v gh >/dev/null 2>&1 || return 0
   [ -d "$FM_ROOT/.github/workflows" ] || return 0
-  gh auth status >/dev/null 2>&1 || return 0
+  # Reads the verdict the caller already paid for. An unauthenticated forge is
+  # the one case this returns silent on, and it is not silence: NEEDS_GH_AUTH is
+  # printed by that same caller on the same run, so the operator is told why the
+  # checks state could not be read.
+  [ "${BOOTSTRAP_GH_AUTH_OK:-0}" = 1 ] || return 0
   slug=$(actions_repo_slug)
   case $? in
     0) ;;
@@ -2131,9 +2135,23 @@ detect_home_summary_publication() {
 local_phase && detect_local_tools
 if network_phase; then
   __fm_timing_stamp=$(fm_timing_now_ms)
-  gh auth status >/dev/null 2>&1 || echo "NEEDS_GH_AUTH"
-  detect_actions_dormant
+  # One authentication probe per run, its verdict published for the checks probe
+  # below rather than asked again: `gh auth status` is a round trip to the forge,
+  # and asking twice on consecutive lines bought nothing.
+  if gh auth status >/dev/null 2>&1; then
+    BOOTSTRAP_GH_AUTH_OK=1
+  else
+    BOOTSTRAP_GH_AUTH_OK=0
+    echo "NEEDS_GH_AUTH"
+  fi
   fm_timing_record phase gh-auth "$__fm_timing_stamp"
+  # Its own bracket, because the comment above this block promises that each
+  # network owner is bracketed so a slow stage can be attributed to the phase
+  # that spent the time. Leaving the checks probe inside the gh-auth bracket
+  # charged its forge round trips to authentication.
+  __fm_timing_stamp=$(fm_timing_now_ms)
+  detect_actions_dormant
+  fm_timing_record phase actions-checks "$__fm_timing_stamp"
 fi
 local_phase && detect_local_config
 
