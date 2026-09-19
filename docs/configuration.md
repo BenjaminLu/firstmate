@@ -262,6 +262,19 @@ The flag is per home and is not inherited by secondmate homes, because stow cade
 Only the file's presence is read, so its contents are ignored; remove it to return to the default contract on the next pass.
 The skill text owns the marker spelling, the tick order, and the reinforcement rule.
 
+## Remote bearings board (config/remote-board)
+
+`config/remote-board` is an optional local, gitignored file holding one line: the address of this home's remote bearings board, the phone-reachable twin of the `/bearings lavish` desk board.
+It exists so a clone can be pointed at its own board instead of inheriting one machine's, and so the address is configuration rather than a note in a private preferences file.
+Absent means this home has no remote board, which is a complete and supported state: nothing degrades, and `bin/fm-remote-board.sh doctor` reports it as not set up rather than failing somewhere later.
+The file is per home and is not inherited by secondmate homes, because each home's board is its own surface.
+
+The board itself is a private Claude artifact that declares the `db` runtime capability.
+Its page is DERIVED from the shipped board template and never hand-written; [`bin/fm-remote-board.sh`](../bin/fm-remote-board.sh)'s header owns the derivation, the payload path, and the exact publish procedure.
+Creating the artifact and writing its payload are the two steps a shell cannot perform, because that store is reached only through a Claude-harness agent tool and no credentialed CLI exposes it.
+`bin/fm-remote-board.sh publish` therefore prepares everything it can - validating the payload, deriving the page, and naming the exact operation and address - and then exits 69 rather than reporting a publish it did not perform.
+A home with no such harness keeps the desk board and loses only the remote one; nothing else in firstmate depends on it.
+
 ## Secondmate routes (data/secondmates.md)
 
 Persistent secondmate routes live locally in `data/secondmates.md`.

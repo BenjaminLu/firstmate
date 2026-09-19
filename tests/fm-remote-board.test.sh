@@ -69,11 +69,17 @@ test_the_derived_board_runs_the_shipped_board_verbatim() {
   # Parity is structural: the shipped script is what renders the remote board,
   # so anything the shipped board grows reaches this page without a list.
   shipped_board_script "$SHIPPED" > "$d/board.js"
+  # Decoded, not raw: the embedded source is escaped so it cannot close its own
+  # script element, so the assertion is that it round-trips to the shipped bytes
+  # exactly - a stronger claim than finding it as literal text.
   python3 - "$d/board.js" "$d/page.html" <<'PY' || fail "the derived board does not carry the shipped board script verbatim"
-import json, sys
+import json, re, sys
 src = open(sys.argv[1], encoding="utf-8").read()
 page = open(sys.argv[2], encoding="utf-8").read()
-sys.exit(0 if json.dumps(src) in page else 1)
+m = re.search(r'var BOARD_SRC = ("(?:[^"\\]|\\.)*");', page)
+if not m:
+    sys.exit("the derived board carries no embedded board source")
+sys.exit(0 if json.loads(m.group(1)) == src else 1)
 PY
 
   # And the shipped markup, which is where every class, token and drawing lives.
@@ -244,6 +250,79 @@ test_the_derived_board_is_renderable_from_the_shipped_assets() {
   pass "the derived board is renderable from the shipped assets"
 }
 
+test_the_embedded_board_source_cannot_close_its_own_script() {
+  local d=$TMP_ROOT/embed
+  mkdir -p "$d"
+  valid_payload "$d/p.json"
+  "$REMOTE" render "$d/p.json" --out "$d/page.html" >/dev/null
+  # Same rule as the payload: a raw `<` in the embedded source would let a
+  # `</script>` inside the shipped board end this element early and blank the
+  # page the captain reads.
+  python3 - "$d/page.html" <<'PY' || fail "the embedded board source carries a raw '<'"
+import re, sys
+page = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'var BOARD_SRC = ("(?:[^"\\]|\\.)*");', page)
+if not m:
+    sys.exit("the derived board carries no embedded board source")
+sys.exit(1 if "<" in m.group(1) else 0)
+PY
+  pass "the embedded board source cannot close its own script"
+}
+
+test_url_and_doctor_report_a_home_with_no_board() {
+  local home out rc=0
+  home=$TMP_ROOT/bare
+  mkdir -p "$home"
+
+  rc=0; out=$(FM_HOME="$home" "$REMOTE" url 2>&1) || rc=$?
+  expect_code 1 "$rc" "url must refuse when the home has no board configured"
+  assert_contains "$out" "no remote board configured" "url must say what is missing"
+  assert_contains "$out" "config/remote-board" "url must name the file to write"
+
+  # A clone with nothing set up is a supported state, not a failure.
+  rc=0; out=$(FM_HOME="$home" "$REMOTE" doctor 2>&1) || rc=$?
+  expect_code 0 "$rc" "doctor must succeed on a home with no remote board"
+  assert_contains "$out" "not configured" "doctor must report the missing address"
+  assert_contains "$out" "supported state" "doctor must say a home without a board is fine"
+  assert_contains "$out" "derives: yes" "doctor must prove the shipped assets still derive"
+  assert_contains "$out" "a shell cannot reach the board store" \
+    "doctor must name what performs the publish"
+  pass "url and doctor report a home with no board"
+}
+
+test_doctor_fails_when_the_shipped_assets_stopped_deriving() {
+  local out rc=0 d=$TMP_ROOT/doctor-broken home
+  home=$d/home
+  mkdir -p "$home"
+  template_without '<script id="bearings-data" type="application/json">' \
+    '<script id="moved" type="application/json">' "$d/broken.html"
+
+  rc=0
+  out=$(FM_HOME="$home" FM_REMOTE_BOARD_TEMPLATE="$d/broken.html" "$REMOTE" doctor 2>&1) || rc=$?
+  expect_code 1 "$rc" "doctor must fail when the shipped board no longer derives"
+  assert_contains "$out" "derives: NO" "doctor must name the derivation as the broken thing"
+  pass "doctor fails when the shipped assets stopped deriving"
+}
+
+test_publish_prepares_and_refuses_to_claim_it_published() {
+  local home out rc=0
+  home=$TMP_ROOT/publish
+  mkdir -p "$home/config"
+  printf 'https://example.invalid/artifact/test\n' > "$home/config/remote-board"
+  valid_payload "$home/p.json"
+
+  rc=0; out=$(FM_HOME="$home" "$REMOTE" publish "$home/p.json" 2>&1) || rc=$?
+  # 69 is this repository's "cannot run here", the same status a missing linter
+  # uses; anything else would read as a publish that happened.
+  expect_code 69 "$rc" "publish must exit 69 rather than report a publish it did not make"
+  assert_contains "$out" "https://example.invalid/artifact/test" "publish must name the configured address"
+  assert_contains "$out" "board/current" "publish must name the exact operation"
+  assert_contains "$out" "prepared the publish rather than making it" \
+    "publish must say plainly that it did not publish"
+  assert_present "$home/.lavish/remote-board.html" "publish must leave the derived page ready"
+  pass "publish prepares and refuses to claim it published"
+}
+
 test_the_derived_board_runs_the_shipped_board_verbatim
 test_the_derived_board_has_one_copy_of_the_board_code
 test_the_contract_owner_gates_what_can_be_rendered
@@ -254,3 +333,7 @@ test_check_catches_a_shipped_feature_the_remote_board_never_got
 test_check_refuses_untracked_content_around_the_board
 test_the_answer_keys_are_the_shipped_boards_own
 test_the_derived_board_is_renderable_from_the_shipped_assets
+test_the_embedded_board_source_cannot_close_its_own_script
+test_url_and_doctor_report_a_home_with_no_board
+test_doctor_fails_when_the_shipped_assets_stopped_deriving
+test_publish_prepares_and_refuses_to_claim_it_published

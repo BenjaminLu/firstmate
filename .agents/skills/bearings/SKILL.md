@@ -106,6 +106,25 @@ This is a default of the system, not a preference: a surface that genuinely cann
 A hand-maintained second copy is not a derivation, because it loses features without anyone measuring it.
 `bin/fm-remote-board.sh` is the worked example, deriving the captain's phone-reachable remote board from that same template and proving the result still matches it.
 
+### The remote board
+
+The remote board is that derived surface: the same board as a private Claude artifact the captain reaches from a phone.
+Run `bin/fm-remote-board.sh doctor` first; it reports this home's address, whether the shipped assets still derive, and what performs the publish.
+A home with no `config/remote-board` address has no remote board, which is a supported state - do not invent one unless the captain asked for it.
+
+Compose and fill the payload exactly as for the desk board above, then `bin/fm-remote-board.sh publish <data.json>`.
+It validates, derives the page, names the operation, and exits 69 without publishing, because the two remaining steps run through a Claude-harness agent tool that no shell can reach:
+
+- Write that same payload to the board's `board/current` document with the artifact database's write action.
+- Publish the derived page to the board's address with the artifact publish action, keeping the `db` capability it already declares.
+
+Creating the board the first time is the same publish against no existing address: publish the derived page as a new private artifact that declares `db`, then write the URL it returns into `config/remote-board` so this home and a fresh clone both point at their own board.
+Never hand-write that page, and never publish anything but what `publish` derived.
+
+Afterwards, read the published page back and run `bin/fm-remote-board.sh check <file>` on it.
+That is the parity proof: it fails when the published board is not what today's template derives, which is how a feature the shipped board grew reaches the captain's phone instead of going missing unmeasured.
+If a feature genuinely cannot cross to this transport, say so in the change that introduces it rather than dropping it quietly.
+
 Never hand-write the payload from the snapshot.
 Start from `bin/fm-bearings-board.sh compose --lang <captain's language> --out <file>`, which reads the same snapshot command and maps every structured row deterministically: Underway, Recently Landed, and Charted Next rows (including an unavailable or externally held secondmate home and every inventory-mismatch notice, as non-dispatchable warning rows), one decision card per live captain hold THIS home owns whose task id is a routable key, and a merge card per merge-ready PR that a task in THIS home's backlog claims (the script header owns the exact mapping and the placeholder shapes).
 The skeleton keys and dispatches only what this home can route back to its own task, so a secondmate-owned hold gets no card, a secondmate-owned gate arrives owner-qualified and never dispatchable, and a PR whose task this home's backlog does not claim gets no merge card; carding or dispatching one of those is your explicit judgment, and you own routing the answer to that home yourself.
