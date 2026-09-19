@@ -392,7 +392,22 @@ test_review_flag_conflicts_and_brief_mismatch_refuse() {
   status=$?
   expect_code 1 "$status" "a review brief dispatched with --scout must refuse"
   assert_contains "$out" "is a review brief but this dispatch omits --review" "wrong refusal for a review brief under --scout"
-  pass "a review dispatch refuses ship flags and a brief whose review shape disagrees"
+
+  # The URL must be validated here too. An already-scaffolded brief is reused
+  # without calling fm-brief.sh, so on that path this is the only check between
+  # a bad URL and the backlog note that records it.
+  id=dispatch-review-badurl-v2
+  mkdir -p "$case_dir/home/data/$id"
+  FM_HOME="$case_dir/home" "$ROOT/bin/fm-brief.sh" "$id" project \
+    --review https://github.com/acme/widget/pull/3 >/dev/null 2>&1
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --review https://gitlab.com/g/p/-/merge_requests/3 \
+    --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" 2>&1)
+  status=$?
+  expect_code 1 "$status" "a non-GitHub --review URL must refuse even when the brief already exists"
+  assert_contains "$out" "requires a GitHub pull request URL" "wrong refusal for a non-GitHub review URL"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "a refused review URL still reached the backlog"
+  pass "a review dispatch refuses ship flags, a disagreeing brief, and a URL it could not post to"
 }
 
 test_scout_call_files_and_spawns_a_scout() {

@@ -126,6 +126,8 @@ esac
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-timing-lib.sh
 . "$SCRIPT_DIR/fm-timing-lib.sh"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
 
 START_MS=$(fm_timing_now_ms)
 
@@ -178,6 +180,11 @@ if [ -n "$REVIEW" ]; then
   # briefed with --review, filed and spawned as a scout, and torn down by the
   # scout gate. bin/fm-brief.sh validates the URL and owns that contract.
   [ "$MODE_SET" -eq 0 ] && [ "$YOLO_SET" -eq 0 ] || die "--review cannot be combined with --mode or --yolo; a review posts findings on an existing PR and delivers no change of its own"
+  # Validate here as well as in fm-brief.sh, because an already-scaffolded
+  # brief is reused without calling it, and the URL would then reach the
+  # backlog note having been checked by nothing.
+  fm_pr_url_parse "$REVIEW" && [ "$FM_PR_PROVIDER" = github ] \
+    || die "--review requires a GitHub pull request URL of the form https://github.com/<owner>/<repo>/pull/<number> (got '$REVIEW')"
   SCOUT=1
   KIND=scout
   NOTE="kind=review pr=$REVIEW"
