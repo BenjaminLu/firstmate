@@ -39,6 +39,18 @@ export FM_BACKEND_CMUX_BUNDLE_BIN="$TMP_ROOT/no-bundled-cmux"
 unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_SOCKET_PATH CMUX_TAB_ID CMUX_PANEL_ID 2>/dev/null || true
 
+# Hermetic worker-skill state, for the same reason the runtime markers are unset
+# above: bootstrap reports an absent diagram-design skill, and it resolves that
+# skill under the Claude config dir, which defaults to the DEVELOPER'S own
+# $HOME. A machine with the skill installed then sees silence where CI sees a
+# MISSING_MANUAL line, so every case asserting exact output passes locally and
+# fails on a runner - which is exactly what happened. Point the default at a
+# fixture that HAS the skill; a case about that check sets its own config dir.
+FM_TEST_CLAUDE_CONFIG="$TMP_ROOT/hermetic-claude"
+mkdir -p "$FM_TEST_CLAUDE_CONFIG/skills/diagram-design"
+: > "$FM_TEST_CLAUDE_CONFIG/skills/diagram-design/SKILL.md"
+export CLAUDE_CONFIG_DIR="$FM_TEST_CLAUDE_CONFIG"
+
 # A fake toolchain where every required tool is present and gh is authenticated.
 # treehouse's `get --help` advertises --lease only when FM_FAKE_TREEHOUSE_LEASE_HELP=1
 # and advertises --no-fetch unless FM_FAKE_TREEHOUSE_NO_FETCH_HELP=0, so a case can
