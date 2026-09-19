@@ -92,6 +92,10 @@
 #          timeout; ACTIONS_UNVERIFIED reports that this could not be determined.
 #          The repository is resolved from FM_ROOT's origin remote, never from
 #          gh's ambient resolution, which inside a fork answers with UPSTREAM.
+#          An origin that is not on github.com is skipped rather than reported
+#          unverified, because there the trap does not apply; an origin that
+#          cannot be parsed at all IS reported. GitHub Enterprise hosts also run
+#          Actions and are skipped by that rule - a known, stated gap.
 #          CLAUDE_PERMISSIONS reports how many of the toolchain commands in the
 #          tracked assets/claude-permissions.starter.json are not yet pre-approved
 #          in the operator's own Claude settings. Bootstrap NEVER merges it on its
@@ -1824,16 +1828,28 @@ detect_lavish_named_session() {
 # ambient resolution: inside a fork, `gh repo view` answers with the UPSTREAM
 # slug, so asking it would confidently report the parent's healthy Actions while
 # this fork's sat dormant.
+# Returns the owner/repo slug, and returns 2 - distinct from a parse failure -
+# when the origin is simply not on github.com. That distinction matters: a
+# GitHub repository whose slug cannot be read is a check that should have run
+# and did not, while a repository hosted somewhere else is a check that does not
+# apply, and reporting the second as unverified would nag every session forever
+# about a trap that cannot happen there.
+#
+# Known gap, stated rather than hidden: a GitHub Enterprise host also runs
+# Actions and is skipped here, because this cannot tell an Enterprise host from
+# an unrelated forge by its name alone.
 actions_repo_slug() {
-  local url
+  local url host
   url=$(git -C "$FM_ROOT" remote get-url origin 2>/dev/null) || return 1
   url=${url%.git}
   case "$url" in
-    https://*|http://*) url=${url#*://}; url=${url#*/} ;;
-    ssh://*) url=${url#ssh://}; url=${url#*@}; url=${url#*/} ;;
-    *:*) url=${url#*@}; url=${url#*:} ;;
+    https://*|http://*) url=${url#*://}; host=${url%%/*}; url=${url#*/} ;;
+    ssh://*) url=${url#ssh://}; url=${url#*@}; host=${url%%/*}; url=${url#*/} ;;
+    *:*) url=${url#*@}; host=${url%%:*}; url=${url#*:} ;;
     *) return 1 ;;
   esac
+  host=${host%%:*}
+  [ "$host" = github.com ] || return 2
   case "$url" in
     */*/*|'') return 1 ;;
     */*) printf '%s' "$url" ;;
@@ -1854,10 +1870,15 @@ detect_actions_dormant() {
   command -v gh >/dev/null 2>&1 || return 0
   [ -d "$FM_ROOT/.github/workflows" ] || return 0
   gh auth status >/dev/null 2>&1 || return 0
-  slug=$(actions_repo_slug) || {
-    echo "ACTIONS_UNVERIFIED: could not resolve this repository from its origin remote, so whether its checks are enabled is unknown; a fork with dormant checks leaves every validation run waiting for CI that never reports"
-    return 0
-  }
+  slug=$(actions_repo_slug)
+  case $? in
+    0) ;;
+    2) return 0 ;;
+    *)
+      echo "ACTIONS_UNVERIFIED: could not resolve this repository from its origin remote, so whether its checks are enabled is unknown; a fork with dormant checks leaves every validation run waiting for CI that never reports"
+      return 0
+      ;;
+  esac
   states=$(gh api "repos/$slug/actions/workflows" --jq '[.workflows[].state] | join(" ")' 2>/dev/null) || states=
   case " $states " in
     *" active "*) return 0 ;;

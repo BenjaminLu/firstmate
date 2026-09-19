@@ -1660,7 +1660,31 @@ test_actions_check_uses_this_repositorys_own_origin() {
     *"someone-else/their-fork"*) ;;
     *) fail "the check should name the repository this checkout pushes to, got: $out" ;;
   esac
-  pass "the checks state is read for this checkout's own origin, not whatever gh resolves to"
+
+  # A repository hosted somewhere else is a check that does not apply, not one
+  # that failed: reporting it unverified would nag every session about a trap
+  # that cannot happen there.
+  git -C "$fake_root" remote set-url origin "git@gitlab.com:someone-else/their-fork.git"
+  out=$(env PATH="$case_dir/fakebin:$BASE_PATH" FM_HOME="$case_dir/home" \
+    FM_ROOT_OVERRIDE="$fake_root" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  case "$out" in
+    *ACTIONS_*) fail "a non-GitHub origin should be skipped, not reported, got: $out" ;;
+  esac
+
+  # An origin that cannot be parsed at all IS reported, so the two cases stay
+  # distinguishable rather than collapsing into one silent skip.
+  git -C "$fake_root" remote set-url origin "not-a-url"
+  out=$(env PATH="$case_dir/fakebin:$BASE_PATH" FM_HOME="$case_dir/home" \
+    FM_ROOT_OVERRIDE="$fake_root" CLAUDE_CONFIG_DIR="$case_dir/claude" \
+    FM_BOOTSTRAP_NETWORK=only FM_BOOTSTRAP_DETECT_ONLY=1 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  case "$out" in
+    *"ACTIONS_UNVERIFIED: could not resolve this repository"*) ;;
+    *) fail "an unparseable origin should be reported unverified, got: $out" ;;
+  esac
+  pass "the checks state is read for this checkout's own origin, a non-GitHub origin is skipped, and an unreadable one is reported"
 }
 
 # A home whose crewmates run another harness never reads Claude settings, so it
