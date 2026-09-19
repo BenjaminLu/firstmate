@@ -12,12 +12,15 @@
 //   hold        a live payload arrives while an answer is being written
 //   hold-send   the same, and then the answer is sent
 //   hold-stale  a selection is left behind on a card the deck has moved past
+//   hold-picks  a payload arrives on unsent dispatch ticks
+//   picks-sent  the same, and then the dispatch order is queued
 //   write-fails an answer is written, the write is refused, a payload follows
+//   stopped     the same, and then the page stops receiving readable payloads
 //   lang        the board's own language switch is used
 //   no-db       the artifact store never hands over a db capability
 //
 // Prints one JSON document:
-//   { badge, badgeHost, gap, gapHost, gapShown, provenance, note, stack, writes }
+//   { badge, badgeHost, answers, answersHost, provenance, note, stack, picks, writes }
 import { readFileSync } from "node:fs";
 
 const [pagePath, scenario] = process.argv.slice(2);
@@ -197,6 +200,7 @@ function fire(target, type, event) {
   let n = target;
   while (n) {
     (n.listeners[type] || []).forEach((fn) => fn(event));
+    if (type === "click" && typeof n.onclick === "function") n.onclick(event);
     n = n.parentNode;
   }
 }
@@ -221,7 +225,7 @@ const db = {
   doc: (path) => ({
     set: (record) => {
       writes.push({ path, record });
-      return scenario === "write-fails"
+      return scenario === "write-fails" || scenario === "stopped"
         ? Promise.reject(new Error("the store refused this write"))
         : Promise.resolve();
     },
@@ -285,11 +289,20 @@ if (scenario === "live") {
   document.getElementById("bb-stack-next").onclick();
   document.activeElement = null;
   push(LIVE);
-} else if (scenario === "write-fails") {
+} else if (scenario === "hold-picks" || scenario === "picks-sent") {
+  // Nothing is being typed and no card is selected: only the dispatch ticks he
+  // has made and not queued can hold this update.
+  const pick = body.querySelector(".bb-pick");
+  pick.checked = true;
+  fire(pick, "change", {});
+  document.activeElement = null;
+  push(LIVE);
+  if (scenario === "picks-sent") fire(document.getElementById("bb-dispatch-btn"), "click", {});
+} else if (scenario === "write-fails" || scenario === "stopped") {
   typeNote("this write is refused");
   submitAnswer();
   await tick();
-  push(LIVE);
+  push(scenario === "stopped" ? null : LIVE);
 } else if (scenario === "lang") {
   push(LIVE);
   await tick();
@@ -303,15 +316,15 @@ await tick();
 const shown = (id) => body.querySelector("#" + id);
 const hostOf = (node) => (node && node.parentNode ? node.parentNode.className : "");
 const linkNode = shown("bb-remote-link");
-const gapNode = shown("bb-remote-answer-gap");
+const answerNode = shown("bb-remote-answers");
 process.stdout.write(JSON.stringify({
   badge: linkNode ? linkNode.textContent : "",
   badgeHost: hostOf(linkNode),
-  gap: gapNode ? gapNode.textContent : "",
-  gapHost: hostOf(gapNode),
-  gapShown: gapNode ? gapNode.style.display !== "none" : false,
+  answers: answerNode ? answerNode.textContent : "",
+  answersHost: hostOf(answerNode),
   provenance: (shown("bb-provenance") || {}).textContent || "",
   note: noteField() ? noteField().value : null,
   stack: (shown("bb-stack-count") || {}).textContent || "",
+  picks: body.querySelectorAll(".bb-pick:checked").length,
   writes,
 }) + "\n");

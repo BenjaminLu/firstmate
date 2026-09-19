@@ -10,6 +10,13 @@
  * recreate the hand-written copy this replaced, which silently lost six
  * features before anyone measured it.
  *
+ * THE CAPTAIN'S UNSENT WORK OUTRANKS A FRESH PAYLOAD. A live payload repaints
+ * the page through the shipped renderer, which throws away everything on it,
+ * so this transport never overwrites anything he has touched and not yet sent,
+ * wherever on the page he touched it - a card he is answering, a dispatch tick
+ * he has not queued. The update is held and the page says so until that work
+ * is sent or left behind.
+ *
  * bin/fm-remote-board.sh composes this file with the template; it is not
  * loaded on its own.
  */
@@ -29,7 +36,7 @@
   var PRISTINE = document.body.innerHTML;
 
   var STATUS_ID = "bb-remote-link";
-  var GAP_ID = "bb-remote-answer-gap";
+  var ANSWER_ID = "bb-remote-answers";
   var linkState = "connecting";
   var sendState = null;
 
@@ -49,20 +56,15 @@
       hant: "沒在更新 — 顯示頁面內建的舊資料",
       hans: "没在更新 — 显示页面内建的旧资料"
     },
-    detached: {
-      en: "no connection — showing the copy built into this page, and answers cannot be sent",
-      hant: "沒有連線 — 顯示頁面內建的舊資料，也無法送出回答",
-      hans: "没有连线 — 显示页面内建的旧资料，也无法送出回答"
-    },
-    readonly: {
-      en: "read-only — answers cannot be sent from here",
-      hant: "唯讀 — 這裡無法送出回答",
-      hans: "只读 — 这里无法送出回答"
+    unsendable: {
+      en: "answers cannot be sent from here",
+      hant: "這裡無法送出回答",
+      hans: "这里无法送出回答"
     }
   };
   var TONE = {
     connecting: "neutral", live: "online", holding: "warn",
-    offline: "warn", detached: "danger", readonly: "danger"
+    offline: "warn", unsendable: "danger"
   };
 
   /* The answer route back to firstmate is not landed yet, so the page says so.
@@ -98,25 +100,18 @@
     return node;
   }
 
-  /* Two separate facts: whether the page is still being updated, and whether an
-     answer can still leave it. Losing the ability to send does not heal when a
-     later payload arrives, so once it is lost it is what the badge says; a
-     readable connection must never repaint "live" over a page that can no
-     longer answer. */
-  function state() { return sendState || linkState; }
-
-  /* A board that quietly shows stale data is the complaint this answers, so the
-     connection state is on the page rather than in the console. */
+  /* Two facts, two badges, and neither may stand in for the other: whether the
+     page is still being updated, and what becomes of an answer given on it. A
+     board that quietly shows stale data is the complaint the first answers, so
+     a lost connection cannot be hidden by a lost send; and losing the ability
+     to send does not heal when a readable payload next arrives, so the second
+     is sticky once set. */
   function paintStatus() {
-    var shown = state();
-    var node = pin(STATUS_ID, TONE[shown] || "neutral");
+    var node = pin(STATUS_ID, TONE[linkState] || "neutral");
     if (!node) return;
-    node.textContent = say(SAY[shown] || SAY.connecting);
-    var gap = pin(GAP_ID, "warn");
-    gap.textContent = say(ANSWER_GAP);
-    /* Where no answer can leave this page at all, the link badge already says
-       so and this one would only repeat it. */
-    gap.style.display = sendState ? "none" : "";
+    node.textContent = say(SAY[linkState] || SAY.connecting);
+    var answers = pin(ANSWER_ID, sendState ? TONE[sendState] : "warn");
+    answers.textContent = sendState ? say(SAY[sendState]) : say(ANSWER_GAP);
   }
 
   function setLink(newState) {
@@ -148,19 +143,14 @@
     paintStatus();
   }
 
-  /* ---- an answer in progress outranks a fresh payload -------------------
-   * Painting replaces the whole body, so it takes a typed note, a selected
-   * option and the captain's place in the card stack with it. The shipped
-   * board owns the rendering and cannot be repainted piecewise from here, so
-   * the update is held instead: the page says an update is waiting, and it
-   * lands the moment the answer is sent or the card is left clean again.
-   * Only the card the captain is looking at can hold the board. The deck deals
-   * one card at a time and hides the rest, so a selection left on a card he
-   * has already moved past is not an answer in progress; that scoping is what
-   * bounds the hold, because dealing the next card releases it on its own.
-   * The signals are the template's own - a form it tagged with
-   * data-lavish-question, on a card the deck has not hidden - never a shape
-   * this file invents. */
+  /* ---- unsent work, as the page itself shows it -------------------------
+   * The rule is stated at the top of this file; this is how the page is read
+   * for it. Both signals are the template's own - a form it tagged with
+   * data-lavish-question, and its dispatch bar - never a shape this file
+   * invents, and both are read the same way: visible, and carrying something
+   * not yet sent. That is also what bounds a hold, since the deck hides a card
+   * once it deals the next one and the bar marks itself queued once its order
+   * goes. */
   var held = null;
 
   function answerInProgress() {
@@ -177,7 +167,9 @@
       if (note && note.value && note.value.trim()) return true;
       if (document.activeElement && form.contains(document.activeElement)) return true;
     }
-    return false;
+    var bar = document.getElementById("bb-dispatch");
+    return !!(bar && !bar.hidden && bar.className.indexOf("is-queued") < 0 &&
+      document.querySelector(".bb-pick:checked"));
   }
 
   function accept(payload) {
@@ -201,16 +193,14 @@
       if (held === payload && !answerInProgress()) accept(payload);
     }, 0);
   }
-  /* The board's own language buttons re-render the page under these badges, so
-     the language is re-read after the page has finished reacting rather than
-     only when the connection state next changes. */
-  function onActivity() {
-    recheckHeld();
-    setTimeout(paintStatus, 0);
-  }
   ["input", "change", "submit", "click", "focusout"].forEach(function (type) {
-    document.addEventListener(type, onActivity, true);
+    document.addEventListener(type, recheckHeld, true);
   });
+  /* The board's own language buttons are clicks that re-render the page under
+     these badges, so the language is re-read once the page has reacted. */
+  document.addEventListener("click", function () {
+    setTimeout(paintStatus, 0);
+  }, true);
 
   /* ---- answers out -------------------------------------------------------
    * The shipped board sends every answer - decision, merge, credential, and
@@ -235,14 +225,15 @@
     if (!db) { pending.push([key, body]); return; }
     db.doc(answerSlot(key)).set(body).catch(function () {
       writable = false;
-      setSend("readonly");
+      setSend("unsendable");
     });
   }
 
   function cannotSend() {
     writable = false;
     pending.length = 0;
-    setSend("detached");
+    linkState = "offline";
+    setSend("unsendable");
   }
 
   window.lavish = window.lavish || {};

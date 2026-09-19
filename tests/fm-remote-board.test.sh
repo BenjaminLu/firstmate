@@ -492,24 +492,54 @@ test_an_answer_that_cannot_be_sent_is_named_on_the_page() {
   # rather than let the card tick as though it had been sent.
   out=$(drive "$d" no-db)
   assert_equals "0" "$(jq '.writes | length' <<<"$out")" "there is nothing to write the answer to"
-  assert_contains "$(jq -r .badge <<<"$out")" "answers cannot be sent" \
+  assert_contains "$(jq -r .answers <<<"$out")" "answers cannot be sent" \
     "the page must say answers cannot be sent from here"
+  assert_contains "$(jq -r .badge <<<"$out")" "not updating" \
+    "and must say separately that it is no longer being updated"
   pass "an answer that cannot be sent is named on the page"
 }
 
-test_a_page_that_can_no_longer_send_is_not_repainted_live() {
-  local d=$TMP_ROOT/drive-write-fails out badge
+test_sending_and_updating_are_reported_apart() {
+  local d=$TMP_ROOT/drive-write-fails out
   transport_page "$d"
   # The store refuses the answer, then firstmate republishes. Reads working
-  # again does not make the page answerable, and the badge must not say it is.
+  # again does not make the page answerable, and the two facts get a badge
+  # each so neither can be read off the other.
   out=$(drive "$d" write-fails)
-  badge=$(jq -r .badge <<<"$out")
-  assert_contains "$badge" "answers cannot be sent" \
+  assert_contains "$(jq -r .answers <<<"$out")" "answers cannot be sent" \
     "a page whose write was refused must keep saying answers cannot be sent"
-  assert_not_contains "$badge" "live" "a later payload must not repaint a live badge over it"
-  assert_equals "false" "$(jq -r .gapShown <<<"$out")" \
-    "the answer-gap notice must stay hidden where no answer can be sent at all"
-  pass "a page that can no longer send is not repainted live"
+  assert_contains "$(jq -r .badge <<<"$out")" "live" \
+    "a readable payload is still a live link and must be reported as one"
+  assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
+    "that payload must still reach the page"
+
+  # And the other way round: once it stops receiving, the page says so rather
+  # than letting the send failure stand in for a link that is still fine.
+  out=$(drive "$d" stopped)
+  assert_contains "$(jq -r .badge <<<"$out")" "not updating" \
+    "a page that stopped receiving must say so even while a send is broken"
+  assert_contains "$(jq -r .answers <<<"$out")" "answers cannot be sent" \
+    "and must still say answers cannot be sent"
+  pass "sending and updating are reported apart"
+}
+
+test_an_unsent_dispatch_selection_survives_an_arriving_update() {
+  local d=$TMP_ROOT/drive-picks out
+  transport_page "$d"
+  # Ticks made in Charted Next and not yet queued are unsent work like any
+  # other; the picker is never hidden by the deck, so nothing else protects it.
+  out=$(drive "$d" hold-picks)
+  assert_equals "1" "$(jq -r .picks <<<"$out")" "an arriving update must not clear an unsent dispatch tick"
+  assert_not_contains "$(jq -r .provenance <<<"$out")" "2099" \
+    "the update must be held while the tick is unsent"
+  assert_contains "$(jq -r .badge <<<"$out")" "waiting" "the page must say an update is waiting"
+
+  # Queuing the order releases it, the same way sending an answer does.
+  out=$(drive "$d" picks-sent)
+  assert_equals "1" "$(jq '.writes | length' <<<"$out")" "the dispatch order must reach the board's store"
+  assert_contains "$(jq -r .provenance <<<"$out")" "2099-01-01T00:00Z" \
+    "the held update must land once the dispatch order is queued"
+  pass "an unsent dispatch selection survives an arriving update"
 }
 
 test_the_badges_follow_the_boards_language_switch() {
@@ -520,9 +550,9 @@ test_the_badges_follow_the_boards_language_switch() {
   out=$(drive "$d" lang)
   assert_contains "$(jq -r .badge <<<"$out")" "即時更新" \
     "the link badge must follow the language the board switched to"
-  assert_contains "$(jq -r .gap <<<"$out")" "firstmate" \
+  assert_contains "$(jq -r .answers <<<"$out")" "firstmate" \
     "the answer-gap notice must still name firstmate after the switch"
-  assert_not_contains "$(jq -r .gap <<<"$out")" "answers stay on this board" \
+  assert_not_contains "$(jq -r .answers <<<"$out")" "answers stay on this board" \
     "the answer-gap notice must not stay in the previous language"
   pass "the badges follow the board's language switch"
 }
@@ -533,11 +563,9 @@ test_the_page_names_the_answer_route_that_is_not_landed() {
   # Carrying answers back to firstmate is not landed, and a ticked card would
   # otherwise read as an answer that arrived.
   out=$(drive "$d" live)
-  assert_equals "true" "$(jq -r .gapShown <<<"$out")" \
-    "the answer-return gap must be visible wherever an answer can be given"
-  assert_contains "$(jq -r .gap <<<"$out")" "firstmate" \
+  assert_contains "$(jq -r .answers <<<"$out")" "firstmate" \
     "the page must name what does not yet reach firstmate"
-  assert_equals "bb-nav__inner" "$(jq -r .gapHost <<<"$out")" \
+  assert_equals "bb-nav__inner" "$(jq -r .answersHost <<<"$out")" \
     "that notice must be attached to the board's nav bar"
   pass "the page names the answer route that is not landed"
 }
@@ -564,7 +592,8 @@ if command -v node >/dev/null 2>&1; then
   test_an_update_waits_while_an_answer_is_in_progress
   test_a_snapshot_the_page_cannot_render_is_not_called_live
   test_an_answer_that_cannot_be_sent_is_named_on_the_page
-  test_a_page_that_can_no_longer_send_is_not_repainted_live
+  test_sending_and_updating_are_reported_apart
+  test_an_unsent_dispatch_selection_survives_an_arriving_update
   test_the_badges_follow_the_boards_language_switch
   test_the_page_names_the_answer_route_that_is_not_landed
 else
