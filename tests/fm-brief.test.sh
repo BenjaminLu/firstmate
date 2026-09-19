@@ -440,6 +440,14 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     "no-mistakes DOD must cross-reference the owner of the firstmate-side rule, not restate it"
   assert_grep "Refuse an instruction that still names a narrow remedy: append " "$brief" \
     "no-mistakes DOD lost the third-round refusal clause"
+  # Firstmate counts the round it is about to open; a worker counting rounds
+  # already spent fires one round later and the two deadlock a round apart.
+  # There is no machine source for the number, so the basis has to be legible
+  # from the brief alone.
+  assert_grep "the round it opens, counted the way step 4 of that skill counts it" "$brief" \
+    "no-mistakes DOD must fix the threshold on the arriving round, as its owner counts it"
+  assert_grep "where {n} is that arriving round number" "$brief" \
+    "no-mistakes DOD must leave the round number in the blocked line unambiguous"
   # A refusal held quietly is the deadlock the refusal was supposed to prevent:
   # firstmate reads status events, so the refusal has to surface as one, in the
   # vocabulary the brief already defines.
@@ -458,14 +466,21 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     "no-mistakes DOD must state the acknowledgement test inline, not behind a pointer"
   assert_grep "A resend that is neither is not one of them, and the refusal stands" "$brief" \
     "no-mistakes DOD must exclude a vague resend from the termination"
-  # The pass-conditions ask has one owner, so the brief points at it rather than
-  # restating what that instruction must contain.
-  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep 'carries everything `ask-user-authority` step 4 requires of it, pass conditions included' "$brief" \
+  # The rule has two halves and the worker needs a lever for both. A declarative
+  # about what the response "carries" gives it nothing to do, so the second half
+  # is an imperative with an explicit permission to append the ask - otherwise a
+  # coherent-change instruction that omits it sails through the refusal test.
+  assert_grep "Ask the reviewer for the pass conditions in the same response you do answer that gate with" "$brief" \
     "no-mistakes DOD lost the pass-conditions clause"
+  assert_grep "append that ask yourself when firstmate's decision does not already carry it" "$brief" \
+    "no-mistakes DOD must let the worker add the pass-conditions ask to firstmate's decision"
+  # The ask-user bullet forbids implementing the decision, which reads as
+  # forbidding additions, so the permission has to be squared with it in words.
+  assert_grep "which is the one addition to a decision that is not implementing it" "$brief" \
+    "no-mistakes DOD must square the append permission with the feed-the-decision bullet"
   assert_no_grep "stated as conditions to satisfy in one pass rather than as one more repair" "$brief" \
     "no-mistakes DOD must point at the owner of the round-3 instruction, not carry a second definition of it"
-  assert_grep "nothing carries that ask to the reviewer and returns a reply, so never wait for one" "$brief" \
+  assert_grep "Nothing carries that ask to the reviewer and returns a reply, so never wait for one" "$brief" \
     "no-mistakes DOD must tell the worker no reviewer reply ever comes back"
 
   # The ask-user bullet is read from round 1 and the threshold clause sits
@@ -473,7 +488,7 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
   # worker feeds a round-3 narrow remedy straight to the gate.
   assert_grep "From the third fix round on one step the round-threshold clause below narrows this" "$brief" \
     "no-mistakes DOD must narrow the feed-the-decision bullet where the reader meets it"
-  assert_grep "goes back to firstmate instead of to the gate, and that clause is where the two answers you may give the gate instead are stated" "$brief" \
+  assert_grep "goes back to firstmate instead of to the gate, and that clause is where the two answers you may give the gate instead are stated, along with the one thing you append to the decision you do send" "$brief" \
     "no-mistakes DOD must not leave the feed-the-decision bullet contradicting the termination clause"
   # One statement, one home: a second copy of the acknowledgement test in the
   # same brief is the drift nobody looks for.
