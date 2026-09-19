@@ -294,9 +294,13 @@ lavish_board_live() {  # <establish output> <canonical-board-path>
 # session that is still not live after that refuses the build rather than
 # arming a poll that can never attach.
 # The installed lavish-axi advertises session names in its own help text; an
-# older release gets the plain open so the board still works there.
+# older release gets the plain open so the board still works there. The probe
+# reads `--help` rather than the bare session listing, because it runs before
+# the session is established and a listing is not inert: it is the same read the
+# liveness proof below depends on, so probing with one lets the probe answer a
+# question the build has not asked yet.
 lavish_name_args() {
-  if lavish-axi 2>/dev/null | grep -q -- '--name <slug>'; then
+  if lavish-axi --help 2>/dev/null | grep -q -- '--name <slug>'; then
     printf -- '--name\n%s\n' "$BOARD_SESSION_NAME"
   fi
 }
