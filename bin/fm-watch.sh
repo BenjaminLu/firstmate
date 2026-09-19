@@ -2083,6 +2083,10 @@ trap 'exit 1' HUP INT TERM
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
 WATCHER_PID=${BASHPID:-$$}
+# Counts completed supervision cycles for this watcher process; published in the
+# liveness beacon so an observer can see a cycle boundary without waiting for an
+# mtime second to turn over. Per-process, so it restarts at 1 with the watcher.
+WATCH_CYCLE=0
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 # shellcheck disable=SC2034 # Consumed by wake() in the separately linted transition owner.
@@ -2167,7 +2171,17 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
-  touch "$STATE/.last-watcher-beat"
+  #
+  # The content is this watcher's pid and cycle counter, and it exists for
+  # observers, not for supervision: every reader in bin/ still judges liveness
+  # from the mtime alone, which this write refreshes exactly as touch did. An
+  # mtime resolves to whole seconds, so "a cycle completed" is invisible until
+  # the second turns over, and anything watching for it has to wait a second per
+  # cycle no matter how fast the watcher actually runs. The counter changes the
+  # instant the cycle does, which is what lets a test drive the real watcher at
+  # a sub-second cadence instead of paying a second per observation.
+  WATCH_CYCLE=$((WATCH_CYCLE + 1))
+  printf '%s %s\n' "$WATCHER_PID" "$WATCH_CYCLE" > "$STATE/.last-watcher-beat"
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
