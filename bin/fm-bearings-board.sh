@@ -187,15 +187,17 @@
 #            the fleet: one Underway row costs one bin/fm-task-progress.sh
 #            read, itself bounded at FM_TASK_PROGRESS_TIMEOUT (default 20
 #            seconds). Those reads share one dependency, so a wedged
-#            no-mistakes costs EVERY row its full bound rather than one; the
-#            progress phase therefore has half the refresh deadline of its
-#            own, and a row not read by then is published with its progress
-#            unknown. The phase can overshoot by at most the one row already
+#            no-mistakes costs EVERY row its full bound rather than one. The
+#            compose therefore holds half the refresh deadline for reading -
+#            the snapshot, the per-task records and cards, and the progress
+#            rows, clocked from the moment compose starts - and a row still
+#            unread when that runs out is published with its progress
+#            unknown. Reading can overshoot by at most the one row already
 #            under way, so it costs at most 45 + 20 seconds of the 90 and
-#            always leaves the snapshot, the reconciliation and the injection
-#            their share. That is what keeps a stuck pipeline visible ON the
-#            board instead of silently stopping the board. One dial moves all
-#            of it. It refuses
+#            always leaves the reconciliation and the injection their share.
+#            That is what keeps a stuck pipeline visible ON the board instead
+#            of silently stopping the board. One dial moves all of it.
+#            It refuses
 #            when no board has been built yet; with --best-effort that refusal,
 #            and every other failure, becomes a silent exit 0 with the reason
 #            appended to the bounded state/.bearings-board-refresh.log, so a
@@ -251,7 +253,10 @@
 # `if_nothing`, `reversible` (yes|no|partly) plus `reversible_note`, and
 # `recommend_why` beside `recommend_value`; `risk` (low|medium|high) badges a
 # decision card, and `evidence` ([{label, url}]) plus `packet_url` link the card
-# to its proof. Links must be https, or http on 127.0.0.1/localhost for a page
+# to its proof. `detail` belongs to a MERGE card and the validator refuses it
+# anywhere else, because the template renders it for merge cards only: copy a
+# payload can carry but the captain can never read is refused at the gate
+# rather than published and silently dropped. Links must be https, or http on 127.0.0.1/localhost for a page
 # served by lavish-axi.
 #
 # Validation is fail-closed: the payload must be valid JSON with
@@ -397,7 +402,7 @@ validate_payload() {  # <data.json>
           and optional_copy("consequence")] | all)
       and (optional_copy("about"))
       and (optional_copy("decide"))
-      and (optional_copy("detail"))
+      and ((has("detail") | not) or (.type == "merge" and (.detail | copy)))
       and (optional_copy("if_nothing"))
       and (optional_copy("recommend_why"))
       and (optional_copy("reversible_note"))
@@ -750,14 +755,15 @@ task_progress() {  # <task-id>
        refreshed: .generated}' 2>/dev/null | head -1
 }
 
-# The progress a row carries when this refresh could not read it: the state
-# word the template already translates, no ladder, and a detail naming why.
-# Reporting unknown is the honest answer; omitting the field would render the
-# row exactly like one whose worker reported nothing.
+# The progress a row carries when this compose could not read it: the state
+# word the template already translates, and no ladder. Reporting unknown is
+# the honest answer, and it is said in the board's own vocabulary rather than
+# in a sentence this script invented - `detail` carries what a reader
+# reported, and nothing read this row.
 unread_progress() {
   jq -nc --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{state: "unknown", detail: "progress not read within this refresh budget",
-      step: null, steps: [], active_for: null, last_activity: null,
+    '{state: "unknown", detail: "", step: null, steps: [],
+      active_for: null, last_activity: null,
       quiet: false, activity: null, refreshed: $now}'
 }
 
@@ -785,7 +791,7 @@ command_compose_check() {  # <data.json>
 
 command_compose() {
   local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
-  local deterministic=false progress='{}' row
+  local deterministic=false progress='{}' row progress_until
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
@@ -798,6 +804,17 @@ command_compose() {
   done
   case "$lang" in en|hant|hans) ;; *) fail "--lang must be en, hant, or hans" ;; esac
   command -v jq >/dev/null 2>&1 || fail "jq is required"
+  # Every per-row progress read is bounded, but they share one dependency: a
+  # wedged no-mistakes makes EVERY row cost its full bound, not one, so a
+  # per-row bound alone would let the reads spend the whole refresh deadline
+  # and publish nothing. Half that deadline covers this compose ENTIRELY - the
+  # snapshot read and the per-id record and card loops as well as the progress
+  # reads - so the clock starts here, not at the loop, and the other half is
+  # left for the reconciliation and the injection. A row still unread when it
+  # runs out is published with its progress UNKNOWN. A board current about the
+  # fleet and honest about the rows it could not read beats a refresh that
+  # gives up and leaves yesterday's page looking live.
+  progress_until=$(( $(date +%s) + REFRESH_TIMEOUT / 2 ))
   if [ -n "$snapshot_file" ]; then
     [ -f "$snapshot_file" ] || fail "snapshot does not exist: $snapshot_file"
     snapshot=$(cat "$snapshot_file")
@@ -840,14 +857,6 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
-  # Every per-row read is bounded, but they share one dependency: a wedged
-  # no-mistakes makes EVERY row cost its full bound, not one, so a per-row
-  # bound alone would let the progress phase spend the whole refresh deadline
-  # and publish nothing. The phase gets half that deadline; a row not read by
-  # then is published with its progress UNKNOWN instead. A board that is
-  # current about the fleet and honest about the rows it could not read beats
-  # a refresh that gives up and leaves yesterday's page looking live.
-  progress_until=$(( $(date +%s) + REFRESH_TIMEOUT / 2 ))
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     card=''
@@ -976,16 +985,18 @@ EOF
       [ .candidate_prs[]?
         | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready) ];
     # A card key IS one intake address, so the board may never carry two cards
-    # under it. A task held more than once consolidates into one card whose
-    # decide slot names how many questions it must answer; two merge-ready PRs
-    # claiming one task get no card at all, because either click would act on
-    # whichever PR the task record names, and a wrong merge is worse than an
-    # absent card.
+    # under it. A task held more than once consolidates into one card, and the
+    # composer is told to answer every one of its questions there; two
+    # merge-ready PRs claiming one task get no card at all, because either
+    # click would act on whichever PR the task record names, and a wrong merge
+    # is worse than an absent card.
+    # A deterministic compose says nothing about the consolidation. It has no
+    # composer to instruct and no rendered slot to say it in, and inventing a
+    # sentence for one would be exactly the copy this board refuses to publish
+    # unread. The next full build writes the real card.
     def held_rows: [ .decisions_open[]? | select(held_here and (.key | slug(128))) ];
     def consolidated($n):
-      if $n <= 1 then {}
-      elif $deterministic then {detail: t("this task is held " + ($n | tostring)
-        + " times; one card carries every one of its questions"; "consolidated")}
+      if $n <= 1 or $deterministic then {}
       else {decide: fill("decide: this task is held " + ($n | tostring)
         + " times; consolidate every one of its questions into this card")} end;
     def first_per_key: reduce .[] as $card

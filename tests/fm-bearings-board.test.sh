@@ -813,6 +813,35 @@ test_build_refuses_a_payload_that_occupies_the_reconcile_value() {
   pass "build refuses a payload that occupies the reserved reconcile value"
 }
 
+# The template renders a card's `detail` for MERGE cards only, so copy put
+# there on a decision card is payload the captain can never read. Rather than
+# trust every composer to know that, the validator refuses it: copy that
+# cannot reach him must fail at the gate, not be published and dropped.
+test_build_refuses_copy_a_decision_card_cannot_display() {
+  local home data rc out
+  home=$(make_home decision-detail)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  jq '.captains_call[0].detail = "this task is held twice"' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  set +e
+  out=$(run_board "$home" build "$data" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a decision card carrying unreadable detail copy was accepted"
+  assert_absent "$home/.lavish/bearings-board.html" "a refused payload still produced a board"
+  # The same field on the card type that DOES render it still builds: the
+  # rule is about where the copy can be read, not about the field name.
+  home=$(make_home merge-detail)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  jq '.captains_call[1].detail = "checks green, review approved"' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  run_board "$home" build "$data" >/dev/null \
+    || fail "a merge card carrying its own rendered detail was refused"
+  pass "build refuses card copy the renderer would drop, and keeps the copy it renders"
+}
+
 test_build_refuses_a_nondecision_reconcile_value() {
   local home data rc out
   home=$(make_home merge-reconcile-reserved)
@@ -1522,7 +1551,20 @@ test_compose_consolidates_a_task_held_more_than_once() {
     ([.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"])
     and (.captains_call[1] | .key == "pick-route" and (.decide.en | test("held 2 times")))
   ' "$skeleton" >/dev/null || fail "a repeated hold was not consolidated: $(cat "$skeleton")"
-  pass "compose consolidates a task held more than once into one card"
+
+  # The deterministic path has no composer to instruct, so it consolidates
+  # silently - and what it emits must be publishable as it stands. A notice
+  # written into a field the renderer drops would fail here, because build
+  # refuses card copy the captain could never read.
+  run_board "$home" compose --deterministic --snapshot "$home/snapshot.json" \
+    --out "$home/deterministic.json" >/dev/null \
+    || fail "a deterministic compose refused a snapshot holding one task twice"
+  jq -e '[.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"]' \
+    "$home/deterministic.json" >/dev/null \
+    || fail "a deterministic compose did not consolidate the repeated hold: $(cat "$home/deterministic.json")"
+  run_board "$home" build "$home/deterministic.json" >/dev/null \
+    || fail "the deterministic consolidation cannot be published as composed"
+  pass "compose consolidates a task held more than once into one publishable card"
 }
 
 test_compose_refuses_to_card_a_merge_two_prs_claim() {
@@ -1665,6 +1707,7 @@ test_build_fails_when_reconcile_cannot_establish_a_listener
 test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
+test_build_refuses_copy_a_decision_card_cannot_display
 test_build_accepts_trilingual_copy_and_five_question_fields
 test_build_refuses_malformed_copy_and_card_fields
 test_compose_maps_every_section_from_the_recorded_snapshot

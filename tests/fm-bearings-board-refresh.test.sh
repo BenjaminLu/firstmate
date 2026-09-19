@@ -716,21 +716,24 @@ test_a_malformed_stored_card_degrades_one_row_instead_of_the_board() {
 # within its cadence.
 
 test_a_hung_dependency_still_publishes_the_board_with_rows_marked_unknown() {
-  local home out rows
+  local home out t i=0 ids=''
   home=$(make_home progress-hung)
   seed_board "$home"
-  # Three Underway rows and a no-mistakes that never answers. Each row waits
-  # out the same wedged CLI, so the reads cost 3 x 3s against a 10s refresh
-  # deadline whose progress phase gets half: the third row is past the budget
-  # before it starts and must be published unread rather than read. Without
-  # that budget the reads keep growing with the fleet until they outlast the
-  # deadline and the board is never written at all.
-  jq '.in_flight = [
-        {id:"ship-a", kind:"ship", state:"unknown", repo:"firstmate", name:"Ship A", doing:"validating"},
-        {id:"ship-b", kind:"ship", state:"unknown", repo:"firstmate", name:"Ship B", doing:"validating"},
-        {id:"ship-c", kind:"ship", state:"unknown", repo:"firstmate", name:"Ship C", doing:"validating"}]' \
+  # Eight Underway rows and a no-mistakes that never answers. Each row waits
+  # out the same wedged CLI, so the reads cost 8 x ~2s against a 16s refresh
+  # deadline - more than the whole refresh has. Half that deadline is what
+  # compose may spend reading, so roughly the first four rows are read and
+  # the rest are published unread, and the refresh finishes with room to
+  # spare. Without that bound the reads alone outlast the deadline and the
+  # board is never written at all.
+  while [ "$i" -lt 8 ]; do
+    i=$((i + 1))
+    ids="$ids ship-$i"
+  done
+  jq --arg ids "$ids" '.in_flight = [($ids | split(" ") | .[] | select(. != ""))
+    | {id:., kind:"ship", state:"unknown", repo:"firstmate", name:("Ship " + .), doing:"validating"}]' \
     "$SNAPSHOT_FIXTURE" > "$home/snapshot.json"
-  for t in ship-a ship-b ship-c; do
+  for t in $ids; do
     mkdir -p "$home/wt-$t"
     git -C "$home/wt-$t" init -q
     git -C "$home/wt-$t" checkout -q -b "fm/$t"
@@ -746,8 +749,8 @@ SH
   out=$(PATH="$home/fakebin:$PATH" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     LAVISH_FAKE_CALLS="$home/lavish-calls" \
-    FM_BEARINGS_REFRESH_TIMEOUT=10 FM_TASK_PROGRESS_TIMEOUT=6 \
-    FM_CREW_STATE_NM_TIMEOUT=3 \
+    FM_BEARINGS_REFRESH_TIMEOUT=16 FM_TASK_PROGRESS_TIMEOUT=2 \
+    FM_CREW_STATE_NM_TIMEOUT=1 \
     "$BOARD" refresh --snapshot "$home/snapshot.json" 2>&1) \
     || fail "a hung dependency stopped the board being published at all: $out"
   assert_contains "$out" "refreshed:" "the refresh did not report a publication: $out"
@@ -755,18 +758,13 @@ SH
     || fail "the board page carries no payload after a hung-dependency refresh"
 
   # Every row is still on the board, and every one says its progress is
-  # unknown rather than claiming a ladder or quietly omitting the field.
-  rows=$(injected_payload "$home" | jq -c '[.underway[] | {id, state: .progress.state, steps: (.progress.steps | length)}]')
-  printf '%s' "$rows" | jq -e '
-    length == 3 and (map(.state == "unknown" and .steps == 0) | all)
-  ' >/dev/null || fail "a row read through a hung dependency did not report unknown: $rows"
-  # And at least one row was never read at all - the phase budget stopped it,
-  # which is what keeps the refresh inside its own deadline.
+  # unknown - the word the template translates - rather than claiming a
+  # ladder or quietly dropping the field.
   injected_payload "$home" | jq -e '
-    [.underway[] | select(.progress.detail == "progress not read within this refresh budget")]
-      | length >= 1
+    (.underway | length) == 8
+    and ([.underway[] | .progress.state == "unknown" and (.progress.steps | length) == 0] | all)
   ' >/dev/null \
-    || fail "no row was degraded by the progress budget: $(injected_payload "$home")"
+    || fail "a row behind a hung dependency did not report unknown: $(injected_payload "$home")"
   pass "a hung dependency still publishes the board, with the rows it could not read marked unknown"
 }
 
