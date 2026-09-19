@@ -563,8 +563,8 @@ case "$fault:$*" in
     printf '%s\n' "$(( $(cat "$FORGE/clock") + 100 ))" > "$FORGE/clock"
     printf 'HTTP 502\n' >&2; exit 1 ;;
   fail:'api repos/o/r/pulls/8/reviews?'*) printf 'HTTP 502\n' >&2; exit 1 ;;
-  slow:'api repos/o/r/pulls/8/reviews?'*) sleep "$(cat "$FORGE/slow" 2>/dev/null || printf 6)" ;;
-  latency:*) sleep "$(cat "$FORGE/latency" 2>/dev/null || printf 4.4)" ;;
+  slow:'api repos/o/r/pulls/8/reviews?'*) sleep "$(cat "$FORGE/slow")" ;;
+  latency:*) sleep "$(cat "$FORGE/latency")" ;;
   down:*) printf 'HTTP 502\n' >&2; exit 1 ;;
   hang:'api repos/o/r/pulls/8') sleep 4 ;;
   head:'pr view '*) printf '{"headRefOid":"%s","reviewDecision":"APPROVED"}\n' "$(printf 'b%.0s' $(seq 40))"; exit 0 ;;
