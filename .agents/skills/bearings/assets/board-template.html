@@ -721,8 +721,12 @@ __FM_BEARINGS_BOARD_DATA__
     var age = nowSeconds() - a.at;
     return age > 0 ? age : 0;
   }
+  /* Only ever asked about an acknowledgement that is already late, so the
+     smallest thing it can be handed is one minute: paintAck calls it under
+     `age >= ACK_LATE_SECONDS` and nowhere else. There is no sub-minute form
+     because the captain settled the report as a waiting time that begins
+     once the consequence has NOT arrived inside the minute. */
   function ackElapsed(s) {
-    if (s < 60) return s + "s";
     if (s < 3600) return Math.floor(s / 60) + "m";
     if (s < 86400) return Math.floor(s / 3600) + "h" + Math.floor((s % 3600) / 60) + "m";
     return Math.floor(s / 86400) + "d" + Math.floor((s % 86400) / 3600) + "h";
