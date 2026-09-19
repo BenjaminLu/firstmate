@@ -332,6 +332,22 @@ fm_live_gate() {
   return 0
 }
 
+# --- hermetic worker-harness state ------------------------------------------
+# Bootstrap reports an absent diagram-design skill, and resolves it under the
+# Claude config dir - which defaults to the DEVELOPER'S own $HOME. A machine with
+# that skill installed sees silence where a CI runner sees a MISSING_MANUAL line,
+# so any suite asserting bootstrap's exact output passes locally and fails on a
+# runner. Ambient user state leaking into a verdict is the same class as the
+# ambient runtime markers individual suites already unset; it is pinned here so
+# every suite gets it once rather than each one remembering.
+# A case that exercises the absent-skill path sets its own CLAUDE_CONFIG_DIR.
+if [ -z "${FM_TEST_KEEP_CLAUDE_CONFIG:-}" ]; then
+  FM_TEST_CLAUDE_CONFIG="${TMPDIR:-/tmp}/fm-test-claude-config.$$"
+  mkdir -p "$FM_TEST_CLAUDE_CONFIG/skills/diagram-design" 2>/dev/null || true
+  : > "$FM_TEST_CLAUDE_CONFIG/skills/diagram-design/SKILL.md" 2>/dev/null || true
+  export CLAUDE_CONFIG_DIR="$FM_TEST_CLAUDE_CONFIG"
+fi
+
 # --- fakebin / PATH shims ---------------------------------------------------
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
@@ -439,6 +455,37 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/$tool"
+}
+
+# fm_fake_lavish_axi <fakebin> [version-override-var] [default-version]
+# A lavish-axi stub that answers BOTH --version and --help.
+#
+# Bootstrap asks the --name capability question SEPARATELY from the version
+# floor, because the published package does not carry that flag and reports a
+# higher version than the build that does. A stub answering only --version
+# therefore makes bootstrap report an unverifiable board URL in every suite that
+# runs it - which is a defect in the stub, not in the check.
+# Set FM_FAKE_LAVISH_AXI_NAME_HELP=0 for a build that answers --help WITHOUT
+# advertising --name, which is the published-release shape.
+fm_fake_lavish_axi() {
+  local fakebin=$1 override=${2:-FM_FAKE_LAVISH_AXI_VERSION} default=${3:-0.1.46}
+  cat > "$fakebin/lavish-axi" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = --version ]; then
+  printf '%s\n' "\${$override:-$default}"
+  exit 0
+fi
+if [ "\${1:-}" = --help ]; then
+  if [ "\${FM_FAKE_LAVISH_AXI_NAME_HELP:-1}" = 1 ]; then
+    printf '%s\n' "usage: lavish-axi <file> [--name <slug>] [--reopen]"
+  else
+    printf '%s\n' "usage: lavish-axi <file> [--reopen]"
+  fi
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$fakebin/lavish-axi"
 }
 
 # --- portable file timestamps -----------------------------------------------
