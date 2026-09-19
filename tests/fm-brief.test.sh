@@ -373,6 +373,15 @@ test_no_mistakes_dod_wording() {
     "no-mistakes DOD still states the --yes ban as a preference"
   assert_no_grep "no-mistakes refuses" "$brief" \
     "no-mistakes DOD must not claim the tool itself refuses --yes"
+
+  # The first done sentence a no-mistakes worker meets arrives dozens of lines
+  # before the CI-green line that governs the mode, so it has to carry its own
+  # condition: workers have declared a committed branch done and had to be
+  # withdrawn by hand.
+  assert_grep "that is the pause before validation, not this mode's finish" "$brief" \
+    "no-mistakes DOD lets its first done sentence read as the end of the task"
+  assert_no_grep "When you believe it is complete, append \`done: {summary}\` to the status file and stop." "$brief" \
+    "no-mistakes DOD still renders an unconditional done imperative"
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
 }
 
@@ -392,8 +401,18 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
 
   # Both surfaces the worker actually controls have to be named, or the practices
   # read as advice to an agent that does not write the fix.
-  assert_grep "the implementation you commit before starting the run, and the \`--instructions\` you pass when you answer a Fix gate" "$brief" \
+  assert_grep "the implementation you commit before starting the run, and how you answer a Fix gate" "$brief" \
     "no-mistakes DOD must name the two surfaces the fix-round technique applies to"
+
+  # Which flag does what, per no-mistakes axi respond --help: a worker that thinks
+  # instructions decide coverage answers a three-finding gate with one finding
+  # selected, and the two it never selected come back as the next round.
+  assert_grep "\`--findings\` selects the set the round covers" "$brief" \
+    "no-mistakes DOD must name the flag that actually decides a round's coverage"
+  assert_grep "guidance layered onto that already-selected set" "$brief" \
+    "no-mistakes DOD must not let instructions read as what selects a round"
+  assert_grep "fold whatever it finds into the round with \`--add-finding\`" "$brief" \
+    "no-mistakes DOD must name the only flag that adds a self-spotted problem to a round"
 
   assert_grep "One site is a class" "$brief" \
     "no-mistakes DOD lost the close-the-whole-class practice"
