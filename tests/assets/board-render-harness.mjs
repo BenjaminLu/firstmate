@@ -6,7 +6,10 @@
 // Prints one JSON document:
 //   { stats:[{n,label}], underway:[{title,sub,badges}],
 //     charted:[{title,sub,badges,pickable}], empty, more,
-//     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips}],
+//     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips,
+//             tabs:[{label,selected}],
+//             panels:[{hidden,figures,notes,label,cost,buttons}],
+//             packet:{said,lang,body}|null}],
 //     headings:[call,charted,underway,landed], error }
 import { readFileSync } from "node:fs";
 
@@ -130,6 +133,31 @@ const cards = deck.children
       rec: findAll(o, "bb-opt__rec").length > 0,
     })),
     chips: findAll(card, "bb-chip").map((a) => a.textContent),
+    /* the packet opened inside the card: its tab strip, one panel per tab, and
+       the as-written block behind the collapsed line */
+    tabs: findAll(card, "bb-tab").map((b) => ({
+      label: b.textContent,
+      selected: b.attributes["aria-selected"] === "true",
+    })),
+    panels: findAll(card, "bb-panel").map((pnl) => ({
+      hidden: pnl.hidden === true,
+      figures: findAll(pnl, "bb-fig").map((f) => f.innerHTML),
+      notes: findAll(pnl, "bb-panel__note").map((n) => n.textContent),
+      label: findAll(pnl, "bb-panel__label")[0]?.textContent ?? "",
+      cost: findAll(pnl, "bb-panel__cost")[0]?.textContent ?? "",
+      buttons: findAll(pnl, "fm-btn").map((b) => ({
+        text: b.textContent, value: b.attributes["data-value"] ?? "",
+      })),
+    })),
+    packet: (() => {
+      const box = findAll(card, "bb-packet__body")[0];
+      if (!box) return null;
+      return {
+        said: findAll(card, "bb-packet__said")[0]?.textContent ?? "",
+        lang: box.attributes.lang ?? "",
+        body: box.innerHTML,
+      };
+    })(),
   }));
 const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
   .map((id) => byId.get(id)?.textContent ?? "");

@@ -311,6 +311,145 @@ test_charted_rows_without_a_filed_date_follow_the_dated_rows_in_payload_order() 
   pass "charted rows with no filed date follow the dated rows in payload order"
 }
 
+# ---- the packet, opened inside the card -------------------------------------
+# The payload carries what bin/fm-packet.sh card reads out of a packet, so these
+# assert what the template does with it, not how the packet is read.
+
+packet_figure() {  # <slug> <node...> -> one contract-shaped drawing
+  local slug=$1; shift
+  local rects='' n
+  for n in "$@"; do
+    rects="$rects<rect data-node=\"$n\" x=\"1\" y=\"1\" width=\"9\" height=\"9\" fill=\"var(--card)\" stroke=\"var(--rule)\"/>"
+  done
+  jq -n --arg slug "$slug" --arg rects "$rects" --argjson nodes "$(printf '%s\n' "$@" | jq -R . | jq -s .)" '{
+    slug: $slug, heading: ("Figure " + $slug), caption: ("what " + $slug + " proves"),
+    svg: ("<svg viewBox=\"0 0 20 20\">" + $rects
+      + "<text data-en=\"one path\" data-hant=\"一條路\" data-hans=\"一条路\">one path</text></svg>"),
+    nodes: $nodes, edges: []}'
+}
+
+packet_payload() {  # <lang> <figures-json>
+  jq -n --arg lang "$1" --argjson figures "$2" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    prs_live:false, lang:$lang, underway:[], landed:[], charted:[],
+    captains_call:[{
+      key:"stream-choice", type:"decision", repo:"firstmate",
+      title:{en:"Where should the message go?", hant:"訊息該送到哪裡？"},
+      decide:{en:"One stream or both?", hant:"一條還是兩條？"},
+      if_nothing:{en:"The run stays parked.", hant:"流程停在原地。"},
+      reversible:"yes", risk:"low", recommend_value:"quiet",
+      recommend_why:{en:"One behaviour instead of two.", hant:"行為只剩一種。"},
+      options:[
+        {value:"quiet", label:{en:"Error stream only", hant:"只走錯誤輸出"},
+         consequence:{en:"Two lines of code leave.", hant:"少兩段程式。"}},
+        {value:"loud", label:{en:"Both streams", hant:"兩個都留"},
+         consequence:{en:"The probe stays load-bearing.", hant:"那段判斷變成關鍵零件。"}}],
+      allow_freeform:true,
+      packet_url:"https://example.test/packet.html",
+      packet:{
+        lang:"en", figures:$figures,
+        body:"<section class=\"pk-part\"><h4 class=\"pk-part__h\">What only this session knows</h4><div class=\"pk-prose\"><ul><li>the probe never ran on Linux</li></ul></div></section>"}
+    }]}'
+}
+
+test_a_packet_with_figures_opens_its_tabs_inside_the_card() {
+  local home out figures
+  home=$(make_home packet-tabs)
+  figures=$(jq -n --argjson c "$(packet_figure cmp quiet loud)" \
+                  --argjson q "$(packet_figure quiet-only quiet)" '[$c, $q]')
+  out=$(render_payload "$home" "$(packet_payload en "$figures")")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "the board rendered its fail-closed error instead of the card: $out"
+  printf '%s' "$out" | jq -e '
+    (.cards | length) == 1
+      and (.cards[0]
+        # one tab for the difference, then one per option, reconcile included
+        | ([.tabs[] | .label] == ["Difference", "Error stream only", "Both streams", "Reconcile"])
+          and ([.tabs[] | .selected] == [true, false, false, false])
+          and ([.panels[] | .hidden] == [false, true, true, true])
+          # the drawing that names every option leads, in its own panel
+          and ((.panels[0].figures | length) == 1)
+          and (.panels[0].figures[0] | test("data-node=\"quiet\"") and test("data-node=\"loud\""))
+          # an option that has its own drawing shows it; one that does not says so
+          and ((.panels[1].figures | length) == 1)
+          and (.panels[1].figures[0] | test("data-node=\"quiet\"") and (test("data-node=\"loud\"") | not))
+          and (.panels[2].figures == [])
+          and (.panels[2].notes | map(test("no drawing")) | any)
+          # each option answers from inside its own tab, with its own value
+          and (.panels[1] | .label == "Error stream only" and .cost == "Two lines of code leave."
+            and ([.buttons[] | .value] == ["quiet"]) and (.buttons[0].text | test("Choose Error stream only")))
+          and (.panels[2] | .label == "Both streams" and ([.buttons[] | .value] == ["loud"]))
+          and (.panels[3] | [.buttons[] | .value] == ["reconcile"]))
+  ' >/dev/null || fail "the packet did not open as tabs inside the card: $out"
+  pass "a packet with figures opens one tab per option, each with its own drawing and button"
+}
+
+test_a_packet_without_figures_still_renders_its_card() {
+  local home out
+  home=$(make_home packet-no-figures)
+  out=$(render_payload "$home" "$(packet_payload en '[]')")
+  printf '%s' "$out" | jq -e '.error == ""' >/dev/null \
+    || fail "a packet with no drawings refused to render: $out"
+  printf '%s' "$out" | jq -e '
+    (.cards[0]
+      | ([.tabs[] | .label] == ["Difference", "Error stream only", "Both streams", "Reconcile"])
+        and ([.panels[] | .figures] | flatten | length) == 0
+        and ([.panels[] | .buttons[] | .value] == ["quiet", "loud", "reconcile"])
+        and (.packet.body | test("the probe never ran on Linux")))
+  ' >/dev/null || fail "a packet with no drawings lost its tabs or its body: $out"
+  pass "a packet with no figures still renders its tabs, its answers and its body"
+}
+
+test_the_packet_body_stays_in_the_language_it_was_written_in() {
+  local home out figures
+  home=$(make_home packet-lang)
+  figures=$(packet_figure cmp quiet loud)
+  out=$(render_payload "$home" "$(packet_payload hant "[$figures]")")
+  printf '%s' "$out" | jq -e '
+    (.cards[0]
+      # everything the packet carries in three languages follows the captain
+      | ([.tabs[] | .label] == ["差在哪", "只走錯誤輸出", "兩個都留", "重新核對"])
+        and (.panels[1] | .cost == "少兩段程式。" and (.buttons[0].text | test("選 只走錯誤輸出")))
+        and (.panels[0].notes | map(test("[A-Za-z]")) | any | not)
+        # and the block that is one language says so, in his language, and
+        # renders as written rather than half-switched
+        and (.packet.lang == "en")
+        and (.packet.said | test("工作者自己的話"))
+        and (.packet.body | test("the probe never ran on Linux")))
+  ' >/dev/null || fail "the language rule did not hold across the card: $out"
+  pass "the switching part follows the captain while the as-written block says which language it is"
+}
+
+test_an_inline_packet_never_offers_a_second_address() {
+  local home out
+  home=$(make_home packet-one-address)
+  out=$(render_payload "$home" "$(packet_payload en '[]')")
+  # The card carries a packet_url, and the card still does not offer it: the
+  # packet is here, so there is no second page to send the captain to.
+  printf '%s' "$out" | jq -e '
+    (.cards[0] | (.chips | index("open the packet")) == null and .packet != null)
+  ' >/dev/null || fail "an inline packet still offered its own separate page: $out"
+  # And the build opened exactly one Lavish session: the board itself.
+  [ "$(wc -l < "$home/lavish-open" | tr -d ' ')" = 1 ] \
+    || fail "the build established more than the board's own session"
+  grep -q 'bearings-board.html$' "$home/lavish-open" \
+    || fail "the one opened session was not the board: $(cat "$home/lavish-open")"
+  pass "a card with the packet inline opens no second session and offers no second address"
+}
+
+test_a_card_with_no_packet_renders_exactly_as_it_did() {
+  local home out
+  home=$(make_home packet-absent)
+  out=$(render_payload "$home" "$(five_question_payload en)")
+  printf '%s' "$out" | jq -e '
+    (.cards[0]
+      | .tabs == [] and .panels == [] and .packet == null
+        and ([.options[] | .label] | index("Reconcile") != null)
+        and (.chips | index("open the packet") != null))
+  ' >/dev/null || fail "a card with no packet stopped rendering the way it always did: $out"
+  pass "a card whose task has no packet renders exactly as it does today"
+}
+
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first
@@ -322,3 +461,8 @@ test_omitted_warnings_never_count_as_more_queued
 test_an_omitted_kind_keeps_the_existing_queued_rendering
 test_a_decision_card_answers_the_five_questions_in_english_by_default
 test_the_payload_language_switches_every_visible_string
+test_a_packet_with_figures_opens_its_tabs_inside_the_card
+test_a_packet_without_figures_still_renders_its_card
+test_the_packet_body_stays_in_the_language_it_was_written_in
+test_an_inline_packet_never_offers_a_second_address
+test_a_card_with_no_packet_renders_exactly_as_it_did

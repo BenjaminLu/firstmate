@@ -178,6 +178,61 @@
 #            gets the link without a second lookup; a page older than the
 #            packet is re-rendered first, so the link never shows a stale
 #            packet.
+#            The card also carries the packet ITSELF, as `packet`, so the
+#            bearings board can open the whole thing inside the card instead
+#            of sending the captain to a second page he can lose by closing a
+#            tab:
+#              {lang, figures: [{slug, svg, nodes}], body}
+#            `figures` is the "Figures" section's drawings, each with the
+#            `data-node` identities it draws, so the board can tell the
+#            comparison drawing (the one naming every option) from an option's
+#            own drawing without a second declaration; `body` is the rest of
+#            the packet - every section except the decision block, already
+#            converted to HTML by the same converter the page uses. Nothing a
+#            figure SAYS is repeated in `figures`: its heading, its caption and
+#            its per-connector evidence reach the card through `body`, which is
+#            where the language rule below puts them, so the card carries one
+#            copy of every string and renders every field it carries. The
+#            reader never opens a session and never writes a file for this:
+#            `fm-packet.sh serve` stays the one explicit way to put a packet
+#            on its own address.
+#            A drawing is inlined into the BOARD, which is not the packet's own
+#            page, so what may be inlined is decided when the card is built
+#            rather than inherited from a check that runs elsewhere: a drawing
+#            carrying a script, an event handler, or foreign markup is dropped
+#            whole, and a <style> block is removed from the one that is kept,
+#            because inside an inlined svg it is page-wide CSS that would
+#            restyle the board around it.
+#
+# ONE LANGUAGE RULE, FOR THE WHOLE PACKET. The captain reads EN / 繁體 / 简体
+# and every captain-facing surface owes him all three. A packet cannot give
+# him all three of everything: the decision block's fields are copy objects,
+# and so are a drawing's own <text> labels, but the prose sections, a figure's
+# heading, its caption and its per-connector evidence are one language - the
+# one the worker wrote. Translating them here is not on the table; nothing in
+# this repo can translate. So the rule is where a string renders, not what it
+# says:
+#
+#   a string renders in the switching part of the card when the packet carries
+#   it in three languages, and in the as-written part otherwise.
+#
+# That puts the decision's own copy and the drawings in the switching part,
+# where the captain's language moves all of it together, and the prose, the
+# figure headings, the captions and the evidence lines in one block below,
+# which does not move at all. No block is ever half-switched - a drawing whose
+# labels follow the captain while the sentence under it stands still is the
+# exact failure this rule exists to prevent - and the card says which block is
+# which.
+#
+# The cost is real and it is the worker's prose: it reaches the captain in the
+# language it was written in, inside one marked block, not in his. A figure's
+# caption is part of that cost - it sits in that block rather than under its
+# own drawing, which is where it belongs. The remedy is not in this renderer:
+# the moment the figure contract carries heading and caption per language,
+# they satisfy the rule as written and move up beside the drawing with no
+# change to it. `lang:` in the packet header (en|hant|hans, default en) names
+# the language that block is in, so its section headings match its body
+# instead of switching underneath it.
 # render     Verify, then write the packet as ONE self-contained HTML page at
 #            data/<id>/packet.html: no network, no CDN, no external
 #            fonts, sections in packet order, the decision block as a card
@@ -806,8 +861,24 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
 
 # ---- card -------------------------------------------------------------------
 
+# The packet itself, as the card's `packet` object, or empty when this host
+# has no python3. A card with no packet object renders on the board exactly as
+# it did before the packet moved into it, so a missing interpreter costs the
+# captain the inline packet and nothing else.
+packet_fragment() {  # <task-id> -> one JSON object, or nothing
+  local packet fragment
+  command -v python3 >/dev/null 2>&1 || return 0
+  packet=$(packet_path "$1")
+  fragment=$(packet_python "$packet" - "$1" card 2>/dev/null) || return 0
+  # Anything but one readable object is dropped rather than carried into the
+  # card, where it would take the whole card down with it and leave the board
+  # composing a placeholder for a task that has a perfectly good packet.
+  printf '%s' "$fragment" | jq -e 'type == "object"' >/dev/null 2>&1 || return 0
+  printf '%s\n' "$fragment"
+}
+
 command_card() {
-  local id='' repo='' packet project page real packet_url=''
+  local id='' repo='' packet project page real packet_url='' fragment=''
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   id=$1; shift
   while [ "$#" -gt 0 ]; do
@@ -833,7 +904,9 @@ command_card() {
       real=$(page_realpath "$page") && packet_url=$(lavish_open_url "$real")
     fi
   fi
-  decision_block "$packet" | jq --arg repo "$repo" --arg packet_url "${packet_url:-}" '
+  fragment=$(packet_fragment "$id")
+  decision_block "$packet" | jq --arg repo "$repo" --arg packet_url "${packet_url:-}" \
+    --argjson packet "${fragment:-null}" '
     def flat: if type == "object" then (if (.hant | type) == "string" then . else .en end) else . end;
     {
       key: .key, type: "decision", repo: $repo,
@@ -846,7 +919,8 @@ command_card() {
     + (if has("risk") then {risk: .risk} else {} end)
     + (if has("recommend_why") then {recommend_why: (.recommend_why | flat)} else {} end)
     + (if has("close") then {close: .close} else {} end)
-    + (if $packet_url != "" then {packet_url: $packet_url} else {} end)'
+    + (if $packet_url != "" then {packet_url: $packet_url} else {} end)
+    + (if $packet == null then {} else {packet: $packet} end)'
 }
 
 # ---- render -----------------------------------------------------------------
@@ -861,11 +935,16 @@ page_path() { printf '%s/%s/packet.html\n' "$DATA" "$1"; }
 # reads; plain strings render as written. The raw markdown rides the page for
 # the copy button. Stdlib python3 only, as bin/fm-doc-audience-check.sh already
 # requires.
-render_html() {  # <packet.md> <out.html> <task-id>
-  python3 - "$1" "$2" "$3" <<'PY'
+# `mode` is `page` (write the standalone page) or `card` (print the board
+# card's `packet` object as JSON). Both read the packet through the same parser
+# and the same markdown converter, so the board card and the page can never
+# disagree about what the packet says.
+packet_python() {  # <packet.md> <out.html|-> <task-id> <mode>
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
 import html, json, re, sys, pathlib
 
-src, out, task = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+src, out, task = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+mode = sys.argv[4] if len(sys.argv) > 4 else "page"
 raw = src.read_text(encoding="utf-8")
 lines = raw.splitlines()
 
@@ -1168,6 +1247,118 @@ def decision_card(d):
     parts.append("</div></section>")
     return "\n".join(parts)
 
+# ---- the card fragment: the packet, ready to open inside the board card ------
+# This script's header owns the one language rule; this is where it is applied.
+# The switching part of the card gets what the packet carries in three
+# languages - the decision block's copy, which command_card already emits, and
+# the drawings, whose <text> nodes carry all three by the figure contract. The
+# as-written part gets everything else, in one language, headings included, so
+# the block never moves by halves.
+FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
+FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
+FIG_SVG = re.compile(r"<svg\b.*?</svg\s*>", re.S)
+FIG_NODE = re.compile(r"""data-node\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+FIG_TAG = re.compile(r"""<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
+FIG_ON = re.compile(r"(?:^|\s)on[a-z]+\s*=", re.I)
+FIG_STYLE = re.compile(r"<\s*style\b.*?</\s*style\s*>", re.S | re.I)
+
+# The card inlines a drawing into the BOARD, a page the packet knows nothing
+# about, so what is safe to inline is decided here and never assumed from a
+# check that runs somewhere else. A drawing that can run code or draw foreign
+# markup is dropped whole - the tab then says the packet carries no drawing for
+# that option, which is true. A <style> block is removed rather than dropping
+# the drawing: inside an inlined svg it is page-wide CSS and would restyle the
+# board around it, and the figure contract already keeps colour out of it, so
+# what is lost is presentation and what is kept is the board.
+def figure_unsafe(svg):
+    for m in FIG_TAG.finditer(svg):
+        if m.group(1).lower() in ("script", "foreignobject"):
+            return True
+        if FIG_ON.search(m.group(2)):
+            return True
+    return False
+
+def figures_of(body):
+    """-> (the lines before the first drawing, the drawings in packet order)"""
+    text = "\n".join(body)
+    head, sep, rest = text.partition("\n### ")
+    if not sep:
+        return head.splitlines(), []
+    out_figs = []
+    for chunk in ("### " + rest).split("\n### "):
+        chunk = chunk[4:] if chunk.startswith("### ") else chunk
+        chunk_lines = chunk.splitlines()
+        heading = chunk_lines[0].strip() if chunk_lines else ""
+        fields, edges = {}, []
+        for line in chunk_lines[1:]:
+            m = FIG_ATTR.match(line)
+            if m and m.group(1) not in fields:
+                fields[m.group(1)] = m.group(2)
+                continue
+            m = FIG_EDGE.match(line)
+            if m:
+                edges.append({"id": m.group(1), "why": inline(m.group(2))})
+        svg = FIG_SVG.search(chunk)
+        if not svg:
+            continue
+        # The drawing rides the card as written. verify has already refused a
+        # <script>, an on* handler and a baked colour, and the board never
+        # renders a packet that failed verify - that is what makes inlining it
+        # safe, and the only thing that does.
+        drawing = svg.group(0)
+        # An unsafe drawing loses its drawing, not its place: what it SAYS is
+        # still true and still reaches the card, so the reader keeps the figure
+        # and drops only the markup the board cannot take.
+        drawing = None if figure_unsafe(drawing) else FIG_STYLE.sub("", drawing)
+        nodes = sorted({(a or b) for a, b in FIG_NODE.findall(drawing) if (a or b)}) if drawing else []
+        out_figs.append({"slug": fields.get("figure", ""), "heading": inline(heading),
+                         "caption": inline(fields.get("caption", "")),
+                         "svg": drawing, "nodes": nodes, "edges": edges})
+    return head.splitlines(), out_figs
+
+def figures_words(lead, figs):
+    """what a figure says in words: its heading, its caption, its evidence"""
+    parts = [md(lead)] if "".join(lead).strip() else []
+    for fig in figs:
+        parts.append("<h5>%s</h5>" % fig["heading"])
+        if fig["caption"]:
+            parts.append('<p class="pk-fig__cap">%s</p>' % fig["caption"])
+        if fig["edges"]:
+            parts.append('<ul class="pk-fig__edges">%s</ul>'
+                         % "".join("<li><code>%s</code> %s</li>" % (esc(e["id"]), e["why"])
+                                   for e in fig["edges"]))
+    return "".join(parts)
+
+if mode == "card":
+    packet_lang = meta.get("lang", "en")
+    if packet_lang not in LANGS:
+        packet_lang = "en"
+    figures, lead, parts = [], [], []
+    for heading, body in sections:
+        body, _decision = split_decision(body)
+        if heading == "Figures":
+            lead, figures = figures_of(body)
+        key = SECTION_KEYS.get(heading)
+        h = T[packet_lang][key] if key else heading
+        # The drawings move up into the switching part of the card; their
+        # headings, captions and evidence lines stay down here, where one
+        # language is the rule rather than a leak.
+        inner = figures_words(lead, figures) if heading == "Figures" else md(body)
+        # "The decision" is the card itself; a section left with nothing but
+        # the block that moved into the card is not worth a heading.
+        if inner.strip():
+            parts.append('<section class="pk-part"><h4 class="pk-part__h">%s</h4>'
+                         '<div class="pk-prose">%s</div></section>' % (esc(h), inner))
+    # The card carries a drawing and the identities it draws, and nothing else:
+    # what a figure SAYS - its heading, its caption, its evidence - is already
+    # in the body, which is where the language rule puts it. One copy of every
+    # string, and every field the card carries is a field the board renders.
+    drawings = [{"slug": f["slug"], "svg": f["svg"], "nodes": f["nodes"]}
+                for f in figures if f["svg"]]
+    print(json.dumps({"lang": packet_lang, "figures": drawings, "body": "".join(parts)},
+                     ensure_ascii=False))
+    sys.exit(0)
+
 # ---- assemble ----------------------------------------------------------------
 kind = meta.get("kind", "done")
 kind_badge = badge("solid" if kind == "needs-decision" else "online", "kind_needs" if kind == "needs-decision" else "kind_done")
@@ -1454,7 +1645,7 @@ slots = {
     "SECTIONS": "\n".join(section_html), "RAW_JS": raw_js,
 }
 page = re.sub(r"\b(?:%s)\b" % "|".join(slots), lambda m: slots[m.group(0)], page)
-out.write_text(page, encoding="utf-8")
+pathlib.Path(out).write_text(page, encoding="utf-8")
 PY
 }
 
@@ -1463,7 +1654,7 @@ render_page() {  # <task-id> ; writes data/<id>/packet.html beside the verified 
   command -v python3 >/dev/null 2>&1 || fail "python3 is required to render the packet page"
   packet=$(packet_path "$1"); page=$(page_path "$1")
   [ ! -L "$page" ] || fail "page path is a symlink: $page"
-  render_html "$packet" "$page" "$1" || fail "rendering $packet failed"
+  packet_python "$packet" "$page" "$1" page || fail "rendering $packet failed"
 }
 
 command_render() {  # <task-id> ; prints `page: <path>`

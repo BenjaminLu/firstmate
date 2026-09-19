@@ -181,6 +181,16 @@
 # to its proof. Links must be https, or http on 127.0.0.1/localhost for a page
 # served by lavish-axi.
 #
+# THE PACKET RIDES THE CARD. A decision card MAY also carry `packet`, the whole
+# decision packet as `bin/fm-packet.sh card` reads it:
+#   {lang, figures: [{slug, svg, nodes}], body}
+# The template opens it in place - a tab strip whose first tab is the drawing
+# that names every option, one tab per option after it, and the rest of the
+# packet behind one collapsed line - so the captain decides on the board's own
+# address instead of on a second page a closed tab loses. `fm-packet.sh serve`
+# stays the one explicit way to put a packet on its own address; nothing here
+# calls it, and no second session is ever established for a card.
+#
 # Validation is fail-closed: the payload must be valid JSON with
 # schema=fm-bearings-board.v1 and every renderer-consumed field must satisfy
 # the fm-bearings-board.v1 types and item invariants below, and no string may
@@ -292,6 +302,23 @@ validate_payload() {  # <data.json>
           and (.artifact | slug(128))
           and (.version | version));
     def evidence_item: type == "object" and (.label | copy) and (.url | link_url);
+    # The packet the card opens in place (bin/fm-packet.sh card). The template
+    # consumes every field here, so every field is typed here: a drawing that
+    # is not a drawing, or a body that is not markup, refuses the board rather
+    # than reaching the captain as a blank panel.
+    def figure_item:
+      type == "object"
+      and (.slug | type == "string")
+      and (.svg | type == "string" and test("^[[:space:]]*<svg\\b"))
+      and (.nodes | type == "array") and ([.nodes[] | type == "string"] | all);
+    def optional_packet:
+      (has("packet") | not)
+      or (.packet
+        | type == "object"
+          and (.lang == "en" or .lang == "hant" or .lang == "hans")
+          and (.body | type == "string")
+          and (.figures | type == "array")
+          and ([.figures[] | figure_item] | all));
     def call_item:
       type == "object"
       and (.key | slug(128))
@@ -319,6 +346,7 @@ validate_payload() {  # <data.json>
           or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
       and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
       and (optional_link_url("packet_url"))
+      and optional_packet
       and (optional_https_url("pr_url"))
       and optional_subject
       and (if has("subject") then .type == "decision" else true end)

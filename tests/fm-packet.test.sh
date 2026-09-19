@@ -762,6 +762,129 @@ test_card_emits_a_board_ready_decision_item() {
   pass "card emits a board-ready decision item, flattening single-language copy"
 }
 
+test_the_card_carries_the_packet_itself() {
+  local home out packet
+  home=$(make_home card-packet)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  # A Figures section, in the shape the packet's own figure contract defines.
+  cat >> "$packet" <<'MD'
+
+## Figures
+
+### Where the options part
+
+figure: cmp
+caption: Both reach the gate; only one writes onto the data stream.
+
+<svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><path data-edge="a-b" d="M1 1 L9 9" stroke="var(--muted)" marker-end="url(#cmp-arw)"/><text data-en="one path" data-hant="一條路" data-hans="一条路">one path</text></svg>
+
+- edge a-b: the gate reads the error stream
+MD
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    (.packet.lang == "en")
+    # the drawing rides the card with the identities it draws, so the board can
+    # tell the comparison from an option drawing without a second declaration
+    and (.packet.figures | length) == 1
+    and (.packet.figures[0]
+      | .slug == "cmp" and (.nodes == ["bound", "quiet"])
+        and (.svg | startswith("<svg"))
+        # what a figure says is carried once, in the body, not twice
+        and (has("caption") | not) and (has("edges") | not))
+    and (.packet.body | test("only one writes"))
+    # and the rest of the packet comes as markup, minus the block that became
+    # the card and minus the drawings that moved into the tabs
+    and (.packet.body | test("tried a retry loop first"))
+    and (.packet.body | test("<svg") | not)
+    and (.packet.body | test("fm-packet-decision") | not)
+    # a figure still says in words what it is and what proves it
+    and (.packet.body | test("Where the options part"))
+    and (.packet.body | test("the gate reads the error stream"))
+  ' >/dev/null || fail "the card did not carry the packet: $out"
+  pass "the card carries the packet itself: its drawings, and the rest as markup"
+}
+
+test_a_packet_with_no_figures_still_cards() {
+  local home out packet
+  home=$(make_home card-packet-plain)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    (.packet.figures == []) and (.packet.body | test("tried a retry loop first"))
+    and (.options | length) == 2
+  ' >/dev/null || fail "a packet with no drawings did not card: $out"
+  pass "a packet with no figures still carries its body onto the card"
+}
+
+test_the_packet_body_declares_the_one_language_it_is_in() {
+  local home out packet
+  home=$(make_home card-packet-lang)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '.packet.lang == "en"' >/dev/null \
+    || fail "an undeclared packet did not default to en: $out"
+  # A packet that says which language its prose is in is taken at its word, and
+  # its section headings follow the body instead of switching underneath it.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("kind: needs-decision", "kind: needs-decision\nlang: hant", 1))
+PY
+  out=$(run_packet "$home" card pk-1) || fail "card failed after declaring a language: $out"
+  printf '%s' "$out" | jq -e '
+    .packet.lang == "hant" and (.packet.body | test("只有這個 session 知道的事"))
+  ' >/dev/null || fail "a declared packet language did not reach the body: $out"
+  pass "the packet body declares the one language it is in, and its headings follow it"
+}
+
+test_a_drawing_the_board_cannot_safely_inline_never_reaches_the_card() {
+  local home out packet
+  home=$(make_home card-packet-unsafe)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  # The card inlines a drawing into the board, so it decides for itself what is
+  # safe to put there rather than trusting a check that runs somewhere else.
+  cat >> "$packet" <<'MD'
+
+## Figures
+
+### A drawing that runs code
+
+figure: bad
+caption: this one must not reach the board.
+
+<svg viewBox="0 0 20 20"><rect data-node="bound" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><script>window.top.location = "https://example.test"</script></svg>
+
+### A drawing that restyles the page around it
+
+figure: styled
+caption: its style block is page-wide CSS once inlined.
+
+<svg viewBox="0 0 20 20"><style>.bb-decision__foot { display: none }</style><rect data-node="quiet" x="1" y="1" width="9" height="9" fill="var(--card)" stroke="var(--rule)"/><text data-en="kept" data-hant="留著" data-hans="留着">kept</text></svg>
+MD
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    # the one that can run code is dropped whole
+    ([.packet.figures[] | .slug] == ["styled"])
+    # the one that can restyle the board keeps its drawing and loses the block
+    and (.packet.figures[0].svg | test("<style") | not)
+    and (.packet.figures[0].svg | test("data-node=\"quiet\""))
+    and (.packet.figures[0].svg | test("data-hant=\"留著\""))
+  ' >/dev/null || fail "an unsafe drawing reached the card: $out"
+  pass "a drawing that can run code or restyle the board never reaches the card as it was written"
+}
+
 test_path_and_bad_ids_are_refused() {
   local home rc
   home=$(make_home path)
@@ -976,3 +1099,7 @@ test_render_writes_a_self_contained_page_for_a_done_packet
 test_render_decision_card_answers_the_five_questions
 test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it
 test_name_support_probe_never_lists_before_the_session_is_opened
+test_the_card_carries_the_packet_itself
+test_a_packet_with_no_figures_still_cards
+test_the_packet_body_declares_the_one_language_it_is_in
+test_a_drawing_the_board_cannot_safely_inline_never_reaches_the_card
