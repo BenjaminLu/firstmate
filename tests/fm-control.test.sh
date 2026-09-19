@@ -884,7 +884,90 @@ test_interrupt_sends_each_harness_verified_key
 test_opencode_interrupts_twice_and_others_once
 test_unverified_harness_is_refused
 test_harness_family_resolution
+# The harness-support lookups read their list through a process substitution.
+# Returning on the first match closed that pipe while the writer was still in
+# it; where SIGPIPE is ignored the writer's printf then reports "write error:
+# Broken pipe" on stderr instead of dying silently, and every caller capturing
+# stderr sees that line prepended to the real message. That is how it
+# surfaced - intermittently, in CI, in an unrelated suite comparing an exact
+# error string.
+#
+# Racing the real 13-word list proves nothing: it fits in the pipe buffer, so
+# the writer finishes before the reader can matter and the bug hides. This
+# drives the case deterministically instead. The producer is replaced with one
+# that emits the queried entry FIRST and then more than a pipe buffer of
+# filler, so a consumer that returns on the first match always strands the
+# writer mid-write. The buffer, not the scheduler, decides.
+#
+# Two conditions here are load-bearing rather than decoration. SIGPIPE must be
+# ignored, or the stranded writer dies on the signal and says nothing. And the
+# filler must exceed the pipe buffer, or the writer completes and there is
+# nothing to strand. Verified both ways before this was written: against the
+# early-return shape the stderr text appears on every run, and against the
+# draining shape it appears on none.
+#
+# What is deliberately NOT asserted: that the producer runs to completion. It
+# does either way - an ignored SIGPIPE means the writer survives its failed
+# write and keeps going - so such a check would pass against the bug and be
+# coverage in name only.
+test_harness_lookups_leave_stderr_clean_when_their_reader_stops_early() {
+  local dir probe out first provider_first
+
+  dir=$(new_case pipe)
+  first=$(bash -c '. "'"$ROOT"'/bin/fm-control-lib.sh"; fm_control_harnesses | head -1')
+  [ -n "$first" ] || fail "could not read the first verified harness"
+  provider_first=$(bash -c '. "'"$ROOT"'/bin/fm-quota-axi-lib.sh"; fm_quota_single_provider_table | head -1 | cut -d" " -f1')
+  [ -n "$provider_first" ] || fail "could not read the first single-provider harness"
+
+  probe="$dir/probe.sh"
+  cat > "$probe" <<EOF
+#!/usr/bin/env bash
+set -u
+trap '' PIPE
+. "$ROOT/bin/fm-control-lib.sh"
+. "$ROOT/bin/fm-quota-axi-lib.sh"
+
+filler() {
+  local i
+  for i in \$(seq 1 4000); do
+    printf '%s\n' "filler-\$i-padding-padding-padding-padding-padding-padding"
+  done
+}
+
+case "\$1" in
+  control)
+    fm_control_harnesses() { printf '%s\n' "$first"; filler; }
+    fm_control_harness_supported "$first" || exit 3
+    ;;
+  quota)
+    fm_quota_single_provider_table() { printf '%s\n' "$provider_first x"; filler; }
+    fm_quota_single_provider_for_harness "$provider_first" >/dev/null || exit 3
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$probe"
+
+  for case_name in control quota; do
+    out=$(bash "$probe" "$case_name" 2>&1 >/dev/null) || fail "$case_name lookup did not report its match"
+    [ -z "$out" ] || fail "the $case_name lookup must leave stderr clean, got: $out"
+  done
+
+  # The drain must not have cost the lookups their actual verdicts.
+  bash -c ". \"$ROOT/bin/fm-control-lib.sh\"; fm_control_harness_supported $first" \
+    || fail "a supported harness must still be reported supported"
+  ! bash -c ". \"$ROOT/bin/fm-control-lib.sh\"; fm_control_harness_supported definitely-not-a-harness" \
+    || fail "an unsupported harness must still be refused"
+  out=$(bash -c ". \"$ROOT/bin/fm-quota-axi-lib.sh\"; fm_quota_single_provider_for_harness $provider_first")
+  [ -n "$out" ] || fail "a mapped harness must still resolve its single provider"
+  ! bash -c ". \"$ROOT/bin/fm-quota-axi-lib.sh\"; fm_quota_single_provider_for_harness definitely-not-a-harness" \
+    || fail "an unmapped harness must still have no single provider"
+
+  pass "fm-control: the harness lookups leave stderr clean when their reader stops early, and keep their verdicts"
+}
+
 test_prefixed_recorded_harness_reaches_each_control_verb
+test_harness_lookups_leave_stderr_clean_when_their_reader_stops_early
 test_backend_key_capability_matrix
 test_harness_kind_capability
 test_orca_refuses_an_escape_harness_interrupt
