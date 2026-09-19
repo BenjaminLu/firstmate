@@ -1510,8 +1510,14 @@ __FM_BEARINGS_BOARD_DATA__
   render();
   /* An acknowledgement whose consequence never arrived has to be able to say
      how long it has been waiting without the board being republished, because
-     a missed answer is exactly the case in which nothing republishes it. */
-  setInterval(function () {
+     a missed answer is exactly the case in which nothing republishes it.
+     A repaint re-runs this whole script, so the previous run's ticker is
+     cleared before a new one is registered: the board may be repainted any
+     number of times and must cost the same every time. The handle lives on
+     the page rather than in this closure precisely because the next run gets
+     a fresh closure and only the page survives between them. */
+  if (window.fmBearingsAckTick) clearInterval(window.fmBearingsAckTick);
+  window.fmBearingsAckTick = setInterval(function () {
     ackPills.forEach(function (p) { paintAck(p, p.ack); });
   }, ACK_TICK_MS);
 })();

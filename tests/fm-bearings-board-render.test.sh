@@ -1191,6 +1191,31 @@ test_the_acknowledgement_speaks_the_captains_language() {
   pass "an acknowledgement is worded in the language the board is showing"
 }
 
+# A repaint re-runs the shipped script on the same page. The pill ticker is the
+# one thing this board registers outside the DOM, so it is the one thing that
+# could survive a repaint uncleared - and an uncleared ticker holds a whole
+# detached copy of the page with it. Counted rather than eyeballed, because a
+# board that costs more on its tenth repaint than its first looks identical.
+test_repainting_the_board_never_accumulates_tickers() {
+  local home data once many
+  home=$(make_home ack-repaint)
+  data="$home/payload.json"
+  printf '%s\n' "$(ack_payload "$(acting_ack 2)")" > "$data"
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" build "$data" >/dev/null || fail "the board did not build"
+  once=$(node "$HARNESS" "$home/.lavish/bearings-board.html") \
+    || fail "the built board could not be rendered"
+  printf '%s' "$once" | jq -e '.error == "" and .intervals == 1' >/dev/null \
+    || fail "one run of the board did not leave exactly one ticker: $once"
+  many=$(BOARD_REPAINTS=8 node "$HARNESS" "$home/.lavish/bearings-board.html") \
+    || fail "the repainted board could not be rendered"
+  printf '%s' "$many" | jq -e '.error == "" and .intervals == 1' >/dev/null \
+    || fail "repainting the board accumulated tickers: $many"
+  pass "repainting the board leaves one ticker however often it repaints"
+}
+
 test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status
 test_an_underway_identifier_label_is_not_replaced_by_run_status
 test_charted_next_reads_newest_filed_first
@@ -1232,3 +1257,4 @@ test_an_underway_row_never_carries_an_acknowledgement
 test_a_fresher_click_outranks_a_stale_published_acknowledgement
 test_the_deck_does_not_deal_over_a_card_the_captain_paged_to
 test_the_acknowledgement_speaks_the_captains_language
+test_repainting_the_board_never_accumulates_tickers
