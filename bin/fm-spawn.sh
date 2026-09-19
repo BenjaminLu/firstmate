@@ -242,7 +242,10 @@
 #   default branch, names the clone, quotes that clone's own remote.origin.fetch
 #   beside the branch it does not cover, and prints one additive `remote
 #   set-branches --add` so the operator fixes the clone once instead of per
-#   spawn, without losing a narrowing they chose. It still refuses rather than
+#   spawn, without losing a narrowing they chose. That command only ever adds,
+#   so the message itself says it reaches only a refspec that omits the branch,
+#   not one whose `^` entry excludes it - the quoted refspec is what shows an
+#   operator which of the two they have. It still refuses rather than
 #   fetching. The branch it names is the default branch this clone records; the
 #   rename caveat above is why it does not claim to be origin's. When no origin
 #   configuration is detected, spawn skips that remote freshness check and
