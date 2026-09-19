@@ -267,26 +267,27 @@ test_refresh_carries_no_placeholder_to_the_captain() {
   injected_payload "$home" \
     | jq -e '[paths(type == "string" and test("\\{(FILL|TRANSLATE)"))] | length == 0' >/dev/null \
     || fail "the refreshed payload still carries composer placeholders: $(injected_payload "$home")"
-  # A degraded card must ASK something. The fixture's pick-route hold carries
-  # its own reason, and that reason - not the task title, which is already the
-  # card's title - is the only text saying what the captain must decide.
-  injected_payload "$home" | jq -e '
+  # A degraded card must ASK something, and the fm-bearings.v1 contract gives
+  # a main captain-hold row exactly {id,key,verb,summary,owner} - no separate
+  # reason field. The question therefore has to be that row's own summary,
+  # which fm-bearings-snapshot.sh fitted as "<title>: <hold reason>". The
+  # fixture rows are shaped to that contract, so a card that fell back to the
+  # task title, or to the bare key, fails here: the title is a strict prefix
+  # of the summary, never equal to it.
+  local summary title
+  summary=$(jq -r '.decisions_open[] | select(.id == "pick-route") | .summary' "$SNAPSHOT_FIXTURE")
+  title=$(injected_payload "$home" | jq -r '.captains_call[] | select(.key == "pick-route") | .title')
+  [ "$title" != "$summary" ] \
+    || fail "the fixture cannot distinguish the title from the question it should ask"
+  injected_payload "$home" | jq -e --arg summary "$summary" --arg title "$title" '
     (.captains_call | length) >= 2
     and ([.captains_call[] | select(.type == "merge")][0].risk == "unassessed")
     and ([.captains_call[] | select(.key == "pick-route")][0]
-      | .title == "Pick the route"
-        and .decide == "we must choose before the region freeze"
+      | .title == $title and .decide == $summary
         and ([.options[].value] == ["reconcile"]) and .allow_freeform == true)
   ' >/dev/null \
     || fail "a card with no written copy did not degrade to an answerable one: $(injected_payload "$home")"
-  # A hold whose row records no reason still gets an answerable question
-  # rather than an empty one.
-  injected_payload "$home" | jq -e '
-    [.captains_call[] | select(.key == "gated-work")][0]
-      | .decide == "Gated work item: choose the rollout order"
-  ' >/dev/null \
-    || fail "a hold with no recorded reason lost its fallback question: $(injected_payload "$home")"
-  pass "refresh degrades unwritten copy to the hold's own question, never a placeholder"
+  pass "refresh degrades unwritten copy to the held row's own question, never a placeholder"
 }
 
 test_refresh_reuses_the_stored_card_verbatim() {

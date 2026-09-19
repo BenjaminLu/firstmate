@@ -110,10 +110,11 @@
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
 #            `bin/fm-captain-hold.sh card <id>` returns a STORED card, that card
-#            is used as-is: a captain call's copy is written once, when the hold
-#            is created, and every later compose and refresh reuses it rather
-#            than asking the first mate for prose again. Only a NEW captain hold
-#            with no stored card still needs copy written once. Failing that,
+#            is used as-is: `build` stores the copy it publishes on each held
+#            task, and every later compose and refresh reuses it rather than
+#            asking the first mate for prose again. A call whose stored card a
+#            re-hold retired, and one that never had one, still needs copy
+#            written once. Failing that,
 #            when `bin/fm-packet.sh verify` accepts the held task's packet, the
 #            card is seeded from `bin/fm-packet.sh card <id>` instead of
 #            placeholders. Every captain-facing copy field is emitted as
@@ -139,9 +140,11 @@
 #            refresh publish with no model in the loop. Every slot a composer
 #            would fill is resolved from structured state instead: a decision
 #            card with no stored or packet-seeded copy degrades to its durable
-#            title plus the hold's own reason as the question to decide and no
-#            invented options, an optional enum or recommendation the evidence
-#            does not supply is omitted rather than guessed, and a merge card's
+#            title plus the held row's own snapshot summary - already fitted
+#            from that title and the hold's reason - as the question to decide,
+#            and no invented options; an optional enum or recommendation the
+#            evidence does not supply is omitted rather than guessed, and a
+#            merge card's
 #            risk reads `unassessed`. Neither omitted-rows count is emitted at
 #            all, because the snapshot reports ONE omitted total and never says
 #            which of those rows were queued work and which were repair
@@ -690,7 +693,9 @@ packet_card() {  # <task-id>
   printf '%s\n' "$card" | jq -c . 2>/dev/null || printf 'null\n'
 }
 
-# The durable card written once when the hold was created, or null.
+# The durable card a previous `build` published for this call, or null -
+# `bin/fm-captain-hold.sh` retires it when the task is held again, so a card
+# that survives is one written for the hold still open.
 # A stored card is durable state written by an earlier session, so it is
 # checked here against the structural rules the payload validator applies to a
 # Captain's Call item before it is used: the wrong key would answer the wrong
@@ -804,9 +809,9 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
-  # The stored card is the durable copy written once when the hold was created
-  # (bin/fm-captain-hold.sh owns it), so a refresh never needs prose from the
-  # first mate for a call the captain has already been shown.
+  # The stored card is the durable copy a previous build published for this
+  # call, so a refresh never needs prose from the first mate for a call the
+  # captain has already been shown.
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     card=$(stored_card "$id")
@@ -902,13 +907,14 @@ EOF
       | if (.packet_url | link_url) then . else del(.packet_url) end;
     # With no stored and no packet-seeded copy, a deterministic compose still
     # owes the captain a visible, answerable card. It degrades to what
-    # structured state actually knows - the durable title and the hold reason
-    # itself as the question - and offers no invented options; the reconcile
-    # choice and free form still carry an answer back, and the next full build
-    # writes real copy once.
+    # structured state actually knows - the durable title, plus the summary
+    # fm-bearings-snapshot.sh already fitted for that held row from the title
+    # and the hold reason, as the question - and offers no invented options;
+    # the reconcile choice and free form still carry an answer back, and the
+    # next full build writes real copy once.
     def degraded_card:
       {key: .key, type: "decision", repo: repo_of(.id), title: t(hold_title; .key),
-       decide: t(.reason; .summary), allow_freeform: true, options: []}
+       decide: t(.summary; .key), allow_freeform: true, options: []}
       + hold_close;
     def unseeded_card: if $deterministic then degraded_card else placeholder_card end;
     def decision_card: . as $row | ($cards[$row.id] // null) as $card
