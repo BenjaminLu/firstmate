@@ -32,7 +32,25 @@
 #
 # poll consumes fm-fleet-snapshot.sh --contribution-input, a local-only read,
 # and spends at most FM_CONTRIBUTIONS_BUDGET seconds on forge reads (default 20,
-# 1..25). Each gh call is bounded by the remaining budget and five seconds.
+# 1..25). Each gh call is bounded by the remaining budget and by twelve seconds.
+# That bound comes from measured GitHub latency on a slow repository: 0.9 to 4.4
+# seconds per call, samples 4.35, 2.83 and 3.39, with one read per URL regularly
+# past five seconds. Twelve sits well above the slowest measured call, so a
+# merely slow forge finishes its read instead of being killed.
+#
+# What that closes is the forge whose calls are merely slower than the old
+# five-second bound. What it does not close is a forge slow enough that a whole
+# observation - eight forge calls - does not fit the budget at all. That URL is
+# not the only one it costs. The poll breaks where the budget ran out, so every
+# row behind it in the queue is skipped, and because its records are left
+# exactly as they were found its checked_at never advances, so it keeps the head
+# of the oldest-first queue and blocks those same rows in every later poll too,
+# until its observation fits. No budget in the documented 1..25 range fits eight
+# calls at the measured latency, so an operator cannot configure around it.
+# Every blocked row ages out under the ordinary freshness rule below and the
+# board shows it unchecked; none is ever shown as freshly checked when it was
+# not. What stops this firing is fewer forge calls per observation - a four-call
+# observation is its own task, not a larger fleet-wide FM_CHECK_TIMEOUT.
 # Oldest observations go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. When
@@ -85,6 +103,7 @@ BUDGET=${FM_CONTRIBUTIONS_BUDGET:-20}
 case "$MAX_AGE" in ''|*[!0-9]*) fail 'invalid freshness bound' ;; esac
 case "$BUDGET" in ''|*[!0-9]*) fail 'invalid poll budget' ;; esac
 [ "$BUDGET" -ge 1 ] && [ "$BUDGET" -le 25 ] || fail 'poll budget must be 1..25 seconds'
+CALL_BOUND=12
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-contributions.XXXXXX")
 LOCK_HELD=0
 cleanup() {
@@ -180,7 +199,7 @@ forge() {
   remaining=$((DEADLINE - $(date +%s)))
   # The budget, not the forge, refused this read.
   [ "$remaining" -gt 0 ] || { BUDGET_EXHAUSTED=1; return 1; }
-  if [ "$remaining" -le 5 ]; then bounded=1; else remaining=5; fi
+  if [ "$remaining" -le "$CALL_BOUND" ]; then bounded=1; else remaining=$CALL_BOUND; fi
   fm_run_timed "$remaining" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
     gh "$@" 2> "$TMP/forge.err" || rc=$?
   # A read killed at the budget's own deadline is budget exhaustion too.
