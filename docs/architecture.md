@@ -323,7 +323,7 @@ The `data/secondmates.md` line contract is owned by the [`secondmate-provisionin
 
 `no-mistakes` tasks run the full validation pipeline, `direct-PR` tasks open PRs without that pipeline, and `local-only` tasks stay local until firstmate performs an approved fast-forward merge.
 Each task's mode and `yolo` merge posture are firstmate's decision at intake.
-The mode is passed explicitly to `bin/fm-brief.sh`, and both values are passed explicitly to `bin/fm-spawn.sh` and `bin/fm-promote.sh`; each command refuses to guess the values it consumes.
+The mode is passed explicitly to `bin/fm-brief.sh`, and both values are passed explicitly to `bin/fm-spawn.sh`, `bin/fm-promote.sh`, and the one-call `bin/fm-dispatch.sh` that wraps brief and spawn; each command refuses to guess the values it consumes.
 A ship brief records its mode as a fixed machine-readable line and the spawn refuses to launch on a different one, so the worker's instructions and the recorded task delivery cannot diverge.
 `bin/fm-dod-lib.sh` is the one owner of that mode's definition of done, rendered into a generated ship brief, the ship instructions a promoted scout receives, and that scout's own `brief.md` so a later relaunch reads the same contract, so a promoted worker cannot be handed a weaker contract than a briefed one.
 It is also the one owner of the no-mistakes `--intent` contract those workers follow.
