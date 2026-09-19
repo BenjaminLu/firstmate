@@ -197,6 +197,9 @@ Bearings invocation examples:
 - `/bearings include PRs` keeps chat-only mode and opts into live PR enrichment.
 - `/bearings file` replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch and links it from the four-section chat digest.
 - `/bearings file include PRs` combines the dated report with live PR enrichment.
+- `/bearings lavish` builds the interactive fleet board - the captain's open calls, work under way, what is queued next, and what recently landed - from the shipped board template, which is the single definition of what a row or card carries, what it validates, and what it renders, so wherever the board is read it is that definition being read; a control that sets fleet work in motion acknowledges the click on the row it was clicked in.
+
+How an answer given on that board reaches the first mate is owned by the bearings skill at [`.agents/skills/bearings/SKILL.md`](.agents/skills/bearings/SKILL.md); the board's own mechanics are owned by the header of `bin/fm-bearings-board.sh`.
 
 Agent-only reference skills live under `.agents/skills/` and are loaded by firstmate at the trigger points named in [`AGENTS.md`](AGENTS.md).
 
