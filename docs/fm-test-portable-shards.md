@@ -57,8 +57,10 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal, so changing the shard count in either file without the other fails the lane loudly instead of leaving part of the required suite unrun.
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
-The serial hints were refreshed from successful per-script records in the `fm-test-timing-portable-serial-*` artifacts of the complete green [run 35279383618](https://github.com/kunchenguid/firstmate/actions/runs/35279383618) and the available completed shards of [run 35282466441](https://github.com/kunchenguid/firstmate/actions/runs/35282466441) on 2026-09-17.
-Together these cover all 176 serial scripts at refresh time; retain the slower successful sample where both exist.
+The serial hints were refreshed on 2026-09-19 from the `fm-test-timing-portable-serial-*` artifacts of five complete green runs on this repository: [35447243698](https://github.com/BenjaminLu/firstmate/actions/runs/35447243698), [35446928942](https://github.com/BenjaminLu/firstmate/actions/runs/35446928942), [35446548848](https://github.com/BenjaminLu/firstmate/actions/runs/35446548848), [35446251051](https://github.com/BenjaminLu/firstmate/actions/runs/35446251051), and [35444308011](https://github.com/BenjaminLu/firstmate/actions/runs/35444308011).
+All nine shards completed in all five, so every one of the 178 serial scripts at refresh time carries five successful samples; retain the slowest.
+Shard 1 of run 35444308011 is the one excluded sample: its single script took 1732786 ms against 765144-819256 ms in the other four, a degraded runner rather than a script that grew, and a hint 2.1x above the script's real cost unbalances the packing it exists to balance.
+Exclude a sample only on that evidence - the same shard measured against itself across runs - and record the exclusion here.
 The native-Windows-only `tests/fm-pi-windows-shell-invocation.test.sh` retains its separate 5121 ms measurement from 2026-09-06T21:02Z instead of a portable capability skip.
 An unfinished or failed invocation is not a healthy duration sample.
 A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
@@ -69,8 +71,15 @@ That is not hypothetical: by 2026-09-01 the lane had grown from 116 to 139 scrip
 Refresh the hints whenever the serial lane gains scripts, rather than waiting for that bound to trip.
 
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size and coverage rather than a copied inventory.
-Nine serial runners pack the refreshed measurements into a longest modeled script sum of 697969 ms (11m38s), with other shards near 10m36s.
-The longest script, `tests/fm-watch-triage.test.sh`, legitimately occupies one whole shard and is the indivisible floor for this layout.
+Nine serial runners pack the refreshed measurements into 721.7 s (12m02s) on every shard, which is also the ideal: no script is now long enough to set the makespan on its own.
+Scored against the same measurements, the previous hints left shard 3 carrying 983s of real work against that 722s ideal, and the refresh alone cut the modeled makespan to 819s.
+The remaining 97s came from splitting the longest script.
+`tests/fm-watch-triage.test.sh` used to run 819s as one file, occupied a whole shard, and stayed the makespan at every shard count, so it was recorded here as this layout's indivisible floor.
+It was not indivisible: its 122 cases are hermetic - each mints its own state directory and its own stubs through `make_case` - and they now run as 95 in that file and 27 in `tests/fm-watch-triage-waits.test.sh`, which owns the wake someone has already explained (a declared pause or dated wait, a captain-held item, the away-posture record, and the wedge threshold that must consult them).
+Their shared fixtures live in `tests/watch-triage-helpers.sh`.
+A split cannot quietly drop coverage, because the coverage guard below proves the lanes still partition every `tests/*.test.sh` whatever a file is called.
+The two hints are the whole file's 819256 ms CI measurement divided by the two halves' measured share of it: 428880 ms and 481020 ms back to back on one unloaded machine on 2026-09-19, 47.1% / 52.9%.
+That is a local ratio applied to a CI total, not a CI measurement of either file; replace both with their own `fm-test-timing-portable-serial-*` values at the next refresh.
 This is a packing estimate, not measured new-workflow execution or an end-to-end latency guarantee.
 Existing job timeouts remain hang tripwires; they are not the desired healthy duration.
 `tests/fm-ci-workflow.test.sh` compares the parsed CI matrix to the executable runner lanes, and the runner rejects parallel `--jobs` on a serial lane even when that shard has only one member.
@@ -79,7 +88,9 @@ Refresh the CI-derived hints by downloading the per-shard timing artifacts from 
 
 ```sh
 for run in <run-id> <run-id> <run-id>; do
-  gh run download "$run" -R kunchenguid/firstmate --pattern 'fm-test-timing-portable-serial-*' -D "/tmp/fm-serial/$run"
+  for k in 1 2 3 4 5 6 7 8 9; do
+    gh run download "$run" -R <owner>/firstmate --name "fm-test-timing-portable-serial-$k" --dir "/tmp/fm-serial/$run/$k"
+  done
 done
 jq -r '.scripts[] | select(.exit == 0) | [.path, .duration_ms] | @tsv' /tmp/fm-serial/*/*/*.json \
   | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print p, m[p] }' \
@@ -87,6 +98,7 @@ jq -r '.scripts[] | select(.exit == 0) | [.path, .duration_ms] | @tsv' /tmp/fm-s
 bin/fm-test-run.sh --check-coverage
 ```
 
+Name the repository the hints are for on every call: an unqualified `gh`/`gh-axi` resolves to whichever remote the checkout defaults to, and run numbers collide between forks, so an unnamed repository silently measures a different fork's CI and the drift this table exists to correct stays invisible.
 A timed-out shard may upload no artifact, so include a complete green run or the slowest scripts go unmeasured in exactly the shard that needs them most.
 Completed shards from a partial run can supplement that complete baseline, but never treat missing tail scripts or the timeout duration as successful samples.
 Measure native-Windows-only scripts through the focused Git Bash runner and retain that `duration_ms` separately, because the portable CI shards skip them.
