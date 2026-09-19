@@ -54,17 +54,20 @@
 #
 # What that closes is the forge whose calls are merely slower than the old
 # five-second bound. What it does not close is a forge slow enough that a whole
-# observation - eight forge calls - does not fit the budget at all. That URL is
-# not the only one it costs. The poll breaks where the budget ran out, so every
-# row behind it in the queue is skipped, and because its records are left
-# exactly as they were found its checked_at never advances, so it keeps the head
-# of the oldest-first queue and blocks those same rows in every later poll too,
-# until its observation fits. No budget in the documented 1..25 range fits eight
-# calls at the measured latency, so an operator cannot configure around it.
-# Every blocked row ages out under the ordinary freshness rule below and the
-# board shows it unchecked; none is ever shown as freshly checked when it was
-# not. What stops this firing is fewer forge calls per observation - a four-call
-# observation is its own task, not a larger fleet-wide FM_CHECK_TIMEOUT.
+# observation does not fit the budget at all. That URL is not the only one it
+# costs. The poll breaks where the budget ran out, so every row behind it in
+# the queue is skipped, and because its records are left exactly as they were
+# found its checked_at never advances, so it keeps the head of the oldest-first
+# queue and blocks those same rows in every later poll too, until its
+# observation fits. Four calls at the measured 0.9-4.4 seconds each - five when
+# a commit carries more than one page of check contexts - fit the default
+# twenty-second budget, so at that latency this does not fire; the eight calls
+# a per-lane REST observation needed did not fit any budget in the documented
+# 1..25 range, and an operator could not configure around it. Every blocked row
+# ages out under the ordinary freshness rule below and the board shows it
+# unchecked; none is ever shown as freshly checked when it was not. What stops
+# this firing is fewer forge calls per observation, not a larger fleet-wide
+# FM_CHECK_TIMEOUT.
 # Oldest observations go first, so a large corpus progresses across polls.
 # Each distinct URL is observed once per poll and applied to every owner. A
 # final observation applies to every owner without another forge read. When
@@ -217,7 +220,7 @@ forge() {
   fm_run_timed "$remaining" env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
     gh "$@" 2> "$TMP/forge.err" || rc=$?
   # A read killed at the budget's own deadline is unmeasured, not a failure.
-  [ "$rc" -ne 124 ] || [ "$bounded" -eq 0 ] || UNMEASURED=1
+  [ "$rc" -ne 124 ] || [ "$bounded" -eq 0 ] || BUDGET_EXHAUSTED=1
   return "$rc"
 }
 
@@ -405,11 +408,11 @@ poll() {
       continue
     fi
     observed=0
-    UNMEASURED=0
+    BUDGET_EXHAUSTED=0
     observe "$url" || observed=$?
     # An observation the budget cut short is unmeasured, not unavailable: keep
     # every owner's prior record so the URL is observed first next poll.
-    [ "$UNMEASURED" -eq 0 ] || break
+    [ "$BUDGET_EXHAUSTED" -eq 0 ] || break
     # Wake once per failure episode: only when no owner has a prior error.
     if [ "$observed" -ne 0 ] && jq -ne --slurpfile saved "$TMP/saved.json" --arg url "$url" --args \
       'all($ARGS.positional[] as $task | [$saved[0][] | select(.task == $task) | .records[] | select(.url == $url)] | first;
