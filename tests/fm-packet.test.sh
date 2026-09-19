@@ -117,7 +117,16 @@ SAID = [
 ]
 said = "\n".join("- en: %s\n- hant: %s\n- hans: %s" % t for t in SAID)
 s = re.sub(r"- en: \{FILL: every path you tried.*?- hans: \{FILL[^}]*\}", lambda m: said, s, flags=re.S)
-s = re.sub(r"\{FILL: file:line.*?\}", "- bin/fm-contributions.sh:190 forge() bound\n- tests/fm-contributions.test.sh: test_bound_hit_is_not_unavailable", s, flags=re.S)
+EVIDENCE = [
+    ("the bound is measured in forge(), not in the poller",
+     "上限是在 forge() 裡量的，不是在 poller",
+     "上限是在 forge() 里量的，不是在 poller"),
+]
+evidence = "\n".join("- en: %s\n- hant: %s\n- hans: %s" % t for t in EVIDENCE)
+# A line that is only a path or a command needs no translation, and says so by
+# being backticked - the same exemption the approved prototype's block uses.
+evidence += "\n- `bin/fm-contributions.sh:190`\n- `tests/fm-contributions.test.sh`"
+s = re.sub(r"- en: \{FILL: file:line.*?- hans: \{FILL[^}]*\}", lambda m: evidence, s, flags=re.S)
 s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
 p.write_text(s)
 PY
@@ -899,6 +908,82 @@ EMPTYTAG
 # Every heading in that block is this renderer's own words, and it has all
 # three - so the captain reads it in his language, as the prototype he approved
 # does. Only what the worker typed stays as typed.
+# verify and the renderer have to agree on what ONE item is, or verify passes a
+# packet the renderer then reads as a copy object with no English - which is a
+# blank line on the page and a board payload the validator refuses by name of
+# nothing at all.
+test_verify_refuses_a_group_the_renderer_would_read_differently() {
+  local home packet out rc
+  home=$(make_home prose-grouping)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  python3 - "$packet" <<'SPLIT'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("- hant: 15 秒的上限沒有對最慢的 repo 驗證過",
+                       "\n- hant: 15 秒的上限沒有對最慢的 repo 驗證過", 1))
+SPLIT
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a continuation cut off from its en line: $out"
+  assert_contains "$out" 'has no "en:" line above it' \
+    "the refusal does not name the orphaned continuation: $out"
+
+  # and a continuation written as a different kind of line is the same mistake
+  fill_prose "$packet"
+  python3 - "$packet" <<'MARKER'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(s.replace("- hans: 15 秒的上限没有对最慢的 repo 验证过",
+                       "hans: 15 秒的上限没有对最慢的 repo 验证过", 1))
+MARKER
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a continuation written unlike its en line: $out"
+  pass "verify refuses a tagged group the renderer would read as a different item"
+}
+
+# The collapse that lets a line which IS a link read once has to be true in
+# every language, or the words a worker wrote around the link in 繁體 and 简体
+# vanish while the English reads correctly.
+test_a_line_that_is_a_link_only_collapses_when_every_language_is() {
+  local home packet out
+  home=$(make_home card-link-collapse)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
+  python3 - "$packet" <<'COLLAPSE'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+s = s.replace("- en: the 15 s bound is unverified against the slowest repo",
+              "- en: [the CI run](https://ci.example.test/run/7)")
+s = s.replace("- hant: 15 秒的上限沒有對最慢的 repo 驗證過",
+              "- hant: 詳見 [CI 執行](https://ci.example.test/run/7)")
+s = s.replace("- hans: 15 秒的上限没有对最慢的 repo 验证过",
+              "- hans: 详见 [CI 执行](https://ci.example.test/run/7)")
+s = s.replace("- en: the merged-record rule assumes settle_final runs before publish",
+              "- en: [the PR](https://example.test/pr/10)")
+s = s.replace("- hant: 合併記錄規則假設 settle_final 在 publish 之前跑",
+              "- hant: [那個 PR](https://example.test/pr/10)")
+s = s.replace("- hans: 合并记录规则假设 settle_final 在 publish 之前跑",
+              "- hans: [那个 PR](https://example.test/pr/10)")
+p.write_text(s)
+COLLAPSE
+  out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
+  printf '%s' "$out" | jq -e '
+    (.packet.sections[] | select(.heading.en == "What only this session knows") | .items) as $said
+    # the line that says more than its link in 繁體 keeps every language of it
+    | ($said[1].text.hant | test("詳見"))
+    and ($said[1].text.hans | test("详见"))
+    and ([$said[1].links[].url] == ["https://ci.example.test/run/7"])
+    # the line that IS the link in all three still reads once
+    and ($said[2] | has("text") | not)
+    and ($said[2].links[0].label.hant == "那個 PR")
+  ' >/dev/null || fail "a trilingual link line lost the words around it: $out"
+  pass "a line collapses to its link only when it is the link in every language"
+}
+
 test_the_packet_block_switches_every_heading_it_owns() {
   local home out packet
   home=$(make_home card-packet-headings)
@@ -1260,14 +1345,20 @@ test_a_link_the_board_would_refuse_rides_the_card_as_text() {
   python3 - "$packet" <<'LINKS'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
-p.write_text(s.replace("- bin/fm-contributions.sh:190 forge() bound",
-  "- see [the brief](data/pk-1/brief.md) and [the run](https://ci.example.test/run/7)", 1))
+s = s.replace("- en: the bound is measured in forge(), not in the poller",
+  "- en: see [the brief](data/pk-1/brief.md) and [the run](https://ci.example.test/run/7)")
+s = s.replace("- hant: 上限是在 forge() 裡量的，不是在 poller",
+  "- hant: 看 [簡報](data/pk-1/brief.md) 和 [那一輪](https://ci.example.test/run/7)")
+s = s.replace("- hans: 上限是在 forge() 里量的，不是在 poller",
+  "- hans: 看 [简报](data/pk-1/brief.md) 和 [那一轮](https://ci.example.test/run/7)")
+p.write_text(s)
 LINKS
   out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
   printf '%s' "$out" | jq -e '
     (.packet.sections[] | select(.heading.en == "Evidence") | .items[0]) as $it
-    | ($it.text | test("the brief"))
+    | ($it.text.en | test("the brief")) and ($it.text.hant | test("簡報"))
     and ([$it.links[].url] == ["https://ci.example.test/run/7"])
+    and ($it.links[0].label | .en == "the run" and .hant == "那一輪" and .hans == "那一轮")
   ' >/dev/null || fail "the card did not keep the words and drop the unreachable link: $out"
   pass "a link the board would refuse rides the card as text, and the reachable one as a link"
 }
@@ -1320,10 +1411,13 @@ s = s.replace("- hant: 15 秒的上限沒有對最慢的 repo 驗證過",
   "- hant: 上限沒有驗證過，看 [CI 那一輪](https://ci.example.test/run/7)")
 s = s.replace("- hans: 15 秒的上限没有对最慢的 repo 验证过",
   "- hans: 上限没有验证过，看 [CI 那一轮](https://ci.example.test/run/7)")
-s = s.replace("- bin/fm-contributions.sh:190 forge() bound",
-  "- the **15 s** bound is `unverified` against [the slowest repo](https://example.test/slow); see <b>escaped</b>")
-s = s.replace("- tests/fm-contributions.test.sh: test_bound_hit_is_not_unavailable",
-  "- the RAW_JS and TASK_ID slots are named here on purpose\n- [a data link](data:text/html,x) and [a vb link](VBScript:x) stay text")
+# The generated section renders as written - it is git output, not the
+# worker's words - so it is where the markdown converter is exercised.
+s = s.replace("- uncommitted paths in the worktree at scaffold time:",
+  "- the **15 s** bound is `unverified` against [the slowest repo](https://example.test/slow); see <b>escaped</b>\n"
+  "- the RAW_JS and TASK_ID slots are named here on purpose\n"
+  "- [a data link](data:text/html,x) and [a vb link](VBScript:x) stay text\n"
+  "- uncommitted paths in the worktree at scaffold time:", 1)
 p.write_text(s)
 PY
   out=$(run_packet "$home" render pk-1) || fail "render failed: $out"
@@ -1426,7 +1520,7 @@ PY
   pass "the rendered decision card answers all five questions and the recommendation"
 }
 
-test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it() {
+test_serve_opens_the_page_under_a_stable_name_and_the_card_stays_one_address() {
   local home out packet page real
   home=$(make_home serve)
   make_lavish_stub "$home" names
@@ -1436,9 +1530,6 @@ test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it() {
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
   fill_figures "$packet"
-  # Before any session is open, the card carries no packet link.
-  out=$(run_packet_lavish "$home" card pk-1) || fail "card failed: $out"
-  printf '%s' "$out" | jq -e 'has("packet_url") | not' >/dev/null || fail "card linked a page nobody served: $out"
   out=$(run_packet_lavish "$home" serve pk-1) || fail "serve failed: $out"
   assert_present "$page" "serve did not render the page"
   assert_contains "$out" "page: $page" "serve did not report the page: $out"
@@ -1446,16 +1537,13 @@ test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it() {
   assert_grep '--name packet-pk-1' "$home/lavish-state/args" "serve did not open the page under its stable name"
   real=$(cd "$(dirname "$page")" && pwd -P)/packet.html
   assert_equals "$(cat "$home/lavish-state/open")" "$real" "serve opened a different file"
+  # The card carries the whole packet, so there is no second address to send the
+  # captain to and the card never offers one - served page or not.
   out=$(run_packet_lavish "$home" card pk-1) || fail "card failed after serve: $out"
-  printf '%s' "$out" | jq -e '.packet_url == "http://127.0.0.1:4387/s/packet-pk-1"' >/dev/null \
-    || fail "card did not carry the served URL: $out"
-  # The worker edits the packet after serve: card re-renders the stale page before linking it.
-  fill_decision "$packet" "$(printf '%s' "$GOOD_DECISION" | jq -c '.recommend_why = "the slowest repo measured 4.4 s"')"
-  touch -t 202001010000 "$page"
-  out=$(run_packet_lavish "$home" card pk-1) || fail "card failed on a stale page: $out"
-  printf '%s' "$out" | jq -e '.packet_url == "http://127.0.0.1:4387/s/packet-pk-1"' >/dev/null \
-    || fail "card dropped the served URL after re-rendering: $out"
-  assert_grep 'the slowest repo measured 4.4 s' "$page" "card linked a page rendered from the old packet"
+  printf '%s' "$out" | jq -e '(has("packet_url") | not) and ((.packet.sections | length) > 0)' >/dev/null \
+    || fail "card sent the captain to a second address: $out"
+  # and composing a card never rewrites the served page behind the reader
+  assert_equals "$(cat "$home/lavish-state/open")" "$real" "card opened or re-served a page of its own"
   # An older lavish-axi without --name gets the plain open and the keyed URL.
   home=$(make_home serve-keyed)
   run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
@@ -1463,7 +1551,7 @@ test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it() {
   out=$(run_packet_lavish "$home" serve pk-1) || fail "serve failed without name support: $out"
   assert_contains "$out" "url: http://127.0.0.1:4387/session/deadbeef" "serve did not print the keyed URL: $out"
   assert_no_grep '--name' "$home/lavish-state/args" "serve passed --name to a lavish-axi that lacks it"
-  pass "serve opens the page under a stable name and the card links the served URL"
+  pass "serve opens the page under a stable name, and a card still sends nobody to it"
 }
 
 test_name_support_probe_never_lists_before_the_session_is_opened() {
@@ -1501,11 +1589,13 @@ test_a_link_the_board_would_refuse_rides_the_card_as_text
 test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet
 test_render_decision_card_answers_the_five_questions
-test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it
+test_serve_opens_the_page_under_a_stable_name_and_the_card_stays_one_address
 test_name_support_probe_never_lists_before_the_session_is_opened
 test_the_card_carries_the_packet_itself
 test_a_needs_decision_packet_with_no_figures_is_refused
 test_an_empty_language_line_is_that_language_missing
+test_verify_refuses_a_group_the_renderer_would_read_differently
+test_a_line_that_is_a_link_only_collapses_when_every_language_is
 test_the_packet_block_switches_every_heading_it_owns
 test_the_packet_block_reaches_the_card_in_all_three_languages
 test_verify_refuses_prose_the_captain_could_not_read

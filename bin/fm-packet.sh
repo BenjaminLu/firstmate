@@ -196,12 +196,7 @@
 #            payload. A copy object without `hant` is flattened to its `en`
 #            string so the board validator accepts it. --repo names the card's
 #            repo; otherwise the task's meta project= basename, else "".
-#            When the rendered page's Lavish session is listed open, the card
-#            also carries its URL as `packet_url`, so the bearings composer
-#            gets the link without a second lookup; a page older than the
-#            packet is re-rendered first, so the link never shows a stale
-#            packet.
-#            The card also carries the packet ITSELF, as `packet`, so the
+#            The card carries the packet ITSELF, as `packet`, so the
 #            bearings board can open the whole thing inside the card instead
 #            of sending the captain to a second page he can lose by closing a
 #            tab:
@@ -271,15 +266,21 @@
 #       - hant: 那段判斷只在這台機器試過，Linux 上沒試過。
 #       - hans: 那段判断只在这台机器试过，Linux 上没试过。
 #
-#     One item, three lines, in any order after the `en:` that opens it. A
-#     language is present when it has WORDS: a tag typed over an empty line is
-#     that language missing, and verify says so. A line with no tag at all is
-#     one language, and verify refuses that in "What only this session knows" -
-#     the section that is nothing but the worker explaining something in words
-#     - and refuses a tagged line written by halves anywhere. Commands in a
-#     fenced block and the generated "What changed" section are not translated:
-#     a command is the same command in every language, exactly as the approved
-#     prototype has it.
+#     One item, three CONSECUTIVE lines, written the same way - all three
+#     bulleted or none of them - because that is what makes them one item to
+#     the renderer as well as to verify. A language is present when it has
+#     WORDS: a tag typed over an empty line is that language missing, and
+#     verify says so.
+#
+#     Every line of every prose section owes all three, "Evidence" and "How to
+#     pull more" included: the captain opens the whole block and a heading that
+#     moves over words that stand still is the half-switched surface the rule
+#     exists to prevent. Two things are exempt, and they are the two the
+#     approved prototype leaves in English: the generated "What changed"
+#     section, and command, path and identifier material - a fenced block, or
+#     one backticked span alone on its line. A command is the same command in
+#     every language and translating it would break it, so it says so for
+#     itself rather than being guessed at.
 #
 # WHO writes them is the worker who writes the packet, the same worker the
 # figure contract already requires to put data-en, data-hant and data-hans on
@@ -467,13 +468,15 @@ command_scaffold() {
       printf '%s\n' '- edge {FILL: the data-edge id}: {FILL: what proves this connector}'
     fi
     printf '\n## Evidence\n\n'
-    printf '%s\n' '{FILL: file:line for each change that matters, the tests that prove it and how to run them, CI or PR links, screenshots. One item per line.}'
+    printf '%s\n' '- en: {FILL: file:line for each change that matters, the tests that prove it and how to run them, CI or PR links, screenshots. One item per line, each written as these three lines; a line that is only a command or a path goes in backticks instead and needs no translation.}'
+    printf '%s\n' '- hant: {FILL: the same line in 繁體}'
+    printf '%s\n' '- hans: {FILL: the same line in 简体}'
     printf '\n## How to pull more\n\n'
     printf '%s\n' '```sh'
     if [ -n "$BASE" ]; then printf 'git -C %s log %s..HEAD --stat\n' "$wt" "$BASE"; fi
     if [ -n "$pr" ]; then printf 'gh pr view %s --json body,reviews,comments\n' "$pr"; printf 'gh pr diff %s\n' "$pr"; fi
     printf '%s\n' '```'
-    printf '%s\n' '{FILL: optional - the files or docs worth reading first, by path, or remove this line}'
+    printf '%s\n' '{FILL: optional - the files or docs worth reading first, each `by path` in backticks, or remove this line}'
   } > "$packet" || fail "cannot write $packet"
   printf 'packet: %s\n' "$packet"
   printf 'kind: %s\n' "$kind"
@@ -520,7 +523,11 @@ prose_problems() {  # <packet> -> one problem per line
     /^## / { flush(); section = substr($0, 4); next }
     {
       line = $0
-      sub(/^[[:space:]]*([-*]|[0-9]+[.)])[[:space:]]+/, "", line)
+      marker = ""
+      if (match(line, /^[[:space:]]*([-*]|[0-9]+[.)])[[:space:]]+/)) {
+        marker = (substr(line, RSTART, RLENGTH) ~ /[0-9]/) ? "ol" : "ul"
+        line = substr(line, RSTART + RLENGTH)
+      }
       sub(/[[:space:]]+$/, "", line)
       if (line ~ /^(en|hant|hans):/) {
         tag = line; sub(/:.*$/, "", tag)
@@ -529,19 +536,35 @@ prose_problems() {  # <packet> -> one problem per line
           flush()
           if (rest == "")
             printf "an \"en:\" line says nothing; a language is present when it has words, not when its tag is typed\n"
-          else { opened = 1; open = rest }
+          else { opened = 1; open = rest; open_marker = marker }
         }
         else if (!opened)
-          printf "a \"%s:\" line has no \"en:\" line above it; the three languages of one line are written together\n", tag
+          printf "a \"%s:\" line has no \"en:\" line above it; the three languages of one line are written together, on consecutive lines written the same way\n", tag
+        else if (marker != open_marker) {
+          printf "a \"%s:\" line is written differently from the \"en:\" line it belongs to; three languages of one line are one list item or none of them\n", tag
+          flush()
+        }
         else if (rest == "") { }
         else if (tag == "hant") seen_hant = 1
         else seen_hans = 1
         next
       }
-      if (line == "" || index(line, "{FILL") > 0) next
-      if (section == "What only this session knows")
-        printf "\"%s\" is written in one language; every line of \"What only this session knows\" reaches the captain, so write it as \"en:\", \"hant:\" and \"hans:\" lines\n", line
+      if (line == "") { flush(); next }
+      if (index(line, "{FILL") > 0) next
+      flush()
+      # The header above the first "## " is metadata, the generated section is
+      # git output, and a Figures body belongs to the figure contract, which
+      # states its own three languages.
+      if (section == "" || section == "What changed (generated)" || section == "Figures") next
+      if (line ~ /^#/) next
+      if (code_material(line)) next
+      printf "\"%s\" is written in one language; every line of a packet section reaches the captain, so write it as \"en:\", \"hant:\" and \"hans:\" lines, or - if it is a command, a path or an identifier - wrap it in backticks or a fenced block\n", line
     }
+    # Command, path and identifier material is the same in every language, and
+    # translating it would break it, so it is exempt - and it says so for
+    # itself, the way the approved prototype does: a fenced block, or one
+    # backticked span with nothing else on the line.
+    function code_material(l) { return l ~ /^`[^`]+`$/ }
     END { flush() }
   ' "$1"
 }
@@ -1086,7 +1109,7 @@ packet_fragment() {  # <task-id> -> one JSON object
 }
 
 command_card() {
-  local id='' repo='' packet project page real packet_url='' fragment=''
+  local id='' repo='' packet project fragment=''
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   id=$1; shift
   while [ "$#" -gt 0 ]; do
@@ -1103,19 +1126,9 @@ command_card() {
     project=$(meta_value "$id" project)
     [ -z "$project" ] || repo=${project##*/}
   fi
-  # The served page's URL rides the card only while its session is listed open,
-  # so the board never links a page nobody can reach.
-  if command -v lavish-axi >/dev/null 2>&1; then
-    page=$(page_path "$id")
-    if [ -e "$page" ]; then
-      [ ! "$packet" -nt "$page" ] || render_page "$id"
-      real=$(page_realpath "$page") && packet_url=$(lavish_open_url "$real")
-    fi
-  fi
   fragment=$(packet_fragment "$id") \
     || fail "the packet could not be read into the card; the card is the captain's whole view of it"
-  decision_block "$packet" | jq --arg repo "$repo" --arg packet_url "${packet_url:-}" \
-    --argjson packet "$fragment" '
+  decision_block "$packet" | jq --arg repo "$repo" --argjson packet "$fragment" '
     def flat: if type == "object" then (if (.hant | type) == "string" then . else .en end) else . end;
     {
       key: .key, type: "decision", repo: $repo,
@@ -1131,7 +1144,6 @@ command_card() {
     + (if has("risk") then {risk: .risk} else {} end)
     + (if has("recommend_why") then {recommend_why: (.recommend_why | flat)} else {} end)
     + (if has("close") then {close: .close} else {} end)
-    + (if $packet_url != "" then {packet_url: $packet_url} else {} end)
     + {packet: $packet}'
 }
 
@@ -1325,10 +1337,16 @@ def fold_langs(lines):
         if m is None:
             out.append(raw); continue
         tag, text = m.group(1), m.group(2)
-        if tag == "en" or not out or not isinstance(out[-1], dict):
-            out.append({tag: text})
-        else:
+        if tag == "en":
+            out.append({tag: text}); continue
+        # A continuation the grouping above never opened is one verify refuses,
+        # so it only reaches here on a packet nothing checked. It stays the line
+        # the worker typed rather than becoming a copy object with no en, which
+        # renders blank on the page and refuses the whole board payload.
+        if out and isinstance(out[-1], dict) and "en" in out[-1]:
             out[-1][tag] = text
+        else:
+            out.append(raw)
     return out
 
 # The packet's prose, parsed ONCE into typed blocks. The page renders them as
@@ -1372,6 +1390,12 @@ def md_blocks(body):
     para()
     return out
 
+# A line the worker wrote in three languages renders as one switchable span
+# plus its links, so its inline code and emphasis are spent to words on the way
+# in - the switch assigns textContent, and markup cannot live in an attribute.
+# The board card spends them the same way, which is the point: the two surfaces
+# say the same thing. Every word survives; only the bold and the monospace do
+# not, and keeping them would mean per-language markup on both surfaces.
 def md_line(value):
     """one item, the way the card reads it: a switchable span, then its links"""
     if not isinstance(value, dict):
@@ -1614,11 +1638,16 @@ def copy_of(value):
 def item_of(value, code=False):
     t, links = copy_of(value)
     # A line that IS a link reads once, as the link: leaving its label in the
-    # text as well would print the same words twice, once unclickable.
+    # text as well would print the same words twice, once unclickable. It has
+    # to be the line in EVERY language, or dropping the text drops what the
+    # worker wrote around the link in the languages that did say more.
     if len(links) == 1:
-        en = t["en"] if isinstance(t, dict) else t
-        if en.strip() == (links[0]["label"]["en"] if isinstance(links[0]["label"], dict)
-                          else links[0]["label"]).strip():
+        label = links[0]["label"]
+        if isinstance(t, dict):
+            bare = all(t[l].strip() == label[l].strip() for l in LANGS)
+        else:
+            bare = t.strip() == label.strip()
+        if bare:
             t = None
     item = {} if t is None else {"text": t}
     if code:

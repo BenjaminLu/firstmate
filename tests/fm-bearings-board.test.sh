@@ -944,7 +944,11 @@ said = "\n".join("- en: %s\n- hant: %s\n- hans: %s" % t for t in (
     ("the bound is unverified", "上限沒有驗證過", "上限没有验证过"),
     ("the order assumes one region", "這個順序假設只有一個區域", "这个顺序假设只有一个区域")))
 s = re.sub(r"- en: \{FILL: every path you tried.*?- hans: \{FILL[^}]*\}", lambda m: said, s, flags=re.S)
-s = re.sub(r"\{FILL: file:line.*?\}", "- bin/example.sh:1 the change", s, flags=re.S)
+evidence = ("- en: the change is at the top of the forge loop\n"
+            "- hant: 改動在 forge 迴圈的最前面\n"
+            "- hans: 改动在 forge 循环的最前面\n"
+            "- `bin/example.sh:1`")
+s = re.sub(r"- en: \{FILL: file:line.*?- hans: \{FILL[^}]*\}", lambda m: evidence, s, flags=re.S)
 s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
 s = re.sub(r"```json fm-packet-decision.v1\n.*?\n```", "```json fm-packet-decision.v1\n" + sys.argv[2] + "\n```", s, flags=re.S)
 # A needs-decision packet owes one figure putting both options in one drawing;

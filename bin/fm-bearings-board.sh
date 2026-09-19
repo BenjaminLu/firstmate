@@ -100,10 +100,10 @@
 #            including a packet copy object whose own en or hant is blank - so
 #            a blank title degrades that row instead of refusing the whole
 #            skeleton, and a gate's `filed` is normalized to null unless it
-#            matches the accepted date shapes, and a pr_url or packet_url is
-#            emitted only when it satisfies the same link rule the validator
-#            applies, so one hand-written `since` word or one malformed link
-#            cannot refuse the board either. A held task's title,
+#            matches the accepted date shapes, and a pr_url is emitted only
+#            when it satisfies the same link rule the validator applies, so one
+#            hand-written `since` word or one malformed link cannot refuse the
+#            board either. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
 #            than captain) gets `close: release`, a question omits close. When
@@ -841,8 +841,7 @@ EOF
       + ({recommend_value: recommend_slot([$card.options[].value]),
           reversible: reversible_slot, risk: risk_slot}
          | with_entries(select($card[.key] == null)))
-      + (if $card.close != null then {close: $card.close} else hold_close end)
-      | if (.packet_url | link_url) then . else del(.packet_url) end;
+      + (if $card.close != null then {close: $card.close} else hold_close end);
     def decision_card: . as $row | ($cards[$row.id] // null) as $card
       | if $card == null then placeholder_card else packet_seeded($card) end;
     def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
