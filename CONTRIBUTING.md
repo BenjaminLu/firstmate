@@ -95,6 +95,10 @@ The `firstmate-coding-guidelines` skill owns the rule that local no-mistakes Tes
 Verify the same way the gate does: reach for `bin/fm-test-run.sh` with the subjects you care about rather than chaining `bash tests/a.test.sh && bash tests/b.test.sh`, because a list of script paths gets the same bounded concurrency as `--changed`.
 The pipeline publishes that evidence itself, so never hand-commit `.no-mistakes/` paths onto a feature branch; CI rejects them as tracked personal fleet paths.
 
+The lint gate needs two pinned linters on `PATH`, and it installs neither for you.
+Run the one-time install once per machine, into a directory you keep on `PATH`: `bin/fm-install-shellcheck.sh <destination-directory>` and `bin/fm-install-actionlint.sh <destination-directory>`, each of which owns its own pin and its exact steps.
+Without them `bin/fm-lint.sh` exits 69 and says which tool is missing, rather than reporting the run as lint findings.
+
 Check and test the toolbelt before pushing:
 
 ```sh

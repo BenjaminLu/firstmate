@@ -253,9 +253,15 @@ test_missing_actionlint_fails_closed() {
   done
   rc=0
   out=$(PATH="$fakebin" "$LINT_WF" --root "$tmp" 2>&1) || rc=$?
-  [ "$rc" -eq 1 ] || fail "missing actionlint expected exit 1, got $rc"$'\n'"$out"
+  # Exit 69 (not 1) is the published "the lint could not run" status: a gate
+  # reading only the status must never take missing tooling for findings.
+  [ "$rc" -eq 69 ] || fail "missing actionlint expected the unrunnable exit 69, got $rc"$'\n'"$out"
   assert_contains "$out" "actionlint not found" \
     "missing actionlint did not name the required linter"
+  assert_contains "$out" "LINT NOT RUN" \
+    "missing actionlint did not report that no workflow lint ran"
+  assert_contains "$out" "not a lint finding" \
+    "missing actionlint did not separate missing tooling from a lint finding"
   assert_contains "$out" "$REQUIRED" \
     "missing actionlint did not name the pinned version"
   assert_contains "$out" "fm-install-actionlint.sh" \
@@ -468,6 +474,8 @@ test_fm_lint_default_path_catches_broken_ci_yml() {
   mkdir -p "$tmp/bin" "$tmp/.github/workflows"
   cp "$LINT" "$tmp/bin/fm-lint.sh"
   cp "$LINT_WF" "$tmp/bin/fm-lint-workflows.sh"
+  # Both owners source the shared unrunnable-outcome library from bin/.
+  cp "$ROOT/bin/fm-lint-unrunnable-lib.sh" "$tmp/bin/"
   chmod +x "$tmp/bin/fm-lint.sh" "$tmp/bin/fm-lint-workflows.sh"
   write_col0_heredoc_workflow "$tmp/.github/workflows/ci.yml"
 

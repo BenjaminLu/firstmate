@@ -8,6 +8,11 @@
 # invokes this owner on its default (no explicit-path) path, which CI and
 # commands.lint both use.
 #
+# Exit status: 0 valid, 1 actionlint reported problems, 2 usage error, and 69
+# when actionlint is missing from PATH or off its pin, so no workflow file was
+# analysed. bin/fm-lint-unrunnable-lib.sh owns that status and its message
+# shape; bin/fm-lint.sh reports missing ShellCheck the same way.
+#
 # Usage:
 #   fm-lint-workflows.sh                 lint workflows under this repo
 #   fm-lint-workflows.sh --root <dir>    lint workflows under <dir>
@@ -20,6 +25,11 @@ REQUIRED_ACTIONLINT=1.7.12
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$SELF_DIR/fm-lint-workflows.sh"
 ROOT="$(cd "$SELF_DIR/.." && pwd)"
+# shellcheck source=bin/fm-lint-unrunnable-lib.sh
+. "$SELF_DIR/fm-lint-unrunnable-lib.sh" || {
+  printf 'fm-lint-workflows.sh: missing bin/fm-lint-unrunnable-lib.sh beside this script.\n' >&2
+  exit 2
+}
 
 if [ "${1:-}" = "--required-version" ]; then
   printf '%s\n' "$REQUIRED_ACTIONLINT"
@@ -27,7 +37,13 @@ if [ "${1:-}" = "--required-version" ]; then
 fi
 
 fm_lint_workflows_usage() {
-  sed -n '2,16{s/^# \{0,1\}//;p;}' "$SELF"
+  # Whole leading comment block, so a header line added above Usage cannot
+  # silently fall out of --help the way a hardcoded line range does.
+  awk '
+    NR == 1 { next }
+    /^#/ { sub(/^# ?/, ""); print; next }
+    { exit }
+  ' "$SELF"
 }
 
 EXPLICIT_ROOT=
@@ -108,17 +124,17 @@ else
 fi
 
 if ! command -v actionlint >/dev/null 2>&1; then
-  printf 'fm-lint-workflows.sh: actionlint not found; install actionlint %s with bin/fm-install-actionlint.sh <destination-directory> and put that directory on PATH.\n' \
-    "$REQUIRED_ACTIONLINT" >&2
-  exit 1
+  fm_lint_unrunnable \
+    "actionlint not found on PATH (this repository pins actionlint $REQUIRED_ACTIONLINT)" \
+    "bin/fm-install-actionlint.sh <destination-directory>, then put <destination-directory> on PATH"
 fi
 ACTIONLINT_BIN=$(command -v actionlint)
 resolved=$("$ACTIONLINT_BIN" -version | awk 'NR==1 {print; exit}')
 printf 'fm-lint-workflows.sh: actionlint %s (pinned %s)\n' "$resolved" "$REQUIRED_ACTIONLINT" >&2
 if [ "$resolved" != "$REQUIRED_ACTIONLINT" ]; then
-  printf 'fm-lint-workflows.sh: actionlint %s required for CI parity, found %s. Install %s with bin/fm-install-actionlint.sh <destination-directory>.\n' \
-    "$REQUIRED_ACTIONLINT" "$resolved" "$REQUIRED_ACTIONLINT" >&2
-  exit 1
+  fm_lint_unrunnable \
+    "actionlint $REQUIRED_ACTIONLINT required for CI parity, found $resolved on PATH" \
+    "bin/fm-install-actionlint.sh <destination-directory>, then put <destination-directory> first on PATH"
 fi
 
 # fm-lint.sh owns ShellCheck of the canonical shell set. Disable actionlint's
