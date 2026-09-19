@@ -1297,6 +1297,58 @@ test_compose_keeps_a_secondmate_landed_row_off_this_homes_books() {
   pass "a secondmate landed row keeps its own id and never drops a local card"
 }
 
+test_compose_cards_a_merge_only_for_a_pr_this_backlog_claims() {
+  local home skeleton long
+  home=$(make_compose_home compose-merge-owner)
+  long=$(printf 'a%.0s' $(seq 1 130))
+  # candidate_prs enumerates every open PR in the repo and derives `task` from
+  # the head branch alone, so a mate's branch, a stale branch, and a nested or
+  # over-long branch all arrive here claiming to be task ids.
+  jq --arg long "$long" '.candidate_prs += [
+        {num: "13", repo: "example/firstmate", task: "mate-only-task",
+         url: "https://github.com/example/firstmate/pull/13",
+         review: "APPROVED", mergeable: "MERGEABLE", checks: "passing"},
+        {num: "14", repo: "example/firstmate", task: "release/2026-09",
+         url: "https://github.com/example/firstmate/pull/14",
+         review: "APPROVED", mergeable: "MERGEABLE", checks: "passing"},
+        {num: "15", repo: "example/firstmate", task: "發佈 #2",
+         url: "https://github.com/example/firstmate/pull/15",
+         review: "APPROVED", mergeable: "MERGEABLE", checks: "passing"},
+        {num: "16", repo: "example/firstmate", task: $long,
+         url: "https://github.com/example/firstmate/pull/16",
+         review: "APPROVED", mergeable: "MERGEABLE", checks: "passing"}]' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$home/snapshot.json"
+  skeleton="$home/skeleton.json"
+  # None of those four may card, and none may refuse the whole skeleton either.
+  run_board "$home" compose --snapshot "$home/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying unkeyable candidate PRs"
+  jq -e '
+    ([.captains_call[] | select(.type == "merge") | .key] == ["merge.ship-task"])
+    and ([.captains_call[].key] | map(select(test("^[A-Za-z0-9._-]{1,128}$") | not)) | length == 0)
+  ' "$skeleton" >/dev/null || fail "a PR no local task claims was carded: $(cat "$skeleton")"
+  pass "compose cards a merge only for a PR this home's backlog claims"
+}
+
+test_compose_suppresses_merge_cards_and_warns_when_the_backlog_is_unreadable() {
+  local home skeleton
+  home=$(make_compose_home compose-merge-no-backlog)
+  # A symlinked backlog is the documented refusal of bin/fm-tasks-axi.sh: no
+  # record can be read, so ownership is UNKNOWN rather than absent.
+  mv "$home/data/backlog.md" "$home/data/real-backlog.md"
+  ln -s "$home/data/real-backlog.md" "$home/data/backlog.md"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot when the backlog could not be read"
+  jq -e '
+    ([.captains_call[] | select(.type == "merge")] | length == 0)
+    and (.charted[] | select(.id == "backlog-unreadable")
+      | .kind == "warning" and .dispatchable == false and .repo == null
+      and (.reason.en | test("merge cards are suppressed")))
+  ' "$skeleton" >/dev/null \
+    || fail "an unreadable backlog produced a board with no warning: $(cat "$skeleton")"
+  pass "an unreadable backlog suppresses merge cards and says so on the board"
+}
+
 test_compose_validates_the_skeleton_on_stdout_too() {
   local home out rc
   home=$(make_compose_home compose-stdout-validate)
@@ -1404,6 +1456,8 @@ test_compose_seeds_a_packet_card_without_a_recorded_project
 test_compose_degrades_a_blank_run_detail_to_the_state_word
 test_compose_cards_no_merge_for_a_pr_without_an_owning_task
 test_compose_validates_the_skeleton_on_stdout_too
+test_compose_cards_a_merge_only_for_a_pr_this_backlog_claims
+test_compose_suppresses_merge_cards_and_warns_when_the_backlog_is_unreadable
 test_compose_drops_a_filed_date_the_payload_contract_refuses
 test_compose_degrades_every_blank_snapshot_string_to_its_row_identity
 test_compose_keeps_a_secondmate_landed_row_off_this_homes_books

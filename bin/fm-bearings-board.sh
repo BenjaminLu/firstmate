@@ -59,11 +59,20 @@
 #            captain hold THIS HOME OWNS becomes exactly one decision
 #            card keyed by its task id; every merge-ready candidate PR (checks
 #            passing, mergeable, review not CHANGES_REQUESTED, present only
-#            under the snapshot's --include-prs) that an owning task claims
-#            becomes a merge card keyed merge.<task-id> with pr_url set and
-#            risk left for the composer. Nothing this home cannot route back
-#            to one of its own tasks is dispatched or keyed: a PR with no
-#            owning task gets no card, a secondmate-owned hold gets no card
+#            under the snapshot's --include-prs) that a task in THIS home's
+#            backlog claims becomes a merge card keyed merge.<task-id> with
+#            pr_url set and risk left for the composer. Nothing this home
+#            cannot route back to one of its own tasks is dispatched or keyed:
+#            a PR gets a card only when this home's backlog record for its
+#            task can be read and the resulting key satisfies the payload
+#            contract, so a mate's `fm/<their-task>` branch, a stale branch,
+#            and a nested or otherwise unkeyable branch name all get no card
+#            instead of a card the keyed intake cannot resolve or a key that
+#            refuses the whole skeleton. An unreadable backlog is unknown
+#            ownership, not absent ownership: it suppresses every merge card
+#            AND adds one non-dispatchable `warning` Charted Next row saying
+#            so, so it can never look like a clean board. A secondmate-owned
+#            hold gets no card
 #            (its snapshot key is the mate's bare local task id, which
 #            `bin/fm-captain-hold.sh` would resolve against this home's
 #            backlog), a secondmate-owned gate is emitted owner-qualified,
@@ -193,10 +202,11 @@ PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
 BOARD_SCHEMA=fm-bearings-board.v1
 PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
-# The one definition of an acceptable Charted Next `filed` date, shared by the
-# payload validator and the compose projection so the projection can never emit
-# a date the validator then refuses.
-FILED_JQ_DEF='
+# The one definition of a routable key and of an acceptable Charted Next
+# `filed` date, shared by the payload validator and the compose projection so
+# the projection can never emit a value the validator then refuses.
+BOARD_JQ_DEFS='
+def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
 def valid_filed:
   . as $filed
   | type == "string"
@@ -223,7 +233,7 @@ fail() {
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
 validate_payload() {  # <data.json>
-  jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" "$FILED_JQ_DEF"'
+  jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     def nonempty_string: type == "string" and length > 0;
     # A compose placeholder stands in for a value the composer still owes. The
     # enum and count slots accept one so the skeleton validates as a skeleton;
@@ -237,7 +247,6 @@ validate_payload() {  # <data.json>
     def copy: nonempty_string or i18n;
     def copy_or_empty: (type == "string") or i18n;
     def optional_copy($name): (has($name) | not) or (.[$name] | copy);
-    def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
     def repo_marker: has("repo") and (.repo == null or (.repo | type == "string"));
     def name_marker: has("name") and (.name | copy);
     def optional_filed:
@@ -523,6 +532,14 @@ show_value() {  # <show output> <field>
   esac
 }
 
+# Whether this home's backlog can be read at all. `bin/fm-tasks-axi.sh` refuses
+# with exit 2 when tasks-axi is missing or the backlog cannot be addressed,
+# while a task that is merely absent from a readable backlog exits 1 - so an
+# unreadable backlog is unknown ownership, never absent ownership.
+backlog_readable() {
+  "$SCRIPT_DIR/fm-tasks-axi.sh" >/dev/null 2>&1
+}
+
 # This home's backlog record for a task: {title, kind, repo} or null when the
 # backlog cannot be read or the task is not there.
 task_record() {  # <task-id>
@@ -571,7 +588,7 @@ command_compose_check() {  # <data.json>
 }
 
 command_compose() {
-  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp
+  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
@@ -591,6 +608,7 @@ command_compose() {
   fi
   printf '%s\n' "$snapshot" | jq -e '.schema == "fm-bearings.v1"' >/dev/null 2>&1 \
     || fail "the snapshot is not an fm-bearings.v1 projection"
+  backlog_readable || readable=false
   # Main-home rows are enriched from this home's own records; secondmate rows
   # keep the snapshot's projection because their books live elsewhere.
   ids=$(printf '%s\n' "$snapshot" | jq -r '
@@ -615,7 +633,8 @@ $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "capta
 EOF
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
-    --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" "$FILED_JQ_DEF"'
+    --argjson records "$records" --argjson cards "$cards" --argjson snap "$snapshot" \
+    --argjson readable "$readable" "$BOARD_JQ_DEFS"'
     # Every captain-facing string goes through this one guard: the validator
     # refuses an empty en, and an ordinary metadata-only backlog row parses to
     # an empty title, so each projection names the durable value that stands in
@@ -692,7 +711,9 @@ EOF
       prs_live: (.prs | startswith("checked")),
       captains_call: (
         [ .decisions_open[]? | select(.verb == "captain-hold" and owned) | decision_card ]
-        + [ .candidate_prs[]? | select(.task != "-" and merge_ready) | merge_card ]),
+        + [ .candidate_prs[]?
+          | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready)
+          | merge_card ]),
       underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
         doing: t(.doing; .state)} ],
       landed: [ .landed[]?
@@ -725,7 +746,13 @@ EOF
              title: t("Secondmate home " + .id + " reports an inventory mismatch"; .id),
              reason: t((.kind // "inventory mismatch")
                + (if ((.ids // []) | length) > 0 then ": " + ((.ids // []) | join(", ")) else "" end); .id),
-             dispatchable: false, kind: "warning", filed: null} ])
+             dispatchable: false, kind: "warning", filed: null} ]
+        + (if $readable then [] else
+          [{id: "backlog-unreadable", repo: null,
+            title: t("This home cannot read its own backlog"; "backlog-unreadable"),
+            reason: t("merge cards are suppressed: no task record can be read to key or route a merge answer";
+              "backlog-unreadable"),
+            dispatchable: false, kind: "warning", filed: null}] end))
     }
     + (if gates_omitted > 0 then {
         charted_more: more_slot("queued"; "charted_warning_more"),
