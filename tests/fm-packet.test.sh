@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-packet.sh: the scaffold is generated from the
 # task's worktree, verify refuses a skeleton and accepts a filled packet, the
-# decision block is validated field by field, card emits a board-ready
-# Captain's Call item, render writes one self-contained HTML page whose
-# decision card answers the five questions, and serve opens that page with
-# lavish-axi under a stable name and hands the card its URL.
+# decision block is validated field by field, the figures section is held to
+# the SVG contract clause by clause, a needs-decision packet owes one figure
+# comparing every option, card emits a board-ready Captain's Call item, render
+# writes one self-contained HTML page whose decision card answers the five
+# questions and whose figures ride it as inline SVG, and serve opens that page
+# with lavish-axi under a stable name and hands the card its URL.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -118,6 +120,62 @@ p.write_text(s)
 PY
 }
 
+# One drawing that puts both options together, meeting every clause of the SVG
+# contract fm-packet.sh's header states: three languages on every text node,
+# colours only as the page's variables, a latin data-node on each shape that
+# stands for an option, ids prefixed
+# per figure, no external font, and one evidence line per drawn connector.
+read -r -d '' GOOD_SVG <<'SVG' || true
+<svg role="img" viewBox="0 0 640 260" xmlns="http://www.w3.org/2000/svg" aria-labelledby="opt-title">
+  <title id="opt-title">Where the two options differ</title>
+  <defs><marker id="opt-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="var(--muted)"/></marker></defs>
+  <rect id="opt-box-a" data-node="bound" x="24" y="24" width="220" height="80" rx="8" fill="var(--accent-tint)" stroke="var(--accent)"/>
+  <text x="34" y="54" style="font-family:var(--sans)" data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限">Raise the bound</text>
+  <rect id="opt-box-b" data-node="quiet" x="24" y="150" width="220" height="80" rx="8" fill="var(--card-2)" stroke="var(--rule)"/>
+  <text x="34" y="180" data-en="Stop waking on merged" data-hant="不再為已合併喚醒" data-hans="不再为已合并唤醒">Stop waking on merged</text>
+  <rect id="opt-box-end" data-node="wake" x="400" y="88" width="200" height="80" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+  <text x="410" y="118" data-en="The wake stops" data-hant="喚醒停止" data-hans="唤醒停止">The wake stops</text>
+  <path data-edge="bound-to-quiet" d="M244 64 L400 118" stroke="var(--accent)" fill="none" marker-end="url(#opt-arrow)"/>
+  <path data-edge="quiet-to-end" d="M244 190 L400 138" stroke="var(--muted)" fill="none" marker-end="url(#opt-arrow)"/>
+</svg>
+SVG
+
+good_figures() {  # -> the whole Figures body, with $1 substituted for the svg when given
+  printf '%s\n' \
+    '### Where the two options differ' \
+    'figure: opt' \
+    'caption: Both options end at the same place; only the left column differs.' \
+    '' \
+    "${1-$GOOD_SVG}" \
+    '' \
+    '- edge bound-to-quiet: measured in tests/fm-contributions.test.sh:120' \
+    '- edge quiet-to-end: the merged-record rule at bin/fm-contributions.sh:190'
+}
+
+fill_figures() {  # <packet> [figures-body]: replace the scaffolded Figures section
+  local body=${2-}
+  [ -n "$body" ] || body=$(good_figures)
+  FIG_BODY="$body" python3 - "$1" <<'PY'
+import os, re, sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+body = os.environ["FIG_BODY"]
+if "## Figures" in s:
+    s = re.sub(r"## Figures\n.*?\n## Evidence", lambda m: "## Figures\n\n" + body + "\n\n## Evidence", s, flags=re.S)
+else:
+    s = s.replace("\n## Evidence", "\n## Figures\n\n" + body + "\n\n## Evidence", 1)
+p.write_text(s)
+PY
+}
+
+# Refuse the good figure with one clause broken; every case must name its reason.
+assert_figure_refused() {  # <home> <packet> <figures-body> <expected> <why>
+  local out rc
+  fill_figures "$2" "$3"
+  set +e; out=$(run_packet "$1" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted $5"
+  assert_contains "$out" "$4" "verify refused $5 for the wrong reason: $out"
+}
+
 GOOD_DECISION='{"key":"pk-1","title":{"en":"Raise the bound","hant":"拉高上限"},"decide":"Ship which fix first?","if_nothing":"the wake keeps coming","reversible":"yes","risk":"low","options":[{"value":"bound","label":"Raise to 15 s","consequence":"failures stop"},{"value":"quiet","label":{"en":"Stop waking on merged"},"consequence":"noise stops, open PRs still fail"}],"recommend_value":"bound","recommend_why":"measured latency is 0.9 to 4.4 s"}'
 
 test_scaffold_is_generated_from_the_worktree_and_refuses_to_overwrite() {
@@ -176,6 +234,7 @@ test_verify_checks_the_decision_block_field_by_field() {
   assert_grep "fm-packet-decision.v1" "$packet" "a needs-decision packet has no decision block"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
   out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a good decision packet: $out"
 
   bad=$(printf '%s' "$GOOD_DECISION" | jq -c '.recommend_value = "other"')
@@ -207,6 +266,473 @@ test_verify_checks_the_decision_block_field_by_field() {
   pass "verify checks the decision block field by field"
 }
 
+test_verify_holds_a_figure_to_the_svg_contract() {
+  local home packet out svg body styled foreign wrapped plain masked cursored n
+  home=$(make_home figures)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  assert_grep "## Figures" "$packet" "a needs-decision scaffold has no Figures section"
+  assert_grep "diagram-design skill" "$packet" "the scaffold does not point at the drawing skill"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+
+  # An unfilled Figures section is refused even once the prose is written -
+  # by the placeholder check that owns it, and by nothing else: the drawing's
+  # own {FILL} slot must not be reported as a stray line to move elsewhere.
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  assert_contains "$out" "placeholders remain" "the figure skeleton was not caught: $out"
+  case "$out" in
+    *"is not part of the figure"*)
+      fail "verify told the worker to move the drawing's own placeholder: $out" ;;
+  esac
+
+  fill_figures "$packet"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a good trilingual figure: $out"
+  assert_contains "$out" "packet: ok" "verify did not accept the figure: $out"
+  # verify owns the mechanical half only; it must not imply it read the drawing.
+  assert_contains "$out" "figures: 1 checked against the contract; legibility is not" \
+    "verify let a passing contract stand in for a legible drawing: $out"
+
+  # 1. every text node carries all three languages
+  svg=${GOOD_SVG/ data-hans=\"唤醒停止\"/}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a <text> is missing data-hans" "a text node with no 简体"
+
+  # 2. colours come from the page's variables, never a baked-in literal
+  svg=${GOOD_SVG/fill=\"var(--accent-tint)\"/fill=\"#f4d8c9\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'colours come from the page' "a hex fill"
+  svg=${GOOD_SVG/style=\"font-family:var(--sans)\"/style=\"font-family:var(--sans);fill:rgb(20,20,20)\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'styles fill: rgb(20,20,20)' "an rgb() fill in a style attribute"
+  # A variable the page never binds resolves to nothing and the shape falls
+  # back to black on --card, so only the bound palette passes - and the
+  # refusal names the palette, since "use var(--...)" is what was written.
+  svg=${GOOD_SVG/fill=\"var(--accent-tint)\"/fill=\"var(--ink)\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'the page binds no --ink' "a variable outside the page's palette"
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'the palette is --fg, --muted' "a palette refusal that does not say what to use"
+
+  # A url() in a style declaration fetches like an href does, so it points at
+  # a same-document fragment or the page stops rendering offline.
+  cursored='style="cursor:url(//evil.example/c.cur),auto"'
+  svg=${GOOD_SVG/style=\"font-family:var(--sans)\"/"$cursored"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a url() in a drawing points at a same-document #fragment" "a style that fetches off-origin"
+  # The presentation-attribute form of the same property fetches the same way.
+  filtered='filter="url(//evil.example/f.svg#blur)" id="opt-box-end"'
+  svg=${GOOD_SVG/id=\"opt-box-end\"/"$filtered"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a url() in a drawing points at a same-document #fragment" "a filter attribute that fetches off-origin"
+  # SMIL sets the attribute at runtime, so an animation aimed at href reaches
+  # the scheme the clause above refuses; motion itself stays welcome.
+  animated='<a href="#opt-box-a"><set attributeName="href" to="javascript:alert(1)" begin="0s"/><rect id="opt-box-a" data-node="bound" x="24" y="24" width="220" height="80" fill="var(--card)"/></a><rect id="opt-box-a2"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-a\"/"$animated"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'animates href to "javascript:alert(1)"' "an animation that repoints a link at a script"
+  # An animation that moves a shape, or repoints a reference inside the
+  # document, is what the drawing tool emits and is not refused.
+  moved='<animate attributeName="opacity" from="0" to="1" begin="0s" dur="1s"/><rect id="opt-box-a"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-a\"/"$moved"}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an animation that moves a shape: $out"
+  local_ref='<set attributeName="href" to="#opt-box-end" begin="0s"/><rect id="opt-box-a"'
+  svg=${GOOD_SVG/<rect id=\"opt-box-a\"/"$local_ref"}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an animation onto a same-document fragment: $out"
+  # The same-document form every drawing already uses is untouched.
+  fill_figures "$packet"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused url(#opt-arrow): $out"
+
+  # A bound variable written with a fallback is refused for what is wrong with
+  # it, not for a palette it is already in.
+  svg=${GOOD_SVG/fill=\"var(--card-2)\"/fill=\"var(--card-2, #fff)\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'has to be exactly var(--card-2)' "a bound variable carrying a fallback"
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  case "$out" in
+    *"binds no --card-2"*) fail "the refusal called a bound variable unbound: $out" ;;
+  esac
+  # Every attribute clause must see an unquoted value too, or it is one
+  # missing pair of quotes away from being unenforced.
+  svg=${GOOD_SVG/fill=\"var(--accent-tint)\"/fill=#f4d8c9}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'colours come from the page' "an unquoted hex fill"
+  svg=${GOOD_SVG/<rect id=\"opt-box-end\"/<rect onload=alert(1) id=\"opt-box-end\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "inline onload handler" "an unquoted event handler"
+
+  # 3. an identity that is claimed is the source's latin name. A shape that
+  # claims none stands for nothing a reader selects - a label mask, a panel -
+  # and the comparison rule, not a per-tag demand, is what makes the options
+  # appear.
+  svg=${GOOD_SVG/data-node=\"wake\"/data-node=\"喚醒停止\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'has data-node="喚醒停止"' "an identity written in the reader's wording"
+  masked='<rect id="opt-label-mask" x="250" y="100" width="120" height="20" fill="var(--card)"/>'
+  svg=${GOOD_SVG/<path data-edge=\"bound-to-quiet\"/$masked<path data-edge="bound-to-quiet"}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify demanded an identity from a label mask: $out"
+
+  # 4. ids are prefixed per figure, so two figures on one page cannot collide
+  svg=${GOOD_SVG/id=\"opt-arrow\"/id=\"arrow\"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    'is not prefixed "opt-"' "an unprefixed marker id"
+  # The prefix only separates two drawings while each owns its own slug.
+  body=$(printf '%s\n\n%s\n' "$(good_figures)" "$(good_figures)")
+  assert_figure_refused "$home" "$packet" "$body" \
+    "already the slug of figure 1" "two figures declaring the same slug"
+
+  # 5. no external font reference, no script, no <style> element
+  svg=${GOOD_SVG/<title id=\"opt-title\">/<style>@import url(https://fonts.googleapis.com/css2?family=Geist);</style><title id=\"opt-title\">}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "references an external font" "an imported web font"
+  # An inline <style> is not scoped to its svg: it restyles the whole served
+  # page, so a drawing carries none at all.
+  styled='<style>.pk-section{display:none}rect{fill:red}</style><title id="opt-title">'
+  svg=${GOOD_SVG/<title id=\"opt-title\">/"$styled"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "the svg carries a <style>" "a style element that restyles the page"
+  svg=${GOOD_SVG/<title id=\"opt-title\">/<script>void 0;<\/script><title id=\"opt-title\">}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "the svg carries a <script>" "a script inside the drawing"
+  # The language switch replaces a label's whole text content, so a <tspan>
+  # inside a <text> is destroyed the first time the captain switches.
+  plain='<text x="34" y="54" style="font-family:var(--sans)" data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限">Raise the bound</text>'
+  wrapped='<text x="34" y="54" data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限"><tspan x="34" dy="0">Raise</tspan><tspan x="34" dy="16">the bound</tspan></text>'
+  svg=${GOOD_SVG/"$plain"/"$wrapped"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a <text> has element children" "a label split into tspans"
+
+  # A <foreignObject> holds HTML the language clause cannot read, so its labels
+  # would stay English when the captain switches the page.
+  foreign='<foreignObject x="0" y="0" width="90" height="20"><div style="font-size:12px">SparkSQL</div></foreignObject><title id="opt-title">'
+  svg=${GOOD_SVG/<title id=\"opt-title\">/"$foreign"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "the svg carries a <foreignObject>" "HTML labels the language switch cannot reach"
+  # The svg rides the page unescaped, so a link scheme the page's own prose
+  # refuses must not reach it through a drawing, and nothing may fetch on open.
+  svg=${GOOD_SVG/<rect id=\"opt-box-end\"/<a href=\"javascript:alert(1)\"><rect id=\"opt-box-end\"}
+  svg=${svg/<\/svg>/<\/a><\/svg>}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "only an <a> may leave the page" "a javascript: link inside the drawing"
+  svg=${GOOD_SVG/<title id=\"opt-title\">/<image href=\"https:\/\/evil.example\/beacon.png\" x=\"0\" y=\"0\"\/><title id=\"opt-title\">}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "same-document #fragment" "an image fetched from the network"
+
+  # 6. a drawn connector needs an identity, and every identity needs evidence
+  svg=${GOOD_SVG/ data-edge=\"quiet-to-end\"/}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "draws an arrow with no data-edge" "an unnamed connector"
+  body=$(good_figures | grep -v 'edge quiet-to-end:')
+  assert_figure_refused "$home" "$packet" "$body" \
+    "has no '- edge quiet-to-end:" "a connector with no evidence line"
+  body=$(good_figures)$'\n''- edge ghost: nothing draws this'
+  assert_figure_refused "$home" "$packet" "$body" \
+    'evidence names edge "ghost"' "evidence for a line the drawing does not have"
+
+  # No figure clause reads above the first '### ', so a drawing parked there
+  # would reach the page with nothing having checked it - and render escapes
+  # it into source text rather than drawing it.
+  body=$(printf '%s\n\n%s\n' "$GOOD_SVG" "$(good_figures)")
+  assert_figure_refused "$home" "$packet" "$body" \
+    "a drawing sits above the first '### ' figure" "a drawing parked above the first figure"
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  n=$(printf '%s\n' "$out" | grep -c "sits above the first" || true)
+  [ "$n" -eq 1 ] || fail "the parked drawing was reported $n times, once per line of its markup: $out"
+  body=$(printf '%s\n\n%s\n' 'Drawn through the diagram-design skill; look before you report.' "$(good_figures)")
+  assert_figure_refused "$home" "$packet" "$body" \
+    "sits above the first '### ' figure" "prose parked above the first figure"
+
+  # A drawing whose closing tag was lost has one true reason, and a worker is
+  # told to fix what verify reports: reporting its every line as prose to move
+  # elsewhere would have it delete the drawing line by line.
+  body=$(good_figures "${GOOD_SVG/<\/svg>/}")
+  assert_figure_refused "$home" "$packet" "$body" \
+    "carries 0 inline <svg> block(s)" "a drawing whose closing tag was lost"
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  case "$out" in
+    *"is not part of the figure"*)
+      fail "verify reported the drawing's own lines as prose to move elsewhere: $out" ;;
+  esac
+
+  # Nothing renders a line the figure body does not recognise, so verify
+  # refuses it by name rather than letting it verify and then vanish.
+  body=$(good_figures)$'\n''The left path re-uses the existing queue; the right one adds a second.'
+  assert_figure_refused "$home" "$packet" "$body" \
+    'The left path re-uses the existing queue' "a stray sentence inside a figure body"
+  assert_figure_refused "$home" "$packet" "$body" \
+    "goes in the caption" "a stray sentence without saying where it belongs"
+  body=$(printf '%s\n%s\n' "$(good_figures)" 'caption: and a second caption nothing reads')
+  assert_figure_refused "$home" "$packet" "$body" \
+    "'caption:' is given twice" "a figure declaring one key twice"
+
+  # A figure must still declare its slug, role and caption.
+  body=$(good_figures | grep -v '^caption:')
+  assert_figure_refused "$home" "$packet" "$body" \
+    "'caption:' is missing" "a figure with no caption"
+  pass "verify holds a figure to the SVG contract clause by clause"
+}
+
+test_a_needs_decision_packet_owes_one_figure_comparing_every_option() {
+  local home packet out body rc rect_b circle_b under
+  home=$(make_home compare)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+
+  # One drawing per option buries the only question the reader has: a figure
+  # naming neither option is refused before any per-option wording is tried.
+  body=$(good_figures "${GOOD_SVG//data-node=\"bound\"/data-node=\"other\"}")
+  body=${body//data-node=\"quiet\"/data-node=\"elsewhere\"}
+  assert_figure_refused "$home" "$packet" "$body" \
+    "no figure puts the options together" "a packet whose figures name no option at all"
+
+  # An option named on any shape counts: the contract requires data-node on
+  # rect and polygon, it does not confine the comparison to those two.
+  rect_b='<rect id="opt-box-b" data-node="quiet" x="24" y="150" width="220" height="80" rx="8" fill="var(--card-2)" stroke="var(--rule)"/>'
+  circle_b='<circle id="opt-box-b" data-node="quiet" cx="134" cy="190" r="40" fill="var(--card-2)" stroke="var(--rule)"/>'
+  fill_figures "$packet" "$(good_figures "${GOOD_SVG/"$rect_b"/"$circle_b"}")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an option drawn as a circle: $out"
+
+  # An option value the decision block accepts is always drawable as the
+  # matching identity: the two are one name, not two spellings of one.
+  under=$(printf '%s' "$GOOD_DECISION" | jq -c '.options[0].value = "_baseline" | .recommend_value = "_baseline"')
+  fill_decision "$packet" "$under"
+  fill_figures "$packet" "$(good_figures "${GOOD_SVG/data-node=\"bound\"/data-node=\"_baseline\"}")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused an option value it accepts in the decision block: $out"
+  fill_decision "$packet" "$GOOD_DECISION"
+
+  # A comparison that omits one option is not a comparison, and it is named.
+  body=$(good_figures "${GOOD_SVG/data-node=\"quiet\"/data-node=\"other\"}")
+  assert_figure_refused "$home" "$packet" "$body" \
+    'draws no shape with data-node="quiet"' "a comparison figure missing an option"
+
+  # There is no line that excuses the figures: a section that declares the
+  # drawing skill absent still owes the drawing.
+  fill_figures "$packet" 'no-figures: the diagram-design skill is not installed in this worker environment'
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  assert_contains "$out" "carries no '### ' figure" "a declared absence bought a pass: $out"
+
+  # A figure that carries no drawing at all is refused, not swallowed: the
+  # comparison rule must not crash past the problems the figure already has.
+  fill_figures "$packet" "$(good_figures '')"
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "verify accepted a needs-decision figure with no drawing in it: $out"
+  assert_contains "$out" "carries 0 inline <svg> block(s)" "the missing drawing was swallowed: $out"
+  case "$out" in *"packet: ok"*) fail "a crashed figures check read as a verified packet: $out" ;; esac
+
+  # A needs-decision packet that simply drops the section is refused.
+  python3 - "$packet" <<'PY'
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(re.sub(r"## Figures\n.*?\n## Evidence", "## Evidence", s, flags=re.S))
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); set -e
+  assert_contains "$out" "there is no '## Figures' section" "a decision with no figures at all was accepted: $out"
+  pass "a needs-decision packet owes one figure that names every option"
+}
+
+test_a_done_packet_is_not_refused_for_having_no_figures() {
+  local home packet out rc
+  home=$(make_home done-figures)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  assert_no_grep "## Figures" "$packet" "a done scaffold grew a Figures section it does not owe"
+  fill_prose "$packet"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a done packet with no figures: $out"
+  assert_contains "$out" "packet: ok" "the packet every worker already writes stopped verifying: $out"
+  case "$out" in *"legibility is not"*) fail "verify talked about figures a packet does not have: $out" ;; esac
+
+  # A done packet may carry figures, and they are held to the same contract.
+  fill_figures "$packet"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a good figure on a done packet: $out"
+  # A section is the drawings in it, whatever the packet kind: an empty one
+  # says a worker meant to draw and did not, and it is refused rather than
+  # counted as nothing.
+  python3 - "$packet" <<'PY2'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+p.write_text(re.sub(r"## Figures\n.*?\n## Evidence", "## Figures\n\n## Evidence", s, flags=re.S))
+PY2
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an empty Figures section on a done packet verified: $out"
+  assert_contains "$out" "carries no '### ' figure" "the empty section was not named: $out"
+  fill_figures "$packet"
+
+  assert_figure_refused "$home" "$packet" "$(good_figures "${GOOD_SVG/fill=\"var(--card)\"/fill=\"#ffffff\"}")" \
+    "colours come from the page" "a broken figure on a done packet"
+
+  # render routes a '## Figures ' heading through figures_html and inlines its
+  # svg unescaped, so verify must hold that same heading to the contract; a
+  # gate stricter than the renderer it guards is a way past every clause.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("\n## Figures\n", "\n##  Figures \n"))
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a whitespace-padded Figures heading skipped the contract: $out"
+  assert_contains "$out" "colours come from the page" "the padded heading was not checked: $out"
+
+  # python splits lines on more than \n, so a heading behind a form feed is a
+  # Figures section to the checker and to render. The shell gate in front of
+  # the checker reads whole physical lines and must never be the reader that
+  # misses it, or the drawing reaches the page with nothing having read it.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("\n##  Figures \n", "\n\f## Figures\n"))
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a Figures heading behind a form feed skipped the contract: $out"
+  assert_contains "$out" "colours come from the page" "the form-feed heading was not checked: $out"
+  pass "a done packet needs no figures and is held to the contract for the ones it has"
+}
+
+test_a_packet_carries_one_figures_section_and_render_publishes_nothing_else() {
+  local home packet out rc
+  home=$(make_home second-figures)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_figures "$packet"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused one good figures section: $out"
+
+  # A second '## Figures' heading is a second set of drawings the page has no
+  # place for - it would render under the same section id - so the packet is
+  # refused rather than the extra section being inlined on verify's word.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+second = """
+## Figures
+
+### A second drawing nobody checked
+figure: two
+caption: The section a worker adds when the first one filled up.
+
+<svg role="img" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg"><script>alert(document.title);</script><rect id="nope" fill="#ff0000" x="0" y="0" width="4" height="4"/><a href="javascript:alert(1)"><text x="1" y="8">English only</text></a></svg>
+"""
+p.write_text(s.rstrip("\n") + "\n" + second)
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a second figures section verified: $out"
+  assert_contains "$out" "declares 2 '## Figures' sections" "the second section was not named: $out"
+  # render publishes nothing a verify refused, so that section never reaches
+  # the page it would otherwise be inlined into unescaped.
+  set +e; out=$(run_packet "$home" render pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "render published a packet verify refused: $out"
+  assert_absent "$home/data/pk-1/packet.html" "render wrote a page for a refused packet"
+
+  # The Evidence check counts the lines between its heading and the next one,
+  # so the reader that finds that boundary has to be the one verify reads the
+  # headings with: an empty Evidence section followed by a drawing is still a
+  # skeleton, however many svg lines sit under the heading after it.
+  home=$(make_home empty-evidence)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  python3 - "$packet" "$(good_figures)" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+s = re.sub(r"## Evidence\n.*?\n## How", "## Evidence\n\n## Figures\n\n" + sys.argv[2] + "\n\n## How", s, flags=re.S)
+p.write_text(s)
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an empty Evidence section followed by figures verified: $out"
+  assert_contains "$out" "'Evidence' is empty" "the emptied Evidence section was not caught: $out"
+  pass "a packet carries one figures section and render publishes nothing verify refused"
+}
+
+test_the_captains_page_carries_only_what_the_worker_wrote() {
+  local home packet page leftover paras
+  home=$(make_home scaffold-prose)
+  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+
+  # Every line the scaffold writes into the Figures section is a placeholder
+  # the worker is asked to replace; it authors no prose of its own, so nothing
+  # the fleet says to itself can survive onto the captain's decision surface.
+  leftover=$(python3 - "$packet" <<'PY'
+import pathlib, sys
+inside, out = False, []
+for l in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if l.startswith("## "):
+        inside = l[3:].strip() == "Figures"
+    elif inside and l.strip() and "{FILL" not in l:
+        out.append(l)
+print("\n".join(out))
+PY
+)
+  [ -z "$leftover" ] || fail "the scaffold wrote Figures prose nothing asks the worker to remove: $leftover"
+
+  fill_prose "$packet"
+  fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed"
+  # The section carries the drawings, their headings and their captions. Prose
+  # above the first figure would arrive as a paragraph; there is none to arrive.
+  paras=$(python3 - "$page" <<'PY'
+import pathlib, re, sys
+m = re.search(r'<section[^>]*id="s_figures".*?</section>', pathlib.Path(sys.argv[1]).read_text(), re.S)
+print(m.group(0).count("<p>") if m else "no-figures-section")
+PY
+)
+  [ "$paras" = 0 ] || fail "the rendered figures section carries $paras paragraph(s) beside the drawings"
+  pass "the captain's page carries only what the worker wrote"
+}
+
+# diagram-design nests icon <svg> elements inside the drawing - its own
+# examples ship a dozen - so the figure below is what unmodified skill output
+# looks like once its colours are edited to the page's palette.
+read -r -d '' NESTED_ICON <<'SVG' || true
+  <svg x="34" y="200" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.5" aria-hidden="true">
+    <circle cx="12" cy="12" r="9"/>
+    <path d="M3.6 9h16.8M3.6 15h16.8"/>
+  </svg>
+SVG
+
+test_a_drawing_that_nests_icon_svgs_is_one_figure_checked_end_to_end() {
+  local home packet page out svg inlined
+  home=$(make_home nested-svg)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  page="$home/data/pk-1/packet.html"
+  fill_prose "$packet"
+
+  # One drawing, whatever it nests: the icon is part of the element, not a
+  # second figure, and not a place the checker stops reading.
+  svg=${GOOD_SVG/<\/svg>/$NESTED_ICON$'\n'</svg>}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a drawing with a nested icon: $out"
+  assert_contains "$out" "figures: 1 checked against the contract" "the nested icon was counted as a second figure: $out"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed on a nested icon"
+  # The whole element reaches the page, not the bytes before the icon's </svg>.
+  inlined=$(python3 - "$page" <<'PY'
+import pathlib, re, sys
+m = re.search(r'<div class="pk-fig__svg">(.*?)</div>', pathlib.Path(sys.argv[1]).read_text(), re.S)
+svg = m.group(1) if m else ""
+print(svg.count("<svg"), svg.count("</svg>"), "yes" if "opt-box-end" in svg else "no")
+PY
+)
+  [ "$inlined" = "2 2 yes" ] || fail "the page carries a truncated drawing instead of the whole element: $inlined"
+
+  # A drawing nests as many icons as it needs; none of them is a second figure.
+  svg=${GOOD_SVG/<\/svg>/$NESTED_ICON$'\n'$NESTED_ICON$'\n'</svg>}
+  fill_figures "$packet" "$(good_figures "$svg")"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a drawing with two nested icons: $out"
+  assert_contains "$out" "figures: 1 checked against the contract" "two nested icons were counted as figures: $out"
+
+  # Nothing past the icon goes unread: the clause that would have been in the
+  # unchecked tail still refuses.
+  svg=${GOOD_SVG/<\/svg>/$NESTED_ICON$'\n'<text x=\"500\" y=\"240\" data-en=\"After the icon\">After the icon</text>$'\n'</svg>}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "a <text> is missing data-hant, data-hans" "a broken node after the nested icon"
+  pass "a drawing that nests icon svgs is one figure, checked and rendered end to end"
+}
+
 test_card_emits_a_board_ready_decision_item() {
   local home out packet
   home=$(make_home card)
@@ -214,6 +740,7 @@ test_card_emits_a_board_ready_decision_item() {
   packet="$home/data/pk-1/packet.md"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
   out=$(run_packet "$home" card pk-1) || fail "card failed: $out"
   printf '%s' "$out" | jq -e '
     .key == "pk-1" and .type == "decision" and .repo == "repo"
@@ -313,13 +840,14 @@ PY
 }
 
 test_render_decision_card_answers_the_five_questions() {
-  local home packet page
+  local home packet page out
   home=$(make_home render-decision)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
   page="$home/data/pk-1/packet.html"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
   run_packet "$home" render pk-1 >/dev/null || fail "render failed"
   assert_no_grep '{FILL' "$page" "a placeholder survived into the page"
   assert_no_external_fetch "$page"
@@ -344,8 +872,32 @@ test_render_decision_card_answers_the_five_questions() {
   assert_grep 'data-en="Raise the bound" data-hant="拉高上限" data-hans="拉高上限"' "$page" "the trilingual title lost a language or hans did not fall back to hant"
   assert_no_grep 'data-en="Ship which fix first?"' "$page" "a plain string grew language attributes"
   assert_no_grep 'pk-raw-json' "$page" "the card dumped the decision JSON a second time"
-  [ "$(section_order "$page")" = 'id="s_changed" id="s_session" id="s_decision" id="s_evidence" id="s_more" ' ] \
+  [ "$(section_order "$page")" = 'id="s_changed" id="s_session" id="s_decision" id="s_figures" id="s_evidence" id="s_more" ' ] \
     || fail "sections are missing or out of packet order: $(section_order "$page")"
+  # The drawing rides the page as inline SVG, not as escaped text, and the
+  # language switch reaches its labels like everything else on the page.
+  assert_grep '<figure class="pk-fig" id="fig-opt">' "$page" "the figure did not render"
+  assert_grep '<rect id="opt-box-a" data-node="bound"' "$page" "the svg was not inlined"
+  assert_no_grep '&lt;svg' "$page" "the svg was escaped into text instead of inlined"
+  assert_grep 'data-hant="拉高上限" data-hans="拉高上限">Raise the bound</text>' "$page" "the drawing lost its languages"
+  assert_grep 'Both options end at the same place' "$page" "the figure lost its caption"
+  # The per-connector evidence is an integrity check verify owns, not page
+  # content: it never reaches the captain's page.
+  assert_no_grep 'pk-fig__edges' "$page" "the figure rendered an edge-evidence list"
+  assert_no_grep '<code>bound-to-quiet</code>' "$page" "an edge id rendered as page content"
+  assert_no_grep '每條線的依據' "$page" "the edge-evidence heading survived in the page's chrome"
+  assert_grep '--accent-tint: var(--rust-050)' "$page" "the page does not bind the palette figures draw against"
+
+  # A worker who drops the section's preamble leaves the '### ' heading on the
+  # first line of the body. verify reads that as a figure, so render must too.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("## Figures\n\n### ", "## Figures\n### "))
+PY
+  run_packet "$home" verify pk-1 >/dev/null || fail "verify refused a Figures section that opens on its heading"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed on a Figures section that opens on its heading"
+  assert_grep '<rect id="opt-box-a" data-node="bound"' "$page" "the first figure's svg was not inlined"
+  assert_no_grep '&lt;svg' "$page" "the first figure's svg was escaped into prose"
   pass "the rendered decision card answers all five questions and the recommendation"
 }
 
@@ -358,6 +910,7 @@ test_serve_opens_the_page_under_a_stable_name_and_the_card_links_it() {
   page="$home/data/pk-1/packet.html"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
   # Before any session is open, the card carries no packet link.
   out=$(run_packet_lavish "$home" card pk-1) || fail "card failed: $out"
   printf '%s' "$out" | jq -e 'has("packet_url") | not' >/dev/null || fail "card linked a page nobody served: $out"
@@ -396,6 +949,7 @@ test_name_support_probe_never_lists_before_the_session_is_opened() {
   packet="$home/data/pk-1/packet.md"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
+  fill_figures "$packet"
   run_packet_lavish "$home" serve pk-1 >/dev/null || fail "serve failed"
   # A listing is the read serve's open/reopen decision consumes, so nothing
   # serve asks before opening the session may be one. Pinning the FIRST call
@@ -410,6 +964,12 @@ test_name_support_probe_never_lists_before_the_session_is_opened() {
 test_scaffold_is_generated_from_the_worktree_and_refuses_to_overwrite
 test_verify_refuses_a_skeleton_and_accepts_a_filled_packet
 test_verify_checks_the_decision_block_field_by_field
+test_verify_holds_a_figure_to_the_svg_contract
+test_a_needs_decision_packet_owes_one_figure_comparing_every_option
+test_a_done_packet_is_not_refused_for_having_no_figures
+test_a_packet_carries_one_figures_section_and_render_publishes_nothing_else
+test_the_captains_page_carries_only_what_the_worker_wrote
+test_a_drawing_that_nests_icon_svgs_is_one_figure_checked_end_to_end
 test_card_emits_a_board_ready_decision_item
 test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet

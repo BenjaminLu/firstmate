@@ -28,7 +28,8 @@
 #            overwritten by a re-run.
 # verify     Refuse a packet that is still a skeleton: a `{FILL` placeholder
 #            left anywhere, fewer than three lines under "What only this
-#            session knows", an empty "Evidence" section, or, for
+#            session knows", an empty "Evidence" section, a "Figures" section
+#            whose drawings break the contract below, or, for
 #            kind=needs-decision, a missing or malformed decision block. The
 #            decision block is a fenced ```json fm-packet-decision.v1 object:
 #              key (the task id), title, decide, if_nothing, reversible
@@ -38,7 +39,135 @@
 #              recommend_why, optional close (done|release).
 #            Copy fields are a plain string or an {en, hant?, hans?} object.
 #            Prints `packet: ok <path>` on success; each problem goes to
-#            stderr and the exit is 1.
+#            stderr and the exit is 1. Checking a "Figures" section needs
+#            python3; a packet with no such section never calls it.
+#
+# The "Figures" section. A decision the captain cannot picture is a title and
+# three labels. The figures are the drawings that show what the options
+# actually differ in, and they live in the packet beside the decision so one
+# page carries both. The section is optional for kind=done - a done packet is
+# never refused for having none - and required for kind=needs-decision, which
+# must also carry one drawing that puts every option together (below). Each
+# figure is:
+#
+#   ### <heading>
+#   figure: <slug>                 # lowercase id prefix for every id in the svg
+#   caption: <one sentence - what to look at, and what the drawing proves>
+#
+#   <svg ...> ... </svg>
+#
+#   - edge <data-edge id>: <what proves this connector>
+#
+# One top-level `<svg>` per figure. diagram-design nests icon `<svg>` elements
+# inside the drawing and those are ordinary content: they are counted as part
+# of the one element, and every clause below reads them like the rest of it.
+#
+# The drawing is produced through the diagram-design skill, never hand-written
+# SVG. There is no line a worker can write to be excused the figures: an
+# environment that genuinely cannot draw is a blocker escalated to firstmate,
+# who can see whether the drawing was truly impossible. That skill emits a
+# standalone HTML file whose SVG carries its own hex palette and a web-font
+# link, so the figure is the `<svg>` lifted out of it and EDITED to the
+# contract below - a straight paste is refused, by design. The contract is
+# baton's, from its references/diagrams.md "The embedding contract" and
+# spec.md "The SVG contract" (whose heading says the same thing: what
+# diagram-design output must be edited to); it is not a parallel rule set,
+# and verify enforces the clauses a script can actually check:
+#
+#   - every `<text>` carries data-en, data-hant and data-hans, so a language
+#     switch re-labels the drawing instead of leaking English onto the
+#     Chinese page, and carries no element children: the switch replaces a
+#     label's whole text content, so a `<tspan>` inside it is destroyed the
+#     first time the captain switches. A label that needs two lines is two
+#     positioned `<text>` elements, which also keeps the geometry from
+#     drifting between languages
+#   - no baked-in colour: fill, stroke, color, stop-color, flood-color and
+#     lighting-color - as attributes or inside style="" - may only be
+#     var(--...), none,
+#     currentColor, transparent, inherit or url(#...), so the drawing
+#     inherits the page's theme instead of fighting it.
+#     The rendered page binds the palette a figure draws against: --fg
+#     --muted --soft --card --card-2 --bg --rule --rule-strong --accent
+#     --accent-tint --amber --seal --ok --link, plus --sans and --mono for
+#     font-family. Figures sit on --card, so paper and label masks are
+#     fill="var(--card)"
+#   - every shape that stands for something the reader might select carries
+#     data-node, the latin identity from the source, never the reader's
+#     wording. Which shapes those are is a question about meaning, and a
+#     script cannot read meaning: a label mask and a panel background are
+#     rects that stand for nothing, and demanding an invented identity from
+#     them would only feed the comparison rule below a name no option has.
+#     So verify checks the identities that ARE there - each must be a latin
+#     id - and leaves the requirement itself to the comparison rule, which a
+#     worker cannot satisfy by decorating
+#   - every id inside the svg is prefixed `<slug>-`, and no two figures in one
+#     packet share a slug, so two figures inlined on one page cannot collide
+#     over a marker id and break each other's arrows
+#   - no external font reference, and no <script>, <style>, <foreignObject> or
+#     on* handler: the page must render offline inside a sandboxed iframe, and
+#     the drawing is static markup. An inline <style> is not scoped to the svg
+#     it sits in - it restyles the whole served page - so a drawing may not
+#     carry one at all; the `style="..."` attribute form the contract asks for
+#     is what the per-attribute check reads. A <foreignObject> is refused for
+#     both reasons at once: it holds HTML the language clause cannot read, so
+#     its labels would stay English when the page switches, and its layout is
+#     the page's rather than the drawing's. Labels are <text> nodes, so a
+#     diagram-design type that emits one is re-drawn rather than lifted.
+#     For the same reason every href, xlink:href
+#     and src points at a same-document `#fragment`; only an `<a>` may leave
+#     the page, and only through http, https or mailto - the schemes the
+#     page's prose links already allow, since the svg rides the page unescaped.
+#     Motion is welcome, but a SMIL `<animate>`, `<set>`, `<animateTransform>`
+#     or `<animateMotion>` aimed at one of those attributes reaches the same
+#     place the attribute does, so its `to`, `from` and `values` are held to
+#     the same rule
+#   - every connector that draws an arrow (marker-start or marker-end)
+#     carries data-edge, and every data-edge has its own evidence line saying
+#     what proves that line. This is baton's figure rule, from its
+#     references/spec.md figure section: a drawn connector without evidence
+#     refuses the build, so the drawing cannot assert a relationship nobody
+#     can trace. Those lines are an integrity check, not page content - they
+#     never render, exactly as baton has it
+#   - at most one `## Figures` section: a second one is a second drawing set
+#     the page has no place for, and the page gives the section one id
+#   - a figure body carries figure:, caption:, one drawing and its `- edge`
+#     lines, and nothing else, and the section carries nothing above its first
+#     `### ` heading. Nothing renders a stray line, and a sentence that
+#     verifies and then never reaches the page is worse than a refusal: one
+#     about the drawing goes in the caption, anything longer in the packet
+#     section it belongs to. Above the first heading the cost is higher still,
+#     since no figure clause reads there at all
+#   - a url() in any attribute value points at a same-document `#fragment`,
+#     like href and src: a protocol-relative or absolute one fetches when the
+#     page opens or on hover, from a page that must render offline
+#
+# The figure's `### ` heading and its caption render as the worker wrote them,
+# in one language, like the packet's other prose - a decided scope boundary,
+# not an oversight. The captain's trilingual surface is the bearings board,
+# where this packet is rendered inside its card; the packet page's own
+# language story belongs to that task, and a trilingual caption sitting above
+# single-language packet prose would be the inconsistency, not the fix.
+# A drawing's `<title>` and `<desc>` are the same residual: they are the
+# accessible name the drawing tool generated, kept as baton says to keep it,
+# and they announce in whatever language the worker wrote. Every `<text>` the
+# reader can actually read carries all three, which is the clause above and
+# the one baton states.
+#
+# verify owns the mechanical half of that contract and only that half. It
+# checks absences a script is good at - a missing language attribute, a baked
+# colour, an unprefixed id, a connector with no evidence - and it never opens
+# the drawing. Whether the picture is legible and correct - a label clipped by
+# its box, two boxes overlapping, an arrow pointing at the wrong thing, a
+# structure that does not match the code - is checked by eye, in a browser, on
+# the rendered page. `packet: ok` means the contract held, never that the
+# drawing reads.
+#
+# For kind=needs-decision, verify additionally requires ONE figure carrying a
+# data-node for EVERY option value in the decision block. One drawing per
+# option buries the only question the reader has - where the options differ,
+# and where they become the same thing - so a drawing that names all but one
+# option is refused, naming the one it left out. Nothing labels that figure as
+# the comparison: naming every option is what makes it one.
 # card       Verify, then print the fm-bearings-board.v1 Captain's Call card
 #            composed from the decision block, ready to drop into a board
 #            payload. A copy object without `hant` is flattened to its `en`
@@ -56,7 +185,8 @@
 #            nothing, reversible, risk) plus the recommendation and why, the
 #            markdown sections converted by a small stdlib-only python3
 #            converter (headings, lists, fenced code, inline code, bold,
-#            links), a copy-the-context button that puts the raw markdown on
+#            links), the "Figures" section's drawings inlined with their
+#            captions, a copy-the-context button that puts the raw markdown on
 #            the clipboard with a selected-text fallback for sandboxed
 #            iframes, and an EN / 繁體 / 简体 switch for the page chrome that
 #            shares the board's stored choice. Copy objects in the decision
@@ -89,6 +219,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 
 PACKET_SCHEMA=fm-packet.v1
 DECISION_SCHEMA=fm-packet-decision.v1
+# The one name an option value and the shape that draws it share: the drawing
+# answers the decision by carrying data-node="<option value>", so a value the
+# decision block accepts has to be a legal identity, and the reverse.
+NAME_RE='^[A-Za-z0-9._-]{1,128}$'
 
 usage() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
@@ -209,6 +343,12 @@ command_scaffold() {
       printf '%s\n' '  "recommend_why": "{FILL: why, in one or two sentences, pointing at the evidence below}"'
       printf '%s\n' '}'
       printf '%s\n' '```'
+      printf '\n## Figures\n\n'
+      printf '%s\n' '### {FILL: the heading - what this drawing shows}'
+      printf '%s\n' 'figure: {FILL: slug, lowercase, used to prefix every id inside the svg}'
+      printf '%s\n\n' 'caption: {FILL: one sentence - what to look at, and what the drawing proves}'
+      printf '%s\n\n' '{FILL: the <svg> lifted out of the file the diagram-design skill wrote, never hand-written, and edited to the contract fm-packet.sh --help states - colours only var(--...), data-en/data-hant/data-hans on every <text>, data-node on every shape, and one shape carrying data-node="<option value>" for EVERY option in the decision above}'
+      printf '%s\n' '- edge {FILL: the data-edge id}: {FILL: what proves this connector}'
     fi
     printf '\n## Evidence\n\n'
     printf '%s\n' '{FILL: file:line for each change that matters, the tests that prove it and how to run them, CI or PR links, screenshots. One item per line.}'
@@ -247,7 +387,7 @@ decision_jq='
     or (type == "object" and (.en | type == "string" and length > 0)
         and ((has("hant") | not) or (.hant | type == "string"))
         and ((has("hans") | not) or (.hans | type == "string")));
-  def slug: type == "string" and test("^[A-Za-z0-9._-]{1,128}$");
+  def slug: type == "string" and test($name_re);
   def problem(cond; msg): if cond then empty else msg end;
   [ problem(type == "object"; "decision block is not a JSON object"),
     problem(.key == $task; "decision key must be the task id \($task)"),
@@ -264,8 +404,341 @@ decision_jq='
     problem((has("close") | not) or (.close == "done" or .close == "release"); "close must be done or release")
   ] | .[]'
 
+# The figures check. The contract it enforces is baton's, stated once in this
+# script's header; this function is only the machine half of it. python3 is
+# used because an SVG attribute does not fit on one line and a line-oriented
+# scanner would pass a broken drawing. It is called only when the packet has a
+# Figures section or owes one, so a packet without figures never needs python3.
+figures_problems() {  # <packet> <kind> [option-value...] -> one problem per line
+  FM_NAME_RE="$NAME_RE" python3 - "$@" <<'PY'
+import os, pathlib, re, sys
+
+packet, kind, options = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
+lines = packet.read_text(encoding="utf-8").splitlines()
+problems = []
+
+# The headings render decides on, character for character, and the same one
+# space the awk section reader and the scaffold already use: a heading two
+# readers spell differently is a drawing one of them turns into prose while
+# the other passes its svg through unescaped.
+def section_heading(line):
+    return line[3:].strip() if line.startswith("## ") else None
+
+def figure_heading(line):
+    return line[4:].strip() if line.startswith("### ") else None
+
+sections, inside = [], False
+for l in lines:
+    h = section_heading(l)
+    if h is not None:
+        inside = h == "Figures"
+        if inside:
+            sections.append([])
+    elif inside:
+        sections[-1].append(l)
+
+found = bool(sections)
+if len(sections) > 1:
+    problems.append("the packet declares %d '## Figures' sections; it carries one, and the page "
+                    "gives that section one id" % len(sections))
+body = sections[0] if sections else []
+
+if not found and kind == "needs-decision":
+    problems.append("kind=needs-decision but there is no '## Figures' section; "
+                    "draw the options through the diagram-design skill. An environment that "
+                    "cannot draw is a blocker to escalate to firstmate, not something to "
+                    "declare here")
+
+# The one rule for lines that belong to no drawing, which both the section and
+# the figure body report through: markup is one problem naming the drawing,
+# because a refusal per line of its markup buries the cause and a worker told
+# to fix what verify reports would delete the drawing line by line; prose is
+# reported line by line, because there each line is its own mistake.
+SVG_OPEN = re.compile(r"<\s*svg\b", re.I)
+
+def stray_problems(lines, where, advice):
+    offending = [l.strip() for l in lines if l.strip()]
+    if any(SVG_OPEN.search(l) for l in offending):
+        return ["a drawing %s; %s" % (where, advice)]
+    return ['the line "%s" %s; %s' % (l, where, advice) for l in offending]
+
+# ---- split the section into figures at their ### headings -------------------
+# Everything in the section belongs to a figure. A line above the first '### '
+# is read by no figure clause - so a drawing parked there would reach the page
+# with nothing having checked it, and prose there renders where the figure
+# body's own stray-line rule says prose may not go.
+figures, cur, preamble = [], None, []
+for l in body:
+    h = figure_heading(l)
+    if h is not None:
+        cur = {"heading": h, "lines": []}
+        figures.append(cur)
+    elif cur is not None:
+        cur["lines"].append(l)
+    elif l.strip():
+        preamble.append(l)
+
+problems.extend(stray_problems(
+    preamble,
+    "sits above the first '### ' figure, where no figure clause reads it",
+    "every line in the section belongs to a figure: a drawing needs its own '### ' heading, "
+    "a sentence about one goes in that figure's caption, and anything longer goes in the "
+    "packet section it belongs to"))
+
+if found and not figures:
+    problems.append("the Figures section carries no '### ' figure; a section is the drawings in "
+                    "it, and a needs-decision packet owes one that puts every option together")
+
+# ---- per-figure checks ------------------------------------------------------
+COLOUR_ATTRS = ("fill", "stroke", "color", "stop-color", "flood-color", "lighting-color")
+# The palette the rendered page binds for a figure to draw against; this
+# script's header enumerates the same names. A var(--...) outside it resolves
+# to nothing and the shape falls back to black on --card, which no clause
+# would otherwise catch.
+PALETTE = ("fg", "muted", "soft", "card", "card-2", "bg", "rule", "rule-strong",
+           "accent", "accent-tint", "amber", "seal", "ok", "link")
+COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)\)"
+                       r"|url\(#[A-Za-z0-9._:-]+\))$" % "|".join(map(re.escape, PALETTE)))
+ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
+TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
+EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
+LATIN_ID = re.compile(os.environ["FM_NAME_RE"])
+FIG_FIELD = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
+FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
+TEXT_ELEMENT = re.compile(r"""<\s*text\b(?:[^<>"']|"[^"]*"|'[^']*')*>(.*?)<\s*/\s*text\s*>""", re.S)
+REF_ATTRS = ("href", "xlink:href", "src")
+URL_REF = re.compile(r"url\(\s*([^)]*)\)", re.I)
+SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+LINK_SCHEMES = ("http", "https", "mailto")
+# SMIL sets an attribute at runtime, so an animation aimed at href reaches the
+# value the clause below refuses. The rule is the same rule, read once here so
+# the static attribute and the animated one cannot drift apart.
+ANIMATION_TAGS = ("animate", "set", "animatetransform", "animatemotion")
+ANIMATION_VALUES = ("to", "from", "values")
+
+def ref_is_local(ref, tag):
+    m = SCHEME.match(ref)
+    if m is None:
+        return ref.startswith("#")
+    return m.group(1).lower() in LINK_SCHEMES and tag == "a"
+
+VAR_REF = re.compile(r"^var\(\s*(--[A-Za-z0-9_-]+)")
+
+def colour_advice(value):
+    """why this colour was refused, in the terms the value is already written in"""
+    m = VAR_REF.match(value.strip())
+    if m is None:
+        return "colours come from the page's CSS variables, as var(--...)"
+    if m.group(1)[2:] in PALETTE:
+        return ("%s is bound, but the value has to be exactly var(%s) - a fallback, a space "
+                "inside the parentheses or an !important is what the page cannot read"
+                % (m.group(1), m.group(1)))
+    return ("the page binds no %s for a figure to draw against; the palette is %s"
+            % (m.group(1), ", ".join("--" + name for name in PALETTE)))
+
+def attrs_of(text):
+    out = {}
+    for m in ATTR.finditer(text):
+        value = next(g for g in m.groups()[1:] if g is not None)
+        out[m.group(1).lower()] = value
+    return out
+
+def style_decls(value):
+    for decl in value.split(";"):
+        if ":" in decl:
+            k, v = decl.split(":", 1)
+            yield k.strip().lower(), v.strip()
+
+# The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
+# elements inside the drawing, and a non-greedy match would stop at the first
+# </svg> and leave the rest of the figure unread. figures_html states this
+# same function, character for character - the two must agree on which bytes
+# are the drawing, or verify checks one thing and the page shows another.
+SVG_TAG = re.compile(r"""<\s*(/?)svg\b((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
+
+def top_level_svgs(text):
+    out, depth, start = [], 0, None
+    for m in SVG_TAG.finditer(text):
+        if m.group(1):
+            if depth > 0:
+                depth -= 1
+                if depth == 0:
+                    out.append(text[start:m.end()]); start = None
+        elif m.group(2).rstrip().endswith("/"):
+            if depth == 0:
+                out.append(m.group(0))
+        else:
+            if depth == 0:
+                start = m.start()
+            depth += 1
+    return out
+
+figure_nodes, slugs_seen = [], {}
+for n, fig in enumerate(figures, 1):
+    chunk = "\n".join(fig["lines"])
+    name = fig["heading"] or "(no heading)"
+    def bad(msg, _name=name, _n=n):
+        problems.append("figure %d (%s): %s" % (_n, _name, msg))
+    if not fig["heading"]:
+        bad("the '###' heading is empty")
+    fields = {}
+    for l in fig["lines"]:
+        m = FIG_FIELD.match(l)
+        if m:
+            if m.group(1) in fields:
+                bad("'%s:' is given twice; the second is dropped where the first is read" % m.group(1))
+            else:
+                fields[m.group(1)] = m.group(2)
+    slug = fields.get("figure", "")
+    if not re.match(r"^[a-z0-9][a-z0-9-]*$", slug):
+        bad("'figure: <slug>' is missing or not lowercase letters, digits and hyphens")
+        slug = ""
+    elif slug in slugs_seen:
+        bad("'figure: %s' is already the slug of figure %d (%s); the prefix only keeps two "
+            "drawings off each other's ids while each owns one" % (slug, slugs_seen[slug][0],
+                                                                   slugs_seen[slug][1]))
+    else:
+        slugs_seen[slug] = (n, name)
+    if not fields.get("caption"):
+        bad("'caption:' is missing or empty")
+
+    svgs = top_level_svgs(chunk)
+    if len(svgs) != 1:
+        bad("the figure carries %d inline <svg> block(s); it needs exactly one, "
+            "drawn through the diagram-design skill" % len(svgs))
+        continue
+    svg = svgs[0]
+
+    # A figure body is figure:, caption:, one drawing and its '- edge' lines.
+    # Anything else renders nowhere, so it is refused by name rather than
+    # accepted and silently dropped on the way to the page. It reads the lines
+    # the drawing did not claim, so it runs only once the drawing is known: a
+    # figure that failed to parse has one true reason above, and reporting its
+    # every line as prose would bury it.
+    opened = chunk.index(svg)
+    first = chunk.count("\n", 0, opened)
+    drawn = range(first, first + svg.count("\n") + 1)
+    rest = [l for at, l in enumerate(fig["lines"])
+            if at not in drawn and not FIG_FIELD.match(l) and not FIG_EDGE.match(l)]
+    for line in stray_problems(
+            rest,
+            "is not part of the figure, and nothing renders it",
+            "a figure body carries figure:, caption:, one drawing and its '- edge' lines: a "
+            "sentence about the drawing goes in the caption, and anything longer goes in the "
+            "packet section it belongs to"):
+        bad(line)
+
+    if re.search(r"<\s*script\b", svg, re.I):
+        bad("the svg carries a <script>; a figure is static markup")
+    if EXTERNAL_FONT.search(svg):
+        bad("the svg references an external font or stylesheet; the page must render offline")
+    if re.search(r"<\s*style\b", svg, re.I):
+        bad("the svg carries a <style>; an inline style element is not scoped to its drawing "
+            "and restyles the whole page, so a figure styles itself through style=\"...\"")
+    if re.search(r"<\s*foreignObject\b", svg, re.I):
+        bad("the svg carries a <foreignObject>; it holds HTML the language clause cannot read, "
+            "so its labels stay English when the page switches, and its layout is the page's "
+            "not the drawing's. Re-draw those labels as <text> nodes carrying data-en, "
+            "data-hant and data-hans")
+
+    for m in TEXT_ELEMENT.finditer(svg):
+        if re.search(r"<\s*[A-Za-z]", m.group(1)):
+            bad("a <text> has element children; the language switch replaces a label's whole "
+                "text content, so they are destroyed the first time the captain switches. "
+                "Write one string per language and split a long label into separate "
+                "positioned <text> elements, which also keeps the geometry from drifting "
+                "between languages")
+
+    nodes, edges_drawn, edges_declared = set(), set(), set()
+    for m in TAG.finditer(svg):
+        tag, at = m.group(1).lower(), attrs_of(m.group(2))
+        for k, v in at.items():
+            if k.startswith("on"):
+                bad("<%s> carries an inline %s handler; a figure is static markup" % (tag, k))
+            if k == "id" and slug and not v.startswith(slug + "-"):
+                bad("id=\"%s\" is not prefixed \"%s-\"; two figures on one page share one id "
+                    "namespace" % (v, slug))
+            if k in COLOUR_ATTRS and not COLOUR_OK.match(v.strip()):
+                bad("<%s> has %s=\"%s\"; %s" % (tag, k, v, colour_advice(v)))
+            if k in REF_ATTRS and not ref_is_local(v.strip(), tag):
+                bad("<%s> has %s=\"%s\"; a drawing points at a same-document #fragment, and "
+                    "only an <a> may leave the page, with http, https or mailto"
+                    % (tag, k, v.strip()))
+            for ref in URL_REF.findall(v):
+                if not ref.strip().strip("\"'").startswith("#"):
+                    bad("<%s> has %s=\"%s\"; a url() in a drawing points at a same-document "
+                        "#fragment, or the page fetches it and stops rendering offline"
+                        % (tag, k, v))
+            if k == "style":
+                for prop, val in style_decls(v):
+                    if prop in COLOUR_ATTRS and not COLOUR_OK.match(val):
+                        bad("<%s> styles %s: %s; %s" % (tag, prop, val, colour_advice(val)))
+        if tag in ANIMATION_TAGS and at.get("attributename", "").lower() in REF_ATTRS:
+            for k in ANIMATION_VALUES:
+                for ref in at.get(k, "").split(";"):
+                    if ref.strip() and not ref_is_local(ref.strip(), tag):
+                        bad("<%s> animates %s to \"%s\"; an animation reaches the same place "
+                            "the attribute itself does, so it points at a same-document "
+                            "#fragment like every other reference in a drawing"
+                            % (tag, at.get("attributename"), ref.strip()))
+        if tag == "text":
+            missing = [a for a in ("data-en", "data-hant", "data-hans") if not at.get(a)]
+            if missing:
+                bad("a <text> is missing %s; one missing attribute leaks English onto the "
+                    "Chinese page" % ", ".join(missing))
+        if at.get("data-node"):
+            if LATIN_ID.match(at["data-node"]):
+                nodes.add(at["data-node"])
+            else:
+                bad("<%s> has data-node=\"%s\"; an identity is the latin name the source "
+                    "gives the thing, never the reader's wording, because the decision block "
+                    "names its options in those terms" % (tag, at["data-node"]))
+        if at.get("data-edge"):
+            edges_drawn.add(at["data-edge"])
+        elif tag in ("path", "line", "polyline"):
+            style = at.get("style", "")
+            if at.get("marker-end") or at.get("marker-start") or "marker-" in style:
+                bad("a <%s> draws an arrow with no data-edge; every connector needs one so its "
+                    "evidence line can name it" % tag)
+
+    for l in fig["lines"]:
+        m = FIG_EDGE.match(l)
+        if m:
+            edges_declared.add(m.group(1))
+    for e in sorted(edges_drawn - edges_declared):
+        bad("connector data-edge=\"%s\" has no '- edge %s: <what proves it>' line" % (e, e))
+    for e in sorted(edges_declared - edges_drawn):
+        bad("evidence names edge \"%s\", which the svg does not draw" % e)
+
+    figure_nodes.append((name, nodes))
+
+# ---- the comparison rule ----------------------------------------------------
+# A figure carrying a data-node for every option IS the comparison; no separate
+# label says so, because a label would be a second declaration of something the
+# drawing already proves - and one a worker could type onto a drawing that
+# compares nothing.
+if kind == "needs-decision" and figure_nodes and options:
+    best = max(figure_nodes, key=lambda c: len(set(options) & c[1]))
+    missing = [o for o in options if o not in best[1]]
+    if len(missing) == len(options):
+        problems.append('no figure puts the options together: none draws a shape with '
+                        'data-node="%s". Separate drawings bury the only question the reader '
+                        'has - where the options differ, and where they become the same thing'
+                        % '" or data-node="'.join(options))
+    elif missing:
+        problems.append('the figure that compares the options (%s) draws no shape with '
+                        'data-node="%s"; a comparison that omits an option is not a comparison'
+                        % (best[0], '", "'.join(missing)))
+
+print(len(figures))
+for line in problems:
+    print(line)
+PY
+}
+
 command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
-  local id=${1-} packet kind problems=0 n block
+  local id=${1-} packet kind problems=0 n block figcount=0
+  local -a opts=()
   [ -n "$id" ] || { usage >&2; exit 2; }
   fm_pr_task_id_valid "$id" || fail "invalid task id"
   packet=$(packet_path "$id")
@@ -291,11 +764,44 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
       while IFS= read -r line; do
         [ -n "$line" ] || continue
         echo "fm-packet: decision: $line" >&2; problems=$((problems + 1))
-      done < <(printf '%s\n' "$block" | jq -r --arg task "$id" "$decision_jq")
+      done < <(printf '%s\n' "$block" | jq -r --arg task "$id" --arg name_re "$NAME_RE" "$decision_jq")
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        opts+=("$line")
+      done < <(printf '%s\n' "$block" | jq -r '.options[]?.value | select(type == "string")' 2>/dev/null)
+    fi
+  fi
+  # This decides one thing only: whether python3 is needed. It must therefore
+  # stay the loosest reader of the three - unanchored, so no heading the
+  # checker or the renderer can see is ever invisible here. A gate that is
+  # stricter in any direction waves that section through unchecked, and the
+  # svg then reaches the page inlined on verify's word.
+  if [ "$kind" = needs-decision ] || grep -qE '##[[:space:]]+Figures' "$packet"; then
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "fm-packet: python3 is required to check the packet's figures" >&2; problems=$((problems + 1))
+    else
+      # A checker that dies must never read as a clean packet: take its exit
+      # status, which a process substitution would discard. Its first line is
+      # the figure count, from the same parse that did the checking.
+      local figs status=0
+      figs=$(figures_problems "$packet" "$kind" ${opts[@]+"${opts[@]}"}) || status=$?
+      if [ "$status" -ne 0 ]; then
+        echo "fm-packet: the figures check failed (exit $status); the packet is not verified" >&2
+        problems=$((problems + 1))
+      fi
+      case "${figs%%$'\n'*}" in
+        ''|*[!0-9]*) ;;
+        *) figcount=${figs%%$'\n'*} ;;
+      esac
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        echo "fm-packet: figures: $line" >&2; problems=$((problems + 1))
+      done < <(printf '%s\n' "$figs" | tail -n +2)
     fi
   fi
   [ "$problems" -eq 0 ] || exit 1
   printf 'packet: ok %s\n' "$packet"
+  [ "$figcount" -eq 0 ] || printf 'figures: %d checked against the contract; legibility is not - render the page and look at the drawing\n' "$figcount"
 }
 
 # ---- card -------------------------------------------------------------------
@@ -364,10 +870,19 @@ raw = src.read_text(encoding="utf-8")
 lines = raw.splitlines()
 
 # ---- parse: header key: value lines, then ## sections in order -------------
+# The heading rules are verify's, character for character (figures_problems
+# states the same two): a heading the two read differently is a drawing one of
+# them turns into prose while the other passes its svg through unescaped.
+def section_heading(line):
+    return line[3:].strip() if line.startswith("## ") else None
+
+def figure_heading(line):
+    return line[4:].strip() if line.startswith("### ") else None
+
 meta = {}
 body_start = 0
 for i, line in enumerate(lines):
-    if line.startswith("## "):
+    if section_heading(line) is not None:
         body_start = i
         break
     m = re.match(r"^([a-z]+): (.*)$", line)
@@ -375,8 +890,9 @@ for i, line in enumerate(lines):
         meta[m.group(1)] = m.group(2)
 sections = []  # [heading, [lines]]
 for line in lines[body_start:]:
-    if line.startswith("## "):
-        sections.append([line[3:].strip(), []])
+    h = section_heading(line)
+    if h is not None:
+        sections.append([h, []])
     elif sections:
         sections[-1][1].append(line)
 
@@ -407,6 +923,7 @@ T = {
     "s_changed": "What changed", "s_generated": "generated from the local copy and the PR",
     "s_session": "What only this session knows", "s_decision": "The decision",
     "s_evidence": "Evidence", "s_more": "How to pull more",
+    "s_figures": "Figures",
     "copy": "Copy the context", "copied": "Copied",
     "copy_hint": "the whole packet as markdown, ready for any coding agent",
     "raw_title": "Select all and copy", "close": "Close",
@@ -423,6 +940,7 @@ T = {
     "s_changed": "改了什麼", "s_generated": "由本機副本與 PR 產生",
     "s_session": "只有這個 session 知道的事", "s_decision": "這個決定",
     "s_evidence": "證據", "s_more": "怎麼再往下挖",
+    "s_figures": "圖解",
     "copy": "複製完整 context", "copied": "已複製",
     "copy_hint": "整份 packet 的 markdown，可直接貼給任何 coding agent",
     "raw_title": "全選後複製", "close": "關閉",
@@ -439,6 +957,7 @@ T = {
     "s_changed": "改了什么", "s_generated": "由本机副本与 PR 生成",
     "s_session": "只有这个 session 知道的事", "s_decision": "这个决定",
     "s_evidence": "证据", "s_more": "怎么再往下挖",
+    "s_figures": "图解",
     "copy": "复制完整 context", "copied": "已复制",
     "copy_hint": "整份 packet 的 markdown，可直接贴给任何 coding agent",
     "raw_title": "全选后复制", "close": "关闭",
@@ -446,7 +965,8 @@ T = {
 }
 SECTION_KEYS = {
     "What changed (generated)": "s_changed", "What only this session knows": "s_session",
-    "The decision": "s_decision", "Evidence": "s_evidence", "How to pull more": "s_more",
+    "The decision": "s_decision", "Figures": "s_figures",
+    "Evidence": "s_evidence", "How to pull more": "s_more",
 }
 
 def esc(s): return html.escape(str(s), quote=True)
@@ -532,6 +1052,67 @@ def md(body):
     para(buf)
     return "\n".join(out)
 
+# ---- figures: the drawings ride the page as inline SVG ----------------------
+# verify has already enforced the SVG contract (this script's header owns it),
+# so the svg is inlined as written rather than escaped: that is the whole point
+# of carrying it in the packet. Its <text> nodes carry the three languages, so
+# the page's language switch re-labels the drawing with everything else, and
+# its colours are the page's own CSS variables. The `- edge ...` lines are an
+# integrity check verify owns and never page content, as baton has it, so they
+# do not render.
+FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
+# The one top-level <svg>, counted by depth: diagram-design nests icon <svg>
+# elements inside the drawing, and a non-greedy match would stop at the first
+# </svg> and leave the rest of the figure unread. figures_problems states this
+# same function, character for character - the two must agree on which bytes
+# are the drawing, or verify checks one thing and the page shows another.
+SVG_TAG = re.compile(r"""<\s*(/?)svg\b((?:[^<>"']|"[^"]*"|'[^']*')*)>""", re.S)
+
+def top_level_svgs(text):
+    out, depth, start = [], 0, None
+    for m in SVG_TAG.finditer(text):
+        if m.group(1):
+            if depth > 0:
+                depth -= 1
+                if depth == 0:
+                    out.append(text[start:m.end()]); start = None
+        elif m.group(2).rstrip().endswith("/"):
+            if depth == 0:
+                out.append(m.group(0))
+        else:
+            if depth == 0:
+                start = m.start()
+            depth += 1
+    return out
+
+
+def figures_html(body):
+    figures, cur = [], None
+    for line in body:
+        h = figure_heading(line)
+        if h is not None:
+            cur = (h, []); figures.append(cur)
+        elif cur is not None:
+            cur[1].append(line)
+    out = []
+    for heading, lines in figures:
+        chunk = "\n".join(lines)
+        fields = {}
+        for line in lines:
+            m = FIG_ATTR.match(line)
+            if m and m.group(1) not in fields:
+                fields[m.group(1)] = m.group(2)
+        svgs = top_level_svgs(chunk)
+        parts = ['<figure class="pk-fig" id="fig-%s">' % esc(fields.get("figure", "")),
+                 "<h3 class=\"pk-fig__h\">%s</h3>" % inline(heading)]
+        if svgs:
+            parts.append('<div class="pk-fig__svg">%s</div>' % svgs[0])
+        if fields.get("caption"):
+            parts.append('<figcaption class="pk-fig__cap">%s</figcaption>' % inline(fields["caption"]))
+        parts.append("</figure>")
+        out.append("".join(parts))
+    return "\n".join(out)
+
 # ---- the decision card: the five questions and the recommendation ----------
 def row(key, value_html, tone=""):
     k_text, k_attrs = tri(key)
@@ -609,7 +1190,7 @@ for heading, body in sections:
     if key == "s_changed":
         s_text, s_attrs = tri("s_generated")
         sub = span("pk-section__sub", s_text, s_attrs)
-    inner = md(body)
+    inner = figures_html(body) if key == "s_figures" else md(body)
     if decision is not None:
         inner = decision_card(decision) + inner
     section_html.append('<section class="fm-card pk-section" id="%s">%s%s<div class="pk-prose">%s</div></section>'
@@ -661,6 +1242,15 @@ page = r'''<!doctype html>
   --shadow-hard-sm: 3px 3px 0 var(--ink-900);
   --focus-ring: 0 0 0 3px var(--gold-300);
   --container-app: 900px;
+  /* The figure palette: the variable names a figure's SVG is drawn against
+     (baton's embedding contract), bound to this page's own tokens so a
+     drawing inherits the page instead of carrying its own colours. */
+  --fg: var(--text-strong); --muted: var(--text-muted); --soft: var(--text-faint);
+  --card: var(--surface-card); --card-2: var(--surface-card-warm); --bg: var(--bg-page);
+  --rule: var(--border-default); --rule-strong: var(--ink-300);
+  --accent: var(--rust-500); --accent-tint: var(--rust-050);
+  --amber: var(--gold-500); --seal: var(--rust-700); --ok: var(--sea-500);
+  --link: var(--ocean-600); --sans: var(--font-sans); --mono: var(--font-mono);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -722,6 +1312,12 @@ a { color: var(--ocean-600); }
 .pk-prose code, .bb-decision code { font-family: var(--font-mono); font-size: 0.9em; background: var(--paper-200); border-radius: 4px; padding: 1px 5px; }
 .pk-prose pre, .bb-decision pre { margin: 0 0 10px; padding: 12px 14px; background: var(--navy-700); color: var(--paper-000); border-radius: var(--radius-sm); overflow-x: auto; font-size: var(--fs-xs); line-height: 1.5; }
 .pk-prose pre code, .bb-decision pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+.pk-fig { margin: 0 0 20px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pk-fig:last-child { margin-bottom: 0; }
+.pk-fig__h { margin: 0; font-size: var(--fs-base); color: var(--text-strong); }
+.pk-fig__svg { overflow-x: auto; padding: 12px; background: var(--card); border: 1px solid var(--border-default); border-radius: var(--radius-sm); }
+.pk-fig__svg > svg { display: block; max-width: 100%; height: auto; font-family: var(--font-sans); }
+.pk-fig__cap { font-size: var(--fs-sm); color: var(--text-body); }
 .pk-decision { margin-bottom: 14px; }
 .bb-decision__pad { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; }
 .bb-decision__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

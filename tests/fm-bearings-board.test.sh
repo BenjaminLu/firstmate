@@ -943,6 +943,27 @@ s = re.sub(r"\{FILL: every path you tried.*?\}", "- tried a flag; dropped it\n- 
 s = re.sub(r"\{FILL: file:line.*?\}", "- bin/example.sh:1 the change", s, flags=re.S)
 s = re.sub(r"\{FILL: optional.*?\}\n", "", s)
 s = re.sub(r"```json fm-packet-decision.v1\n.*?\n```", "```json fm-packet-decision.v1\n" + sys.argv[2] + "\n```", s, flags=re.S)
+# A needs-decision packet owes one figure putting both options in one drawing;
+# the board only carries the packet's link, but the packet must still verify.
+figure = """### Where the two rollout orders differ
+figure: roll
+caption: Both orders reach the same release; only the first hour differs.
+
+<svg role="img" viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="roll-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="var(--muted)"/></marker></defs>
+  <rect id="roll-a" data-node="canary" x="20" y="20" width="160" height="60" rx="8" fill="var(--accent-tint)" stroke="var(--accent)"/>
+  <text x="30" y="46" data-en="Canary first" data-hant="先金絲雀" data-hans="先金丝雀">Canary first</text>
+  <rect id="roll-b" data-node="all" x="20" y="120" width="160" height="60" rx="8" fill="var(--card-2)" stroke="var(--rule)"/>
+  <text x="30" y="146" data-en="All at once" data-hant="一次全開" data-hans="一次全开">All at once</text>
+  <rect id="roll-end" data-node="released" x="300" y="70" width="160" height="60" rx="8" fill="var(--card)" stroke="var(--rule)"/>
+  <text x="310" y="96" data-en="Released" data-hant="已上線" data-hans="已上线">Released</text>
+  <path data-edge="canary-to-released" d="M180 50 L300 96" stroke="var(--accent)" fill="none" marker-end="url(#roll-arrow)"/>
+  <path data-edge="all-to-released" d="M180 150 L300 114" stroke="var(--muted)" fill="none" marker-end="url(#roll-arrow)"/>
+</svg>
+
+- edge canary-to-released: the last regression the canary caught
+- edge all-to-released: bin/example.sh:1 the change"""
+s = re.sub(r"## Figures\n.*?\n## Evidence", lambda m: "## Figures\n\n" + figure + "\n\n## Evidence", s, flags=re.S)
 p.write_text(s)
 PY2
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
