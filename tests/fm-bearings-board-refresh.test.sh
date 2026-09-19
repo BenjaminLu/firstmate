@@ -429,6 +429,28 @@ store_merge_card() {  # <home> <key> <pr-url>
     "$ROOT/bin/fm-captain-hold.sh" card "$key" --store "$home/merge-card.json" >/dev/null
 }
 
+test_the_merge_carry_forward_resurrects_only_merge_cards() {
+  local home
+  home=$(make_home merge-carry-type)
+  seed_board "$home"
+  # The carry-forward finds its cards by key, and a task id may legally
+  # contain a dot. A DECISION card stored under such a key must not ride the
+  # merge path: the decision path reads a stored card only for a hold that is
+  # still open, so carrying this one would put a closed call's question back
+  # on the board and leave it there.
+  mkdir -p "$home/data/merge.not-a-merge"
+  jq -n '{key:"merge.not-a-merge", type:"decision", repo:"firstmate",
+    title:"A closed call", decide:"Which way?",
+    options:[{value:"north", label:"North"}], allow_freeform:true}' \
+    > "$home/data/merge.not-a-merge/board-card.json"
+  run_board "$home" refresh >/dev/null || fail "a refresh with no snapshot argument failed"
+  injected_payload "$home" | jq -e '
+    [.captains_call[] | select(.key == "merge.not-a-merge")] | length == 0
+  ' >/dev/null \
+    || fail "the merge carry-forward resurrected a decision card: $(injected_payload "$home")"
+  pass "the merge carry-forward resurrects only merge cards"
+}
+
 test_a_refresh_carries_the_merge_card_forward_and_retires_it_when_it_lands() {
   local home card
   home=$(make_home merge-carry)
@@ -948,6 +970,7 @@ test_a_stored_card_publishes_only_the_copy_it_carries
 test_a_stored_card_the_validator_would_refuse_costs_only_its_own_row
 test_a_stored_card_carrying_a_placeholder_costs_only_its_own_row
 test_a_refresh_carries_the_merge_card_forward_and_retires_it_when_it_lands
+test_the_merge_carry_forward_resurrects_only_merge_cards
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run

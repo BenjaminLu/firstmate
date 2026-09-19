@@ -784,6 +784,7 @@ stored_merge_cards() {
     key=${dir##*/}
     card=$(stored_card "$key")
     [ "$card" != null ] || continue
+    printf '%s' "$card" | jq -e '.type == "merge"' >/dev/null 2>&1 || continue
     acc=$(jq -n --argjson acc "$acc" --arg key "$key" --argjson card "$card" \
       '$acc + {($key): $card}') || return 1
   done
@@ -1154,23 +1155,51 @@ EOF
   rm -f -- "$tmp"
 }
 
-# Store every composed decision card on its own task, so the copy the captain
-# is about to see becomes the durable card a later refresh reuses.
-# bin/fm-captain-hold.sh owns the store; a task that cannot take one - a merge
-# card, or a call whose row is gone - simply keeps none.
-# This reads the COMPOSED payload, never the reconciled one: the reconcile
-# choice is injected per publication and the validator refuses a card that
-# already carries it, so storing a card with it would poison every later
-# compose.
-persist_composed_cards() {  # <payload.json>
-  local key tmp
+# Make the store match what was just PUBLISHED. Every decision and merge card
+# the publication carries is written to its own key, so the copy the captain
+# is about to see is the durable card a later refresh reuses - a decision card
+# because a refresh has no first mate to write prose, a merge card because a
+# refresh has no PR view to rediscover it with.
+# The store must MIRROR the publication, not only grow with it: a merge card
+# the publication stopped carrying - because its PR closed unmerged, went red,
+# or is simply no longer merge-ready - has to leave the store in the same
+# breath, or the very next fleet event carries the dead Merge now control
+# straight back onto the page. So every stored merge card the publication does
+# not carry is retired here. Decision cards are not swept: a call the payload
+# happens not to card this time is still open, and bin/fm-captain-hold.sh
+# retires its card when the hold is re-established.
+# Copy is read from the COMPOSED payload and membership from the PUBLISHED
+# one: the reconcile choice is injected per publication and the validator
+# refuses a card that already carries it, so storing the published decision
+# card would poison every later compose - but the composed payload still
+# carries the cards reconciliation dropped, which must not be stored.
+persist_composed_cards() {  # <composed.json> <published.json>
+  local composed=$1 published=$2 key tmp
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-card.XXXXXX") || return 0
   while IFS= read -r key; do
     [ -n "$key" ] || continue
-    jq -c --arg key "$key" '.captains_call[] | select(.key == $key)' "$1" > "$tmp" 2>/dev/null || continue
+    jq -c --arg key "$key" '.captains_call[] | select(.key == $key)' "$composed" > "$tmp" 2>/dev/null \
+      || continue
+    [ -s "$tmp" ] || continue
     "$SCRIPT_DIR/fm-captain-hold.sh" card "$key" --store "$tmp" >/dev/null 2>&1 || true
-  done < <(jq -r '.captains_call[]? | select(.type == "decision" or .type == "merge") | .key' "$1" 2>/dev/null)
+  done < <(jq -r '.captains_call[]? | select(.type == "decision" or .type == "merge") | .key' \
+    "$published" 2>/dev/null)
   rm -f -- "$tmp"
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    retire_stored_card "$key"
+  done < <(stored_merge_keys_absent_from "$published")
+}
+
+# Every stored merge card key the published payload does not carry.
+stored_merge_keys_absent_from() {  # <published.json>
+  local dir key
+  for dir in "$DATA"/merge.*; do
+    [ -f "$dir/board-card.json" ] || continue
+    key=${dir##*/}
+    jq -e --arg key "$key" 'any(.captains_call[]?; .key == $key)' "$1" >/dev/null 2>&1 \
+      || printf '%s\n' "$key"
+  done
 }
 
 command_build() {
@@ -1221,7 +1250,7 @@ command_build() {
     rm -f -- "$effective"
     fail "cannot inject the board data into $TEMPLATE"
   fi
-  persist_composed_cards "$data"
+  persist_composed_cards "$data" "$effective"
   board_unlock
   trap - EXIT
   rm -f -- "$effective"

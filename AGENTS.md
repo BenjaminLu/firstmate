@@ -97,7 +97,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
   <id>/packet.md     the worker's decision packet behind a done or needs-decision event; bin/fm-packet.sh owns its format, verify, and board card; survives teardown
   <id>/packet.html   the packet rendered as one self-contained page for the captain's browser, written by bin/fm-packet.sh render or serve; the board card links it as packet_url; survives teardown
-  <id>/board-card.json  the durable Captain's Call card for a task held for the captain, written by what the board last published and retired by bin/fm-captain-hold.sh when the task is held again, since the previous call's question must never answer for the new one; it is what lets the board refresh itself with no model in the loop
+  <id>/board-card.json  the durable Captain's Call card the board last published under that card key, which is what lets the board refresh itself with no model in the loop; bin/fm-captain-hold.sh owns the store. For a task held for the captain the key is the task id, and a re-hold retires the card so the previous call's question can never answer for the new one. A merge card is stored under its own `merge.<task-id>` key - never a task's own directory - and every publication retires the stored merge cards it no longer carries
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
