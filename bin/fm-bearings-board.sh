@@ -1045,7 +1045,20 @@ EOF
     # a PR that genuinely stopped being merge-ready, and none of them is proof
     # of anything. A stored card leaves only on proof that its pull request
     # LANDED.
-    def carried_merge_cards: [ $merge_cards[] ];
+    # Carrying is not unconditional, though, because one live fact does
+    # contradict a stored card: two merge-ready PRs claiming its task. This
+    # compose then refuses to offer a merge for that task at all, and says so
+    # in a warning row below, so carrying the stored card back would publish a
+    # Merge now beside the row saying none is offered - and a click would act
+    # on whichever PR the task record names, which is the wrong merge the
+    # collision rule exists to prevent. The card is WITHHELD, not retired:
+    # nothing is deleted and it returns by itself once the collision clears.
+    def collided_tasks: [ merge_ready_prs | group_by(.task)[] | select(length > 1) | .[0].task ];
+    def carried_merge_cards:
+      collided_tasks as $collided
+      | [ $merge_cards[]
+          | (.key | ltrimstr("merge.")) as $task
+          | select(($collided | index($task)) == null) ];
     # A card key IS one intake address, so the board may never carry two cards
     # under it. A task held more than once consolidates into one card, and the
     # composer is told to answer every one of its questions there; two

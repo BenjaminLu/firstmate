@@ -481,6 +481,40 @@ test_no_pull_request_view_ever_costs_a_stored_merge_card() {
   pass "no pull-request view, however complete it looks, retires a stored merge card"
 }
 
+# Two merge-ready pull requests claiming one task get no merge card at all,
+# because a merge answer keyed to that task names only one of them and either
+# click would act on whichever the task record happens to name. The board says
+# so in a warning row. A stored card carried back regardless would publish a
+# Merge now beside the row saying none is offered, and pressing it would merge
+# a pull request that card never named - the exact wrong merge the collision
+# rule exists to prevent. The card is withheld, not retired: the stored file
+# stays on disk and the card returns once the collision clears.
+test_a_collision_withholds_the_stored_merge_card_without_deleting_it() {
+  local home snapshot collided payload
+  home=$(make_home collision-withholds)
+  seed_board "$home"
+  store_merge_card "$home" merge.ship-task "https://github.com/example/firstmate/pull/9"
+  snapshot="$home/snapshot.json"
+  collided='[{"num":"9","repo":"example/firstmate","task":"ship-task",
+    "url":"https://github.com/example/firstmate/pull/9","review":"APPROVED",
+    "mergeable":"MERGEABLE","checks":"passing"},
+   {"num":"21","repo":"example/other","task":"ship-task",
+    "url":"https://github.com/example/other/pull/21","review":"APPROVED",
+    "mergeable":"MERGEABLE","checks":"passing"}]'
+  jq --argjson rows "$collided" '.candidate_prs = $rows' \
+    "$SNAPSHOT_FIXTURE" > "$snapshot"
+  run_board "$home" refresh --snapshot "$snapshot" >/dev/null \
+    || fail "the refresh failed"
+  payload=$(injected_payload "$home")
+  printf '%s' "$payload" | jq -e '
+    ([.charted[] | select(.id | startswith("merge-collision"))] | length == 1)
+    and ([.captains_call[] | select(.key == "merge.ship-task")] | length == 0)
+  ' >/dev/null \
+    || fail "the board published a merge card and the no-merge-offered row together: $payload"
+  [ -f "$home/data/merge.ship-task/board-card.json" ] \
+    || fail "the collision deleted the stored card instead of withholding it"
+}
+
 test_the_merge_carry_forward_resurrects_only_merge_cards() {
   local home
   home=$(make_home merge-carry-type)
@@ -1024,6 +1058,7 @@ test_a_stored_card_carrying_a_placeholder_costs_only_its_own_row
 test_a_refresh_carries_the_merge_card_forward_and_retires_it_when_it_lands
 test_the_merge_carry_forward_resurrects_only_merge_cards
 test_no_pull_request_view_ever_costs_a_stored_merge_card
+test_a_collision_withholds_the_stored_merge_card_without_deleting_it
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run
