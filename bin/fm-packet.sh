@@ -362,39 +362,44 @@ packet, kind, options = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
 lines = packet.read_text(encoding="utf-8").splitlines()
 problems = []
 
-# The section and figure headings render decides on, character for character:
-# a heading either side reads differently is a drawing one of them silently
-# turns into prose, and render inlines the svg unescaped on verify's word.
-SP = r"[ \t\v\f\r]"
-SECTION = re.compile(r"^##%s+(.*?)%s*$" % (SP, SP))
-FIGURE = re.compile(r"^###%s+(.*?)%s*$" % (SP, SP))
+# The headings render decides on, character for character, and the same one
+# space the awk section reader and the scaffold already use: a heading two
+# readers spell differently is a drawing one of them turns into prose while
+# the other passes its svg through unescaped.
+def section_heading(line):
+    return line[3:].strip() if line.startswith("## ") else None
 
-start = next((i + 1 for i, l in enumerate(lines)
-              if SECTION.match(l) and SECTION.match(l).group(1) == "Figures"), None)
-body = []
-if start is None:
-    if kind == "needs-decision":
-        problems.append("kind=needs-decision but there is no '## Figures' section; "
-                        "draw the options through the diagram-design skill. An environment that "
-                        "cannot draw is a blocker to escalate to firstmate, not something to "
-                        "declare here")
-else:
-    for l in lines[start:]:
-        if SECTION.match(l):
-            break
+def figure_heading(line):
+    return line[4:].strip() if line.startswith("### ") else None
+
+# Every Figures section, not the first: render routes each one through
+# figures_html, so each one's drawings reach the page inlined on verify's word.
+body, inside, found = [], False, False
+for l in lines:
+    h = section_heading(l)
+    if h is not None:
+        inside = h == "Figures"
+        found = found or inside
+    elif inside:
         body.append(l)
+
+if not found and kind == "needs-decision":
+    problems.append("kind=needs-decision but there is no '## Figures' section; "
+                    "draw the options through the diagram-design skill. An environment that "
+                    "cannot draw is a blocker to escalate to firstmate, not something to "
+                    "declare here")
 
 # ---- split the section into figures at their ### headings -------------------
 figures, cur = [], None
 for l in body:
-    m = FIGURE.match(l)
-    if m:
-        cur = {"heading": m.group(1), "lines": []}
+    h = figure_heading(l)
+    if h is not None:
+        cur = {"heading": h, "lines": []}
         figures.append(cur)
     elif cur is not None:
         cur["lines"].append(l)
 
-if start is not None and not figures and kind == "needs-decision":
+if found and not figures and kind == "needs-decision":
     problems.append("the Figures section carries no '### ' figure; a needs-decision packet owes "
                     "one drawing that puts every option together")
 
@@ -688,14 +693,16 @@ lines = raw.splitlines()
 # The heading rules are verify's, character for character (figures_problems
 # states the same two): a heading the two read differently is a drawing one of
 # them turns into prose while the other passes its svg through unescaped.
-SP = r"[ \t\v\f\r]"
-SECTION = re.compile(r"^##%s+(.*?)%s*$" % (SP, SP))
-FIGURE = re.compile(r"^###%s+(.*?)%s*$" % (SP, SP))
+def section_heading(line):
+    return line[3:].strip() if line.startswith("## ") else None
+
+def figure_heading(line):
+    return line[4:].strip() if line.startswith("### ") else None
 
 meta = {}
 body_start = 0
 for i, line in enumerate(lines):
-    if SECTION.match(line):
+    if section_heading(line) is not None:
         body_start = i
         break
     m = re.match(r"^([a-z]+): (.*)$", line)
@@ -703,9 +710,9 @@ for i, line in enumerate(lines):
         meta[m.group(1)] = m.group(2)
 sections = []  # [heading, [lines]]
 for line in lines[body_start:]:
-    m = SECTION.match(line)
-    if m:
-        sections.append([m.group(1), []])
+    h = section_heading(line)
+    if h is not None:
+        sections.append([h, []])
     elif sections:
         sections[-1][1].append(line)
 
@@ -877,9 +884,9 @@ FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 def figures_html(body):
     head, figures, cur = [], [], None
     for line in body:
-        m = FIGURE.match(line)
-        if m:
-            cur = (m.group(1), []); figures.append(cur)
+        h = figure_heading(line)
+        if h is not None:
+            cur = (h, []); figures.append(cur)
         elif cur is not None:
             cur[1].append(line)
         else:

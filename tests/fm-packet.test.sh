@@ -433,7 +433,61 @@ PY
   set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "a whitespace-padded Figures heading skipped the contract: $out"
   assert_contains "$out" "carries no data-node" "the padded heading was not checked: $out"
+
   pass "a done packet needs no figures and is held to the contract for the ones it has"
+}
+
+test_every_figures_section_is_held_to_the_contract_not_only_the_first() {
+  local home packet out rc
+  home=$(make_home second-figures)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  fill_figures "$packet"
+  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused one good figures section: $out"
+
+  # render routes EVERY '## Figures' heading through figures_html and inlines
+  # its svg unescaped on verify's word, so a second section must be checked
+  # too - otherwise a drawing reaches the served page unread.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+second = """
+## Figures
+
+### A second drawing nobody checked
+figure: two
+caption: The section a worker adds when the first one filled up.
+
+<svg role="img" viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg"><script>alert(document.title);</script><rect id="nope" fill="#ff0000" x="0" y="0" width="4" height="4"/><a href="javascript:alert(1)"><text x="1" y="8">English only</text></a></svg>
+"""
+p.write_text(s.rstrip("\n") + "\n" + second)
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a second figures section went unchecked: $out"
+  assert_contains "$out" "the svg carries a <script>" "the second section's script was not caught: $out"
+  assert_contains "$out" "only an <a> may leave the page" "the second section's javascript: href was not caught: $out"
+  assert_contains "$out" "colours come from the page" "the second section's hex fill was not caught: $out"
+  assert_absent "$home/data/pk-1/packet.html" "render published a page for a refused packet"
+
+  # The Evidence check counts the lines between its heading and the next one,
+  # so the reader that finds that boundary has to be the one verify reads the
+  # headings with: an empty Evidence section followed by a drawing is still a
+  # skeleton, however many svg lines sit under the heading after it.
+  home=$(make_home empty-evidence)
+  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
+  packet="$home/data/pk-1/packet.md"
+  fill_prose "$packet"
+  python3 - "$packet" "$(good_figures)" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+s = re.sub(r"## Evidence\n.*?\n## How", "## Evidence\n\n## Figures\n\n" + sys.argv[2] + "\n\n## How", s, flags=re.S)
+p.write_text(s)
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "an empty Evidence section followed by figures verified: $out"
+  assert_contains "$out" "'Evidence' is empty" "the emptied Evidence section was not caught: $out"
+  pass "every figures section is held to the contract, not only the first"
 }
 
 test_card_emits_a_board_ready_decision_item() {
@@ -597,19 +651,6 @@ PY
   run_packet "$home" render pk-1 >/dev/null || fail "render failed on a Figures section that opens on its heading"
   assert_grep '<rect id="opt-box-a" data-node="bound"' "$page" "the first figure's svg was not inlined"
   assert_no_grep '&lt;svg' "$page" "the first figure's svg was escaped into prose"
-
-  # Whatever separates '###' from the heading, verify and render must read the
-  # same line as a figure: a drawing checked by one and escaped by the other
-  # goes missing from the page without a word.
-  python3 - "$packet" <<'PY'
-import pathlib, sys
-p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("### Where the two", "###\tWhere the two"))
-PY
-  out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused a tab-separated figure heading: $out"
-  assert_contains "$out" "figures: 1 checked against the contract" "the tab-separated figure went uncounted: $out"
-  run_packet "$home" render pk-1 >/dev/null || fail "render failed on a tab-separated figure heading"
-  assert_grep '<rect id="opt-box-a" data-node="bound"' "$page" "the tab-separated figure's svg was not inlined"
-  assert_no_grep '&lt;svg' "$page" "the tab-separated figure's svg was escaped into prose"
   pass "the rendered decision card answers all five questions and the recommendation"
 }
 
@@ -679,6 +720,7 @@ test_verify_checks_the_decision_block_field_by_field
 test_verify_holds_a_figure_to_the_svg_contract
 test_a_needs_decision_packet_owes_one_figure_comparing_every_option
 test_a_done_packet_is_not_refused_for_having_no_figures
+test_every_figures_section_is_held_to_the_contract_not_only_the_first
 test_card_emits_a_board_ready_decision_item
 test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet
