@@ -135,6 +135,13 @@ Its serve-first sequence publishes the board, establishes and verifies its Lavis
 Never bind or arm the board before its session is listed open.
 Never run `lavish-axi poll` for the board yourself: the armed source's supervised runner owns the blocking poll, and both the build and the watcher's ordinary reconcile repair a missing listener, so no conversational turn ever blocks on the board.
 
+### The board is a live surface
+
+This is firstmate's default for every board, not a property of whichever one is current.
+An answer the captain gives on a board reaches firstmate on its own: firstmate never waits to be told to go and look, and never learns about an answer only because he mentioned it.
+Where a board's answers cannot be delivered by an event, keep a source that wakes firstmate while an unanswered card is open and is silent when none is, so the cost is paid only while something is actually waiting; `process-event-sources` owns the arming and wake mechanics for both shapes.
+A board that replaces an older one does not regress its responsiveness: the retired local Lavish surface woke firstmate within seconds of a click, so a replacement that notices only later is a downgrade to state plainly - in the change that introduces it and to the captain - rather than to accept quietly.
+
 ### Handling a board wake
 
 The captain's remote copy of the board reaches firstmate through its own source: when you publish it carrying cards he has not answered, arm `bin/fm-procevent-board-remote.sh` with those card keys, and load `process-event-sources` for the arming and wake contract. Its answers reach the same keyed-answer intake and the same merge ruling below, so nothing in this section changes for them.

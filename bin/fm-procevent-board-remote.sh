@@ -44,6 +44,14 @@
 # captain a real consequence within about a minute, so a finer interval cannot
 # be noticed and still spends a turn every time.
 #
+# Stated plainly rather than accepted quietly: this is SLOWER than the local
+# Lavish board it replaces, which woke firstmate within seconds of a click
+# because its poll blocked on the click itself. An interval is the best a
+# surface with no event can do, and `bearings` owns that standard. If seconds
+# are wanted here, the way back is a transport that can be woken - a signed-in
+# browser holding the page, or a session that can perform the read - not a
+# finer interval.
+#
 # A FAILED READ LOSES NOTHING, and that is a property of this store rather than
 # of this script. The artifact read returns documents without consuming or
 # clearing them, so an answer that is not captured stays exactly where it was
