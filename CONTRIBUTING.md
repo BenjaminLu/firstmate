@@ -72,7 +72,8 @@ Coordinate any workflow rollback with its required-check names so a retired chec
   A malformed `.github/workflows/*.yml`, including a self-broken `ci.yml`, fails that local lint path before merge because a broken workflow cannot report its own breakage.
   It pins one exact shellcheck version and one exact actionlint version and refuses to run under any other.
   Print the shellcheck pin with `bin/fm-lint.sh --required-version` and the actionlint pin with `bin/fm-lint-workflows.sh --required-version`.
-  Use `bin/fm-install-shellcheck.sh` and `bin/fm-install-actionlint.sh` to install those exact builds locally; each installer's header owns its destination usage and supported platforms.
+  Use `bin/fm-install-shellcheck.sh <destination-directory>` and `bin/fm-install-actionlint.sh <destination-directory>` to install those exact builds locally once per machine, into a directory you keep on `PATH`; each installer's header owns its destination usage and supported platforms.
+  Nothing installs them for you, and a linter absent from `PATH` or resolved off its pin makes its owner exit 69 naming that tool instead of reporting the run as lint findings; `bin/fm-lint-unrunnable-lib.sh`'s header owns that status and its message.
 - Harness-adapter ownership spans detection in `bin/fm-harness.sh`, launch and hook mechanics in `bin/fm-spawn.sh`, spawn-time Claude workspace-trust and external-CLAUDE.md-import pre-approval in `bin/fm-claude-trust.sh`, semantic busy sources and trust gates in `bin/fm-busy-lib.sh`, delivery-only rendered guards in `bin/fm-composer-lib.sh`, cleanup in `bin/fm-teardown.sh`, and facts in the skill tree rooted at `.agents/skills/harness-adapters/SKILL.md`; the `firstmate-coding-guidelines` skill owns the validation policy for checks that depend on those harnesses.
 - Changes to runtime session backends (`bin/fm-backend.sh`, `bin/backends/`, and the scripts that dispatch through them) keep current setup and limits in the relevant backend guide and active empirical evidence in [`docs/verification/runtime-backends.md`](docs/verification/runtime-backends.md).
 - [`docs/documentation-audiences.md`](docs/documentation-audiences.md) and its machine-consumed inventory own prose classification; run `bin/fm-doc-audience-check.sh` after documentation changes.
@@ -94,10 +95,6 @@ Firstmate's wrapper still matters: crewmates route every `ask-user` finding to f
 The `firstmate-coding-guidelines` skill owns the rule that local no-mistakes Test stays intent-targeted rather than configuring `commands.test`.
 Verify the same way the gate does: reach for `bin/fm-test-run.sh` with the subjects you care about rather than chaining `bash tests/a.test.sh && bash tests/b.test.sh`, because a list of script paths gets the same bounded concurrency as `--changed`.
 The pipeline publishes that evidence itself, so never hand-commit `.no-mistakes/` paths onto a feature branch; CI rejects them as tracked personal fleet paths.
-
-The lint gate needs two pinned linters on `PATH`, and it installs neither for you.
-Run the one-time install once per machine, into a directory you keep on `PATH`: `bin/fm-install-shellcheck.sh <destination-directory>` and `bin/fm-install-actionlint.sh <destination-directory>`, each of which owns its own pin and its exact steps.
-Without them `bin/fm-lint.sh` exits 69 and says which tool is missing, rather than reporting the run as lint findings.
 
 Check and test the toolbelt before pushing:
 
