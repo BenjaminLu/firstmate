@@ -858,7 +858,7 @@ test_refresh_fetches_origin_exactly_once_and_skips_set_head_when_origin_head_res
 }
 
 test_refresh_queries_remote_head_only_when_origin_head_is_missing() {
-  local rec id out status fetches set_heads want_set_heads
+  local rec id out status fetches set_heads
   id='pool-one-fetch-missing-r1'
   rec=$(make_case one-fetch-missing "$id")
   read_case_record "$rec"
