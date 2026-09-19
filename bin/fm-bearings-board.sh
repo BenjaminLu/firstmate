@@ -187,17 +187,14 @@
 #            the fleet: one Underway row costs one bin/fm-task-progress.sh
 #            read, itself bounded at FM_TASK_PROGRESS_TIMEOUT (default 20
 #            seconds). Those reads share one dependency, so a wedged
-#            no-mistakes costs EVERY row its full bound rather than one. The
-#            compose therefore holds half the refresh deadline for reading -
-#            the snapshot, the per-task records and cards, and the progress
-#            rows, clocked from the moment compose starts - and a row still
-#            unread when that runs out is published with its progress
-#            unknown. Reading can overshoot by at most the one row already
-#            under way, so it costs at most 45 + 20 seconds of the 90 and
-#            always leaves the reconciliation and the injection their share.
-#            That is what keeps a stuck pipeline visible ON the board instead
-#            of silently stopping the board. One dial moves all of it.
-#            It refuses
+#            no-mistakes costs every row its full bound rather than one, and
+#            a wide enough fleet behind one can outlast the deadline. That
+#            deadline is the ONLY stop: nothing inside the compose yields to
+#            a clock of its own. A refresh that does not finish publishes
+#            nothing and leaves the board exactly as it was - with its own
+#            `generated` stamp still telling the captain how old it is, which
+#            is the honest answer and the one a half-written board could not
+#            give. It refuses
 #            when no board has been built yet; with --best-effort that refusal,
 #            and every other failure, becomes a silent exit 0 with the reason
 #            appended to the bounded state/.bearings-board-refresh.log, so a
@@ -755,18 +752,6 @@ task_progress() {  # <task-id>
        refreshed: .generated}' 2>/dev/null | head -1
 }
 
-# The progress a row carries when this compose could not read it: the state
-# word the template already translates, and no ladder. Reporting unknown is
-# the honest answer, and it is said in the board's own vocabulary rather than
-# in a sentence this script invented - `detail` carries what a reader
-# reported, and nothing read this row.
-unread_progress() {
-  jq -nc --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{state: "unknown", detail: "", step: null, steps: [],
-      active_for: null, last_activity: null,
-      quiet: false, activity: null, refreshed: $now}'
-}
-
 list_placeholders() {  # <data.json> -> "<path>: <value>" lines
   jq -r --arg re "$PLACEHOLDER_RE" '
     . as $doc
@@ -791,7 +776,7 @@ command_compose_check() {  # <data.json>
 
 command_compose() {
   local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' id record card ids tmp readable=true
-  local deterministic=false progress='{}' row progress_until
+  local deterministic=false progress='{}' row
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
@@ -804,17 +789,6 @@ command_compose() {
   done
   case "$lang" in en|hant|hans) ;; *) fail "--lang must be en, hant, or hans" ;; esac
   command -v jq >/dev/null 2>&1 || fail "jq is required"
-  # Every per-row progress read is bounded, but they share one dependency: a
-  # wedged no-mistakes makes EVERY row cost its full bound, not one, so a
-  # per-row bound alone would let the reads spend the whole refresh deadline
-  # and publish nothing. Half that deadline covers this compose ENTIRELY - the
-  # snapshot read and the per-id record and card loops as well as the progress
-  # reads - so the clock starts here, not at the loop, and the other half is
-  # left for the reconciliation and the injection. A row still unread when it
-  # runs out is published with its progress UNKNOWN. A board current about the
-  # fleet and honest about the rows it could not read beats a refresh that
-  # gives up and leaves yesterday's page looking live.
-  progress_until=$(( $(date +%s) + REFRESH_TIMEOUT / 2 ))
   if [ -n "$snapshot_file" ]; then
     [ -f "$snapshot_file" ] || fail "snapshot does not exist: $snapshot_file"
     snapshot=$(cat "$snapshot_file")
@@ -857,13 +831,15 @@ EOF
   done <<EOF
 $(printf '%s\n' "$snapshot" | jq -r '.decisions_open[]? | select(.verb == "captain-hold" and .owner == "(main)") | .id')
 EOF
+  # A row whose projection produced nothing carries NO progress at all. The
+  # payload contract allows that, and it is the only honest answer: a
+  # synthesized `unknown` block is indistinguishable from a real read that
+  # found nothing, and stamping it with a read time would have the board
+  # claim the freshest possible read for the one row nobody read.
   while IFS= read -r row; do
     [ -n "$row" ] || continue
-    card=''
-    if [ "$(date +%s)" -lt "$progress_until" ]; then
-      card=$(task_progress "$row") || card=''
-    fi
-    [ -n "$card" ] || card=$(unread_progress)
+    card=$(task_progress "$row") || continue
+    [ -n "$card" ] || continue
     progress=$(jq -n --argjson acc "$progress" --arg id "$row" --argjson p "$card" \
       '$acc + {($id): $p}')
   done <<EOF
@@ -1343,7 +1319,7 @@ inject_board() {  # <payload.json> <board>
 # bounds itself; the lock records its owner, so a worker killed at the deadline
 # is reclaimed by the next trigger rather than wedging the board for good.
 command_refresh() {
-  local arg rc=0
+  local arg rc=0 said=''
   # Read before anything can fail, so every failure below - in either role -
   # already knows whether --best-effort must absorb it.
   for arg in "$@"; do
@@ -1359,13 +1335,26 @@ command_refresh() {
     refresh_worker "$@"
     return
   fi
-  fm_run_timed "$REFRESH_TIMEOUT" env FM_BEARINGS_BOARD_REFRESH_WORKER=1 \
-    "$SCRIPT_DIR/fm-bearings-board.sh" refresh "$@" || rc=$?
-  [ "$rc" -ne 0 ] || return 0
+  # The worker speaks through this parent, never past it. Killing the worker
+  # at the deadline kills its own children too, and the shell it was running
+  # says so on stderr - a trigger promised silence must not receive that.
+  # Holding the output here means the parent decides what a caller hears:
+  # nothing it did not ask for, and nothing at all under --best-effort.
+  said=$(fm_run_timed "$REFRESH_TIMEOUT" env FM_BEARINGS_BOARD_REFRESH_WORKER=1 \
+    "$SCRIPT_DIR/fm-bearings-board.sh" refresh "$@" 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    [ -z "$said" ] || printf '%s\n' "$said"
+    return 0
+  fi
   [ "$rc" -ne 124 ] \
     || refresh_fail "refresh exceeded its ${REFRESH_TIMEOUT}-second deadline"
   # Any other failure was already reported - and, under --best-effort, already
   # absorbed - by the worker itself; the parent only carries its status.
+  if [ "$REFRESH_BEST_EFFORT" -eq 1 ]; then
+    [ -z "$said" ] || refresh_log "$said"
+    exit 0
+  fi
+  [ -z "$said" ] || printf '%s\n' "$said" >&2
   exit "$rc"
 }
 

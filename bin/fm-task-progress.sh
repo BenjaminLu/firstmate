@@ -59,11 +59,11 @@
 # Bounds and cost: this projection makes exactly ONE external read - the
 # crew-state call - bounded by FM_TASK_PROGRESS_TIMEOUT (default 20 seconds),
 # so one board row costs at most 20 seconds. That bound is per row and the
-# dependency behind it is shared, so it does not bound a whole fleet:
-# bin/fm-bearings-board.sh gives the progress phase a deadline of its own and
-# publishes a row it did not reach with its progress unknown. A bound that
-# trips here degrades the document to unknown with no ladder rather than
-# failing the read.
+# dependency behind it is shared, so it does not bound a whole fleet: a wide
+# fleet behind one wedged CLI can outlast the board's own refresh deadline,
+# which is the single stop and leaves the previous board in place when it
+# fires. A bound that trips here degrades the document to unknown with no
+# ladder rather than failing the read.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
