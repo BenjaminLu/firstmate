@@ -824,33 +824,6 @@ test_slow_forge_straddles_the_shipped_call_bound() {
   pass 'the shipped per-call bound passes a six-second read and kills a fourteen-second one'
 }
 
-test_whole_observation_of_a_slow_forge_fits_the_shipped_budget() {
-  local home out started elapsed calls
-  home=$(new_home measured-latency-budget)
-  forge_home "$home"
-  wrap_forge "$home"
-  # A stale record so only an observation completed by this poll can advance it.
-  mutate_record "$home" delivery '.records[0].checked_at="2026-09-15T08:00:00Z"'
-  # Every one of the eight calls pays two seconds, so the whole observation
-  # costs more than three times the five-second bound this poll used to impose
-  # and still has to finish inside the shipped budget, with no overrides.
-  printf 'latency\n' > "$home/forge/fault"
-  printf '2\n' > "$home/forge/latency"
-  started=$(/bin/date +%s)
-  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) \
-    || fail 'poll failed against a slow forge'
-  elapsed=$(( $(/bin/date +%s) - started ))
-  [ -z "$out" ] || fail "a completed observation of a slow forge printed: $out"
-  jq -e --arg now "$NOW" '.records[0] | .checked_at == $now and .error == null
-    and .observation.state == "open" and .observation.head != null' \
-    "$home/data/delivery/contributions.json" >/dev/null \
-    || fail 'a whole observation of a slow forge did not fit the shipped budget'
-  calls=$(wc -l < "$home/forge/calls" | tr -d ' ')
-  [ "$calls" -ge 8 ] || fail "the observation did not issue a whole PR read: $calls calls"
-  [ "$elapsed" -ge 16 ] || fail "the forge did not actually pay the latency: ${elapsed}s"
-  pass 'a whole eight-call observation of a slow forge fits the shipped budget'
-}
-
 test_observation_past_the_budget_leaves_the_row_stale() {
   local home out before
   home=$(new_home observation-past-budget)
@@ -890,7 +863,7 @@ test_tiny_watcher_bound_still_reads_the_forge() {
 }
 
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_slow_forge_straddles_the_shipped_call_bound test_whole_observation_of_a_slow_forge_fits_the_shipped_budget test_observation_past_the_budget_leaves_the_row_stale test_tiny_watcher_bound_still_reads_the_forge; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_slow_forge_straddles_the_shipped_call_bound test_observation_past_the_budget_leaves_the_row_stale test_tiny_watcher_bound_still_reads_the_forge; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

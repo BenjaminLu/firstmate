@@ -324,9 +324,9 @@ publish_pending() { # task canonical-url record-file
 settle_final() { # canonical-url task... : copy the URL's final observation to every owner
   local url=$1 task
   shift
-  jq -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '
-    [$saved[0][] | .records[] | select(.url == $url
-      and (.observation.state | IN("merged","closed")))] as $final
+  jq -L "$SCRIPT_DIR" -n --slurpfile saved "$TMP/saved.json" --arg url "$url" '
+    include "fm-contributions";
+    [$saved[0][] | .records[] | select(.url == $url and observation_terminal(.))] as $final
     | ([$final[] | select(.error == null)] | first) // ($final | first)' > "$TMP/final.json"
   for task in "$@"; do
     fm_pr_task_id_valid "$task" || { printf 'contributions: invalid durable task id\n'; continue; }

@@ -40,8 +40,7 @@ def observation_terminal($record):
 # A terminal observation with no error beside it is final, so it never expires.
 def observation_final($record):
   $record.error == null and observation_terminal($record);
-# The single definition of a measured contribution: the board's freshness rule
-# and the poll's own reading of which contributions it owes an observation.
+# The board's freshness rule: whether a record counts as a measured observation.
 def observation_fresh($record; $url; $now; $max_age):
   ($record.observation // {}) as $o
   | (observation_final($record)
