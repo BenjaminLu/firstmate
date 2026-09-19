@@ -373,7 +373,101 @@ test_no_mistakes_dod_wording() {
     "no-mistakes DOD still states the --yes ban as a preference"
   assert_no_grep "no-mistakes refuses" "$brief" \
     "no-mistakes DOD must not claim the tool itself refuses --yes"
+
+  # The first done sentence a no-mistakes worker meets arrives dozens of lines
+  # before the CI-green line that governs the mode, so it has to carry its own
+  # condition: workers have declared a committed branch done and had to be
+  # withdrawn by hand.
+  assert_grep "that is the pause before validation, not this mode's finish" "$brief" \
+    "no-mistakes DOD lets its first done sentence read as the end of the task"
+  assert_no_grep "When you believe it is complete, append \`done: {summary}\` to the status file and stop." "$brief" \
+    "no-mistakes DOD still renders an unconditional done imperative"
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
+}
+
+# The captain's standing ask is that a worker close a finding's whole class in one
+# round instead of stacking rounds, so the practices must reach the worker through
+# the only surface every no-mistakes worker reads: its own delivery contract. They
+# are scoped to no-mistakes, where fix rounds exist, and must not leak into the
+# faster paths.
+test_no_mistakes_dod_carries_the_fix_round_technique() {
+  local home id brief other_mode other_id other_brief
+  home="$TMP_ROOT/fix-round-home"
+  mkdir -p "$home/data"
+  id="brief-fix-round-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "brief was not scaffolded"
+
+  # Both surfaces the worker actually controls have to be named, or the practices
+  # read as advice to an agent that does not write the fix.
+  assert_grep "the implementation you commit before starting the run, and how you answer a Fix gate" "$brief" \
+    "no-mistakes DOD must name the two surfaces the fix-round technique applies to"
+
+  # Which flag does what, per no-mistakes axi respond --help: a worker that thinks
+  # instructions decide coverage answers a three-finding gate with one finding
+  # selected, and the two it never selected come back as the next round.
+  assert_grep "\`--findings\` selects the set the round covers" "$brief" \
+    "no-mistakes DOD must name the flag that actually decides a round's coverage"
+  assert_grep "guidance layered onto that already-selected set" "$brief" \
+    "no-mistakes DOD must not let instructions read as what selects a round"
+  assert_grep "fold whatever it finds into the round with \`--add-finding\`" "$brief" \
+    "no-mistakes DOD must name the only flag that adds a self-spotted problem to a round"
+
+  assert_grep "One site is a class" "$brief" \
+    "no-mistakes DOD lost the close-the-whole-class practice"
+  assert_grep "detect it at least two independent ways" "$brief" \
+    "no-mistakes DOD lost the two-detector requirement that keeps a sweep from reporting clean"
+  assert_grep "re-run that sweep over the fix's own diff - yours before the run, the pipeline's after a fix round -" "$brief" \
+    "no-mistakes DOD lost the re-sweep requirement that catches a site the fix itself creates"
+  assert_grep "name any site you deliberately leave unfixed" "$brief" \
+    "no-mistakes DOD lost the stated-split requirement"
+  assert_grep "Your fix is the next candidate" "$brief" \
+    "no-mistakes DOD lost the review-your-own-diff practice"
+  assert_grep "reverting the production fix, confirming the test goes red, and restoring it" "$brief" \
+    "no-mistakes DOD lost the test-vacuity practice"
+  assert_grep "Read the primary source before writing a check" "$brief" \
+    "no-mistakes DOD lost the primary-source practice"
+
+  # Every practice a worker could read as a worktree edit has to carry its own
+  # mid-run half, because the no-hand-edit rule sits paragraphs away from these
+  # bullets and a worker who reads only the bullet must not reach an edit.
+  assert_grep "Once a run is active you never touch the worktree" "$brief" \
+    "no-mistakes DOD must bar a hand-run vacuity proof during an active run"
+  assert_grep "the pipeline's fix commit rather than one you are about to submit" "$brief" \
+    "no-mistakes DOD must say whose diff the review pass runs over mid-run"
+
+  # The long form stays in the external skill, and it is split across two
+  # references: a worker sent to only one of them for the class sweep lands in a
+  # file that opens by disclaiming class coverage and writes a single-pattern
+  # sweep. The run structure around them stays unnamed.
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`greenlight` skill is installed at `~/.claude/skills/greenlight`' "$brief" \
+    "no-mistakes DOD must say where the greenlight long form lives"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`references/generalize.md` for the long form of what a class is' "$brief" \
+    "no-mistakes DOD must point the class sweep at the reference that covers it"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep '`references/verify-your-fix.md` for the long form of the pass over your own diff' "$brief" \
+    "no-mistakes DOD must point the self-review pass at the reference that covers it"
+  assert_no_grep "skills/greenlight/SKILL.md" "$brief" \
+    "no-mistakes DOD must not point at the greenlight run structure"
+  assert_grep "taking the technique and not its run structure" "$brief" \
+    "no-mistakes DOD must bound the greenlight pointer to the technique"
+  assert_no_grep "the PR body" "$brief" \
+    "no-mistakes DOD must not name a surface this worker never writes"
+
+  # Both faster paths, not just one: neither runs the pipeline whose rounds these
+  # practices bound.
+  for other_mode in direct-PR local-only; do
+    other_id="brief-fix-round-$other_mode"
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$other_id" some-proj --mode "$other_mode" >/dev/null 2>&1
+    other_brief="$home/data/$other_id/brief.md"
+    assert_present "$other_brief" "$other_mode: brief was not scaffolded"
+    assert_no_grep "One site is a class" "$other_brief" \
+      "$other_mode brief must not carry the no-mistakes fix-round technique"
+  done
+  pass "fm-brief.sh: no-mistakes DOD carries the fix-round technique and the faster paths do not"
 }
 
 test_ask_user_escalation_format() {
@@ -960,6 +1054,7 @@ test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_no_mistakes_dod_carries_the_fix_round_technique
 test_ask_user_escalation_format
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete

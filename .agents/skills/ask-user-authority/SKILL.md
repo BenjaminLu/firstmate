@@ -32,8 +32,9 @@ It stops at the finding, routes the decision to firstmate, and applies only the 
 4. Count the fix rounds already spent on the step this finding came from.
    From the fourth round on one step, the correction rate is itself the evidence: each narrow remedy is producing the next finding.
    The instructions firstmate passes with that gate's Fix stop naming a narrow remedy and instead ask for the coherent change - what keeps producing these findings, the single change that would close them together, and whether the honest answer is to revert a chunk of the work or narrow the task.
-   Nothing carries a question to the reviewer and returns a reply, so never wait for one: `no-mistakes axi respond --action fix --instructions` reaches the next fix round, and the only thing that comes back is the next gate report.
+   Nothing carries a question to the reviewer and returns a reply, so never wait for one: `no-mistakes axi respond --action fix --findings --instructions` reaches the next fix round, and the only thing that comes back is the next gate report.
    Read that report as evidence, not authority: firstmate still decides, and escalates under step 5 when the coherent change would revert or narrow what the captain accepted.
+   How a worker makes any one round close its finding for good is owned by the no-mistakes Definition of done in `bin/fm-dod-lib.sh`.
 5. Escalate only genuinely ambiguous findings:
    - a Fix that would materially expand the contract by adding a new guarantee, threat model, subsystem, abstraction, compatibility surface, state machine, continuous-monitoring requirement, generalized framework, or broader architecture not required by the accepted intent
    - a product or architecture call not settled by accepted intent
