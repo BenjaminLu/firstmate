@@ -1319,17 +1319,23 @@ test_a_symlinked_import_target_is_reported_not_refused() {
 }
 
 
-# The caveat only counts where the operator is looking. The scan's record goes
-# to stdout, which bin/fm-spawn.sh discards, so a clear verdict that named its
-# unexamined dimensions only there reached nobody at dispatch time. It has to
-# arrive on stderr, on every clear rather than only on a failure, because a
-# clean verdict is exactly when the unexamined part matters.
-test_a_clear_verdict_names_what_it_did_not_check_on_stderr() {
+# The caveat only counts where the operator is looking, and only where there is
+# something to warn about. The scan's record goes to stdout, which
+# bin/fm-spawn.sh discards, so a clear verdict that named its unexamined
+# dimensions only there reached nobody at dispatch time. It has to arrive on
+# stderr - but only on a host that actually HAS one of those files, because a
+# caveat about a file that does not exist is a warning about a risk that cannot
+# occur, and that is what teaches an operator to skip the one that matters.
+# Both directions are pinned here; one without the other is half a contract.
+test_a_clear_verdict_warns_on_stderr_when_a_chain_is_unexamined() {
   local row err out status
   row=$(import_case imports-clear-stderr)
   read_case "$row"
   printf '# p\n\n@AGENTS.md\n' > "$WT/CLAUDE.md"
   printf 'inner\n' > "$WT/AGENTS.md"
+  # The store lives in $CONFIG, so this is the user-global memory file the scan
+  # deliberately never reads - existence alone is what the caveat turns on.
+  printf '# global\n' > "$CONFIG/CLAUDE.md"
   err="$CASE_DIR/stderr.txt"
   out=$(CLAUDE_CONFIG_DIR="$CONFIG" HOME="$CONFIG" "$TRUST" "$WT" "$PROJ" 2>"$err") && status=0 || status=$?
   expect_code 0 "$status" "a chain that stays inside the worktree must still pass: $out"
@@ -1337,7 +1343,27 @@ test_a_clear_verdict_names_what_it_did_not_check_on_stderr() {
     "the clear verdict did not tell the operator what it had not checked"
   assert_grep "checked this project's own instruction files" "$err" \
     "the clear verdict did not tell the operator what it had checked"
-  pass "fm-claude-trust.sh: a clear verdict names what it checked and what it did not, on the stream the spawn shows"
+  pass "fm-claude-trust.sh: a clear verdict warns on the stream the spawn shows when a chain was left unexamined"
+}
+
+# The other direction, and it is the one that keeps the warning worth reading:
+# with no user-global memory file and nothing above the worktree, the clear
+# verdict is genuinely complete and an ordinary dispatch gains no new output.
+test_a_clear_verdict_stays_quiet_when_nothing_is_unexamined() {
+  local row err out status
+  row=$(import_case imports-clear-quiet)
+  read_case "$row"
+  printf '# p\n\n@AGENTS.md\n' > "$WT/CLAUDE.md"
+  printf 'inner\n' > "$WT/AGENTS.md"
+  [ ! -e "$CONFIG/CLAUDE.md" ] || fail "the quiet case needs a config directory with no user memory file"
+  err="$CASE_DIR/stderr.txt"
+  out=$(CLAUDE_CONFIG_DIR="$CONFIG" HOME="$CONFIG" "$TRUST" "$WT" "$PROJ" 2>"$err") && status=0 || status=$?
+  expect_code 0 "$status" "a chain that stays inside the worktree must still pass: $out"
+  [ ! -s "$err" ] || fail "a complete clear verdict put output on an ordinary dispatch: $(cat "$err")"
+  # The record on stdout is unchanged either way - it always names both.
+  assert_contains "$out" "were not examined" \
+    "the recorded clear verdict stopped naming the dimensions it did not examine"
+  pass "fm-claude-trust.sh: a clear verdict with nothing left unexamined stays silent on an ordinary dispatch"
 }
 
 # A verdict Claude Code's own record settles carries no such clause: once the
@@ -1406,7 +1432,8 @@ test_a_punctuated_spelling_of_an_already_scanned_file_stays_clear
 test_an_import_naming_an_outside_directory_does_not_block
 test_a_memory_file_symlinked_out_of_the_worktree_is_reported
 test_a_symlinked_import_target_is_reported_not_refused
-test_a_clear_verdict_names_what_it_did_not_check_on_stderr
+test_a_clear_verdict_warns_on_stderr_when_a_chain_is_unexamined
+test_a_clear_verdict_stays_quiet_when_nothing_is_unexamined
 test_a_record_derived_clear_carries_no_caveat
 test_a_memory_file_symlinked_out_of_the_worktree_is_still_read
 test_secondmate_home_external_import_blocks_the_launch

@@ -47,9 +47,13 @@
 # checked one, the scan-derived `clear` verdict says out loud which dimensions
 # it did not examine - and says it on STDERR, the stream the spawn actually
 # shows, because a caveat written where the caller discards it is not said at
-# all. It goes out on every clear, not only on a failure: a clean verdict is
-# exactly when the unexamined part matters, since that is when someone acts on
-# it. Stdout keeps the full record; stderr carries the operator's one clause.
+# all. It goes out on a clean verdict, not only on a failure, because a clean
+# verdict is exactly when the unexamined part matters - that is when someone
+# acts on it - but only where one of those files actually EXISTS on the host: a
+# caveat about a file that is not there warns of a risk that cannot occur, and
+# that is what teaches an operator to skip the one that matters. Existence is
+# all that is read; no byte of those files is opened. Stdout keeps the full
+# record either way; stderr carries the operator's one clause.
 # Only worktree mode reaches this second dialog's flags: a
 # secondmate home has no separate "project" entry to carry consent forward
 # from, so its registration stays trust-only.
@@ -728,6 +732,30 @@ const MAX_IMPORT_DEPTH = 4;
 // approval or its explicit decline, no dialog renders whatever any chain
 // contains - and a caveat attached where no residual doubt exists is what
 // teaches an operator to skip the one that matters.
+// Whether there is anything unexamined to warn ABOUT. The clause above is worth
+// an operator's attention only where one of those files actually exists: on a
+// host with neither, the scan-derived clear is genuinely complete and a caveat
+// would be a warning about a risk that cannot occur - which is what teaches
+// someone to skip the one that matters. Existence only; nothing here reads a
+// byte of those files, so this stays outside the content scan that is
+// deliberately not performed (see the block above).
+const unexaminedExists = () => {
+  const names = ["CLAUDE.md", "CLAUDE.local.md"];
+  const configDir = path.dirname(store);
+  for (const name of names) {
+    if (fs.existsSync(path.join(configDir, name))) return true;
+  }
+  let cursor = path.dirname(dir);
+  let previous = dir;
+  while (cursor !== previous) {
+    for (const name of names) {
+      if (fs.existsSync(path.join(cursor, name))) return true;
+    }
+    previous = cursor;
+    cursor = path.dirname(cursor);
+  }
+  return false;
+};
 const UNEXAMINED = `the operator's user-global ~/.claude memory chain and any CLAUDE.md or CLAUDE.local.md in directories above ${dir} were not examined`;
 // A third field carries the sentence an OPERATOR reads, as opposed to the
 // second, which is the record: same fact, no paths, one clause of what was
@@ -970,7 +998,9 @@ if (undecidable.length > 0) say("unknown", listOf(undecidable));
 say(
   "clear",
   `no import in the project memory chain under ${dir} (CLAUDE.md, CLAUDE.local.md and their @imports, followed to the ${MAX_IMPORT_DEPTH + 1} memory files Claude Code was measured to load - this directory's own memory file plus at most ${MAX_IMPORT_DEPTH} imported ones) reaches outside it; ${UNEXAMINED}`,
-  "checked this project's own instruction files and everything they import; did not check your personal instruction file or any instruction file in a folder above this project",
+  unexaminedExists()
+    ? "checked this project's own instruction files and everything they import; did not check your personal instruction file or any instruction file in a folder above this project"
+    : undefined,
 );
 NODE
 }
