@@ -237,7 +237,13 @@
 #   created or updated that ref and the spawn launched, so this is a behavior
 #   change for such checkouts. Restoring that fetch would re-add a round trip
 #   the intent cut, so it is left to the captain; bin/fm-review-diff.sh keeps
-#   its own narrowed fetch for the same reason. When no origin
+#   its own narrowed fetch for the same reason. The refspec refusal therefore
+#   names that cause apart from an unreachable origin or an unresolvable
+#   default branch, names the clone, and prints the one command that widens the
+#   refspec so the operator fixes the clone once instead of per spawn: `remote
+#   set-branches --add` when no entry names the branch, and a `--replace-all`
+#   back to the standard wildcard when a negative entry excludes it, which no
+#   added positive entry can undo. It still refuses rather than fetching. When no origin
 #   configuration is detected, spawn skips that remote freshness check and
 #   launches from the clean worktree's current HEAD. Relaunch reuses the
 #   recorded worktree without fetching or resetting its base. An unreachable
@@ -2872,13 +2878,25 @@ spawn_refspec_side_match() { # <refspec-side> <ref>
 # refspec matching the branch excludes it however many positives named it, and
 # a refspec landing it anywhere but refs/remotes/origin/<branch> leaves that
 # ref untouched, so neither counts as covered.
+# On a negative verdict this publishes which of those two shapes it saw in
+# SPAWN_REFSPEC_MISS ('excluded' or 'unnamed') and, for an exclusion, the
+# offending entry in SPAWN_REFSPEC_MISS_SPEC, because the two need different
+# remedies: a positive entry can simply be added beside the existing ones,
+# while a negative entry keeps excluding the branch however many positives name
+# it. Both are read only by this function's caller, immediately.
 spawn_worktree_fetch_covers_branch() { # <worktree> <branch>
   local worktree=$1 ref="refs/heads/$2" want="refs/remotes/origin/$2" spec src dst middle covered=
+  SPAWN_REFSPEC_MISS=unnamed
+  SPAWN_REFSPEC_MISS_SPEC=
   while IFS= read -r spec; do
     [ -n "$spec" ] || continue
     case $spec in
       '^'*)
-        spawn_refspec_side_match "${spec#^}" "$ref" >/dev/null && return 1
+        if spawn_refspec_side_match "${spec#^}" "$ref" >/dev/null; then
+          SPAWN_REFSPEC_MISS=excluded
+          SPAWN_REFSPEC_MISS_SPEC=$spec
+          return 1
+        fi
         continue
         ;;
     esac
@@ -2890,7 +2908,28 @@ spawn_worktree_fetch_covers_branch() { # <worktree> <branch>
     case $dst in *'*'*) dst="${dst%%'*'*}$middle${dst#*'*'}" ;; esac
     [ "$dst" = "$want" ] && covered=yes
   done < <(git -C "$worktree" config --get-all remote.origin.fetch 2>/dev/null)
-  [ -n "$covered" ]
+  if [ -n "$covered" ]; then
+    SPAWN_REFSPEC_MISS=
+    SPAWN_REFSPEC_MISS_SPEC=
+    return 0
+  fi
+  return 1
+}
+
+# The refusal for the one cause an operator can fix once and for all: this
+# clone's fetch refspec never names the default branch, so the single fetch
+# spawn makes cannot refresh it. Say that in those words - not as an origin,
+# network, or default-branch-resolution failure - and hand over the exact
+# command that widens the refspec, keyed to which shape the refspec has.
+spawn_report_refspec_cannot_refresh() { # <worktree> <branch> <target>
+  local worktree=$1 branch=$2 target=$3
+  if [ "${SPAWN_REFSPEC_MISS:-}" = excluded ]; then
+    echo "error: the clone behind pooled worktree '$worktree' does not fetch its default branch '$branch': remote.origin.fetch excludes it with '$SPAWN_REFSPEC_MISS_SPEC', so spawn's one fetch of origin left '$target' exactly as this slot last saw it. Origin is reachable and '$branch' is its default branch; only the refspec is the problem; refusing to launch from a potentially stale base" >&2
+    echo "fix the clone once by restoring the standard refspec (this drops every narrowing entry, the excluding one included): git -C '$worktree' config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'" >&2
+    return 0
+  fi
+  echo "error: the clone behind pooled worktree '$worktree' does not fetch its default branch '$branch': remote.origin.fetch never maps 'refs/heads/$branch' onto '$target' - the shape of a single-branch clone, or of a refspec narrowed by hand - so spawn's one fetch of origin left that ref exactly as this slot last saw it. Origin is reachable and '$branch' is its default branch; only the refspec is the problem; refusing to launch from a potentially stale base" >&2
+  echo "fix the clone once by widening the refspec: git -C '$worktree' remote set-branches --add origin '$branch'" >&2
 }
 
 freshen_spawn_worktree_base() { # <worktree>
@@ -2934,7 +2973,7 @@ freshen_spawn_worktree_base() { # <worktree>
   # ref exactly as the slot last saw it, and resetting onto it would launch
   # from a stale base without a word; refuse instead.
   if ! spawn_worktree_fetch_covers_branch "$worktree" "$default"; then
-    echo "error: remote.origin.fetch for pooled worktree '$worktree' does not map 'refs/heads/$default' onto '$target', so the fetch of origin could not refresh it; refusing to launch from a potentially stale base" >&2
+    spawn_report_refspec_cannot_refresh "$worktree" "$default" "$target"
     return 1
   fi
   expected=$(git -C "$worktree" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {

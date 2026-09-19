@@ -492,12 +492,31 @@ test_fetch_refspec_missing_the_default_branch_refuses_the_pool() {
   git -C "$POOL_DIR" remote set-head origin main
   before=$(git -C "$POOL_DIR" rev-parse HEAD)
 
-  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] \
     || fail "spawn launched from a base its one fetch could not refresh"$'\n'"$out"
   assert_contains "$out" "refusing to launch from a potentially stale base" \
     "spawn did not clearly refuse a refspec that cannot refresh the default branch"
+  # The refusal has to be readable as this cause and no other: it names the
+  # clone, says the refspec never maps the default branch, and rules out the
+  # neighbouring failures an operator would otherwise go chasing.
+  assert_contains "$out" "does not fetch its default branch '$DEFAULT_BRANCH'" \
+    "the refusal did not name the cause as the clone not fetching its default branch"
+  assert_contains "$out" "$POOL_DIR" "the refusal did not name the clone it is talking about"
+  assert_contains "$out" "only the refspec is the problem" \
+    "the refusal did not separate itself from an unreachable origin or an unresolved default branch"
+  assert_not_contains "$out" "could not resolve origin's current default branch" \
+    "the refspec refusal borrowed the unresolved-default-branch wording"
+  assert_not_contains "$out" "could not fetch origin" \
+    "the refspec refusal borrowed the unreachable-origin wording"
+  # The remedy is the point: one command the operator runs once on the clone.
+  assert_contains "$out" \
+    "git -C '$POOL_DIR' remote set-branches --add origin '$DEFAULT_BRANCH'" \
+    "the refusal did not print the command that widens the refspec"
+  # Still one fetch: the remedy is advice, not a second round trip taken here.
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 1 ] \
+    || fail "spawn fetched more than once instead of refusing:"$'\n'"$(cat "$CASE_DIR/git.log")"
   tracked=$(git -C "$POOL_DIR" rev-parse refs/remotes/origin/main)
   current=$(git --git-dir="$CASE_DIR/origin.git" rev-parse "$DEFAULT_BRANCH")
   [ "$tracked" != "$current" ] \
@@ -510,6 +529,72 @@ test_fetch_refspec_missing_the_default_branch_refuses_the_pool() {
     printf '# observed base: origin/main=%s origin tip=%s\n' "$tracked" "$current"
   fi
   pass "a fetch refspec that omits the default branch refuses the pooled worktree"
+}
+
+# A negative refspec entry excludes the default branch however many positive
+# entries name it, so the remedy above - adding one more positive entry - would
+# not move that slot a single spawn further. This case exists to prove the
+# refusal tells those two shapes apart and hands over the command that actually
+# clears the exclusion.
+test_negatively_excluded_default_branch_names_its_own_remedy() {
+  local rec id out status before
+  id='pool-excluded-refspec-r1'
+  rec=$(make_case excluded-refspec "$id")
+  read_case_record "$rec"
+  git -C "$PROJECT_DIR" config --add remote.origin.fetch "^refs/heads/$DEFAULT_BRANCH"
+  git -C "$POOL_DIR" update-ref "refs/remotes/origin/$DEFAULT_BRANCH" "$INITIAL_SHA"
+  git -C "$POOL_DIR" remote set-head origin "$DEFAULT_BRANCH"
+  before=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_counting_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "spawn launched although a negative refspec excluded the default branch"$'\n'"$out"
+  assert_contains "$out" "refusing to launch from a potentially stale base" \
+    "spawn did not refuse a refspec that excludes the default branch"
+  assert_contains "$out" "excludes it with '^refs/heads/$DEFAULT_BRANCH'" \
+    "the refusal did not name the negative entry doing the excluding"
+  assert_contains "$out" \
+    "git -C '$POOL_DIR' config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'" \
+    "the refusal did not print the command that clears a negative exclusion"
+  assert_not_contains "$out" "remote set-branches --add" \
+    "the refusal offered an added positive entry, which a negative entry keeps excluding"
+  [ "$(fetch_count "$CASE_DIR/git.log")" = 1 ] \
+    || fail "spawn fetched more than once instead of refusing:"$'\n'"$(cat "$CASE_DIR/git.log")"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+    || fail "spawn moved the slot onto a ref its fetch never refreshed"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "refused spawn published task metadata"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# observed excluded-refspec refusal: %s\n' "$out"
+  fi
+  pass "a negative refspec entry refuses with the remedy that actually clears it"
+}
+
+# The other half of the guarantee: an ordinary clone - the wildcard refspec git
+# installs - is untouched by any of this. It launches, and the operator never
+# sees a word about refspecs.
+test_ordinary_clone_refspec_is_untouched() {
+  local rec id out status specs
+  id='pool-wildcard-refspec-r1'
+  rec=$(make_case wildcard-refspec "$id")
+  read_case_record "$rec"
+  specs=$(git -C "$PROJECT_DIR" config --get-all remote.origin.fetch)
+  case $specs in
+    *'refs/heads/*:refs/remotes/origin/*'*) ;;
+    *) fail "fixture did not give the clone the ordinary wildcard refspec: ${specs:-<none>}" ;;
+  esac
+
+  out=$(run_spawn "$id" --mode no-mistakes --yolo off)
+  status=$?
+  expect_code 0 "$status" "an ordinary wildcard refspec should still launch"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "the ordinary-refspec spawn did not report success"
+  assert_not_contains "$out" "does not fetch its default branch" \
+    "an ordinary clone was told its refspec cannot refresh the default branch"
+  assert_not_contains "$out" "remote set-branches --add" \
+    "an ordinary clone was handed the narrowed-refspec remedy"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$(git -C "$POOL_DIR" rev-parse "origin/$DEFAULT_BRANCH")" ] \
+    || fail "the ordinary-refspec spawn did not launch from the current origin tip"
+  pass "an ordinary wildcard refspec launches with no refspec diagnosis at all"
 }
 
 # A slot left on a stale submodule pin is the field failure this diagnosis exists
@@ -940,6 +1025,8 @@ test_direct_pr_and_scout_refresh_before_launch
 test_dirty_pool_refuses_without_discarding_work
 test_unresolved_remote_default_refuses_pool
 test_fetch_refspec_missing_the_default_branch_refuses_the_pool
+test_negatively_excluded_default_branch_names_its_own_remedy
+test_ordinary_clone_refspec_is_untouched
 test_unreachable_origin_refuses_stale_pool_base
 test_originless_pool_launches_without_a_freshness_fetch
 test_originless_dirty_pool_refuses_without_discarding_work
