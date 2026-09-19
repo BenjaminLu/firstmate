@@ -1549,6 +1549,66 @@ if (a.some((r) => r.includes("{{FM_ROOT}}"))) { console.error("left the placehol
   pass "the tracked allow-list is offered at detect time, merged only on consent, additive, idempotent, and refuses rather than rewriting what it cannot parse"
 }
 
+# A rule approved through a prompt lands in the PROJECT-local settings file, not
+# the user one. Counting only the user file tells a home its commands are not
+# pre-approved when they demonstrably are - a false claim about what the operator
+# can observe, which is worse than no check.
+test_claude_permission_probe_counts_every_settings_file() {
+  local case_dir out full base
+  case_dir=$(clone_truth_case perms-sources)
+  cat > "$case_dir/fakebin/claude" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/claude"
+  add_real_node "$case_dir/fakebin"
+  # A fake FM_ROOT carrying the tracked starter, so the project-local settings
+  # file this test writes is the one the check resolves.
+  mkdir -p "$case_dir/root/assets" "$case_dir/root/.claude"
+  cp "$ROOT/assets/claude-permissions.starter.json" "$case_dir/root/assets/"
+
+  run_sources() {
+    env PATH="$case_dir/fakebin:$BASE_PATH" FM_HOME="$case_dir/home" \
+      CLAUDE_CONFIG_DIR="$case_dir/claude" FM_ROOT_OVERRIDE="$case_dir/root" \
+      FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null \
+      | sed -n 's/^CLAUDE_PERMISSIONS: \([0-9][0-9]*\) of.*/\1/p'
+  }
+
+  base=$(run_sources)
+  [ -n "$base" ] || fail "expected a permissions count with no settings present"
+
+  # Three rules present ONLY in the project-local file must reduce the count.
+  printf '%s\n' '{"permissions":{"allow":["Bash(no-mistakes:*)","Bash(gh-axi:*)","Bash(tasks-axi:*)"]}}' \
+    > "$case_dir/root/.claude/settings.local.json"
+  full=$(run_sources)
+  [ -n "$full" ] || fail "expected a permissions count with project-local rules present"
+  [ "$full" -eq $((base - 3)) ] \
+    || fail "project-local rules were not counted: $base -> $full, expected $((base - 3))"
+
+  # And with every rule there, the check has nothing to report.
+  node -e '
+const fs = require("fs");
+const starter = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const allow = starter.permissions.allow.map((r) => r.split("{{FM_ROOT}}").join(process.argv[3]));
+fs.writeFileSync(process.argv[2], JSON.stringify({ permissions: { allow } }));
+' "$case_dir/root/assets/claude-permissions.starter.json" "$case_dir/root/.claude/settings.local.json" "$case_dir/root"
+  out=$(run_sources)
+  [ -z "$out" ] || fail "a home covered entirely by project-local rules should be silent, got count $out"
+
+  # A settings file that exists and will not parse is an error, never an empty
+  # one: treating it as carrying no rules is how the false claim comes back.
+  printf '%s\n' '{not json' > "$case_dir/claude/settings.local.json"
+  out=$(env PATH="$case_dir/fakebin:$BASE_PATH" FM_HOME="$case_dir/home" \
+    CLAUDE_CONFIG_DIR="$case_dir/claude" FM_ROOT_OVERRIDE="$case_dir/root" \
+    FM_BOOTSTRAP_NETWORK=skip "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  case "$out" in
+    *"CLAUDE_PERMISSIONS: could not compare"*) ;;
+    *) fail "an unparseable settings file in the read set should be reported, got: $out" ;;
+  esac
+  rm -f "$case_dir/claude/settings.local.json"
+  pass "the permission count reflects every settings file a rule can be in, and an unreadable one is reported rather than read as empty"
+}
+
 # A probe that never ran is not a clean result. With no usable interpreter the
 # comparison cannot happen at all, and the session start has to say so rather
 # than report a home as fully pre-approved while every command still prompts.
@@ -1748,6 +1808,7 @@ test_diagram_design_skill_is_reported_as_a_manual_install
 test_lavish_named_session_is_a_capability_probe_not_a_version_floor
 test_experimental_backend_is_always_stated
 test_claude_permission_starter_is_offered_then_merged_on_consent
+test_claude_permission_probe_counts_every_settings_file
 test_claude_permission_probe_reports_when_it_cannot_compare
 test_dormant_fork_checks_are_reported
 test_actions_check_uses_this_repositorys_own_origin

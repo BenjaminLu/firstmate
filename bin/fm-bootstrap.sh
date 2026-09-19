@@ -1542,6 +1542,23 @@ startup_memory_budget_setup() {
 # version, because the union only ever adds the exact strings that are absent.
 CLAUDE_PERMISSIONS_STARTER="$FM_ROOT/assets/claude-permissions.starter.json"
 
+# WHERE A RULE CAN ALREADY BE. A rule the operator approved through a prompt, or
+# added with /permissions, does not land in the user settings file: it lands in
+# the PROJECT-local one. Comparing the shipped list against the user file alone
+# therefore reports commands as un-approved that in fact never prompt - a claim
+# about observable behaviour that is simply false, and the exact silent-wrong
+# shape this change exists to stop.
+#
+# So detection reads every settings file this session can actually be governed
+# by and asks whether a rule is present in ANY of them, while the merge keeps
+# writing to the user file: that is the only one of the four that survives, as
+# bin/fm-spawn.sh rewrites a worktree's .claude/settings.local.json on every
+# spawn.
+#
+# What this DOES NOT model, and the reported line says so rather than implying
+# otherwise: precedence between the files, `deny` rules that could override an
+# `allow`, and any enterprise or managed policy file, none of which are readable
+# from here.
 claude_settings_path() {
   local config_dir=${CLAUDE_CONFIG_DIR:-}
   if [ -n "$config_dir" ]; then
@@ -1552,6 +1569,19 @@ claude_settings_path() {
   printf '%s/.claude/settings.json' "$HOME"
 }
 
+# Every settings file that can carry an allow rule for this session, newline
+# separated, most durable first. The user file is always present in the list
+# even when absent on disk, because it is the merge target.
+claude_settings_read_set() {
+  local user_settings config_dir
+  user_settings=$(claude_settings_path) || return 1
+  printf '%s\n' "$user_settings"
+  config_dir=${CLAUDE_CONFIG_DIR:-"${HOME:-}/.claude"}
+  printf '%s/settings.local.json\n' "$config_dir"
+  printf '%s/.claude/settings.json\n' "$FM_ROOT"
+  printf '%s/.claude/settings.local.json\n' "$FM_ROOT"
+}
+
 # Both halves run the same node program so detection and merge can never
 # disagree about which rules count as present. `report` prints the missing rules
 # and changes nothing; `merge` writes the union and prints what it added.
@@ -1559,7 +1589,10 @@ claude_permissions_run() {  # <mode> <starter> <settings> <fm-root>
   node -e '
 const fs = require("fs");
 const path = require("path");
-const [mode, starterPath, settingsPath, fmRoot] = process.argv.slice(1);
+const [mode, starterPath, settingsPath, fmRoot, readSetRaw] = process.argv.slice(1);
+// Detection reads every file a rule can already be in; the merge still writes
+// only to settingsPath, the one that survives a spawn.
+const readSet = (readSetRaw || settingsPath).split("\n").filter(Boolean);
 
 let starter;
 try {
@@ -1571,38 +1604,57 @@ try {
 const wanted = (starter.permissions && starter.permissions.allow || [])
   .map((r) => r.split("{{FM_ROOT}}").join(fmRoot));
 
+// readOne returns the allow rules of one settings file. An absent file is
+// simply empty; a file that exists but cannot be read is an ERROR, never an
+// empty one, because treating an unreadable file as carrying no rules is how a
+// home that is fully configured gets told it is not.
+function readOne(path) {
+  if (!fs.existsSync(path)) return { allow: [], settings: null, present: false };
+  const st = fs.lstatSync(path);
+  if (!st.isFile()) throw new Error("settings path is not a regular file: " + path);
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+  } catch (e) {
+    throw new Error("settings is not valid JSON (" + path + "): " + e.message);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("settings is not a JSON object: " + path);
+  }
+  const allow = (parsed.permissions && Array.isArray(parsed.permissions.allow))
+    ? parsed.permissions.allow
+    : [];
+  return { allow, settings: parsed, present: true, mode: st.mode & 0o777 };
+}
+
 let settings = {};
 // Default only for a file this run creates; an existing file keeps its own mode,
 // because silently tightening a settings file nobody asked to tighten is a
 // change the operator would have to discover for themselves.
 let fileMode = 0o600;
-if (fs.existsSync(settingsPath)) {
-  const st = fs.lstatSync(settingsPath);
-  if (!st.isFile()) {
-    console.error("settings path is not a regular file");
-    process.exit(3);
+const have = new Set();
+const readPaths = [];
+try {
+  for (const path of readSet) {
+    const got = readOne(path);
+    got.allow.forEach((r) => have.add(r));
+    if (got.present) readPaths.push(path);
+    if (path === settingsPath && got.present) {
+      settings = got.settings;
+      fileMode = got.mode;
+    }
   }
-  fileMode = st.mode & 0o777;
-  try {
-    settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  } catch (e) {
-    console.error("settings is not valid JSON: " + e.message);
-    process.exit(3);
-  }
-  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
-    console.error("settings is not a JSON object");
-    process.exit(3);
-  }
+} catch (e) {
+  console.error(e.message);
+  process.exit(3);
 }
 
-const have = new Set(
-  (settings.permissions && Array.isArray(settings.permissions.allow))
-    ? settings.permissions.allow
-    : []
-);
 const missing = wanted.filter((r) => !have.has(r));
 
 if (mode === "report") {
+  // The first line names what was actually read, so the operator line can say
+  // what it checked instead of implying it checked everything.
+  console.log("READ\t" + readPaths.join("\t"));
   missing.forEach((r) => console.log(r));
   process.exit(missing.length ? 1 : 0);
 }
@@ -1643,19 +1695,27 @@ claude_permissions_applicable() {
 # a clean result is precisely how a home ends up prompting for every command
 # while its session start says all is well.
 detect_claude_permissions() {
-  local settings missing count status
+  local settings read_set out missing count status read_line checked
   claude_permissions_applicable || return 0
   [ -f "$CLAUDE_PERMISSIONS_STARTER" ] || return 0
   settings=$(claude_settings_path) || return 0
-  missing=$(claude_permissions_run report "$CLAUDE_PERMISSIONS_STARTER" "$settings" "$FM_ROOT" 2>/dev/null)
+  read_set=$(claude_settings_read_set) || return 0
+  out=$(claude_permissions_run report "$CLAUDE_PERMISSIONS_STARTER" "$settings" "$FM_ROOT" "$read_set" 2>/dev/null)
   status=$?
   [ "$status" -eq 0 ] && return 0
+  read_line=$(printf '%s\n' "$out" | sed -n '1s/^READ\t//p')
+  missing=$(printf '%s\n' "$out" | sed '1d')
   if [ "$status" -ne 1 ] || [ -z "$missing" ]; then
-    echo "CLAUDE_PERMISSIONS: could not compare $settings against this repository's command allow-list, so whether workers will prompt for ordinary fleet commands is unknown - merge it deliberately with: $FM_ROOT/bin/fm-bootstrap.sh install-permissions"
+    echo "CLAUDE_PERMISSIONS: could not compare this repository's command allow-list against $settings, so whether workers will prompt for ordinary fleet commands is unknown - merge it deliberately with: $FM_ROOT/bin/fm-bootstrap.sh install-permissions"
     return 0
   fi
+  # Name the files actually read, and the thing this comparison does not model,
+  # so the count is a claim the operator can check rather than one they have to
+  # trust.
+  checked=$(printf '%s' "$read_line" | tr '\t' ' ')
+  [ -n "$checked" ] || checked="no existing settings file"
   count=$(printf '%s\n' "$missing" | wc -l | tr -d ' ')
-  echo "CLAUDE_PERMISSIONS: $count of this repository's toolchain commands are not pre-approved in $settings, so a worker will stop and ask before ordinary fleet commands such as the validation pipeline - merge the shipped list with: $FM_ROOT/bin/fm-bootstrap.sh install-permissions"
+  echo "CLAUDE_PERMISSIONS: $count of this repository's toolchain commands are not pre-approved in any settings file this session reads, so a worker will stop and ask before ordinary fleet commands such as the validation pipeline - checked: $checked; not checked: precedence between those files, deny rules, and any managed policy - merge the shipped list into $settings with: $FM_ROOT/bin/fm-bootstrap.sh install-permissions"
 }
 
 if [ "${1:-}" = "lavish-compatible" ]; then
@@ -1669,7 +1729,9 @@ fi
 if [ "${1:-}" = "install-permissions" ]; then
   [ -f "$CLAUDE_PERMISSIONS_STARTER" ]     || { echo "error: allow-list starter missing at $CLAUDE_PERMISSIONS_STARTER" >&2; exit 1; }
   PERMISSIONS_SETTINGS=$(claude_settings_path)     || { echo "error: neither CLAUDE_CONFIG_DIR nor HOME is set, so the Claude settings file cannot be located" >&2; exit 1; }
-  if PERMISSIONS_ADDED=$(claude_permissions_run merge "$CLAUDE_PERMISSIONS_STARTER" "$PERMISSIONS_SETTINGS" "$FM_ROOT"); then
+  PERMISSIONS_READ_SET=$(claude_settings_read_set) \
+    || { echo "error: could not resolve the settings files to compare against" >&2; exit 1; }
+  if PERMISSIONS_ADDED=$(claude_permissions_run merge "$CLAUDE_PERMISSIONS_STARTER" "$PERMISSIONS_SETTINGS" "$FM_ROOT" "$PERMISSIONS_READ_SET"); then
     if [ -z "$PERMISSIONS_ADDED" ]; then
       echo "already pre-approved: $PERMISSIONS_SETTINGS carries every command in this repository's allow-list"
     else
