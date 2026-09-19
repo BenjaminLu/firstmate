@@ -515,6 +515,43 @@ test_a_collision_withholds_the_stored_merge_card_without_deleting_it() {
     || fail "the collision deleted the stored card instead of withholding it"
 }
 
+# A build fills every translate slot, so the rows the captain reads carry
+# {en, hant, hans}. A deterministic refresh has no translator and recomposes
+# the whole payload, so without carrying the published copy the board drops
+# into English the moment it refreshes itself - and this change exists to make
+# refreshes frequent and automatic, which would make his board worse in his
+# own language the more often it fired. The translation is reused only on
+# proof it belongs to this exact text: same row, same English. A row whose
+# text changed keeps the fresh English rather than a stale translation
+# asserting words nobody wrote.
+test_a_refresh_keeps_the_translated_row_copy_it_cannot_recompose() {
+  local home payload
+  home=$(make_home carry-row-copy)
+  seed_board "$home"
+  refresh "$home" >/dev/null || fail "the first refresh failed"
+  # What a build leaves behind: one row translated, and one translated against
+  # text that no longer matches what this compose produces.
+  set_page_payload "$home" '''
+    .underway = [ .underway[] | if .id == "ship-task"
+      then .name = {en: "Ship the thing", hant: "出貨", hans: "出货"}
+      else . end ]
+    | .landed = [ .landed[] | if .id == "done-a"
+      then .what = {en: "Something else entirely", hant: "別的", hans: "别的"}
+      else . end ]
+  ''' || fail "could not stage the published translations"
+  refresh "$home" >/dev/null || fail "the second refresh failed"
+  payload=$(injected_payload "$home")
+  printf '%s' "$payload" | jq -e '''
+    ([.underway[] | select(.id == "ship-task") | .name]
+       | .[0] == {en: "Ship the thing", hant: "出貨", hans: "出货"})
+  ''' >/dev/null \
+    || fail "the refresh dropped a translation it could have carried: $payload"
+  printf '%s' "$payload" | jq -e '''
+    ([.landed[] | select(.id == "done-a") | .what] | .[0] | type == "string")
+  ''' >/dev/null \
+    || fail "the refresh carried a translation onto text it does not translate: $payload"
+}
+
 test_the_merge_carry_forward_resurrects_only_merge_cards() {
   local home
   home=$(make_home merge-carry-type)
@@ -1059,6 +1096,7 @@ test_a_refresh_carries_the_merge_card_forward_and_retires_it_when_it_lands
 test_the_merge_carry_forward_resurrects_only_merge_cards
 test_no_pull_request_view_ever_costs_a_stored_merge_card
 test_a_collision_withholds_the_stored_merge_card_without_deleting_it
+test_a_refresh_keeps_the_translated_row_copy_it_cannot_recompose
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run

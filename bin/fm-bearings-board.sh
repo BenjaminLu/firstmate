@@ -1519,6 +1519,48 @@ published_lang() {
   esac
 }
 
+# A build has a translator in the loop and publishes each row's copy as
+# {en, hant, hans}; a deterministic refresh has none and emits the plain
+# string. Recomposing the whole payload would therefore drop the board out of
+# the captain's language the moment it refreshed itself - the more often the
+# refresh he asked for fires, the worse his board reads. Cards are already
+# carried forward through the stored-card store; row copy has nowhere to be
+# carried from except the page being replaced, so it is carried from there.
+#
+# A translation is reused only on proof that it is a translation of exactly
+# this text: the published row must have the same id and its `en` must equal
+# the string this compose just produced. Any edit to the row - a renamed task,
+# a changed reason - fails that test and keeps the fresh English, because a
+# stale translation asserting the new text would be the invented copy this
+# board refuses to publish. A carried value that still holds a placeholder is
+# refused for the same reason.
+carry_published_copy() {  # <skeleton> <board>
+  local published tmp
+  published=$(injected_payload "$2" 2>/dev/null) || return 0
+  [ -n "$published" ] || return 0
+  printf '%s' "$published" | jq -e 'type == "object"' >/dev/null 2>&1 || return 0
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-carry.XXXXXX") || return 1
+  if jq --argjson prev "$published" --arg ph "$PLACEHOLDER_RE" '
+      def carried($section; $field):
+        . as $row
+        | ([ $prev[$section][]? | select(.id == $row.id) | .[$field] ] | .[0]) as $was
+        | if ($row[$field] | type) == "string"
+             and ($was | type) == "object"
+             and ($was.en? == $row[$field])
+             and (($was | tojson | test($ph)) | not)
+          then $row + {($field): $was}
+          else $row end;
+      .underway = [ .underway[]? | carried("underway"; "name") | carried("underway"; "doing") ]
+      | .charted = [ .charted[]? | carried("charted"; "title") | carried("charted"; "reason") ]
+      | .landed = [ .landed[]? | carried("landed"; "what") ]
+    ' "$1" > "$tmp" 2>/dev/null; then
+    mv -- "$tmp" "$1"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  return 1
+}
+
 refresh_log() {  # <message>
   local log="$STATE/.bearings-board-refresh.log" size tmp
   mkdir -p "$STATE" 2>/dev/null || true
@@ -1696,6 +1738,12 @@ refresh_worker() {
   if ! "$SCRIPT_DIR/fm-bearings-board.sh" compose "${compose_args[@]}" --out "$skeleton" >/dev/null 2>&1; then
     rm -f -- "$skeleton" "$effective"
     refresh_fail "cannot compose the board payload"
+  fi
+  # Carried before the placeholder and validator checks below, so a carried
+  # value is held to exactly the same bar as a freshly composed one.
+  if ! carry_published_copy "$skeleton" "$board"; then
+    rm -f -- "$skeleton" "$effective"
+    refresh_fail "cannot carry the published row copy forward"
   fi
   # A deterministic compose owes no placeholder; refusing here keeps that a
   # checked property rather than an assumption about the projection above.
