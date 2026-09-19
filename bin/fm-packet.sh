@@ -76,8 +76,7 @@
 #   - no baked-in colour: fill, stroke, color, stop-color and flood-color -
 #     as attributes or inside style="" - may only be var(--...), none,
 #     currentColor, transparent, inherit or url(#...), so the drawing
-#     inherits the page's theme instead of fighting it; a <style> block
-#     carrying a hex, rgb() or hsl() literal is refused for the same reason.
+#     inherits the page's theme instead of fighting it.
 #     The rendered page binds the palette a figure draws against: --fg
 #     --muted --soft --card --card-2 --bg --rule --rule-strong --accent
 #     --accent-tint --amber --seal --ok --link, plus --sans and --mono for
@@ -88,15 +87,24 @@
 #   - every id inside the svg is prefixed `<slug>-`, and no two figures in one
 #     packet share a slug, so two figures inlined on one page cannot collide
 #     over a marker id and break each other's arrows
-#   - no external font reference, and no <script> or on* handler: the page
-#     must render offline inside a sandboxed iframe, and the drawing is
-#     static markup. For the same reason every href, xlink:href and src points
-#     at a same-document `#fragment`; only an `<a>` may leave the page, and
-#     only through http, https or mailto - the schemes the page's prose links
-#     already allow, since the svg rides the page unescaped
+#   - no external font reference, and no <script>, <style> or on* handler: the
+#     page must render offline inside a sandboxed iframe, and the drawing is
+#     static markup. An inline <style> is not scoped to the svg it sits in -
+#     it restyles the whole served page - so a drawing may not carry one at
+#     all; the `style="..."` attribute form the contract asks for is what the
+#     per-attribute check reads. For the same reason every href, xlink:href
+#     and src points at a same-document `#fragment`; only an `<a>` may leave
+#     the page, and only through http, https or mailto - the schemes the
+#     page's prose links already allow, since the svg rides the page unescaped
 #   - every connector that draws an arrow (marker-start or marker-end)
 #     carries data-edge, and every data-edge has its own evidence line saying
-#     what proves that line
+#     what proves that line. This is baton's figure rule, from its
+#     references/spec.md figure section: a drawn connector without evidence
+#     refuses the build, so the drawing cannot assert a relationship nobody
+#     can trace. Those lines are an integrity check, not page content - they
+#     never render, exactly as baton has it
+#   - at most one `## Figures` section: a second one is a second drawing set
+#     the page has no place for, and the page gives the section one id
 #
 # verify owns the mechanical half of that contract and only that half. It
 # checks absences a script is good at - a missing language attribute, a baked
@@ -372,16 +380,21 @@ def section_heading(line):
 def figure_heading(line):
     return line[4:].strip() if line.startswith("### ") else None
 
-# Every Figures section, not the first: render routes each one through
-# figures_html, so each one's drawings reach the page inlined on verify's word.
-body, inside, found = [], False, False
+sections, inside = [], False
 for l in lines:
     h = section_heading(l)
     if h is not None:
         inside = h == "Figures"
-        found = found or inside
+        if inside:
+            sections.append([])
     elif inside:
-        body.append(l)
+        sections[-1].append(l)
+
+found = bool(sections)
+if len(sections) > 1:
+    problems.append("the packet declares %d '## Figures' sections; it carries one, and the page "
+                    "gives that section one id" % len(sections))
+body = sections[0] if sections else []
 
 if not found and kind == "needs-decision":
     problems.append("kind=needs-decision but there is no '## Figures' section; "
@@ -413,7 +426,6 @@ PALETTE = ("fg", "muted", "soft", "card", "card-2", "bg", "rule", "rule-strong",
            "accent", "accent-tint", "amber", "seal", "ok", "link")
 COLOUR_OK = re.compile(r"^(?:none|inherit|transparent|currentColor|var\(--(?:%s)\)"
                        r"|url\(#[A-Za-z0-9._:-]+\))$" % "|".join(map(re.escape, PALETTE)))
-LITERAL = re.compile(r"#[0-9A-Fa-f]{3,8}\b|\brgba?\(|\bhsla?\(")
 ATTR = re.compile(r"""([A-Za-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+))""")
 TAG = re.compile(r'''<\s*([A-Za-z][\w:-]*)((?:[^<>"']|"[^"]*"|'[^']*')*)>''', re.S)
 EXTERNAL_FONT = re.compile(r"@font-face|@import|fonts\.googleapis\.com|<\s*link\b|url\(\s*['\"]?https?:", re.I)
@@ -471,11 +483,9 @@ for n, fig in enumerate(figures, 1):
         bad("the svg carries a <script>; a figure is static markup")
     if EXTERNAL_FONT.search(svg):
         bad("the svg references an external font or stylesheet; the page must render offline")
-    for block in re.findall(r"<style\b[^>]*>(.*?)</style\s*>", svg, re.S):
-        stripped = re.sub(r"url\(\s*#[^)]*\)", "", block)
-        if LITERAL.search(stripped):
-            bad("a <style> block bakes in a colour literal; colours come from the page's "
-                "CSS variables, as var(--...)")
+    if re.search(r"<\s*style\b", svg, re.I):
+        bad("the svg carries a <style>; an inline style element is not scoped to its drawing "
+            "and restyles the whole page, so a figure styles itself through style=\"...\"")
 
     nodes, edges_drawn, edges_declared = set(), set(), set()
     for m in TAG.finditer(svg):
@@ -593,10 +603,12 @@ command_verify() {  # <task-id> ; prints problems to stderr, exit 1 on any
       done < <(printf '%s\n' "$block" | jq -r '.options[]?.value | select(type == "string")' 2>/dev/null)
     fi
   fi
-  # Looser than the checker's own heading rule on purpose: this only decides
-  # whether python3 is needed, and a gate stricter than the parser it guards
-  # would wave a section through unchecked.
-  if [ "$kind" = needs-decision ] || grep -qE '^##[[:space:]]+Figures[[:space:]]*$' "$packet"; then
+  # This decides one thing only: whether python3 is needed. It must therefore
+  # stay the loosest reader of the three - unanchored, so no heading the
+  # checker or the renderer can see is ever invisible here. A gate that is
+  # stricter in any direction waves that section through unchecked, and the
+  # svg then reaches the page inlined on verify's word.
+  if [ "$kind" = needs-decision ] || grep -qE '##[[:space:]]+Figures' "$packet"; then
     if ! command -v python3 >/dev/null 2>&1; then
       echo "fm-packet: python3 is required to check the packet's figures" >&2; problems=$((problems + 1))
     else
@@ -743,7 +755,7 @@ T = {
     "s_changed": "What changed", "s_generated": "generated from the local copy and the PR",
     "s_session": "What only this session knows", "s_decision": "The decision",
     "s_evidence": "Evidence", "s_more": "How to pull more",
-    "s_figures": "Figures", "f_edges": "what proves each line",
+    "s_figures": "Figures",
     "copy": "Copy the context", "copied": "Copied",
     "copy_hint": "the whole packet as markdown, ready for any coding agent",
     "raw_title": "Select all and copy", "close": "Close",
@@ -760,7 +772,7 @@ T = {
     "s_changed": "改了什麼", "s_generated": "由本機副本與 PR 產生",
     "s_session": "只有這個 session 知道的事", "s_decision": "這個決定",
     "s_evidence": "證據", "s_more": "怎麼再往下挖",
-    "s_figures": "圖解", "f_edges": "每條線的依據",
+    "s_figures": "圖解",
     "copy": "複製完整 context", "copied": "已複製",
     "copy_hint": "整份 packet 的 markdown，可直接貼給任何 coding agent",
     "raw_title": "全選後複製", "close": "關閉",
@@ -777,7 +789,7 @@ T = {
     "s_changed": "改了什么", "s_generated": "由本机副本与 PR 生成",
     "s_session": "只有这个 session 知道的事", "s_decision": "这个决定",
     "s_evidence": "证据", "s_more": "怎么再往下挖",
-    "s_figures": "图解", "f_edges": "每条线的依据",
+    "s_figures": "图解",
     "copy": "复制完整 context", "copied": "已复制",
     "copy_hint": "整份 packet 的 markdown，可直接贴给任何 coding agent",
     "raw_title": "全选后复制", "close": "关闭",
@@ -877,9 +889,10 @@ def md(body):
 # so the svg is inlined as written rather than escaped: that is the whole point
 # of carrying it in the packet. Its <text> nodes carry the three languages, so
 # the page's language switch re-labels the drawing with everything else, and
-# its colours are the page's own CSS variables.
+# its colours are the page's own CSS variables. The `- edge ...` lines are an
+# integrity check verify owns and never page content, as baton has it, so they
+# do not render.
 FIG_ATTR = re.compile(r"^(figure|caption):\s*(\S.*?)\s*$")
-FIG_EDGE = re.compile(r"^\s*-\s*edge\s+(\S+)\s*:\s*(\S.*?)\s*$")
 
 def figures_html(body):
     head, figures, cur = [], [], None
@@ -894,14 +907,11 @@ def figures_html(body):
     out = [md(head)] if "\n".join(head).strip() else []
     for heading, lines in figures:
         chunk = "\n".join(lines)
-        fields, edges = {}, []
+        fields = {}
         for line in lines:
             m = FIG_ATTR.match(line)
             if m and m.group(1) not in fields:
-                fields[m.group(1)] = m.group(2); continue
-            m = FIG_EDGE.match(line)
-            if m:
-                edges.append((m.group(1), m.group(2)))
+                fields[m.group(1)] = m.group(2)
         svg = re.search(r"<svg\b.*?</svg\s*>", chunk, re.S)
         parts = ['<figure class="pk-fig" id="fig-%s">' % esc(fields.get("figure", "")),
                  "<h3 class=\"pk-fig__h\">%s</h3>" % inline(heading)]
@@ -909,11 +919,6 @@ def figures_html(body):
             parts.append('<div class="pk-fig__svg">%s</div>' % svg.group(0))
         if fields.get("caption"):
             parts.append('<figcaption class="pk-fig__cap">%s</figcaption>' % inline(fields["caption"]))
-        if edges:
-            e_text, e_attrs = tri("f_edges")
-            parts.append(span("pk-fig__edges-h", e_text, e_attrs))
-            parts.append('<ul class="pk-fig__edges">%s</ul>'
-                         % "".join("<li><code>%s</code> %s</li>" % (esc(k), inline(v)) for k, v in edges))
         parts.append("</figure>")
         out.append("".join(parts))
     return "\n".join(out)
@@ -1123,9 +1128,6 @@ a { color: var(--ocean-600); }
 .pk-fig__svg { overflow-x: auto; padding: 12px; background: var(--card); border: 1px solid var(--border-default); border-radius: var(--radius-sm); }
 .pk-fig__svg svg { display: block; max-width: 100%; height: auto; font-family: var(--font-sans); }
 .pk-fig__cap { font-size: var(--fs-sm); color: var(--text-body); }
-.pk-fig__edges-h { font-family: var(--font-mono); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); }
-ul.pk-fig__edges { margin: 0; padding-left: 20px; font-size: var(--fs-xs); color: var(--text-muted); }
-ul.pk-fig__edges li { margin: 2px 0; overflow-wrap: anywhere; }
 .pk-decision { margin-bottom: 14px; }
 .bb-decision__pad { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; }
 .bb-decision__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

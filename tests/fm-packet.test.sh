@@ -266,7 +266,7 @@ test_verify_checks_the_decision_block_field_by_field() {
 }
 
 test_verify_holds_a_figure_to_the_svg_contract() {
-  local home packet out svg body
+  local home packet out svg body styled
   home=$(make_home figures)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
@@ -326,10 +326,16 @@ test_verify_holds_a_figure_to_the_svg_contract() {
   assert_figure_refused "$home" "$packet" "$body" \
     "already the slug of figure 1" "two figures declaring the same slug"
 
-  # 5. no external font reference, no script
+  # 5. no external font reference, no script, no <style> element
   svg=${GOOD_SVG/<title id=\"opt-title\">/<style>@import url(https://fonts.googleapis.com/css2?family=Geist);</style><title id=\"opt-title\">}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "references an external font" "an imported web font"
+  # An inline <style> is not scoped to its svg: it restyles the whole served
+  # page, so a drawing carries none at all.
+  styled='<style>.pk-section{display:none}rect{fill:red}</style><title id="opt-title">'
+  svg=${GOOD_SVG/<title id=\"opt-title\">/"$styled"}
+  assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
+    "the svg carries a <style>" "a style element that restyles the page"
   svg=${GOOD_SVG/<title id=\"opt-title\">/<script>void 0;<\/script><title id=\"opt-title\">}
   assert_figure_refused "$home" "$packet" "$(good_figures "$svg")" \
     "the svg carries a <script>" "a script inside the drawing"
@@ -434,10 +440,21 @@ PY
   [ "$rc" -ne 0 ] || fail "a whitespace-padded Figures heading skipped the contract: $out"
   assert_contains "$out" "carries no data-node" "the padded heading was not checked: $out"
 
+  # python splits lines on more than \n, so a heading behind a form feed is a
+  # Figures section to the checker and to render. The shell gate in front of
+  # the checker reads whole physical lines and must never be the reader that
+  # misses it, or the drawing reaches the page with nothing having read it.
+  python3 - "$packet" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace("\n##  Figures \n", "\n\f## Figures\n"))
+PY
+  set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "a Figures heading behind a form feed skipped the contract: $out"
+  assert_contains "$out" "carries no data-node" "the form-feed heading was not checked: $out"
   pass "a done packet needs no figures and is held to the contract for the ones it has"
 }
 
-test_every_figures_section_is_held_to_the_contract_not_only_the_first() {
+test_a_packet_carries_one_figures_section_and_render_publishes_nothing_else() {
   local home packet out rc
   home=$(make_home second-figures)
   run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
@@ -446,9 +463,9 @@ test_every_figures_section_is_held_to_the_contract_not_only_the_first() {
   fill_figures "$packet"
   out=$(run_packet "$home" verify pk-1 2>&1) || fail "verify refused one good figures section: $out"
 
-  # render routes EVERY '## Figures' heading through figures_html and inlines
-  # its svg unescaped on verify's word, so a second section must be checked
-  # too - otherwise a drawing reaches the served page unread.
+  # A second '## Figures' heading is a second set of drawings the page has no
+  # place for - it would render under the same section id - so the packet is
+  # refused rather than the extra section being inlined on verify's word.
   python3 - "$packet" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
@@ -464,11 +481,13 @@ caption: The section a worker adds when the first one filled up.
 p.write_text(s.rstrip("\n") + "\n" + second)
 PY
   set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
-  [ "$rc" -ne 0 ] || fail "a second figures section went unchecked: $out"
-  assert_contains "$out" "the svg carries a <script>" "the second section's script was not caught: $out"
-  assert_contains "$out" "only an <a> may leave the page" "the second section's javascript: href was not caught: $out"
-  assert_contains "$out" "colours come from the page" "the second section's hex fill was not caught: $out"
-  assert_absent "$home/data/pk-1/packet.html" "render published a page for a refused packet"
+  [ "$rc" -ne 0 ] || fail "a second figures section verified: $out"
+  assert_contains "$out" "declares 2 '## Figures' sections" "the second section was not named: $out"
+  # render publishes nothing a verify refused, so that section never reaches
+  # the page it would otherwise be inlined into unescaped.
+  set +e; out=$(run_packet "$home" render pk-1 2>&1); rc=$?; set -e
+  [ "$rc" -ne 0 ] || fail "render published a packet verify refused: $out"
+  assert_absent "$home/data/pk-1/packet.html" "render wrote a page for a refused packet"
 
   # The Evidence check counts the lines between its heading and the next one,
   # so the reader that finds that boundary has to be the one verify reads the
@@ -487,7 +506,7 @@ PY
   set +e; out=$(run_packet "$home" verify pk-1 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "an empty Evidence section followed by figures verified: $out"
   assert_contains "$out" "'Evidence' is empty" "the emptied Evidence section was not caught: $out"
-  pass "every figures section is held to the contract, not only the first"
+  pass "a packet carries one figures section and render publishes nothing verify refused"
 }
 
 test_card_emits_a_board_ready_decision_item() {
@@ -638,7 +657,11 @@ test_render_decision_card_answers_the_five_questions() {
   assert_no_grep '&lt;svg' "$page" "the svg was escaped into text instead of inlined"
   assert_grep 'data-hant="拉高上限" data-hans="拉高上限">Raise the bound</text>' "$page" "the drawing lost its languages"
   assert_grep 'Both options end at the same place' "$page" "the figure lost its caption"
-  assert_grep '<code>bound-to-quiet</code>' "$page" "the figure lost its per-connector evidence"
+  # The per-connector evidence is an integrity check verify owns, not page
+  # content: it never reaches the captain's page.
+  assert_no_grep 'pk-fig__edges' "$page" "the figure rendered an edge-evidence list"
+  assert_no_grep '<code>bound-to-quiet</code>' "$page" "an edge id rendered as page content"
+  assert_no_grep '每條線的依據' "$page" "the edge-evidence heading survived in the page's chrome"
   assert_grep '--accent-tint: var(--rust-050)' "$page" "the page does not bind the palette figures draw against"
 
   # A worker who drops the section's preamble leaves the '### ' heading on the
@@ -720,7 +743,7 @@ test_verify_checks_the_decision_block_field_by_field
 test_verify_holds_a_figure_to_the_svg_contract
 test_a_needs_decision_packet_owes_one_figure_comparing_every_option
 test_a_done_packet_is_not_refused_for_having_no_figures
-test_every_figures_section_is_held_to_the_contract_not_only_the_first
+test_a_packet_carries_one_figures_section_and_render_publishes_nothing_else
 test_card_emits_a_board_ready_decision_item
 test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet
