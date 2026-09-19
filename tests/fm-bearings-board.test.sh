@@ -314,6 +314,35 @@ test_compose_ignores_a_malformed_acknowledgement_instead_of_losing_the_board() {
   pass "a malformed acknowledgement record is skipped, never rendered and never fatal"
 }
 
+# A record can pass the per-record filter and still break the merge that
+# collects the map - two JSON values in one carrier file is the simplest way
+# there. The map must absorb that the way it absorbs a malformed record: the
+# acknowledgements collected before it survive, the ones after it still land,
+# and the captain keeps his board. Accumulating in place loses all of them,
+# because a failed command substitution empties the accumulator before the
+# guard that was meant to protect it runs, and compose then fails outright.
+test_compose_survives_a_record_that_breaks_the_acknowledgement_merge() {
+  local home skeleton
+  home=$(make_compose_home compose-ack-unmergeable)
+  run_board "$home" ack gated-work --acting >/dev/null || fail "recording the card acknowledgement failed"
+  run_board "$home" ack plain-queued --acting >/dev/null || fail "recording the row acknowledgement failed"
+  # Sorts between the two good records, so it is read after one and before the
+  # other.
+  printf '%s\n%s\n' \
+    '{"schema":"fm-board-ack.v1","kind":"acting","at":1758240000}' \
+    '{"schema":"fm-board-ack.v1","kind":"acting","at":1758240001}' \
+    > "$home/state/board-acks/later-call.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "one unmergeable record cost the captain the whole board"
+  jq -e '
+    (.captains_call[] | select(.key == "gated-work") | .ack.kind == "acting")
+    and (.charted[] | select(.id == "plain-queued") | .ack.kind == "acting")
+  ' "$skeleton" >/dev/null \
+    || fail "an unmergeable record took the other acknowledgements with it: $(cat "$skeleton")"
+  pass "one unmergeable record is skipped and every other acknowledgement survives"
+}
+
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind() {
   local home data out rc
   home=$(make_home ack-validator)
@@ -1898,5 +1927,6 @@ test_compose_carries_the_refusal_to_the_row_the_captain_clicked
 test_compose_acknowledges_a_card_and_a_charted_row_by_their_own_keys
 test_compose_carries_the_click_stamp_the_page_ages_from
 test_compose_ignores_a_malformed_acknowledgement_instead_of_losing_the_board
+test_compose_survives_a_record_that_breaks_the_acknowledgement_merge
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind
 test_a_captured_board_answer_acknowledges_every_key_it_named
