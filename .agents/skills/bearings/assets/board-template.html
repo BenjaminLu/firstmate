@@ -699,9 +699,10 @@ __FM_BEARINGS_BOARD_DATA__
      click paints an `acting` pill straight onto the row and remembers the key
      it was clicked on, so the board never looks as if nothing was heard and a
      re-render - a language switch, a reload - cannot take the acknowledgement
-     away again. Every publication after that renders the row's own `ack` from
-     the payload instead, which is what lets an acknowledgement resolve into a
-     refusal that says why.
+     away again. A publication carries the row's own `ack`, which is what lets
+     an acknowledgement resolve into a refusal that says why; where both exist
+     the NEWER of the two is what the row shows, because the board may tell
+     the captain anything except that a click he has just made did not happen.
      `kind` is machine vocabulary this template translates and `at` is the
      epoch second of the click; only a refusal's `why` is prose the first mate
      wrote, and so is the one field that is payload copy. An unknown kind
@@ -805,20 +806,32 @@ __FM_BEARINGS_BOARD_DATA__
     queuedKeys[key] = nowSeconds();
     try { if (window.localStorage) window.localStorage.setItem(answeredStore, JSON.stringify(queuedKeys)); } catch (e) { /* private mode */ }
   }
-  /* The acknowledgement a click left behind, for a key no publication has
-     carried one back for yet. */
-  function rememberedAck(key) {
-    var at = queuedKeys[key];
-    return at ? { kind: "acting", at: at } : null;
+  /* What this key's row shows: the published acknowledgement or the click this
+     page remembers, whichever happened later. Both carry the second they
+     happened, so neither is hard-coded to win - a publication that still
+     carries a ten-minute-old unsettled record must not bury a click made three
+     seconds ago, and an equal stamp goes to the publication because only it
+     can carry a refusal's reason. */
+  function ackFor(key, published) {
+    var clicked = queuedKeys[key];
+    if (typeof clicked !== "number") return published || null;
+    if (published && published.at >= clicked) return published;
+    return { kind: "acting", at: clicked };
   }
   var dispatchQueued = false;
   var active = -1;
+  /* The deal a card's answer armed belongs to the render that armed it: its
+     cards and its showCard are the ones it closed over. A re-render replaces
+     both, so any deal still pending is dropped rather than left to fire into a
+     deck that no longer exists. */
+  var dealTimer = 0;
 
   function render() {
   try {
     /* every pill on the page is rebuilt below, so the ageing list starts over
        with it rather than holding elements no longer in the document */
     ackPills = [];
+    clearTimeout(dealTimer);
     if (document.documentElement) {
       document.documentElement.lang = lang === "en" ? "en" : (lang === "hant" ? "zh-Hant" : "zh-Hans");
     }
@@ -1294,14 +1307,20 @@ __FM_BEARINGS_BOARD_DATA__
         rememberAnswered(item.key);
         card.classList.add("is-queued");
         ackClicked(pad);
-        /* deal the next card once this one is answered, and once its
-           acknowledgement has been on screen long enough to read */
-        setTimeout(function () { showCard(active < cards.length - 1 ? active + 1 : active); }, CARD_DEAL_MS);
+        /* Deal the next card once this one is answered, and once its
+           acknowledgement has been on screen long enough to read. Both the
+           answered card and the one to deal are bound HERE, at the answer; if
+           the captain has paged the deck himself while the hold ran, the card
+           he chose to look at outranks the one we were going to show him and
+           nothing is dealt at all. */
+        var dealt = active;
+        var next = dealt < cards.length - 1 ? dealt + 1 : dealt;
+        dealTimer = setTimeout(function () { if (active === dealt) showCard(next); }, CARD_DEAL_MS);
       }
 
       if (queuedKeys[item.key]) card.classList.add("is-queued");
       pad.appendChild(form);
-      appendAck(pad, item.ack || rememberedAck(item.key));
+      appendAck(pad, ackFor(item.key, item.ack));
       card.appendChild(pad);
       deck.appendChild(card);
     });
@@ -1357,7 +1376,6 @@ __FM_BEARINGS_BOARD_DATA__
       /* captain-facing rows name the repo; the internal task id shows only when
          no repo is known */
       main.appendChild(el("div", "bb-row__sub", pick(x.doing) + " · " + x.kind + " · " + (x.repo || x.id)));
-      appendAck(main, x.ack);
       row.appendChild(main);
       uw.appendChild(row);
     });
@@ -1426,7 +1444,7 @@ __FM_BEARINGS_BOARD_DATA__
       var chSub = x.repo || x.id;
       var reason = pick(x.reason);
       main.appendChild(el("div", "bb-row__sub", reason ? reason + " · " + chSub : chSub));
-      appendAck(main, x.ack || rememberedAck(x.id));
+      appendAck(main, ackFor(x.id, x.ack));
       row.appendChild(main);
       if (isWarning(x)) row.appendChild(badge("danger", t("needs_repair")));
       else if (reason) row.appendChild(badge("warn", t("waiting")));

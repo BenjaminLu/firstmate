@@ -261,19 +261,24 @@ test_compose_carries_the_refusal_to_the_row_the_captain_clicked() {
   pass "a recorded refusal reaches the row the captain clicked, with its reason"
 }
 
-test_compose_acknowledges_a_card_and_an_underway_row_by_their_own_keys() {
+# The two surfaces the captain clicks - and only those. A record keyed to an
+# Underway row reaches nothing: he has no control on that row, so a pill there
+# could only ever be the shape of an unsettled record, never an answer.
+test_compose_acknowledges_a_card_and_a_charted_row_by_their_own_keys() {
   local home skeleton
   home=$(make_compose_home compose-ack-keys)
   run_board "$home" ack gated-work --acting >/dev/null || fail "recording the card acknowledgement failed"
-  run_board "$home" ack ship-task --acting >/dev/null || fail "recording the row acknowledgement failed"
+  run_board "$home" ack plain-queued --acting >/dev/null || fail "recording the row acknowledgement failed"
+  run_board "$home" ack ship-task --acting >/dev/null || fail "recording the underway acknowledgement failed"
   skeleton="$home/skeleton.json"
   run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
     || fail "compose refused a snapshot with recorded acknowledgements"
   jq -e '
     (.captains_call[] | select(.key == "gated-work") | .ack.kind == "acting")
-    and (.underway[] | select(.id == "ship-task") | .ack.kind == "acting")
+    and (.charted[] | select(.id == "plain-queued") | .ack.kind == "acting")
+    and ([.underway[] | select(.ack != null)] | length == 0)
   ' "$skeleton" >/dev/null || fail "an acknowledgement missed its card or row: $(cat "$skeleton")"
-  pass "an acknowledgement reaches a decision card and an underway row by their own keys"
+  pass "an acknowledgement reaches a decision card and a charted row, and no underway row"
 }
 
 # Compose carries the stamp and derives nothing from it: the page is what ages
@@ -1932,7 +1937,7 @@ test_url_reads_the_live_session_listing
 test_ack_records_and_clears_what_the_captain_clicked
 test_ack_refuses_a_refusal_with_no_reason_and_a_key_that_is_not_one
 test_compose_carries_the_refusal_to_the_row_the_captain_clicked
-test_compose_acknowledges_a_card_and_an_underway_row_by_their_own_keys
+test_compose_acknowledges_a_card_and_a_charted_row_by_their_own_keys
 test_compose_carries_the_click_stamp_the_page_ages_from
 test_compose_ignores_a_malformed_acknowledgement_instead_of_losing_the_board
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind

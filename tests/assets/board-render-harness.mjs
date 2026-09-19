@@ -7,19 +7,23 @@
 //   { stats:[{n,label}], underway:[{title,sub,badges,ack}],
 //     charted:[{title,sub,badges,pickable,ack}], empty, more,
 //     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips,ack,
-//             tabs:[{label,selected}],
+//             hidden, tabs:[{label,selected}],
 //             panels:[{hidden,figures,notes,rows,label,cost,
 //                      buttons:[{text,queues}]}],
 //             on_enter, on_enter_all,
 //             packet:{lang,headings,items,links}|null}],
 //     headings:[call,charted,underway,landed], error }
-// An `ack` is {label, why} or null.
+// An `ack` is {label, kind, why} or null. It rides only the two surfaces the
+// captain clicks - a Captain's Call card and a Charted Next row - so an
+// Underway row reads it back as null, which is itself worth asserting.
 //
 // A second argument replays a captain click before the page is read, so the
 // immediate acknowledgement is asserted through the real handler rather than
 // by reading the template's source:
-//   dispatch        check every pickable Charted Next row, then send
-//   answer          submit the dealt Captain's Call card
+//   dispatch            check every pickable Charted Next row, then send
+//   answer              submit the dealt Captain's Call card
+//   answer-then-paging  submit the dealt card, page two cards on by hand, then
+//                       let the deal timer the answer armed fire
 // A third argument (en|hant|hans) then clicks that language button, so what
 // survives a re-render is asserted through the real control the captain has.
 import { readFileSync } from "node:fs";
@@ -128,9 +132,19 @@ globalThis.FormData = class {
     return field ? field.value : null;
   }
 };
-// The deck deals the next card on a timer; the acknowledgement is not on it,
-// so the shim never runs one and the read below sees the click's own effect.
-globalThis.setTimeout = () => 0;
+// The deck deals the next card on a timer. Timers are queued rather than run,
+// so the acknowledgement read below is the click's own effect; a click mode
+// that is about the deal itself drains the queue deliberately.
+const timers = [];
+globalThis.setTimeout = (fn) => timers.push(fn);
+globalThis.clearTimeout = (id) => { if (id) timers[id - 1] = null; };
+const runTimers = () => {
+  for (let i = 0; i < timers.length; i += 1) {
+    const fn = timers[i];
+    timers[i] = null;
+    if (fn) fn();
+  }
+};
 // The pills age on an interval the page owns. Nothing here advances it: each
 // read below is one instant, and an aged acknowledgement is produced by an
 // older stamp rather than by winding a clock on.
@@ -146,6 +160,15 @@ const nodesWhere = (root, pred) => {
   walk(root);
   return out;
 };
+// The deck deals the first card that still needs an answer, and that is the
+// only one on screen, so the first form is the card under the captain's hand.
+const answerDealtCard = () => {
+  const dealt = nodesWhere(byId.get("bb-call"), (n) => n.tagName === "form")[0];
+  if (!dealt) return;
+  const radio = nodesWhere(dealt, (n) => n.tagName === "input" && n.type === "radio")[0];
+  if (radio) radio.checked = true;
+  dealt.dispatch("submit", { preventDefault() {} });
+};
 const click = process.argv[3] || "";
 if (click === "dispatch") {
   const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
@@ -153,12 +176,12 @@ if (click === "dispatch") {
   const btn = byId.get("bb-dispatch-btn");
   if (typeof btn.onclick === "function") btn.onclick();
 } else if (click === "answer") {
-  const form = nodesWhere(byId.get("bb-call"), (n) => n.tagName === "form")[0];
-  if (form) {
-    const radio = nodesWhere(form, (n) => n.tagName === "input" && n.type === "radio")[0];
-    if (radio) radio.checked = true;
-    form.dispatch("submit", { preventDefault() {} });
-  }
+  answerDealtCard();
+} else if (click === "answer-then-paging") {
+  answerDealtCard();
+  const next = byId.get("bb-stack-next");
+  next.onclick(); next.onclick();
+  runTimers();
 } else if (click) {
   throw new Error("unknown click: " + click);
 }
@@ -320,6 +343,7 @@ const cards = deck.children
       };
     })(),
     ack: ackOf(card.children.find((c) => c.className.includes("bb-decision__pad"))),
+    hidden: card.hidden === true,
   }));
 const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
   .map((id) => byId.get(id)?.textContent ?? "");
