@@ -23,12 +23,14 @@
 # forge calls, and that count is load-bearing: a slow forge answers each call in
 # 0.9-4.4 seconds, so four fit the default 20s budget while the eight a per-lane
 # REST read needs (7.2-35.2s) do not, and a budget that cannot hold one whole
-# observation leaves the row unobserved rather than merely slow. One GraphQL
-# document carries the pull request core, the repository's push permission, the
-# forge review decision, the head, and both check lanes in a single snapshot, so
-# the checks are bound to that head without a separate recheck; comments,
-# reviews and inline review comments stay on their REST list endpoints so their
-# event tokens are unchanged. A commit with more than one page of check contexts
+# observation leaves the row unobserved rather than merely slow. Four is what a
+# single-page pull request costs; the budget paragraph below states every
+# assumption that figure rests on. One GraphQL document carries the pull
+# request core, the repository's push permission, the forge review decision,
+# the head, and both check lanes in a single snapshot, so the checks are bound
+# to that head without a separate recheck; comments, reviews and inline review
+# comments stay on their REST list endpoints so their event tokens are
+# unchanged. A commit with more than one page of check contexts
 # pages the same document with an after cursor, costing five, so one
 # normalization rule defines a check lane and one commit cannot read two ways.
 # Lane equivalence is deliberate: the lanes reported here are exactly the lanes
@@ -60,12 +62,19 @@
 # found its checked_at never advances, so it keeps the head of the oldest-first
 # queue and blocks those same rows in every later poll too, until its
 # observation fits. Four calls fit the default twenty-second budget across the
-# whole measured 0.9-4.4 second range; the five a paged commit costs do not fit
-# it at the 4.4-second upper bound, so that commit is what this now fires on.
-# The eight calls a per-lane REST observation needed fit no budget in the
-# documented 1..25 range, and an operator could not configure around it. Every
-# blocked row ages out under the ordinary freshness rule below and the board
-# shows it unchecked; none is ever shown as freshly checked when it was not.
+# whole measured 0.9-4.4 second range, but four counts gh invocations and not
+# forge round trips: the comment, review and inline-comment lists each page
+# inside their one invocation at a hundred items per request, and the check
+# rollup pages by cursor into a fifth invocation. So the figure holds for a
+# pull request whose comment, review and inline-comment lists each fit one page
+# and whose head commit's rollup fits one page. A pull request past any of
+# those pages costs more round trips than the figure allows, and at the
+# 4.4-second upper bound more than the budget holds, so those are the cases
+# this now fires on. The eight calls a per-lane REST observation needed fit no
+# budget in the documented 1..25 range, and an operator could not configure
+# around it - and it paginated these same lists identically. Every blocked row
+# ages out under the ordinary freshness rule below and the board shows it
+# unchecked; none is ever shown as freshly checked when it was not.
 # What stops this firing is fewer forge calls per observation, not a larger
 # fleet-wide FM_CHECK_TIMEOUT.
 # Oldest observations go first, so a large corpus progresses across polls.
