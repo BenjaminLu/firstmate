@@ -423,9 +423,9 @@ feed_keyed_answers() {  # <adapter> <source-id> <result-file>
 # event the board republishes on is consequence-side - a spawn, a teardown, a
 # status change - so an answer whose consequence has not happened yet left the
 # board looking as if nothing was heard. Recording the answer here, at capture,
-# is the one captain-side trigger those events cannot supply; what the
-# acknowledgement then means, how long it may stay unresolved, and who retires
-# it all belong to bin/fm-bearings-board.sh, which owns the carrier.
+# is the one captain-side trigger those events cannot supply. This seam is the
+# BORN stage and nothing more: the whole lifecycle is stated once in
+# bin/fm-bearings-board.sh's header, which owns it.
 #
 # Scoped to the board's own source, because this is the board's behaviour and
 # not Lavish's: any other Lavish review is an ephemeral discussion that

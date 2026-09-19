@@ -343,6 +343,60 @@ test_compose_survives_a_record_that_breaks_the_acknowledgement_merge() {
   pass "one unmergeable record is skipped and every other acknowledgement survives"
 }
 
+# A record retires when its key leaves the board: no row can render it again,
+# so compose drops it. This is the only reason a record is dropped there - the
+# companion test below holds the deliberate half, that age is never a reason.
+test_compose_drops_a_record_whose_row_has_left_the_board() {
+  local home skeleton
+  home=$(make_compose_home compose-ack-unreachable)
+  run_board "$home" ack plain-queued --acting >/dev/null || fail "recording the live acknowledgement failed"
+  run_board "$home" ack answered-and-gone --acting >/dev/null \
+    || fail "recording the unreachable acknowledgement failed"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with recorded acknowledgements"
+  [ ! -e "$home/state/board-acks/answered-and-gone.json" ] \
+    || fail "a record no row can render survived the publication that proved it unreachable"
+  [ -e "$home/state/board-acks/plain-queued.json" ] \
+    || fail "a record whose row is still on the board was dropped with it"
+  pass "compose drops the record of a key that has left the board, and only that one"
+}
+
+# The waiting report is the whole point of the record, so a record whose row is
+# still there survives however long it has been waiting. Nothing retires on a
+# clock.
+test_compose_keeps_a_long_unanswered_record_whose_row_is_still_there() {
+  local home skeleton
+  home=$(make_compose_home compose-ack-old)
+  run_board "$home" ack plain-queued --acting >/dev/null || fail "recording the acknowledgement failed"
+  jq '.at = (.at - 864000)' "$home/state/board-acks/plain-queued.json" > "$home/aged" \
+    && mv "$home/aged" "$home/state/board-acks/plain-queued.json"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with an aged acknowledgement"
+  [ -e "$home/state/board-acks/plain-queued.json" ] \
+    || fail "an acknowledgement was retired by age alone"
+  jq -e '.charted[] | select(.id == "plain-queued") | .ack.kind == "acting"' "$skeleton" >/dev/null \
+    || fail "the aged acknowledgement stopped reaching its row: $(cat "$skeleton")"
+  pass "a record whose row is still on the board survives compose however long it has waited"
+}
+
+# Every malformed call on this path explains itself. A flag whose value is
+# missing used to abort on the failed shift before the guard that would have
+# said so, which left the first mate a bare exit 1 and no refusal recorded.
+test_a_flag_with_no_value_explains_itself() {
+  local home out rc
+  home=$(make_home ack-flag-no-value)
+  for args in "ack somekey --refused --why-file" "compose --lang" "compose --out" "compose --snapshot"; do
+    set +e; out=$(run_board "$home" $args 2>&1); rc=$?; set -e
+    [ "$rc" -ne 0 ] || fail "'$args' with no value was accepted: $out"
+    [ -n "$out" ] || fail "'$args' with no value failed without saying anything"
+  done
+  [ ! -e "$home/state/board-acks/somekey.json" ] \
+    || fail "a refusal with no reason file still wrote a record"
+  pass "a flag whose value is missing says so instead of exiting silently"
+}
+
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind() {
   local home data out rc
   home=$(make_home ack-validator)
@@ -1970,5 +2024,8 @@ test_compose_acknowledges_a_card_and_a_charted_row_by_their_own_keys
 test_compose_carries_the_click_stamp_the_page_ages_from
 test_compose_ignores_a_malformed_acknowledgement_instead_of_losing_the_board
 test_compose_survives_a_record_that_breaks_the_acknowledgement_merge
+test_compose_drops_a_record_whose_row_has_left_the_board
+test_compose_keeps_a_long_unanswered_record_whose_row_is_still_there
+test_a_flag_with_no_value_explains_itself
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind
 test_a_captured_board_answer_acknowledges_every_key_it_named
