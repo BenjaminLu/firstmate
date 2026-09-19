@@ -84,6 +84,13 @@ set_page_payload() {  # <home> <jq-filter>
   ' "$page"
 }
 
+# The stored card as `bin/fm-captain-hold.sh card` hands it back - the same
+# public read bin/fm-bearings-board.sh makes.
+run_captain_card() {  # <home> <task-id>
+  FM_HOME="$1" FM_STATE_OVERRIDE="$1/state" FM_DATA_OVERRIDE="$1/data" \
+    "$ROOT/bin/fm-captain-hold.sh" card "$2" >/dev/null 2>&1
+}
+
 test_refresh_publishes_the_board_in_place() {
   local home out
   home=$(make_home publish)
@@ -347,6 +354,36 @@ test_a_stored_card_publishes_only_the_copy_it_carries() {
     and ([.options[].value] == ["canary", "all", "regional", "reconcile"])
   ' >/dev/null || fail "the board invented copy the stored card never carried: $card"
   pass "a stored card publishes the copy it carries and invents none it omits"
+}
+
+test_a_stored_card_the_validator_would_refuse_costs_only_its_own_row() {
+  local home id=gated-work card
+  home=$(make_home stored-card-unpublishable)
+  seed_board "$home"
+  # `card --store` is a public entry point and checks only the key, so a card
+  # the payload validator would refuse can reach the store. Composed onto the
+  # board it would refuse the WHOLE payload, and under --best-effort - what
+  # every fleet trigger uses - the refresh would exit 0 silently and the board
+  # would stop refreshing on every later event until someone deleted the file.
+  # This card has no options and no allow_freeform: nothing the captain could
+  # answer with, which is exactly what call_item refuses.
+  mkdir -p "$home/data/$id"
+  jq -n --arg id "$id" '{key:$id, type:"decision", repo:"firstmate",
+    title:"Rollout order", options:[]}' > "$home/data/$id/board-card.json"
+  run_captain_card "$home" "$id" || fail "the fixture card is not what the store accepts"
+
+  refresh "$home" --best-effort >/dev/null \
+    || fail "an unpublishable stored card stopped the refresh"
+  injected_payload "$home" | jq -e '.schema == "fm-bearings-board.v1"' >/dev/null \
+    || fail "an unpublishable stored card cost the whole board: $(injected_payload "$home")"
+  # The row is still there and still answerable - it degraded to the copy the
+  # snapshot supports instead of carrying the card the board could not publish.
+  card=$(injected_payload "$home" | jq -c --arg id "$id" '.captains_call[] | select(.key == $id)')
+  [ -n "$card" ] || fail "the degraded row lost its captain call entirely"
+  printf '%s' "$card" | jq -e '
+    ([.options[].value] | index("reconcile")) != null and .allow_freeform == true
+  ' >/dev/null || fail "the degraded card is not answerable: $card"
+  pass "a stored card the payload validator would refuse costs its own row, not the board"
 }
 
 # --- the Underway progress projection ---------------------------------------
@@ -716,12 +753,11 @@ test_a_malformed_stored_card_degrades_one_row_instead_of_the_board() {
 # within its cadence.
 
 test_a_refresh_that_runs_out_of_time_leaves_the_board_it_could_not_replace() {
-  local home out before after
+  local home out
   home=$(make_home refresh-deadline)
   seed_board "$home"
   refresh "$home" >/dev/null || fail "the first refresh failed"
-  before=$(injected_payload "$home" | jq -r .generated)
-  [ -n "$before" ] || fail "the first refresh published no generation stamp"
+  cp "$home/.lavish/bearings-board.html" "$home/published.html"
 
   # A wedged no-mistakes behind an Underway ship. The refresh deadline is the
   # only stop, and when it fires the board must be left exactly as it was -
@@ -750,9 +786,11 @@ SH
   assert_grep "deadline" "$home/state/.bearings-board-refresh.log" \
     "the refresh that ran out of time left no trace a diagnosis could find"
 
-  after=$(injected_payload "$home" | jq -r .generated)
-  [ "$after" = "$before" ] \
-    || fail "a refresh that ran out of time still rewrote the board: $before -> $after"
+  # The page itself, byte for byte. A republication would differ: this second
+  # refresh runs without the pinned projection clock, so every row it wrote
+  # would carry its own fresh `progress.refreshed`.
+  cmp -s "$home/published.html" "$home/.lavish/bearings-board.html" \
+    || fail "a refresh that ran out of time still rewrote the board"
   pass "a refresh that runs out of time leaves the previous board and its own freshness stamp"
 }
 
@@ -826,6 +864,7 @@ test_a_build_waits_for_the_publication_already_under_way
 test_refresh_carries_no_placeholder_to_the_captain
 test_refresh_reuses_the_stored_card_verbatim
 test_a_stored_card_publishes_only_the_copy_it_carries
+test_a_stored_card_the_validator_would_refuse_costs_only_its_own_row
 test_refresh_states_only_the_omission_total_the_snapshot_establishes
 test_a_malformed_stored_card_degrades_one_row_instead_of_the_board
 test_progress_reads_the_ladder_from_the_attributed_run

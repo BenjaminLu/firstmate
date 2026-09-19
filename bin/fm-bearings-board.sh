@@ -250,10 +250,8 @@
 # `if_nothing`, `reversible` (yes|no|partly) plus `reversible_note`, and
 # `recommend_why` beside `recommend_value`; `risk` (low|medium|high) badges a
 # decision card, and `evidence` ([{label, url}]) plus `packet_url` link the card
-# to its proof. `detail` belongs to a MERGE card and the validator refuses it
-# anywhere else, because the template renders it for merge cards only: copy a
-# payload can carry but the captain can never read is refused at the gate
-# rather than published and silently dropped. Links must be https, or http on 127.0.0.1/localhost for a page
+# to its proof. `detail` is rendered for a MERGE card only, so a decision card
+# is composed without it. Links must be https, or http on 127.0.0.1/localhost for a page
 # served by lavish-axi.
 #
 # Validation is fail-closed: the payload must be valid JSON with
@@ -335,6 +333,75 @@ def valid_filed:
     then try ((fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")) == $filed) catch false
     else try (((. + "T00:00:00Z") | fromdateiso8601 | strftime("%Y-%m-%d")) == $filed) catch false
     end);
+def nonempty_string: type == "string" and length > 0;
+# A compose placeholder stands in for a value the composer still owes. The
+# enum slots accept one so a skeleton validates as a skeleton; build refuses
+# every placeholder before it validates, so a payload that reaches the captain
+# still satisfies the enums.
+def placeholder: type == "string" and test($ph);
+# Captain-facing copy is a plain string or an {en, hant, hans?} object; the
+# renderer resolves it for the language the captain chose.
+def i18n: type == "object" and (.en | nonempty_string) and (.hant | nonempty_string)
+  and ((has("hans") | not) or (.hans | type == "string"));
+def copy: nonempty_string or i18n;
+def optional_copy($name): (has($name) | not) or (.[$name] | copy);
+def repo_marker: has("repo") and (.repo == null or (.repo | type == "string"));
+def optional_https_url($name): (has($name) | not) or (.[$name] | https_url);
+def optional_link_url($name): (has($name) | not) or (.[$name] | link_url);
+def version: type == "string" and test("^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$");
+def optional_subject:
+  (has("subject") | not)
+  or (.subject
+    | type == "object"
+      and (keys | sort) == ["artifact", "version"]
+      and (.artifact | slug(128))
+      and (.version | version));
+def evidence_item: type == "object" and (.label | copy) and (.url | link_url);
+# ONE definition of a publishable Captain'"'"'s Call item, shared by the payload
+# validator and by the stored-card guard that decides whether a durable card
+# may be reused. They must never drift: a guard narrower than the validator
+# accepts a card that then refuses the WHOLE board, which under --best-effort
+# stops every later refresh silently.
+def call_item:
+  type == "object"
+  and (.key | slug(128))
+  and (.type == "decision" or .type == "merge" or .type == "credential")
+  and repo_marker
+  and (.title | copy)
+  and (.options | type == "array")
+  and ((.options | length) > 0 or .allow_freeform == true)
+  and ([.options[]
+    | type == "object"
+      and (.value | slug(128))
+      and (.label | copy)
+      and optional_copy("hint")
+      and optional_copy("consequence")] | all)
+  and (optional_copy("about"))
+  and (optional_copy("decide"))
+  and (optional_copy("detail"))
+  and (optional_copy("if_nothing"))
+  and (optional_copy("recommend_why"))
+  and (optional_copy("reversible_note"))
+  and ((has("reversible") | not) or (.reversible | placeholder)
+    or (.reversible == "yes" or .reversible == "no" or .reversible == "partly"))
+  and (if .type == "merge" then true
+    else ((has("risk") | not) or (.risk | placeholder)
+      or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
+  and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
+  and (optional_link_url("packet_url"))
+  and (optional_https_url("pr_url"))
+  and optional_subject
+  and (if has("subject") then .type == "decision" else true end)
+  and (optional_copy("freeform_hint"))
+  and ((has("close") | not) or (.close == "done" or .close == "release"))
+  and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
+  and ((has("recommend_value") | not)
+    or (.recommend_value | placeholder)
+    or ((.recommend_value | slug(128))
+      and (.recommend_value as $recommend
+        | ([.options[].value] | index($recommend) != null))))
+  and ([.options[].value] | index("reconcile") == null)
+  and (if .type == "merge" then (.risk | nonempty_string) else true end);
 '
 
 usage() {
@@ -354,75 +421,11 @@ board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
 validate_payload() {  # <data.json>
   jq -e --arg schema "$BOARD_SCHEMA" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
-    def nonempty_string: type == "string" and length > 0;
-    # A compose placeholder stands in for a value the composer still owes. The
-    # enum and count slots accept one so the skeleton validates as a skeleton;
-    # build refuses every placeholder before it validates, so a payload that
-    # reaches the captain still satisfies the enums below.
-    def placeholder: type == "string" and test($ph);
-    # Captain-facing copy is a plain string or an {en, hant, hans?} object; the
-    # renderer resolves it for the language the captain chose.
-    def i18n: type == "object" and (.en | nonempty_string) and (.hant | nonempty_string)
-      and ((has("hans") | not) or (.hans | type == "string"));
-    def copy: nonempty_string or i18n;
     def copy_or_empty: (type == "string") or i18n;
-    def optional_copy($name): (has($name) | not) or (.[$name] | copy);
-    def repo_marker: has("repo") and (.repo == null or (.repo | type == "string"));
     def name_marker: has("name") and (.name | copy);
     def optional_filed:
       (has("filed") | not) or (.filed == null) or (.filed | valid_filed);
     def optional_string($name): (has($name) | not) or (.[$name] | type == "string");
-    def optional_https_url($name): (has($name) | not) or (.[$name] | https_url);
-    def optional_link_url($name): (has($name) | not) or (.[$name] | link_url);
-    def version: type == "string" and test("^(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})\\.(0|[1-9][0-9]{0,8})$");
-    def optional_subject:
-      (has("subject") | not)
-      or (.subject
-        | type == "object"
-          and (keys | sort) == ["artifact", "version"]
-          and (.artifact | slug(128))
-          and (.version | version));
-    def evidence_item: type == "object" and (.label | copy) and (.url | link_url);
-    def call_item:
-      type == "object"
-      and (.key | slug(128))
-      and (.type == "decision" or .type == "merge" or .type == "credential")
-      and repo_marker
-      and (.title | copy)
-      and (.options | type == "array")
-      and ((.options | length) > 0 or .allow_freeform == true)
-      and ([.options[]
-        | type == "object"
-          and (.value | slug(128))
-          and (.label | copy)
-          and optional_copy("hint")
-          and optional_copy("consequence")] | all)
-      and (optional_copy("about"))
-      and (optional_copy("decide"))
-      and ((has("detail") | not) or (.type == "merge" and (.detail | copy)))
-      and (optional_copy("if_nothing"))
-      and (optional_copy("recommend_why"))
-      and (optional_copy("reversible_note"))
-      and ((has("reversible") | not) or (.reversible | placeholder)
-        or (.reversible == "yes" or .reversible == "no" or .reversible == "partly"))
-      and (if .type == "merge" then true
-        else ((has("risk") | not) or (.risk | placeholder)
-          or (.risk == "low" or .risk == "medium" or .risk == "high")) end)
-      and ((has("evidence") | not) or ((.evidence | type == "array") and ([.evidence[] | evidence_item] | all)))
-      and (optional_link_url("packet_url"))
-      and (optional_https_url("pr_url"))
-      and optional_subject
-      and (if has("subject") then .type == "decision" else true end)
-      and (optional_copy("freeform_hint"))
-      and ((has("close") | not) or (.close == "done" or .close == "release"))
-      and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
-      and ((has("recommend_value") | not)
-        or (.recommend_value | placeholder)
-        or ((.recommend_value | slug(128))
-          and (.recommend_value as $recommend
-            | ([.options[].value] | index($recommend) != null))))
-      and ([.options[].value] | index("reconcile") == null)
-      and (if .type == "merge" then (.risk | nonempty_string) else true end);
     def optional_null_string($name):
       (has($name) | not) or (.[$name] == null) or (.[$name] | type == "string");
     # The structured progress projection an Underway row carries
@@ -707,30 +710,23 @@ packet_card() {  # <task-id>
 # The durable card a previous `build` published for this call, or null -
 # `bin/fm-captain-hold.sh` retires it when the task is held again, so a card
 # that survives is one written for the hold still open.
-# A stored card is durable state written by an earlier session, so it is
-# checked here against the structural rules the payload validator applies to a
-# Captain's Call item before it is used: the wrong key would answer the wrong
-# call, and any other malformation would refuse the WHOLE board rather than
-# one row. A card that fails degrades this row to the packet or placeholder
-# path instead. The reconcile choice is stripped because it is injected per
-# publication and the validator refuses a card that already carries it.
+# A stored card is durable state an earlier session wrote, and anything may
+# have written it - `bin/fm-captain-hold.sh card --store` is a public entry
+# point that only checks the key. It is therefore held to the SAME call_item
+# rule the payload validator applies, from the one shared definition: a guard
+# narrower than the validator accepts a card that then refuses the whole
+# board, and under --best-effort that stops every later refresh in silence. A
+# card that fails degrades this row to the packet or placeholder path instead.
+# The reconcile choice is stripped first, because it is injected per
+# publication and the validator refuses a card that arrives carrying it.
 stored_card() {  # <task-id>
   local card
   card=$("$SCRIPT_DIR/fm-captain-hold.sh" card "$1" 2>/dev/null) || { printf 'null\n'; return 0; }
   printf '%s\n' "$card" \
-    | jq -c --arg id "$1" "$BOARD_JQ_DEFS"'
-      def nonempty_string: type == "string" and length > 0;
-      def i18n: type == "object" and (.en | nonempty_string) and (.hant | nonempty_string)
-        and ((has("hans") | not) or (.hans | type == "string"));
-      def copy: nonempty_string or i18n;
-      if type == "object"
-        and .key == $id
-        and (.key | slug(128))
-        and (.type == "decision" or .type == "merge" or .type == "credential")
-        and (.title | copy)
-        and ((.options // []) | type == "array")
-        and ([(.options // [])[] | type == "object" and (.value | slug(128)) and (.label | copy)] | all)
-      then .options = [(.options // [])[] | select(.value != "reconcile")]
+    | jq -c --arg id "$1" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
+      if type == "object" and .key == $id then
+        (.options = [((.options // [])[]) | select(.value != "reconcile")])
+        | if call_item then . else null end
       else null end' 2>/dev/null \
     || printf 'null\n'
 }
@@ -849,7 +845,7 @@ EOF
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" \
     --argjson progress "$progress" --argjson deterministic "$deterministic" \
-    --argjson readable "$readable" "$BOARD_JQ_DEFS"'
+    --argjson readable "$readable" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     . as $snap |
     # Every captain-facing string goes through this one guard: the validator
     # refuses an empty en, and an ordinary metadata-only backlog row parses to
