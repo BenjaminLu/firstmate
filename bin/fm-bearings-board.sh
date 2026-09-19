@@ -227,6 +227,7 @@ PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
 # an acceptable Charted Next `filed` date, shared by the payload validator and
 # the compose projection so the projection can never emit a value the validator
 # then refuses.
+# shellcheck disable=SC2016  # a jq program: the $ names are jq's variables, not the shell's
 BOARD_JQ_DEFS='
 def slug($max): type == "string" and test("^[A-Za-z0-9._-]{1," + ($max | tostring) + "}$");
 def https_url:
