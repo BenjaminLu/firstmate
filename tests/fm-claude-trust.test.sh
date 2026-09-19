@@ -1318,6 +1318,45 @@ test_a_symlinked_import_target_is_reported_not_refused() {
   pass "fm-claude-trust.sh: an import whose target is a symlink out of the worktree is reported, not refused"
 }
 
+
+# The caveat only counts where the operator is looking. The scan's record goes
+# to stdout, which bin/fm-spawn.sh discards, so a clear verdict that named its
+# unexamined dimensions only there reached nobody at dispatch time. It has to
+# arrive on stderr, on every clear rather than only on a failure, because a
+# clean verdict is exactly when the unexamined part matters.
+test_a_clear_verdict_names_what_it_did_not_check_on_stderr() {
+  local row err out status
+  row=$(import_case imports-clear-stderr)
+  read_case "$row"
+  printf '# p\n\n@AGENTS.md\n' > "$WT/CLAUDE.md"
+  printf 'inner\n' > "$WT/AGENTS.md"
+  err="$CASE_DIR/stderr.txt"
+  out=$(CLAUDE_CONFIG_DIR="$CONFIG" HOME="$CONFIG" "$TRUST" "$WT" "$PROJ" 2>"$err") && status=0 || status=$?
+  expect_code 0 "$status" "a chain that stays inside the worktree must still pass: $out"
+  assert_grep "did not check your personal instruction file" "$err" \
+    "the clear verdict did not tell the operator what it had not checked"
+  assert_grep "checked this project's own instruction files" "$err" \
+    "the clear verdict did not tell the operator what it had checked"
+  pass "fm-claude-trust.sh: a clear verdict names what it checked and what it did not, on the stream the spawn shows"
+}
+
+# A verdict Claude Code's own record settles carries no such clause: once the
+# project entry holds an approval or an explicit decline, no dialog renders
+# whatever any chain contains, and a caveat where no doubt exists is what
+# teaches an operator to skip the one that matters.
+test_a_record_derived_clear_carries_no_caveat() {
+  local row err out status
+  row=$(import_case imports-record-clear)
+  read_case "$row"
+  printf '# p\n\n@%s/outside.md\n' "$CASE_DIR" > "$WT/CLAUDE.md"
+  seed_import_approval "$CONFIG/.claude.json" "$PROJ"
+  err="$CASE_DIR/stderr.txt"
+  out=$(CLAUDE_CONFIG_DIR="$CONFIG" HOME="$CONFIG" "$TRUST" "$WT" "$PROJ" 2>"$err") && status=0 || status=$?
+  expect_code 0 "$status" "a project the human already approved must launch: $out"
+  grep -q "did not check" "$err" && fail "a record-derived clear carried the unexamined-dimension clause"
+  return 0
+}
+
 test_fresh_worktree_is_trusted
 test_fresh_worktree_also_trusts_the_project_root_without_import_consent
 test_registration_carries_forward_existing_import_consent
@@ -1367,6 +1406,8 @@ test_a_punctuated_spelling_of_an_already_scanned_file_stays_clear
 test_an_import_naming_an_outside_directory_does_not_block
 test_a_memory_file_symlinked_out_of_the_worktree_is_reported
 test_a_symlinked_import_target_is_reported_not_refused
+test_a_clear_verdict_names_what_it_did_not_check_on_stderr
+test_a_record_derived_clear_carries_no_caveat
 test_a_memory_file_symlinked_out_of_the_worktree_is_still_read
 test_secondmate_home_external_import_blocks_the_launch
 test_secondmate_home_with_an_underivable_consent_entry_is_undecided

@@ -45,7 +45,12 @@
 # exist on the machine the reproduction was run on, so the user memory chain is
 # not scanned here - and, because an unscanned dimension must not read as a
 # checked one, the scan-derived `clear` verdict says out loud which dimensions
-# it did not examine. Only worktree mode reaches this second dialog's flags: a
+# it did not examine - and says it on STDERR, the stream the spawn actually
+# shows, because a caveat written where the caller discards it is not said at
+# all. It goes out on every clear, not only on a failure: a clean verdict is
+# exactly when the unexamined part matters, since that is when someone acts on
+# it. Stdout keeps the full record; stderr carries the operator's one clause.
+# Only worktree mode reaches this second dialog's flags: a
 # secondmate home has no separate "project" entry to carry consent forward
 # from, so its registration stays trust-only.
 #
@@ -724,8 +729,13 @@ const MAX_IMPORT_DEPTH = 4;
 // contains - and a caveat attached where no residual doubt exists is what
 // teaches an operator to skip the one that matters.
 const UNEXAMINED = `the operator's user-global ~/.claude memory chain and any CLAUDE.md or CLAUDE.local.md in directories above ${dir} were not examined`;
-const say = (verdict, reason) => {
-  process.stdout.write(`${verdict}\t${reason}\n`);
+// A third field carries the sentence an OPERATOR reads, as opposed to the
+// second, which is the record: same fact, no paths, one clause of what was
+// checked and what was not. It is set only where the verdict actually rests on
+// the scan, and the caller puts it where the operator is already looking.
+const say = (verdict, reason, operator) => {
+  const tail = operator === undefined ? "" : `\t${operator}`;
+  process.stdout.write(`${verdict}\t${reason}${tail}\n`);
   process.exit(0);
 };
 // The vendor's own record, read first: an entry that already carries a decision
@@ -960,6 +970,7 @@ if (undecidable.length > 0) say("unknown", listOf(undecidable));
 say(
   "clear",
   `no import in the project memory chain under ${dir} (CLAUDE.md, CLAUDE.local.md and their @imports, followed to the ${MAX_IMPORT_DEPTH + 1} memory files Claude Code was measured to load - this directory's own memory file plus at most ${MAX_IMPORT_DEPTH} imported ones) reaches outside it; ${UNEXAMINED}`,
+  "checked this project's own instruction files and everything they import; did not check your personal instruction file or any instruction file in a folder above this project",
 );
 NODE
 }
@@ -968,9 +979,13 @@ if ! IMPORT_SCAN=$(import_scan "$TARGET_REAL" "${HOME:-}" "$STORE" "$IMPORT_ENTR
   IMPORT_SCAN=$(printf 'unknown\tthe external-imports scan did not complete')
 fi
 
-IMPORT_VERDICT=${IMPORT_SCAN%%$'\n'*}
-IMPORT_REASON=${IMPORT_VERDICT#*$'\t'}
-IMPORT_VERDICT=${IMPORT_VERDICT%%$'\t'*}
+IMPORT_LINE=${IMPORT_SCAN%%$'\n'*}
+IMPORT_VERDICT=${IMPORT_LINE%%$'\t'*}
+IMPORT_REST=${IMPORT_LINE#*$'\t'}
+IMPORT_REASON=${IMPORT_REST%%$'\t'*}
+# The third field is optional, so an unsplit rest means there was none.
+IMPORT_OPERATOR=${IMPORT_REST#*$'\t'}
+[ "$IMPORT_OPERATOR" != "$IMPORT_REST" ] || IMPORT_OPERATOR=
 # A scan run against an entry that is not the entry Claude Code reads answers a
 # different question than the one asked, so its verdict is not this gate's to
 # report either way: a standing approval would be missed and the launch refused
@@ -983,6 +998,13 @@ fi
 case "$IMPORT_VERDICT" in
 clear)
   echo "external imports: clear ($IMPORT_REASON)"
+  # The verdict's record goes to stdout, which the spawn discards. What the
+  # scan did NOT look at has to arrive where the verdict arrives, on the stream
+  # the operator is already reading, every time and not only when something is
+  # wrong: a clean verdict is exactly when the unexamined part matters, because
+  # that is when someone acts on it. Only the scan-derived clear carries it;
+  # the record-derived ones rest on Claude Code's own stored decision instead.
+  [ -z "$IMPORT_OPERATOR" ] || echo "claude imports: clear - $IMPORT_OPERATOR" >&2
   ;;
 blocks)
   echo "external imports: blocks ($IMPORT_REASON)"
