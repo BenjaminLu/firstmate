@@ -4487,3 +4487,27 @@ JSON
 }
 
 test_an_unreadable_head_commit_names_its_condition
+
+# The two payload problems on the GitLab approvals read are different conditions
+# and get different sentences, the way R16 split their GitHub twins.
+test_the_gitlab_approvals_read_names_which_problem_it_hit() {
+  local case_dir rc
+  case_dir=$(make_gitlab_case gitlab-approvals-short)
+  # An approver username carrying a newline splits the two-field read, so it
+  # comes back short - which is not the same as the read failing outright.
+  printf '%s\n' '{"approved_by":[{"user":{"username":"two\nlines"}}]}' \
+    > "$case_dir/glab-approvals.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-approvals-short: a short approvals read must not merge"
+  assert_grep 'approvals did not read back cleanly' "$case_dir/stderr" \
+    "gitlab-approvals-short: a short read was not named as one"
+  assert_no_grep 'could not be read, so no approval is proven' "$case_dir/stderr" \
+    "gitlab-approvals-short: a short read was reported as a failed read"
+  pass "the GitLab approvals read names which of its two payload problems it hit"
+}
+
+test_the_gitlab_approvals_read_names_which_problem_it_hit

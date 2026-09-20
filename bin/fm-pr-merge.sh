@@ -577,7 +577,7 @@ FIELDS
 $approvals
 APPROVALS
     if [ "$approval_named" -ne 2 ] || [ "$approval_total" -ne 2 ]; then
-      refusals="$refusals  - the merge request's approvals could not be read, so no approval is proven
+      refusals="$refusals  - the merge request's approvals did not read back cleanly, so the approval is unknown; retrying will not clear it
 "
     elif [ "$approval_count" -eq 0 ]; then
       refusals="$refusals  - the merge request has no approval
