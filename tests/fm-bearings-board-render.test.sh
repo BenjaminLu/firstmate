@@ -428,6 +428,35 @@ test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
 }
 
 # Colour repeats the risk, so the plot reads without counting pixels.
+# R17. R14's class on the card. The row explaining what undoing a change costs
+# was headed "reversible" on a call where nobody said it could be undone - the
+# badge twelve lines above it is correctly guarded, so the same field on the
+# same card was guarded in one place and invented in the other.
+test_the_card_does_not_call_a_change_reversible_when_nobody_said_so() {
+  local home out
+  home=$(make_home rev-unstated)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"unstated", type:"decision", repo:"s", title:"Nobody said either way",
+       decide:"Which way?", reversible_note:"Undoing it means a migration",
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"stated", type:"decision", repo:"s", title:"He said it cannot be undone",
+       decide:"Which way?", reversible:"no", reversible_note:"Undoing it means a migration",
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].ctx[] | select(.k == "reversible")] | length')" = "0" ] \
+    || fail "a call nobody called reversible was headed reversible: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '[.cards[0].ctx[].k] | join(",")')" "undoing it" \
+    "the row explaining what undoing costs lost its heading: $out"
+  # A call that DID state it keeps its own word, or the fix would have thrown
+  # away the answer along with the invention.
+  assert_contains "$(printf '%s' "$out" | jq -r '[.cards[1].ctx[].k] | join(",")')" "cannot be undone" \
+    "a stated reversibility was not used as the row heading: $out"
+  pass "the card does not call a change reversible when nobody said so"
+}
+
 # R16. The card's render-time refusal was attached to ONE control. A packet
 # card carries a "Choose X" button inside every option tab, and those stayed
 # live on a board that cannot send - so pressing one queued nothing and
@@ -2122,3 +2151,4 @@ test_pressing_answer_with_nothing_chosen_says_so
 test_an_empty_press_does_not_wipe_a_standing_refusal
 test_the_per_option_buttons_go_dead_with_the_rest_of_the_card
 test_the_per_option_buttons_stay_live_on_a_working_board
+test_the_card_does_not_call_a_change_reversible_when_nobody_said_so

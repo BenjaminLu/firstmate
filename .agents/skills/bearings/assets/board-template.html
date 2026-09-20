@@ -628,6 +628,7 @@ __FM_BEARINGS_BOARD_DATA__
       risk: "risk {r}", risk_low: "low", risk_medium: "medium", risk_high: "high",
       rev_yes: "reversible", rev_no: "cannot be undone", rev_partly: "partly reversible",
       k_decide: "decide", k_about: "about", k_nothing: "if nothing", k_why: "why", k_evidence: "evidence",
+      k_undoing: "undoing it",
       packet: "open the packet", rec: "rec",
       tab_diff: "Difference", choose: "Choose {x}",
       tab_note: "Open a tab above to see exactly what that option changes.",
@@ -699,6 +700,7 @@ __FM_BEARINGS_BOARD_DATA__
       risk: "風險 {r}", risk_low: "低", risk_medium: "中", risk_high: "高",
       rev_yes: "可回頭", rev_no: "回不去", rev_partly: "部分可回頭",
       k_decide: "決定什麼", k_about: "背景", k_nothing: "什麼都不做", k_why: "為什麼", k_evidence: "證據",
+      k_undoing: "要收回的話",
       packet: "打開 packet", rec: "建議",
       tab_diff: "差在哪", choose: "選 {x}",
       tab_note: "點上面的分頁，看那個選項到底改了什麼。",
@@ -770,6 +772,7 @@ __FM_BEARINGS_BOARD_DATA__
       risk: "风险 {r}", risk_low: "低", risk_medium: "中", risk_high: "高",
       rev_yes: "可回头", rev_no: "回不去", rev_partly: "部分可回头",
       k_decide: "决定什么", k_about: "背景", k_nothing: "什么都不做", k_why: "为什么", k_evidence: "证据",
+      k_undoing: "要收回的话",
       packet: "打开 packet", rec: "建议",
       tab_diff: "差在哪", choose: "选 {x}",
       tab_note: "点上面的分页，看那个选项到底改了什么。",
@@ -1384,7 +1387,16 @@ __FM_BEARINGS_BOARD_DATA__
       if (item.decide) ctx.appendChild(ctxRow(t("k_decide"), pick(item.decide), "decide"));
       if (item.about) ctx.appendChild(ctxRow(t("k_about"), pick(item.about)));
       if (item.if_nothing) ctx.appendChild(ctxRow(t("k_nothing"), pick(item.if_nothing), "nothing"));
-      if (item.reversible_note) ctx.appendChild(ctxRow(reversibleBadge(item.reversible || "yes").textContent, pick(item.reversible_note)));
+      /* Headed by what the call actually said about undoing it, and by a
+         neutral heading when it said nothing. `|| "yes"` headed the row
+         "reversible" on a call where nobody had said it could be undone -
+         the badge twelve lines up is correctly guarded, so the same field on
+         the same card was guarded in one place and invented in the other. */
+      if (item.reversible_note) {
+        ctx.appendChild(ctxRow(
+          item.reversible ? reversibleBadge(item.reversible).textContent : t("k_undoing"),
+          pick(item.reversible_note)));
+      }
       if (ctx.children.length) pad.appendChild(ctx);
 
       var form = document.createElement("form");
