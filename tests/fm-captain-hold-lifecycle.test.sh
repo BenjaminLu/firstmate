@@ -3990,10 +3990,147 @@ test_retained_body_keeps_its_utf8_bytes() {
   pass "cleanup preserves every byte of a retained body's non-ASCII characters"
 }
 
+# --- a closed captain call the backlog has archived --------------------------
+#
+# Retention moves a closed row out of the active backlog into the archive the
+# backlog itself writes. A gate that reads only the active backlog then reports
+# an answered call as simply gone, and a finished scout it was attested for can
+# never be cleaned up. The archive is the same durable store, so the gate reads
+# it; what it must NOT do is treat absence as a pass, because that would let a
+# genuine unresolved call be cleaned away in silence.
+test_completion_gate_reads_an_answered_call_out_of_the_archive() {
+  local home id call plain show
+  home=$(make_home archived-answer)
+  id=sample-archived-origin
+  call=sample-archived-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate the archived answer" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the archived-answer origin"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Archived answer\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose the archived option" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not hold the archived call"
+  printf 'Fund the clock seam.\n' > "$home/archived-decision.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/archived-decision.txt" >/dev/null \
+    || fail "could not answer the archived call"
+
+  # An ordinary finished task, closed with no captain answer at all, archived
+  # beside it. Nothing about being archived may make it look durable.
+  plain=sample-archived-plain
+  tasks_in "$home" add "$plain" "Ordinary finished work" --kind ship --repo sample >/dev/null \
+    || fail "could not create the plain archived fixture"
+  tasks_in "$home" "done" "$plain" >/dev/null || fail "could not close the plain fixture"
+  tasks_in "$home" prune --keep 0 >/dev/null || fail "could not archive the answered call"
+
+  if tasks_in "$home" show "$call" --full >/dev/null 2>&1; then
+    fail "the fixture did not archive the answered call out of the active backlog"
+  fi
+  assert_grep "$call" "$home/data/done-archive.md" "the answered call never reached the archive"
+
+  run_captain "$home" complete "$id" "$call" > "$home/complete.out" 2> "$home/complete.err" \
+    || fail "the completion gate lost an answered call to retention: $(cat "$home/complete.err")"
+  run_captain "$home" verify "$id" >/dev/null 2> "$home/verify.err" \
+    || fail "the completion gate could not verify an archived answer: $(cat "$home/verify.err")"
+  run_teardown "$home" "$id" >/dev/null 2> "$home/archived-teardown.err" \
+    || fail "cleanup stayed blocked behind an archived answer: $(cat "$home/archived-teardown.err")"
+
+  write_origin_meta "$home" "$id"
+  if run_captain "$home" complete "$id" "$plain" > "$home/plain.out" 2> "$home/plain.err"; then
+    fail "the completion gate attested an archived close that carries no captain answer"
+  fi
+  assert_contains "$(cat "$home/plain.err")" "no recorded captain answer" \
+    "the archived ordinary close was refused for some other reason than the missing answer"
+  if run_captain "$home" complete "$id" sample-never-existed \
+    > "$home/absent.out" 2> "$home/absent.err"; then
+    fail "the completion gate attested a task that exists in neither the backlog nor the archive"
+  fi
+  assert_contains "$(cat "$home/absent.err")" "sample-never-existed" \
+    "the refusal did not name the entry it could not resolve"
+  pass "the completion gate reads an answered call out of the backlog's archive"
+}
+
+# --- cleanup owns the close of a row whose worker is still up ----------------
+#
+# The captain's answer arriving while the work it gates is still running is
+# ordinary. Closing that row is not: cleanup owns the completion transition,
+# and a row closed ahead of it leaves the worker with no lifecycle left - it
+# cannot be cleaned up, holds its isolated copy, and re-alarms forever. So the
+# answer is recorded and the hold is lifted; only the close is refused, and the
+# refusal names the flag that does exactly that.
+test_answer_will_not_close_a_row_whose_worker_is_still_up() {
+  local home id err show
+  home=$(make_home live-worker-answer)
+  id=sample-live-worker
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate with the worker still up" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the live-worker fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Live worker\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id" --reason "captain must choose before the worker stands down" \
+    >/dev/null || fail "could not hold the live worker's own row"
+  printf 'Fund the clock seam.\n' > "$home/live-decision.txt"
+
+  if run_captain "$home" answer "$id" --decision-file "$home/live-decision.txt" \
+    > "$home/live.out" 2> "$home/live.err"; then
+    fail "the captain's answer closed a row whose worker is still up"
+  fi
+  err=$(cat "$home/live.err")
+  assert_contains "$err" "--release" "the refusal did not name the flag that records the answer"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the refused answer lost the row"
+  assert_contains "$show" "held: yes" "the refused answer released the captain hold anyway"
+  assert_not_contains "$show" "Resolution recorded by fm-captain-hold" \
+    "the refused answer recorded a resolution it did not complete"
+
+  run_captain "$home" answer "$id" --release --decision-file "$home/live-decision.txt" >/dev/null \
+    || fail "the named remedy did not record the captain's answer"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the released row disappeared"
+  assert_contains "$show" "state: in_flight" "the released row was completed anyway"
+  assert_contains "$show" "Resolution mode: released" "the released row lost the captain's answer"
+
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "the completion gate refused the released call"
+  run_teardown "$home" "$id" >/dev/null 2> "$home/live-teardown.err" \
+    || fail "cleanup could not stand the worker down: $(cat "$home/live-teardown.err")"
+  show=$(tasks_in "$home" show "$id" --full) || fail "cleanup lost the released row"
+  assert_contains "$show" "state: done" "cleanup did not record the completion it owns"
+  pass "an answer will not close a row whose worker is still up"
+}
+
+# The same rule reaches every channel, because the keyed intake resolves through
+# the same `answer` path: a card that declared a close on a live worker's row is
+# reported skipped with the reason, never quietly closed or quietly downgraded.
+test_keyed_intake_reports_a_live_workers_row_as_skipped() {
+  local home id out
+  home=$(make_home live-worker-intake)
+  id=sample-live-intake
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate through the keyed intake" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the keyed-intake fixture"
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --reason "captain must choose before the worker stands down" \
+    >/dev/null || fail "could not hold the keyed-intake fixture"
+  out=$(printf '%s\tgo\tFund it\tdone\n' "$id" \
+    | run_captain "$home" answers --source "board fixture" 2>&1) \
+    && fail "the keyed intake closed a row whose worker is still up: $out"
+  assert_contains "$out" "skipped: $id" "the keyed intake did not report the refusal: $out"
+  assert_contains "$out" "--release" "the skipped line lost the remedy: $out"
+  out=$(printf '%s\tgo\tFund it\trelease\n' "$id" \
+    | run_captain "$home" answers --source "board fixture" 2>&1) \
+    || fail "the keyed intake could not release the live worker's row: $out"
+  assert_contains "$out" "closed: $id" "the released keyed answer was not recorded: $out"
+  pass "the keyed intake reports a live worker's row as skipped, with the remedy"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
+test_completion_gate_reads_an_answered_call_out_of_the_archive
+test_answer_will_not_close_a_row_whose_worker_is_still_up
+test_keyed_intake_reports_a_live_workers_row_as_skipped
 test_answer_records_and_closes
 test_release_frees_held_work
 test_hold_stamp_precedes_hold_visibility

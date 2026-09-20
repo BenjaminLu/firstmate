@@ -48,7 +48,13 @@
 # later" answer is stored as a date instead of a live card.
 #
 # `answer` records the captain's exact words and resolves the call in the same
-# act. It requires a non-empty captain decision file of at most 8192 bytes and
+# act. It will not CLOSE a row whose worker record is still live, because
+# bin/fm-teardown.sh owns that row's completion transition and a row closed
+# ahead of it strands the worker outside the ordinary lifecycle; the refusal
+# names `--release`, which records the same answer, lifts the hold, and leaves
+# the row for cleanup. `reconcile close` is held to the same rule, and so is
+# every channel, because `answers` resolves through this same command.
+# It requires a non-empty captain decision file of at most 8192 bytes and
 # writes a resolution block while preserving the leading hold-set stamp until
 # the close succeeds (the previous body is preserved and archived through
 # tasks-axi --archive-body). It closes a question with `tasks-axi done` - or,
@@ -134,6 +140,13 @@
 # `captain-held [key=...]` status close naming the inventory. Later review
 # passes may add ids. A post-teardown visual review can complete against the
 # surviving report and tasks without recreating task state.
+# Durability is read across BOTH halves of a markdown backlog, because
+# done_keep retires a closed row out of the active file into the archive beside
+# it and a reader of the active file alone would report an answered call as
+# simply gone. Retention is not a resolution, though: an archived row counts
+# only through the captain answer recorded in it, while an archived row with no
+# answer, and an id in neither file, both stay refusals - nothing passes this
+# gate merely by having disappeared.
 # `verify` is read-only and is called by scout teardown, so teardown cannot
 # erase a source before this gate has succeeded: every recorded inventory
 # entry must still be durable and no keyed status decision may be open.
@@ -527,11 +540,36 @@ resolution_block() {  # <mode>
     "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
 }
 
+# The archived half of this home's backlog, for a row done_keep has retired out
+# of the active file. Absence here is still absence: it resolves NOTHING on its
+# own and only ever supplies the closed row's own recorded body.
+archived_row_body() {  # <task-id>; prints the archived row's body
+  local data status=0 body
+  data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
+  body=$(fm_backlog_archived_row "$data" "$1") || status=$?
+  if [ "$status" -eq 2 ]; then
+    fail "${FM_BACKLOG_TRANSITION_ERROR:-the backlog archive cannot be read}"
+  fi
+  [ "$status" -eq 0 ] || return 1
+  printf '%s' "$body"
+}
+
 # Durable state of one captain call: an active captain hold (annotations
-# surviving even when a date gate has expired) or a recorded captain answer.
+# surviving even when a date gate has expired) or a recorded captain answer,
+# wherever this home's backlog keeps the row - the active file or its archive.
 verify_hold_durable() {  # <task-id>
-  local id=$1 show state hold_kind body
-  task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  local id=$1 show state hold_kind body archived
+  if ! task_show "$id"; then
+    # Retention is not a resolution. An archived row proves durability only
+    # through the captain answer recorded in it; an archived row without one,
+    # and an id in neither file, both stay refusals, so nothing is cleaned away
+    # on the strength of having disappeared.
+    archived=$(archived_row_body "$id") \
+      || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+    body_has_resolution_record "$archived" \
+      || fail "archived task $id closed with no recorded captain answer; it is not a durable captain call"
+    return 0
+  fi
   show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
@@ -762,11 +800,22 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
     2) return 2 ;;
     124) return 124 ;;
   esac
+  # Every live lookup has been tried, so a row retention retired can now answer
+  # without ever shadowing one still listed. verify_hold_durable still decides
+  # whether what it found is durable.
+  if archived_row_body "$entry" >/dev/null; then
+    printf '%s archived' "$entry"
+    return 0
+  fi
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
     legacy=$(legacy_hold_id "$origin" "$entry")
-    fail "no captain-held task $entry and no migrated hold for it in this home's configured backlog (data directory $DATA); the nearest legacy identity $legacy also resolves to nothing"
+    if archived_row_body "$legacy" >/dev/null; then
+      printf '%s archived' "$legacy"
+      return 0
+    fi
+    fail "no captain-held task $entry in this home's configured backlog or its archive, and no migrated hold for it (data directory $DATA); the nearest legacy identity $legacy also resolves to nothing"
   fi
-  fail "no captain-held task $entry and no migrated hold for it in this home's configured backlog (data directory $DATA)"
+  fail "no captain-held task $entry in this home's configured backlog or its archive, and no migrated hold for it (data directory $DATA)"
 }
 
 body_hold_set_timestamp() {  # <decoded-task-body>
@@ -979,6 +1028,31 @@ apply_pending_retained_artifact() {  # <task-id>
   esac
 }
 
+# --- cleanup owns a live worker's completion transition ----------------------
+#
+# bin/fm-backlog-transition-lib.sh states the invariant: while `state/<id>.meta`
+# exists, that row is In flight and the script holding the worker's record owns
+# the paired backlog transition; `state/<id>.backlog-close` marks the one window
+# where cleanup has already claimed the close and only its replay is pending.
+# Closing such a row here takes that transition away from cleanup, and the
+# worker is then unreachable by the ordinary lifecycle: it cannot be cleaned up,
+# it holds its isolated copy, and it re-alarms as stale indefinitely.
+#
+# What is refused is the CLOSE, never the captain's word. `--release` records
+# the same answer, lifts the hold, and leaves the work item for cleanup to
+# complete when the worker stands down, so the remedy the refusal names really
+# does resolve the case it is printed for. Every channel inherits this, because
+# the keyed intake resolves through this same command.
+worker_record_live() {  # <task-id>
+  [ -f "$STATE/$1.meta" ] || return 1
+  [ ! -f "$STATE/$1.backlog-close" ]
+}
+
+refuse_close_over_live_worker() {  # <task-id>
+  worker_record_live "$1" || return 0
+  fail "task $1 still has a live worker record at $STATE/$1.meta, and cleanup owns that row's completion; record the captain's answer with --release, which keeps the answer and lifts the hold while leaving the row for cleanup to close"
+}
+
 close_answered() {  # <task-id> <release-0-or-1>
   if [ "$2" = 1 ]; then
     tasks_axi unhold "$1" >/dev/null
@@ -1074,6 +1148,7 @@ command_answer() {
   fi
 
   if [ "$hold_kind" = captain ]; then
+    [ "$release" = 1 ] || refuse_close_over_live_worker "$id"
     # Actively the captain's item (a date-expired hold keeps its annotations
     # and stays answerable). A matching record means an interrupted close to
     # finish; a different digest is a NEW answer on a re-held task and gets
@@ -1557,6 +1632,7 @@ reconcile_close() {
   fi
   [ "$hold_kind" = captain ] \
     || fail "task $id is not held for the captain; there is no captain call to reconcile"
+  refuse_close_over_live_worker "$id"
   if body_has_resolution_record "$body" \
     && [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ]; then
     recorded_mode=$(recorded_resolution_mode "$body" || true)

@@ -15,6 +15,8 @@ Publishing the stamp first ensures a snapshot cannot observe a newly captain-hel
 Retries of an active hold preserve its hold-set timestamp, while re-holding released work starts a new timestamped lifecycle; a closed task is refused rather than reopened, and `--until` stores the captain's own deferral date through tasks-axi's date gate.
 
 The `answer` subcommand records the captain's exact words and resolves the call in the same act: it closes a question-shaped call, while `answer --release` frees a captain-gated work item to proceed without completing it.
+Which of the two applies is not a style choice while the work is still running: cleanup owns a live worker's completion transition, so `answer` refuses to close a row whose worker record is still on disk and names `--release` in the refusal, and `reconcile close` is held to the same rule.
+Closing such a row ahead of cleanup leaves the worker outside the ordinary lifecycle entirely - it cannot be cleaned up, it holds its isolated copy, and it re-alarms as stale indefinitely - and the refusal costs the captain nothing, because `--release` records exactly the same answer.
 It requires a non-empty captain decision file of at most 8192 bytes, durably writes a resolution block carrying the decision digest and a `Resolution mode:` while retaining the leading hold-set stamp until the selected `tasks-axi done` or `tasks-axi unhold` transition succeeds, then restores the successful record's resolution-first body ordering (the previous body remains preserved below the block and archived through tasks-axi `--archive-body`).
 If the close is interrupted, the still-held task therefore keeps its original age basis.
 A matching retry also completes any resolution-first normalization left unfinished after the close itself succeeded.
@@ -29,6 +31,8 @@ With a non-empty inventory it appends a `captain-held [key=<key>]: tracked by <i
 
 Scout teardown calls the read-only `verify` subcommand after checking for the report and before removing any source state.
 `verify` requires the recorded attestation, requires every recorded inventory entry to still be durable (actively captain-held, or carrying a recorded answer), and fails on any keyed status decision that opened after the last `complete`, which makes re-running `complete` the repair.
+Both subcommands read durability across both halves of a markdown backlog, because `done_keep` retires a closed row out of the active file into the archive beside it, and a reader of the active file alone reports an answered call as simply gone - which is how a finished scout came to be unable to pass its own gate.
+Retention is not a resolution: an archived row counts only through the captain answer recorded in it, while an archived row carrying no answer, and an id present in neither file, both stay refusals, so nothing passes this gate merely by having disappeared.
 The `--force` path remains the explicit captain-approved discard escape hatch.
 
 ## Cleanup never closes a captain call
