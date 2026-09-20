@@ -2307,15 +2307,24 @@ while :; do
           if [ -n "$poll_head" ]; then
             fm_pr_meta_rebind_head "$STATE" "$id" \
               "$provider" "$host" "$path" "$number" "$poll_head" || rebind_rc=$?
-          elif [ "$out" = merged ]; then
-            # Merged, and the forge would not give up a head. What the record
-            # still holds is the arming-time value - the superseded head this
-            # whole branch exists to stop anyone trusting - and the poll retires
-            # below, so nothing will ever correct it. Drop it rather than leave
-            # a head nobody has seen standing as the merged one; every consumer
-            # resolves a head live when none is recorded. The row is queued
-            # either way, because reporting while leaving the false record in
-            # place would fix only the half nobody reads.
+          elif [ "$out" = merged ] && [ "$provider" = github ]; then
+            # GitHub merged, and the forge would not give up a head. What the
+            # record still holds is the arming-time value - the superseded head
+            # this whole branch exists to stop anyone trusting - and the poll
+            # retires below, so nothing will ever correct it. Drop it rather
+            # than leave a head nobody has seen standing as the merged one;
+            # every consumer resolves a head live when none is recorded. The row
+            # is queued either way, because reporting while leaving the false
+            # record in place would fix only the half nobody reads.
+            #
+            # GitHub only, and the guard is the whole point. A bare merged from
+            # GitLab is that provider's DOCUMENTED output, not a degradation:
+            # plain glab exposes the head only inside JSON, so bin/fm-pr-poll.sh
+            # never emits one and bin/fm-pr-check.sh never records one to be
+            # stale. Reading a contract as a failure queued a durable row
+            # describing an incident that did not happen, on every GitLab merge,
+            # forever - which is the crowding the report-once record exists to
+            # stop, arriving through the path added to stop silence.
             fm_pr_meta_clear_head "$STATE" "$id" \
               "$provider" "$host" "$path" "$number" || rebind_rc=$?
             unconfirmed_head=1

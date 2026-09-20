@@ -2685,7 +2685,16 @@ test_gitlab_merged_poll_retires() {
   case "$(cat "$dir/watch.out")" in check:*task-a.check.sh:*merged) ;; *) fail "GitLab merged wake was missing" ;; esac
   assert_poll_absent "$state" task-a
   grep -qxF "pr=$url" "$state/task-a.meta" || fail "GitLab retirement removed canonical metadata"
-  pass "GitHub and GitLab exact merged results share one retirement path"
+  # A bare merged is GitLab's DOCUMENTED output - plain glab exposes the head
+  # only inside JSON, so nothing was degraded and nothing is owed beyond the
+  # merge itself. This case asserted the wake and the retirement but never the
+  # queue's contents, which is why a durable row describing an incident that did
+  # not happen could be added on every GitLab merge without failing anything.
+  ! grep -F 'pr-head-task-a' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "a GitLab merge queued a head row for a provider that reports no head: $(cat "$state/.wake-queue")"
+  assert_no_grep 'pr_head=' "$state/task-a.meta" \
+    "a GitLab task recorded a head it never had"
+  pass "GitHub and GitLab exact merged results share one retirement path, and GitLab owes no head row"
 }
 
 # --- poll-path merge authority ----------------------------------------------
