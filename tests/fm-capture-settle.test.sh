@@ -58,7 +58,7 @@ test_an_unseen_intermediate_frame_still_settles() {
   # still succeed.
   reset_capture 'composer ready' 'RELOAD DONE and the composer is back'
   out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/unseen" 40 \
-    'RELOAD DONE' 'RELOAD WORKING' 2>&1) && status=0 || status=$?
+    --present 'RELOAD DONE' --absent 'RELOAD WORKING' 2>&1) && status=0 || status=$?
   expect_code 0 "$status" "a transition whose intermediate frame was never captured must still settle: $out"
   pass "an intermediate frame no capture ever sampled does not fail a completed transition"
 }
@@ -73,7 +73,7 @@ test_the_end_state_is_not_accepted_while_the_transient_is_still_up() {
     'RELOAD WORKING ... RELOAD DONE' \
     'RELOAD DONE and the composer is back'
   out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/overlap" 40 \
-    'RELOAD DONE' 'RELOAD WORKING' 2>&1) && status=0 || status=$?
+    --present 'RELOAD DONE' --absent 'RELOAD WORKING' 2>&1) && status=0 || status=$?
   expect_code 0 "$status" "the wait must settle once the transient half clears: $out"
   assert_grep 'RELOAD DONE and the composer is back' "$TMP_ROOT/overlap" \
     "the settled capture must be the frame with the transient gone"
@@ -84,7 +84,7 @@ test_a_transition_that_never_happens_fails_with_the_viewport_it_saw() {
   local out status
   reset_capture 'composer ready, nothing happened at all'
   out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/never" 4 \
-    'RELOAD DONE' 'RELOAD WORKING' 2>&1) && status=0 || status=$?
+    --present 'RELOAD DONE' --absent 'RELOAD WORKING' 2>&1) && status=0 || status=$?
   expect_code 1 "$status" "a transition that never happened must fail: $out"
   assert_contains "$out" "never showed 'RELOAD DONE'" "the failure must name what it waited for"
   assert_contains "$out" 'composer ready, nothing happened at all' \
@@ -96,7 +96,7 @@ test_a_stuck_transient_is_reported_as_stuck_not_as_missing() {
   local out status
   reset_capture 'RELOAD WORKING ... RELOAD DONE'
   out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/stuck" 4 \
-    'RELOAD DONE' 'RELOAD WORKING' 2>&1) && status=0 || status=$?
+    --present 'RELOAD DONE' --absent 'RELOAD WORKING' 2>&1) && status=0 || status=$?
   expect_code 1 "$status" "a viewport stuck mid-transition must fail: $out"
   assert_contains "$out" "never cleared 'RELOAD WORKING'" \
     "a stuck transient must be distinguished from an end state that never arrived"
@@ -107,7 +107,7 @@ test_a_self_reported_failure_aborts_at_once() {
   local out status
   reset_capture 'composer ready' 'Reload failed: extension threw'
   out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/abort" 400 \
-    'RELOAD DONE' 'RELOAD WORKING' 'Reload failed:' 2>&1) && status=0 || status=$?
+    --present 'RELOAD DONE' --absent 'RELOAD WORKING' --abort 'Reload failed:' 2>&1) && status=0 || status=$?
   expect_code 2 "$status" "a self-reported failure must abort, not spend the whole bound: $out"
   assert_contains "$out" "reported 'Reload failed:'" "the abort must name the failure it read"
   [ "$(capture_calls)" -lt 20 ] \
@@ -126,7 +126,7 @@ test_the_bound_is_an_attempt_count_that_stretches_under_load() {
   reset_capture 'composer ready, nothing happened at all'
   CAPTURE_DELAY=0.3
   started=$SECONDS
-  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/slow" 6 'RELOAD DONE' 2>&1) \
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/slow" 6 --present 'RELOAD DONE' 2>&1) \
     && status=0 || status=$?
   elapsed=$((SECONDS - started))
   expect_code 1 "$status" "the slow-capture wait must fail only once its attempts are spent: $out"
@@ -142,13 +142,68 @@ test_the_bound_is_an_attempt_count_that_stretches_under_load() {
   pass "the bound is an attempt count, so a loaded runner gets more real time instead of an early failure"
 }
 
-test_an_absent_text_is_optional() {
+test_either_half_of_the_end_state_stands_alone() {
   local out status
   reset_capture 'RELOAD DONE'
-  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/present-only" 40 'RELOAD DONE' 2>&1) \
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/present-only" 40 \
+    --present 'RELOAD DONE' 2>&1) && status=0 || status=$?
+  expect_code 0 "$status" "a wait with only a --present text must settle: $out"
+
+  # The wait-for-absence shape: the settle is something leaving the screen, with
+  # nothing new arriving to mark it. Those are the loops that used to fall
+  # through in silence when they ran out.
+  reset_capture 'THINKING is expanded' 'THINKING is expanded' 'collapsed'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/absent-only" 40 \
+    --absent 'THINKING' 2>&1) && status=0 || status=$?
+  expect_code 0 "$status" "a wait with only an --absent text must settle: $out"
+
+  reset_capture 'THINKING never collapses'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/absent-stuck" 4 \
+    --absent 'THINKING' 2>&1) && status=0 || status=$?
+  expect_code 1 "$status" "a wait-for-absence that never clears must fail rather than fall through: $out"
+  assert_contains "$out" "never cleared 'THINKING'" "the failure must name the text that stayed"
+  pass "a --present text and an --absent text each stand alone, and an absence that never clears fails loudly"
+}
+
+test_every_text_the_next_assertion_needs_can_be_required() {
+  local out status
+  # R1's shape: the capture the wait leaves behind is what the assertions after
+  # it read, so a wait that requires only the transition marker leaves those
+  # assertions depending on the subject's internal ordering. Requiring all of
+  # them is what closes that.
+  reset_capture \
+    'RELOAD DONE' \
+    'RELOAD DONE and the skill row is back' \
+    'RELOAD DONE and the skill row is back and FINAL RESPONSE'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/multi" 40 \
+    --present 'RELOAD DONE' --present 'skill row' --present 'FINAL RESPONSE' 2>&1) \
     && status=0 || status=$?
-  expect_code 0 "$status" "a wait with no must-be-gone text and no abort texts must settle: $out"
-  pass "the must-be-gone text and the abort texts are both optional"
+  expect_code 0 "$status" "a wait naming several required texts must hold out for all of them: $out"
+  assert_grep 'FINAL RESPONSE' "$TMP_ROOT/multi" \
+    "the settled capture must be the frame carrying every required text"
+
+  reset_capture 'RELOAD DONE, but the final response never came back'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/multi-missing" 4 \
+    --present 'RELOAD DONE' --present 'FINAL RESPONSE' 2>&1) && status=0 || status=$?
+  expect_code 1 "$status" "one required text missing must fail the wait: $out"
+  assert_contains "$out" "never showed 'FINAL RESPONSE'" "the failure must name the text that was missing"
+  assert_not_contains "$out" "never showed 'RELOAD DONE'" "the failure must not blame a text that was present"
+  pass "every text the following assertion needs can be required of the settled capture, and a missing one is named"
+}
+
+test_a_wait_that_requires_nothing_is_refused() {
+  local out status
+  reset_capture 'anything at all'
+  out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/empty" 4) 2>&1 ) && status=0 || status=$?
+  expect_code 1 "$status" "a wait with no condition must be refused, not pass on the first capture: $out"
+  assert_contains "$out" 'needs at least one --present or --absent' \
+    "the refusal must say what the call is missing"
+
+  out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/typo" 4 --pressent 'x') 2>&1 ) \
+    && status=0 || status=$?
+  expect_code 1 "$status" "a misspelled flag must be refused rather than silently ignored: $out"
+  assert_contains "$out" "unknown argument '--pressent'" "the refusal must name the argument it did not understand"
+  pass "a wait with no condition, or with a flag it does not understand, is refused instead of passing"
 }
 
 test_an_unseen_intermediate_frame_still_settles
@@ -157,5 +212,7 @@ test_a_transition_that_never_happens_fails_with_the_viewport_it_saw
 test_a_stuck_transient_is_reported_as_stuck_not_as_missing
 test_a_self_reported_failure_aborts_at_once
 test_the_bound_is_an_attempt_count_that_stretches_under_load
-test_an_absent_text_is_optional
+test_either_half_of_the_end_state_stands_alone
+test_every_text_the_next_assertion_needs_can_be_required
+test_a_wait_that_requires_nothing_is_refused
 echo "# all fm-capture-settle tests passed"

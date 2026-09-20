@@ -2137,7 +2137,7 @@ JS
 
 test_hidden_block_geometry_e2e() {
   local project home config sessions session_file snapshot expanded_snapshot calm_off_snapshot restarted_snapshot
-  local version skill_line final_line gap i reload_done reload_running
+  local version skill_line final_line gap reload_done reload_running
   if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for Pi Calm hidden-block geometry E2E"
     return 0
@@ -2284,15 +2284,13 @@ TS
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
   wait_for_geometry_text "$snapshot" "visible row two" \
     || fail "Pi Calm hidden-block geometry E2E did not complete the /skill:ahoy turn"
-  i=0
-  while [ "$i" -lt 120 ]; do
-    capture_geometry_viewport "$snapshot"
-    # Pi <=0.84 rendered a "Working..." transcript row; Pi >=0.85 embeds the
-    # indicator in the editor border as "Working". Match either spelling.
-    tail -12 "$snapshot" | grep -Eq "Working(\\.\\.\\.)?([[:space:]]|─|$)" || break
-    sleep 0.05
-    i=$((i + 1))
-  done
+  # Pi <=0.84 rendered a "Working..." transcript row; Pi >=0.85 embeds the
+  # indicator in the editor border as "Working". Absence of the bare token
+  # covers both spellings and is the stricter of the two, which is the safe
+  # direction for a wait: nothing else this fixture puts on screen contains it.
+  fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
+    --absent 'Working' \
+    || fail "Pi Calm hidden-block geometry E2E left the /skill:ahoy turn still working"
   assert_contains "$(cat "$snapshot")" "[skill] ahoy" "Calm hid the collapsed skill header"
   assert_contains "$(cat "$snapshot")" "CALM_GEOMETRY_FINAL" "Calm hid the final assistant response"
   assert_not_contains "$(cat "$snapshot")" "Thinking..." "Calm left a collapsed thinking label visible"
@@ -2316,15 +2314,29 @@ TS
   # captures can straddle, and missing it failed a reload that had in fact
   # completed. The box now serves as the must-be-gone half of the end state,
   # which is the one thing it can prove without being caught in the act.
+  #
+  # The two transcript rows assert_geometry_gap reads are required here too.
+  # They are on screen by the time the status row is - Pi rebuilds the chat
+  # before it writes that row - but that is Pi's call order, not anything this
+  # test states, and the gap assertion gets one shot at whatever capture the
+  # wait leaves behind. Requiring them is what keeps the race removed instead
+  # of moved one line down.
+  #
+  # 600 attempts at this helper's 0.05s cadence is roughly twice the real
+  # budget of the 600 attempts at 0.01s it replaces. Deliberate: a latching
+  # condition is where headroom belongs, and it is spent only by a failure.
   reload_done='Reloaded keybindings, extensions, skills, prompts, themes, and context files'
   reload_running='Reloading keybindings, extensions, skills, prompts, themes, and context files...'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/reload'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
   fm_wait_capture_settled capture_geometry_viewport "$snapshot" 600 \
-    "$reload_done" "$reload_running" \
-    'Reload failed:' \
-    'Wait for the current response to finish before reloading.' \
-    'Wait for compaction to finish before reloading.' \
+    --present "$reload_done" \
+    --present '[skill] ahoy' \
+    --present 'CALM_GEOMETRY_FINAL' \
+    --absent "$reload_running" \
+    --abort 'Reload failed:' \
+    --abort 'Wait for the current response to finish before reloading.' \
+    --abort 'Wait for compaction to finish before reloading.' \
     || fail "Pi Calm hidden-block geometry E2E did not complete the /reload viewport transition"
   assert_geometry_gap "$snapshot" "reloaded native Calm transcript"
 
@@ -2333,14 +2345,13 @@ TS
     || fail "thinking expansion did not restore Calm-hidden reasoning"
   assert_not_contains "$(cat "$expanded_snapshot")" "probe-one.txt" "thinking expansion restored Calm-hidden tool rows"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" C-t
-  i=0
-  while [ "$i" -lt 120 ]; do
-    capture_geometry_viewport "$snapshot"
-    grep -Fq "CALM_GEOMETRY_THINKING_ONE" "$snapshot" || break
-    sleep 0.05
-    i=$((i + 1))
-  done
-  assert_not_contains "$(cat "$snapshot")" "CALM_GEOMETRY_THINKING_ONE" "collapsing thinking restored hidden-row output"
+  # The wait and the assertion are the same claim here, so they are one call:
+  # a separate assert_not_contains after a loop that already required the text
+  # gone could never fire, and the loop running out in silence is what used to
+  # report this as a geometry failure one screen later.
+  fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
+    --absent 'CALM_GEOMETRY_THINKING_ONE' \
+    || fail "collapsing thinking restored hidden-row output"
   assert_geometry_gap "$snapshot" "re-collapsed native Calm transcript"
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/calm'
@@ -2350,15 +2361,10 @@ TS
   assert_contains "$(cat "$calm_off_snapshot")" "Thinking..." "turning Calm off did not restore collapsed thinking labels"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/calm'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
-  i=0
-  while [ "$i" -lt 120 ]; do
-    capture_geometry_viewport "$snapshot"
-    if ! grep -Fq "probe-one.txt" "$snapshot" && ! grep -Fq "Thinking..." "$snapshot"; then
-      break
-    fi
-    sleep 0.05
-    i=$((i + 1))
-  done
+  fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
+    --absent 'probe-one.txt' \
+    --absent 'Thinking...' \
+    || fail "turning Calm back on did not hide the tool-call and thinking rows again"
   assert_geometry_gap "$snapshot" "Calm redraw of existing transcript"
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/quit'

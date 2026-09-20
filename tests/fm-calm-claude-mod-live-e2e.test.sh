@@ -168,7 +168,15 @@ hull_column() {  # <screen text>
 
 # The answer names words that live only in notes.txt, so the settled turn is told apart
 # from the echoed prompt by "gamma" on screen with no working row left.
-PROMPT='Run this exact bash command with the Bash tool: sleep 5; cat notes.txt   Then reply with one short sentence naming the three words.'
+# The stock working row and the boat that replaces it are only up while a turn
+# is working, and both cases below have to observe that window. Its length is
+# held open deliberately rather than left to the model: the command the prompt
+# asks for sleeps for this long inside the turn. Against the 0.1s sampling
+# cadence used below that is roughly fifty chances at a row displayed for the
+# whole window - which is what keeps "never sampled" a statement about the
+# matcher rather than a lost race. Shortening this re-opens that race.
+WORKING_HOLD_SECONDS=5
+PROMPT="Run this exact bash command with the Bash tool: sleep $WORKING_HOLD_SECONDS; cat notes.txt   Then reply with one short sentence naming the three words."
 
 # The stock working row on this build: `✢ Propagating… (1s · ↓ 114 tokens)`.
 working_row_shown() {  # <screen text>
@@ -218,8 +226,14 @@ if command_listed calm; then
 fi
 send "$PROMPT"
 enter
-# Sample every frame until the turn settles: the boat must never appear, and the
-# stock working row must have been seen, or the flag-off case proved nothing.
+# Sample every frame across the turn: the boat must never appear, and the stock
+# working row must, or the flag-off case proved nothing.
+#
+# The loop's own exit must not depend on having caught the working row. A
+# sampler that missed it would then spend the whole bound and report a missed
+# sample as a product failure - the same defect this branch removed from the Pi
+# reload check. It stops on the turn's own durable end state instead, and what
+# a miss means is settled afterwards, from evidence that is still on screen.
 saw_working=0
 i=0
 while [ "$i" -lt 600 ]; do
@@ -236,7 +250,10 @@ while [ "$i" -lt 600 ]; do
   esac
   if working_row_shown "$off_frame"; then
     saw_working=1
-  elif [ "$saw_working" -eq 1 ]; then
+  else
+    # The turn's durable end state: the answer on screen with no working row
+    # left. Reached whether or not any sample caught that row, so a miss costs
+    # a diagnosis below rather than the whole bound here.
     case "$off_frame" in
       *'gamma'*) break ;;
     esac
@@ -244,9 +261,23 @@ while [ "$i" -lt 600 ]; do
   sleep 0.1
   i=$((i + 1))
 done
-[ "$saw_working" -eq 1 ] || fail "Claude Code $CLAUDE_VERSION showed no stock working row during the flag-off turn, so the no-op case cannot be judged"
 wait_settled 'the turn with the flag off'
 off_settled=$(screen)
+# A turn that ran the tool held the working window open for WORKING_HOLD_SECONDS,
+# so missing the row across every sample of it is not a lost race: either the
+# turn never ran the command, or the pattern no longer matches this build's
+# working row. Both are real failures, and they are not the same failure.
+if [ "$saw_working" -eq 0 ]; then
+  printf '%s\n' "$off_settled" >&2
+  case "$off_settled" in
+    *'Bash('*|*'shell command'*)
+      fail "Claude Code $CLAUDE_VERSION ran the flag-off turn, but no frame across its ${WORKING_HOLD_SECONDS}s working window matched the stock working row, so working_row_shown no longer recognizes this build's row and the no-op case cannot be judged"
+      ;;
+    *)
+      fail "the flag-off turn never ran the Bash tool the prompt asked for, so it held no working window and the no-op case cannot be judged"
+      ;;
+  esac
+fi
 case "$off_settled" in
   *'Bash('*|*'shell command'*) : ;;
   *)

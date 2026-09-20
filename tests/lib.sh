@@ -620,13 +620,15 @@ fm_write_secondmate_meta() {
 # --- waiting for a terminal viewport to settle ------------------------------
 
 # fm_wait_capture_settled <capture-fn> <file> <max-attempts> \
-#                         <present-text> [<absent-text>] [<abort-text>...]
+#                         [--present TEXT]... [--absent TEXT]... [--abort TEXT]...
 #
 # Re-runs <capture-fn> "<file>" until the captured viewport has SETTLED into
-# the end state a completed transition leaves behind: <present-text> is on
-# screen and <absent-text>, when given, is gone. Returns 0 then, 2 as soon as
-# any <abort-text> appears - text by which the program under test reports its
-# own failure - and 1 once <max-attempts> captures have gone by with neither.
+# the end state a completed transition leaves behind: every --present text on
+# screen and every --absent text gone, all in the same capture. Returns 0 then,
+# 2 as soon as any --abort text appears - text by which the program under test
+# reports its own failure - and 1 once <max-attempts> captures have gone by
+# with neither. At least one --present or --absent is required; every flag may
+# be repeated, and all matching is fixed-string.
 #
 # Wait on the end state, never on the intermediate one. Captures are discrete
 # samples, so a state the program passes through can appear and vanish
@@ -638,40 +640,69 @@ fm_write_secondmate_meta() {
 # STARTED. An end state cannot be missed: once true it stays true, so the poll
 # either observes it or the transition really did not finish.
 #
+# Name every text the assertions after the wait depend on, not just the one
+# that proves the transition finished. The capture this call leaves behind is
+# what those assertions read, and they get one shot at it with no retry behind
+# them; a text they need but the wait did not require is a timing dependence
+# moved rather than removed.
+#
 # The bound is an attempt count, not a wall-clock budget, per CONTRIBUTING.md:
 # each attempt costs more on a loaded machine, so the count stretches with the
 # load it exists to tolerate, where a clock would expire on work that was still
-# legitimately in progress.
+# legitimately in progress. Budget a count against THIS cadence - the 0.05s
+# below plus one capture, so roughly 0.08s per attempt at a loaded runner's
+# measured ~0.03s per capture - rather than carrying a count over from a loop
+# that slept for something else.
 #
 # Both failures print the last capture to stderr. A check that cannot confirm
 # what it was watching for has to say what it saw instead, or the next reader
 # pays for the diagnosis all over again.
 fm_wait_capture_settled() {
-  local capture_fn=$1 file=$2 max_attempts=$3 present=$4 absent=${5:-}
-  # Everything past the fixed five is an abort text; with none, clear $@ so the
-  # scan below iterates zero times instead of re-reading the fixed arguments.
-  if [ "$#" -gt 5 ]; then shift 5; else set --; fi
-  local attempt=0 abort reason rc
+  local capture_fn=$1 file=$2 max_attempts=$3
+  shift 3
+  local present=() absent=() aborts=() text
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --present) present+=("$2"); shift 2 ;;
+      --absent) absent+=("$2"); shift 2 ;;
+      --abort) aborts+=("$2"); shift 2 ;;
+      *) fail "fm_wait_capture_settled: unknown argument '$1'" ;;
+    esac
+  done
+  [ "${#present[@]}" -gt 0 ] || [ "${#absent[@]}" -gt 0 ] \
+    || fail "fm_wait_capture_settled: needs at least one --present or --absent text"
+
+  local attempt=0 settled reason rc
   while :; do
     "$capture_fn" "$file" || true
     attempt=$((attempt + 1))
-    for abort in "$@"; do
-      if grep -Fq -- "$abort" "$file" 2>/dev/null; then
-        reason="reported '$abort' instead of settling on '$present'"
+    for text in ${aborts[@]+"${aborts[@]}"}; do
+      if grep -Fq -- "$text" "$file" 2>/dev/null; then
+        reason="reported '$text' instead of settling"
         rc=2
         break 2
       fi
     done
-    if grep -Fq -- "$present" "$file" 2>/dev/null &&
-      { [ -z "$absent" ] || ! grep -Fq -- "$absent" "$file" 2>/dev/null; }; then
-      return 0
+    settled=1
+    for text in ${present[@]+"${present[@]}"}; do
+      grep -Fq -- "$text" "$file" 2>/dev/null || { settled=0; break; }
+    done
+    if [ "$settled" -eq 1 ]; then
+      for text in ${absent[@]+"${absent[@]}"}; do
+        ! grep -Fq -- "$text" "$file" 2>/dev/null || { settled=0; break; }
+      done
     fi
+    [ "$settled" -eq 0 ] || return 0
     if [ "$attempt" -ge "$max_attempts" ]; then
-      if grep -Fq -- "$present" "$file" 2>/dev/null; then
-        reason="showed '$present' but never cleared '$absent' across $max_attempts captures"
-      else
-        reason="never showed '$present' across $max_attempts captures"
-      fi
+      reason="never settled across $max_attempts captures"
+      for text in ${present[@]+"${present[@]}"}; do
+        grep -Fq -- "$text" "$file" 2>/dev/null \
+          || reason="$reason; never showed '$text'"
+      done
+      for text in ${absent[@]+"${absent[@]}"}; do
+        ! grep -Fq -- "$text" "$file" 2>/dev/null \
+          || reason="$reason; never cleared '$text'"
+      done
       rc=1
       break
     fi
