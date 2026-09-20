@@ -2346,9 +2346,16 @@ while :; do
           # again. Nothing on the merged path is exempt at all, contention
           # included: the outcome publishes and the poll retires in this same
           # cycle, so whatever the record holds then it holds forever.
-          if [ "$rebind_rc" -eq 0 ] && [ "${unconfirmed_head:-0}" = 0 ]; then
-            # Recorded. Anything reported before is answered, so the next
-            # failure - even an identical one - is news again.
+          if [ -n "$poll_head" ] && [ "$rebind_rc" -eq 0 ] && [ "${unconfirmed_head:-0}" = 0 ]; then
+            # A head was actually recorded, so anything reported before is
+            # answered and the next failure - even an identical one - is news
+            # again. The poll_head test is load-bearing: rebind_rc starts at 0
+            # and STAYS 0 on a sweep where no re-bind was even attempted, which
+            # is what a silent poll produces (an unreachable forge, a gh
+            # failure, an unparseable head). Dropping the record then would
+            # re-queue an already-reported condition on every forge hiccup,
+            # which is the crowding this record exists to prevent. "The re-bind
+            # did not fail" is not the same fact as "a head was recorded".
             rm -f "$STATE/.pr-head-reported-$id"
           fi
           if [ "$rebind_rc" -ne 0 ] || [ "${unconfirmed_head:-0}" = 1 ]; then

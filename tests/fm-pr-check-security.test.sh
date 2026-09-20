@@ -1048,6 +1048,50 @@ test_a_failed_rebind_is_never_silent() {
   pass "a merged poll that cannot record its head reaches the durable queue, and one that can stays quiet"
 }
 
+# The report-once record is dropped when a head is recorded, so the next failure
+# is news again. A sweep where the poll printed NOTHING - an unreachable forge, a
+# gh failure, an unparseable head - records nothing and must not count as one:
+# `rebind_rc` starts at 0 and stays 0 there, so reading it alone as "recorded"
+# would re-queue an already-reported condition on every forge hiccup.
+test_a_sweep_that_recorded_nothing_keeps_the_report_once_record() {
+  local dir state rc marker
+  dir=$(make_case rebind-marker-silent-sweep)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  marker="$state/.pr-head-reported-task-a"
+  printf '%s 1\n' 0123456789abcdef0123456789abcdef01234567 > "$marker"
+
+  # The poll prints nothing at all: not merged, and no readable head.
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD_UNREADABLE=1 FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  case "$rc" in 0|124) ;; *) fail "silent-poll sweep failed (rc=$rc): $(cat "$dir/watch.err")" ;; esac
+  grep -F -- '--json state,headRefOid' "$dir/gh.log" >/dev/null \
+    || fail "the sweep never reached the poll"
+  [ -f "$marker" ] \
+    || fail "a sweep that recorded nothing dropped the report-once record"
+
+  # And the other direction stays true: a sweep that DOES record a head drops it.
+  # Acknowledge first, or this sweep resurfaces the previous one's queued row
+  # instead of reaching the poll at all.
+  ack_watcher_cycle "$state" || fail "silent-poll sweep acknowledgement failed"
+  rm -f "$state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch2.out" 2> "$dir/watch2.err"
+  rc=$?
+  set -e
+  case "$rc" in 0|124) ;; *) fail "recording sweep failed (rc=$rc): $(cat "$dir/watch2.err")" ;; esac
+  grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
+    || fail "the recording sweep did not record a head"
+  [ ! -f "$marker" ] || fail "a sweep that recorded a head kept the report-once record"
+  pass "only a sweep that actually recorded a head clears the report-once record"
+}
+
 # When the drop itself fails, the arming-time head survives - and the poll
 # retires in the same cycle, so it survives forever. A row saying "no head is
 # recorded" then points a supervisor at an empty record when what is actually
@@ -3362,6 +3406,7 @@ test_a_permanent_lock_failure_is_not_reported_as_contention
 test_a_failed_rebind_is_never_silent
 test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so
 test_a_merged_row_names_what_the_record_actually_holds
+test_a_sweep_that_recorded_nothing_keeps_the_report_once_record
 test_a_repeating_rebind_failure_is_reported_once_per_condition
 test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
