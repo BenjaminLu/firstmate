@@ -404,6 +404,22 @@ Three files sit on the line and want a ruling rather than my judgement.
   But the guard is a structural backstop, and a reason that no longer names the repair action is a real defect rather than a rewording.
   Marked TRIM-HEAVY; whether that reason string may be asserted at all is a ruling, not a measurement.
 
+## One deletion recovered coverage rather than losing it
+
+`tests/fm-backlog-atomicity.test.sh` is red on `main`, and removing its pinned wording changed where.
+
+`test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi` asserts four things in order: that the spawn's output says `preservation could not be verified`, that it says `did not finish within 3s`, that the backlog row is still `queued`, and that `state/<id>.meta` - the paired task record - still exists.
+
+The first two are wording.
+On `main` the test dies on the first and never reaches the fourth.
+With the wording removed it runs on and dies on the fourth: after a timed-out `tasks-axi` verification the paired task record is gone, and `assert_present` is a bare `[ -e ]`, so the file genuinely does not exist.
+
+`bin/fm-spawn.sh` never invokes the only `bin/` script this work changed, and the behaviour is identical on `main`.
+It was unobservable because a sentence assertion stood in front of it and absorbed the red.
+
+This is the strongest case in the inventory for the rule.
+A pinned-text test is not merely worth less than it costs; this one was masking a durable-record loss on a timeout path, and a red that never gets past its first assertion trains everyone to stop reading there.
+
 ## What this deletion would cost
 
 Carrying out every DELETE-FILE and TRIM-HEAVY verdict, plus the wholly-prose test functions inside TRIM files, removes roughly 10,000 lines and these specific guarantees.
