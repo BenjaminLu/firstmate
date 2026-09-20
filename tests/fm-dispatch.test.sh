@@ -1047,6 +1047,12 @@ ASK
   assert_equals "in_flight" "$(row_state "$case_dir" "$id")" "the quoting ask never reached the spawn"
 
   # A promoted scout brief: two Definition of done sections, contract in the second.
+  # This case is the only guard on that shape. 9000e617's message claimed
+  # tests/fm-control-relaunch.sh covered it; the file is
+  # tests/fm-control-relaunch.test.sh, and what it asserts there is a whole-file
+  # `assert_grep "Delivery contract: mode=$mode"` on the launch payload, which
+  # finds the string in either section and so would stay green against a
+  # first-section-only read. That claim named a guard that does not guard.
   brief="$case_dir/promoted-brief.md"
   {
     printf '%s\n' '# Task' '## Captain'"'"'s intent' 'investigate' '' \
