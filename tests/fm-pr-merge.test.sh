@@ -173,6 +173,12 @@ case "${1:-} ${2:-}" in
   "pr view")
     case " $* " in
       *statusCheckRollup*)
+        # A forge read that does not answer: rate limit, network, auth, or any
+        # other error gh exits nonzero for.
+        if [ -f "${FM_TEST_GH_VIEW_FAILS:-}" ]; then
+          echo 'error: API rate limit exceeded' >&2
+          exit 1
+        fi
         cat "$FM_TEST_GH_VIEW_JSON"
         if [ -f "${FM_TEST_AWAY_RECORD_AFTER_VIEW:-}" ]; then
           cp "$FM_TEST_AWAY_RECORD_AFTER_VIEW" "$FM_STATE_OVERRIDE/.afk-contract"
@@ -423,6 +429,7 @@ run_pr_merge() {
   FM_TEST_GH_OUTCOME="$case_dir/github-outcome" \
   FM_TEST_GH_RULES="$case_dir/github-rules" \
   FM_TEST_GH_VIEW_JSON="$case_dir/github-view.json" \
+  FM_TEST_GH_VIEW_FAILS="$case_dir/github-view-fails" \
   FM_TEST_GH_HEAD="$case_dir/github-head" \
   FM_TEST_GH_MERGE_RC_FILE="$case_dir/github-merge-rc" \
   FM_TEST_GH_MERGE_OUTPUT="$(cat "$case_dir/github-merge-output" 2>/dev/null || true)" \
@@ -3847,3 +3854,68 @@ test_a_withdrawn_review_at_the_head_is_not_reported_as_a_stale_one() {
 
 test_a_withdrawn_review_at_the_head_is_not_reported_as_a_stale_one
 test_an_unreadable_author_is_not_reported_as_a_different_account
+
+# A forge that will not answer and a pull request nobody approved are different
+# states, and they send an operator somewhere different: one says the forge is
+# not answering, the other says go get a review. If they produced the same
+# sentence, a supervisor hitting a rate limit would spend its time dispatching a
+# reviewer for a pull request that already has one.
+test_a_failed_forge_read_is_never_reported_as_a_missing_approval() {
+  local case_dir rc head=1717171717171717171717171717171717171717
+
+  # 1. The forge does not answer at all.
+  case_dir=$(make_case github-read-fails)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  : > "$case_dir/github-view-fails"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-read-fails: an unanswered forge read must not merge"
+  assert_grep 'could not read the GitHub pull request state' "$case_dir/stderr" \
+    "github-read-fails: the refusal did not say the read failed"
+  assert_no_grep 'no review has been posted' "$case_dir/stderr" \
+    "github-read-fails: an unanswered read was reported as a missing approval"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-read-fails: gh pr merge ran on a read that never answered"
+
+  # 2. The forge answers, but not with the reviews this reads.
+  case_dir=$(make_case github-reviews-absent)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  cat > "$case_dir/github-view.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","author":{"login":"worker"},"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-reviews-absent: an unreadable reviews list must not merge"
+  assert_grep 'could not read the GitHub pull request reviews' "$case_dir/stderr" \
+    "github-reviews-absent: the refusal did not name the reviews it could not read"
+  assert_no_grep 'no review has been posted' "$case_dir/stderr" \
+    "github-reviews-absent: an unreadable reviews list was reported as a missing approval"
+
+  # 3. The forge answers and the pull request genuinely has no review.
+  case_dir=$(make_case github-genuinely-unreviewed)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" ''
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-genuinely-unreviewed: an unreviewed pull request must not merge"
+  assert_grep 'no review has been posted' "$case_dir/stderr" \
+    "github-genuinely-unreviewed: the refusal did not say a review is missing"
+  assert_no_grep 'could not read' "$case_dir/stderr" \
+    "github-genuinely-unreviewed: a missing approval was reported as a failed read"
+  pass "a forge that will not answer, an unreadable reviews list, and a pull request with no review each refuse with their own message"
+}
+
+test_a_failed_forge_read_is_never_reported_as_a_missing_approval
