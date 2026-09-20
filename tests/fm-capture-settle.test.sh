@@ -193,26 +193,42 @@ test_every_text_the_next_assertion_needs_can_be_required() {
   pass "every text the following assertion needs can be required of the settled capture, and a missing one is named"
 }
 
-test_a_scoped_absence_ignores_a_match_outside_its_scope() {
+test_a_scoped_absence_reads_its_scope_and_only_its_scope() {
   local out status
   # The condition that sent this branch back: an absence that only ever meant
   # the terminal's own chrome, checked against the transcript above it too.
   # Broadening an absence makes FEWER frames settle, and with exhaustion now
   # fatal that is a way to red a healthy run - so the scope has to survive the
   # move into the helper.
-  reset_capture 'a transcript row about Working hours\nchrome: Working...\n' \
-    'a transcript row about Working hours\nchrome: idle\n'
+  #
+  # Both halves are needed, and only one of them is about the widening. The
+  # frames carry NO trailing newline, so --tail 1 lands on the chrome row
+  # rather than on the empty line after it: with one, the scope would be blank
+  # and the case would pass without the in-scope direction ever being
+  # exercised - which is the half the real call site depends on.
+  reset_capture 'a transcript row about Working hours\nchrome: Working...' \
+    'a transcript row about Working hours\nchrome: Working...' \
+    'a transcript row about Working hours\nchrome: idle'
   out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/scoped" 6 \
     --tail 1 --absent 'Working' 2>&1) && status=0 || status=$?
-  expect_code 0 "$status" "a --tail scoped absence must ignore a match above its scope: $out"
+  expect_code 0 "$status" "a --tail scoped absence must settle once its own scope clears: $out"
+  [ "$(capture_calls)" -ge 3 ] \
+    || fail "the wait settled after $(capture_calls) captures, so a match inside the scope did not hold it out"
 
-  # Unscoped, the same frames never settle - which is the regression --tail is
-  # here to prevent, asserted rather than assumed.
-  reset_capture 'a transcript row about Working hours\nchrome: idle\n'
+  # And the in-scope match on its own must never settle, so the direction above
+  # is not being reached by the scope simply reading nothing.
+  reset_capture 'a quiet transcript row\nchrome: Working...'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/scoped-stuck" 3 \
+    --tail 1 --absent 'Working' 2>&1) && status=0 || status=$?
+  expect_code 1 "$status" "a match inside the scope must hold the wait out: $out"
+
+  # Unscoped, the settling frame never settles - which is the regression --tail
+  # is here to prevent, asserted rather than assumed.
+  reset_capture 'a transcript row about Working hours\nchrome: idle'
   out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/unscoped" 3 \
     --absent 'Working' 2>&1) && status=0 || status=$?
-  expect_code 1 "$status" "without --tail the same match must hold the wait out: $out"
-  pass "a scoped absence ignores a match outside its scope, and an unscoped one does not"
+  expect_code 1 "$status" "without --tail the match above the scope must hold the wait out: $out"
+  pass "a scoped absence reads its own scope, holds out on a match inside it, and ignores one above it"
 }
 
 test_a_bounded_absence_ignores_a_longer_word_containing_the_token() {
@@ -308,7 +324,7 @@ test_a_self_reported_failure_aborts_at_once
 test_the_bound_is_an_attempt_count_that_stretches_under_load
 test_either_half_of_the_end_state_stands_alone
 test_every_text_the_next_assertion_needs_can_be_required
-test_a_scoped_absence_ignores_a_match_outside_its_scope
+test_a_scoped_absence_reads_its_scope_and_only_its_scope
 test_a_bounded_absence_ignores_a_longer_word_containing_the_token
 test_an_unusable_tail_count_is_refused_rather_than_matching_nothing
 test_a_wait_that_requires_nothing_is_refused
