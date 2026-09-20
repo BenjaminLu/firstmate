@@ -4212,6 +4212,49 @@ test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
   pass "each live-worker refusal names a remedy its own command accepts"
 }
 
+# A close already recorded and interrupted must still be finishable. The guard
+# sits below that replay for exactly that reason: the recorded mode also
+# refuses the guard's own remedy, so guarding the replay too would leave a task
+# that can be neither completed nor unblocked - the dead end this change exists
+# to remove, reintroduced by the fix for it.
+test_an_interrupted_close_still_finishes_when_a_worker_appears() {
+  local home id show
+  home=$(make_home interrupted-close-live-worker)
+  id=sample-interrupted-live
+  tasks_in "$home" add "$id" "Finish an interrupted close" --kind ship --repo sample >/dev/null \
+    || fail "could not create the interrupted-close fixture"
+  run_captain "$home" hold "$id" --reason "captain must choose" >/dev/null \
+    || fail "could not hold the interrupted-close fixture"
+  printf 'Go.\n' > "$home/interrupted-live.txt"
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = done ] && [ "${2:-}" = sample-interrupted-live ] \
+  && [ ! -e "$FM_HOME/close-failed-once" ]; then
+  : > "$FM_HOME/close-failed-once"
+  exit 92
+fi
+exec "$REAL_TASKS_AXI" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+  if run_captain "$home" answer "$id" --decision-file "$home/interrupted-live.txt" \
+    > "$home/interrupted.out" 2> "$home/interrupted.err"; then
+    fail "the forced close failure reported success"
+  fi
+  show=$(tasks_in "$home" show "$id" --full) || fail "the interrupted row disappeared"
+  assert_contains "$show" "Resolution mode: answered" "the interrupted close recorded no answer"
+  assert_contains "$show" "held: yes" "the interrupted close released the hold"
+
+  # Now a worker record appears for that id - a partial cleanup followed by a
+  # relaunch. The recorded close must still be completable.
+  write_origin_meta "$home" "$id"
+  run_captain "$home" answer "$id" --decision-file "$home/interrupted-live.txt" >/dev/null \
+    2> "$home/interrupted-retry.err" \
+    || fail "an interrupted close could not be finished once a worker record existed: $(cat "$home/interrupted-retry.err")"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the finished row disappeared"
+  assert_contains "$show" "state: done" "the interrupted close never completed"
+  pass "an interrupted close still finishes when a worker record appears"
+}
+
 # The same rule reaches every channel, because the keyed intake resolves through
 # the same `answer` path: a card that declared a close on a live worker's row is
 # reported skipped with the reason, never quietly closed or quietly downgraded.
@@ -4245,6 +4288,7 @@ test_completion_gate_reads_an_answered_call_out_of_the_archive
 test_archive_follows_its_configuration_and_reports_an_unreadable_store
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
+test_an_interrupted_close_still_finishes_when_a_worker_appears
 test_keyed_intake_reports_a_live_workers_row_as_skipped
 test_answer_records_and_closes
 test_release_frees_held_work

@@ -1195,7 +1195,6 @@ command_answer() {
   fi
 
   if [ "$hold_kind" = captain ]; then
-    [ "$release" = 1 ] || refuse_close_over_live_worker "$id" "$ANSWER_LIVE_WORKER_REMEDY"
     # Actively the captain's item (a date-expired hold keeps its annotations
     # and stays answerable). A matching record means an interrupted close to
     # finish; a different digest is a NEW answer on a re-held task and gets
@@ -1218,6 +1217,12 @@ command_answer() {
       printf '%s: %s\n' "$outcome" "$id"
       return 0
     fi
+    # Only a NEW close is guarded, and only here - below the replay above.
+    # A close already recorded and interrupted has nowhere else to finish, and
+    # its recorded mode also refuses the remedy, so guarding it would leave a
+    # task that can be neither completed nor unblocked: exactly the dead end
+    # this whole change exists to remove.
+    [ "$release" = 1 ] || refuse_close_over_live_worker "$id" "$ANSWER_LIVE_WORKER_REMEDY"
     write_resolution_record "$id" "$outcome" "$body"
     if ! close_answered "$id" "$release"; then
       fail "could not close answered captain-held task $id"
@@ -1677,7 +1682,6 @@ reconcile_close() {
   fi
   [ "$hold_kind" = captain ] \
     || fail "task $id is not held for the captain; there is no captain call to reconcile"
-  refuse_close_over_live_worker "$id" "$RECONCILE_LIVE_WORKER_REMEDY"
   if body_has_resolution_record "$body" \
     && [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ]; then
     recorded_mode=$(recorded_resolution_mode "$body" || true)
@@ -1685,6 +1689,8 @@ reconcile_close() {
       || fail "task $id records this resolution with mode ${recorded_mode:-unknown}; it is not a reconciliation retry"
     occurrence=$(resolution_record_count "$body")
   else
+    # New reconciliations only; an interrupted one finishes here as above.
+    refuse_close_over_live_worker "$id" "$RECONCILE_LIVE_WORKER_REMEDY"
     write_resolution_record "$id" reconciled "$body"
   fi
   close_answered "$id" 0 || fail "could not close reconciled captain-held task $id"
