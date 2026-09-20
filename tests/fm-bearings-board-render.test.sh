@@ -659,6 +659,54 @@ test_an_empty_press_does_not_wipe_a_standing_refusal() {
   pass "an empty press never wipes the message already telling him something"
 }
 
+# R32. A separation pass used to spread overlapping bubbles along x to keep
+# them readable. On this plot x carries meaning - how expensive a wrong answer
+# is - so moving a mark for legibility trades a true picture for a tidy one,
+# and neither failure announces itself. Past about eight uncosted calls it
+# pushed one across the middle into the costly half, in the quadrant that says
+# "just pick one", while that bubble's own words said nobody costed it.
+#
+# Both axes here carry meaning, so nothing can be separated along a free one.
+# What is actually unreadable is the LABELS, and a label's position means
+# nothing - so the labels move and the marks do not.
+crowded_uncosted_payload() {  # <n>
+  jq -n --argjson n "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[range(0;$n) as $i | {
+      key: ("thin" + ($i|tostring)), type:"decision", repo:"r",
+      title: ("Nobody costed this one " + ($i|tostring)),
+      thin:true, blocks:0, allow_freeform:true, options:[]}]}'
+}
+
+test_a_crowded_plot_never_moves_a_bubble_off_its_own_coordinate() {
+  local home out lefts
+  home=$(make_home map-crowded)
+  out=$(render_payload "$home" "$(crowded_uncosted_payload 12)")
+
+  [ "$(printf '%s' "$out" | jq -r '.map | length')" = "12" ] \
+    || fail "the crowded fixture did not plot every call: $out"
+  # Every one of them is uncosted, so every one belongs at the left edge and
+  # none may be drawn in the costly half.
+  lefts=$(printf '%s' "$out" | jq -r '[.map[].cx] | unique | join(",")')
+  [ "$(printf '%s' "$out" | jq -r '[.map[].cx] | unique | length')" = "1" ] \
+    || fail "a crowded plot moved uncosted bubbles off the left edge: $lefts"
+  # And the caption's claim about them is true of all twelve.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "left edge" \
+    "the caption stopped explaining where uncosted bubbles sit: $out"
+  pass "a crowded plot never moves a bubble off its own coordinate"
+}
+
+# The labels are what moves instead, so a crowded plot is still readable.
+test_a_crowded_plot_separates_the_labels_instead() {
+  local home out
+  home=$(make_home map-crowded-labels)
+  out=$(render_payload "$home" "$(crowded_uncosted_payload 6)")
+  [ "$(printf '%s' "$out" | jq -r '[.map[].label_y] | unique | length')" != "1" ] \
+    || fail "six bubbles on one point drew all six labels on one line: $out"
+  pass "a crowded plot separates the labels instead of the bubbles"
+}
+
 # R31. The caption still opened with a flat claim about the number in the
 # bubble and corrected it four sentences later - the exact shape ruled against
 # for the hand-weighting sentence, left standing in the same string. A reader
@@ -2514,3 +2562,5 @@ test_the_bars_refusal_does_not_outlive_what_raised_it
 test_the_bar_tells_him_both_reasons_when_both_hold
 test_the_caption_does_not_call_a_floor_count_an_exact_one
 test_the_caption_states_the_count_plainly_when_every_count_is_exact
+test_a_crowded_plot_never_moves_a_bubble_off_its_own_coordinate
+test_a_crowded_plot_separates_the_labels_instead

@@ -533,6 +533,10 @@ const bubbles = findAll(mapHost, "bb-bub").map((g) => {
     r: Number(circle.attributes?.r ?? 0),
     fill: circle.attributes?.fill ?? "",
     selected: (g.attributes?.class ?? "").includes("is-sel"),
+    /* Where the bubble's own label was drawn. A label may be moved to keep a
+       crowded plot readable; the bubble may not, because its position is the
+       information. Both are reported so a test can hold that line. */
+    label_y: Number(texts[texts.length - 1]?.attributes?.y ?? 0),
     /* A broken outline is how the plot says nobody assessed this call. */
     dashed: (circle.attributes?.["stroke-dasharray"] ?? "") !== "",
     aria: g.attributes?.["aria-label"] ?? "",

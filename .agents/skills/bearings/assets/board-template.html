@@ -1950,28 +1950,33 @@ __FM_BEARINGS_BOARD_DATA__
           y: y1 - INSET - waitingCost(c) * (y1 - y0 - INSET * 2),
           r: 11 + Math.min(c.blocks || 0, 3) * 3.5 };
       });
-      /* Two calls can compute to nearly the same point, and two bubbles on top
-         of each other with their labels through one another is worse than an
-         approximate position. One separation pass spreads an overlapping pair
-         along x, which keeps each in its own quadrant - the reading that
-         matters - while making both readable. */
-      for (var pass = 0; pass < 8; pass++) {
-        var moved = false;
-        for (var i = 0; i < pts.length; i++) {
-          for (var j = i + 1; j < pts.length; j++) {
-            var a = pts[i], b = pts[j];
-            var dx = b.x - a.x, dy = b.y - a.y;
-            var need = a.r + b.r + 16;
-            var d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-            if (d >= need) continue;
-            var push = (need - d) / 2 + 0.5;
-            var ux = dx / d || 1;
-            a.x = Math.max(x0 + 22, Math.min(x1 - 22, a.x - ux * push));
-            b.x = Math.max(x0 + 22, Math.min(x1 - 22, b.x + ux * push));
-            moved = true;
-          }
+      /* NOTHING MOVES A BUBBLE. Two calls can compute to nearly the same point,
+         and the readable thing to do about it is not to shift one of them:
+         both axes here carry meaning, so nudging a mark for legibility trades a
+         true picture for a tidy one and neither failure announces itself. A
+         separation pass along x used to do exactly that - past about eight
+         uncosted calls it pushed one across the middle, so a bubble nobody had
+         costed was drawn in the costly half, in the quadrant that says pick one,
+         while its own words said nobody assessed it.
+         What is actually unreadable when bubbles coincide is their LABELS
+         running through one another, and a label's position carries no meaning,
+         so that is what moves. The mark stays where the data put it. */
+      var taken = [];
+      function labelY(pt) {
+        var below = pt.y < midY + 20;
+        var at = below ? pt.y + pt.r + 12 : pt.y - pt.r - 6;
+        /* Step away from the bubble until this label clears the ones already
+           placed near it, bounded so a crowded plot degrades to a readable
+           column rather than running off the plot. */
+        for (var step = 0; step < 12; step++) {
+          var clash = taken.some(function (t2) {
+            return Math.abs(t2[0] - pt.x) < 58 && Math.abs(t2[1] - at) < 11;
+          });
+          if (!clash) break;
+          at += below ? 11 : -11;
         }
-        if (!moved) break;
+        taken.push([pt.x, at]);
+        return at;
       }
       pts.forEach(function (pt) {
         var c = pt.c;
@@ -1996,7 +2001,7 @@ __FM_BEARINGS_BOARD_DATA__
           g.appendChild(n);
         }
         var lab = svgEl("text", { x: pt.x.toFixed(1),
-          y: (pt.y < midY + 20 ? pt.y + pt.r + 12 : pt.y - pt.r - 6).toFixed(1),
+          y: labelY(pt).toFixed(1),
           "text-anchor": "middle" });
         lab.setAttribute("class", "bb-bublabel");
         lab.textContent = shortLabel(c);
