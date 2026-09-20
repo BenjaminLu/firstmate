@@ -2274,6 +2274,26 @@ while :; do
           run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
             "$provider" "$url" "$host" "$path" "$number" || exit 1
           out=$FM_CHECK_RESULT
+          # The poll reads the pull request's head on the same call that reads
+          # its state (bin/fm-pr-poll.sh owns that output contract), so the
+          # recorded head is re-bound to the live one every cycle instead of
+          # staying on whatever was captured when the poll was armed. A head
+          # line is not supervisor-actionable - an open pull request's head
+          # moves with every push - so it is consumed here and clears $out
+          # rather than waking. A merged line's head is the commit the merge
+          # landed, recorded before that outcome is published. Only a head this
+          # poll just read reaches metadata, and a line this watcher does not
+          # recognise is left alone and still surfaces as an ordinary wake.
+          poll_head=
+          case "$out" in
+            'merged '*) poll_head=${out#merged }; out=merged ;;
+            'head '*) poll_head=${out#head }; out= ;;
+          esac
+          if [ -n "$poll_head" ] \
+            && ! fm_pr_meta_rebind_head "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" "$poll_head"; then
+            triage_log "could not re-bind the recorded head of $id to $poll_head"
+          fi
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
           custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT
           run_check_capture "$custom_snapshot" || exit 1

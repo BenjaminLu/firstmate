@@ -1264,3 +1264,97 @@ fm_pr_poll_merge_notified_remove() {  # <state> <id>
   [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
   rm -f -- "$marker"
 }
+
+# --- recorded head re-binding -------------------------------------------------
+# The single owner of writing a task's pr_head= after arming recorded it once.
+# bin/fm-pr-check.sh captures a head at arming time inside its own atomic pr=
+# rewrite; from then on the head moves with every push, rebase and force-push,
+# and this is what puts the recorded value back on the current commit.
+#
+# bin/fm-wake-lib.sh is a canonical lint root in its own right, so reaching its
+# lock primitive stays an analysis boundary, exactly as bin/fm-afk-contract.sh's
+# fm_afk_contract_lock_helpers does.
+_FM_PR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+fm_pr_lock_helpers() {
+  command -v fm_meta_lock_path >/dev/null 2>&1 && return 0
+  # shellcheck source=/dev/null
+  . "$_FM_PR_LIB_DIR/fm-wake-lib.sh"
+}
+
+# fm_pr_meta_rebind_head <state> <id> <provider> <host> <path> <number> <head>
+#
+# Record <head> as the task's pr_head=, atomically and under the task's own
+# metadata lock. <head> must be a commit id a forge just returned: this never
+# derives one from local git, never keeps a previously recorded value alive, and
+# refuses anything that is not a valid commit id, so no consumer can be handed
+# a head nobody observed.
+#
+# The write happens only while the metadata's own canonical pr= still names the
+# identity the caller validated its head against. A task rebound to a different
+# pull request between that read and this write therefore keeps the new pull
+# request's head instead of being overwritten with the old one's.
+#
+# Returns 0 once the metadata records exactly <head>, including when it already
+# did, and 1 on any failure, having replaced the file wholly or not at all.
+fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <head>
+  local state=$1 id=$2 provider=$3 host=$4 path=$5 number=$6 head=$7
+  local meta lock tmp='' state_device url status=0 line
+  fm_pr_task_id_valid "$id" || return 1
+  fm_pr_head_valid "$head" || return 1
+  [ -d "$state" ] && [ ! -L "$state" ] || return 1
+  fm_pr_lock_helpers || return 1
+  state_device=$(fm_pr_file_device "$state") || return 1
+  meta="$state/$id.meta"
+  lock=$(fm_meta_lock_path "$meta") || return 1
+  fm_lock_acquire_wait "$lock" || return 1
+  if ! fm_pr_metadata_identity_parse "$meta" \
+    || [ "$FM_PR_META_PROVIDER" != "$provider" ] \
+    || [ "$FM_PR_META_HOST" != "$host" ] \
+    || [ "$FM_PR_META_PATH" != "$path" ] \
+    || [ "$FM_PR_META_NUMBER" != "$number" ] \
+    || [ "$(fm_pr_file_device "$meta")" != "$state_device" ]; then
+    fm_lock_release "$lock" || true
+    return 1
+  fi
+  url=$FM_PR_META_URL
+  if [ "$(grep '^pr_head=' "$meta" | tail -1 | cut -d= -f2- || true)" = "$head" ]; then
+    fm_lock_release "$lock" || return 1
+    return 0
+  fi
+  umask 077
+  tmp=$(mktemp "$state/.fm-pr-meta-head.XXXXXX") || { fm_lock_release "$lock" || true; return 1; }
+  # pr= and pr_head= are re-appended together at the end, because
+  # fm_pr_metadata_identity_parse accepts no unrecognised line after pr=.
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      pr=*|pr_head=*) ;;
+      *) printf '%s\n' "$line" >> "$tmp" || status=1 ;;
+    esac
+  done < "$meta"
+  if [ "$status" -eq 0 ]; then
+    printf 'pr=%s\npr_head=%s\n' "$url" "$head" >> "$tmp" || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    chmod 0600 "$tmp" \
+      && fm_pr_private_file_valid "$tmp" 600 "$state_device" \
+      && fm_pr_metadata_identity_parse "$tmp" \
+      && [ "$FM_PR_META_PROVIDER" = "$provider" ] \
+      && [ "$FM_PR_META_URL" = "$url" ] \
+      && [ "$FM_PR_META_HOST" = "$host" ] \
+      && [ "$FM_PR_META_PATH" = "$path" ] \
+      && [ "$FM_PR_META_NUMBER" = "$number" ] \
+      && fm_pr_regular_destination_on_device_or_absent "$meta" "$state_device" \
+      && mv -f -- "$tmp" "$meta" \
+      || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    tmp=''
+    fm_pr_private_file_valid "$meta" 600 "$state_device" \
+      && grep -qxF "pr_head=$head" "$meta" \
+      || status=1
+  fi
+  [ -z "$tmp" ] || rm -f -- "$tmp"
+  fm_lock_release "$lock" || status=1
+  return "$status"
+}

@@ -1,11 +1,28 @@
 #!/usr/bin/env bash
 # Static watcher program for a validated PR/MR poll sidecar.
-# It emits exactly one merged line for a merged PR or MR and stays silent
-# otherwise, including on every error, so a failed lookup can never be read as
-# a merge. The provider-tagged identity is data in the sidecar and is never
-# interpolated into this source: these bytes are identical for every task.
+# The provider-tagged identity is data in the sidecar and is never interpolated
+# into this source: these bytes are identical for every task.
 # Each provider is read through its own standard CLI, gh for GitHub and glab
 # for GitLab, so an upstream checkout needs no extra tooling to follow either.
+#
+# Output contract, one line at most, consumed by bin/fm-watch.sh:
+#   "merged <head>"  the pull request is merged, at that exact head commit
+#   "merged"         the pull request is merged and no head could be read
+#   "head <head>"    not merged; <head> is the pull request's head right now
+# and silence on every error, so a failed lookup can never be read as a merge.
+# Only a merged line is supervisor-actionable; the head line exists because the
+# head a pull request is open at moves with every push, rebase and force-push,
+# and a value captured once at arming time is stale minutes later. Reading it
+# here costs nothing: it is one more field on the read the poll already makes,
+# so the watcher can re-bind the task's recorded head every cycle instead of
+# trusting the arming snapshot. A head is emitted only when the forge just
+# returned it and it validates as a commit id, so nothing downstream can record
+# a head this poll did not see; an unreadable head loses the attribution rather
+# than the merge, because losing the merge would be the worse failure.
+# A GitLab merge request emits no head: plain glab exposes it only inside JSON,
+# which would need a JSON processor firstmate does not require, so a GitLab
+# task's recorded head is never re-bound here and bin/fm-pr-merge.sh's own live
+# read at merge time stays its only current head.
 set -u
 LC_ALL=C
 export LC_ALL
@@ -62,8 +79,28 @@ case "$provider" in
       .|..|*[!A-Za-z0-9._-]*) exit 0 ;;
     esac
     [ "$url" = "https://github.com/$owner/$repo/pull/$number" ] || exit 0
-    state=$(gh pr view "$url" --json state -q .state 2>/dev/null) || exit 0
-    [ "$state" = MERGED ] && printf '%s\n' merged
+    # One read answers both questions. gh's own --jq prints the two selected
+    # fields as two lines, so no JSON processor is needed on PATH and the head
+    # cannot be read from a different moment than the state it is paired with.
+    read_out=$(gh pr view "$url" --json state,headRefOid -q '.state, .headRefOid' 2>/dev/null) || exit 0
+    state=$(printf '%s\n' "$read_out" | sed -n 1p)
+    head=$(printf '%s\n' "$read_out" | sed -n 2p)
+    case "$head" in
+      *[!0-9a-f]*) head= ;;
+    esac
+    case "${#head}" in
+      40|64) ;;
+      *) head= ;;
+    esac
+    if [ "$state" = MERGED ]; then
+      if [ -n "$head" ]; then
+        printf '%s %s\n' merged "$head"
+      else
+        printf '%s\n' merged
+      fi
+    elif [ -n "$head" ]; then
+      printf '%s %s\n' head "$head"
+    fi
     ;;
   gitlab)
     [ "${#host}" -ge 1 ] && [ "${#host}" -le 253 ] || exit 0

@@ -17,6 +17,8 @@ WATCH="$ROOT/bin/fm-watch.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 REGISTER="$ROOT/bin/fm-check-register.sh"
 TMP_ROOT=$(fm_test_tmproot fm-pr-check-security)
+# The head the fake gh reports unless a case overrides FM_TEST_GH_HEAD.
+DEFAULT_POLL_HEAD=0123456789abcdef0123456789abcdef01234567
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 REAL_CP=$(command -v cp)
 REAL_MV=$(command -v mv)
@@ -174,6 +176,16 @@ case " $* " in
   *" api repos/"*"/issues/"*"/comments?per_page=100 "*|*" api repos/"*"/pulls/"*"/reviews?per_page=100 "*|*" api repos/"*"/pulls/"*"/comments?per_page=100 "*)
     printf '%s\n' '[[]]'
     ;;
+  # The merge poll's own read: one call selecting the state and the head, which
+  # the real gh answers as one line per selected field through its own --jq.
+  *"--json state,headRefOid"*)
+    [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
+    [ -z "${FM_TEST_GH_STATE_STARTED:-}" ] || : > "$FM_TEST_GH_STATE_STARTED"
+    [ "${FM_TEST_GH_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GH_SLEEP"
+    printf '%s\n' "${FM_TEST_GH_STATE:-OPEN}"
+    [ "${FM_TEST_GH_HEAD_UNREADABLE:-0}" = 1 ] \
+      || printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}"
+    ;;
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
   *" state "*)
     [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
@@ -231,6 +243,8 @@ write_poll_meta() {
     "window=fm-$id" \
     "$@" \
     "pr=$url"
+  # An armed task's record is private, exactly as bin/fm-pr-check.sh leaves it.
+  chmod 0600 "$state/$id.meta"
 }
 
 
@@ -772,10 +786,27 @@ test_static_poll_contract() {
       *) value=$state ;;
     esac
     out=$(FM_TEST_GH_STATE="$value" run_poll "$dir")
-    [ -z "$out" ] || fail "static poll emitted for non-merged state"
+    [ "$out" = "head $DEFAULT_POLL_HEAD" ] \
+      || fail "static poll did not report the live head for non-merged state $state: $out"
+    out=$(FM_TEST_GH_STATE="$value" FM_TEST_GH_HEAD_UNREADABLE=1 run_poll "$dir")
+    [ -z "$out" ] || fail "static poll emitted for non-merged state with no readable head"
   done
   out=$(FM_TEST_GH_STATE=MERGED run_poll "$dir")
-  [ "$out" = merged ] || fail "static poll did not emit exactly one merged line"
+  [ "$out" = "merged $DEFAULT_POLL_HEAD" ] \
+    || fail "static poll did not emit exactly one merged line carrying the landed head: $out"
+  # Losing the merge is worse than losing its attribution, so an unreadable head
+  # still reports the merge - and reports it with no head rather than any other.
+  out=$(FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD_UNREADABLE=1 run_poll "$dir")
+  [ "$out" = merged ] || fail "static poll did not fall back to a bare merged line: $out"
+  # A head that is not a commit id is no head, however the forge produced it.
+  for head in not-a-sha 0123456789abcdef0123456789abcdef0123456 \
+    0123456789abcdef0123456789abcdef012345678 \
+    0123456789ABCDEF0123456789ABCDEF01234567; do
+    out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD="$head" run_poll "$dir")
+    [ -z "$out" ] || fail "static poll reported a head that is not a commit id: $out"
+    out=$(FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD="$head" run_poll "$dir")
+    [ "$out" = merged ] || fail "static poll attached a head that is not a commit id: $out"
+  done
   out=$(FM_TEST_GH_FAIL=1 run_poll "$dir")
   [ -z "$out" ] || fail "static poll emitted after gh failure"
 
@@ -811,7 +842,99 @@ test_static_poll_contract() {
   set -e
   [ "$rc" -eq 0 ] || fail "watcher did not surface merged poll"
   [ "$(grep -c '^check: .*: merged$' "$dir/watch.out")" -eq 1 ] || fail "watcher did not convert merged output into exactly one wake"
-  pass "static poll is silent except for one merged line and remains watcher-bounded"
+  grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$dir/home/state/task-a.meta" \
+    || fail "watcher did not record the commit the merge landed at"
+  pass "static poll reports the live head, reports a merge once, and remains watcher-bounded"
+}
+
+# The head a pull request is open at moves with every push, rebase and
+# force-push. Arming records one; these prove the poll puts the recorded value
+# back on the live commit every cycle, silently, and that nothing but a head the
+# forge just returned can ever become that recorded value.
+test_poll_rebinds_the_recorded_head() {
+  local dir state rc moved
+  moved=cafebabecafebabecafebabecafebabecafebabe
+  dir=$(make_case poll-rebind-head)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1 \
+    'worktree=/nonexistent' 'kind=ship' 'mode=direct-PR'
+  printf 'pr_head=%s\n' 0000000000000000000000000000000000000000 >> "$state/task-a.meta"
+  fm_pr_poll_prepare "$state" task-a github https://github.com/o/r/pull/1 github.com o/r 1 "$POLL" \
+    || fail "could not prepare the re-bind poll"
+  fm_pr_poll_publish_prepared || fail "could not publish the re-bind poll"
+  rm -f "$state/.last-check"
+
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD="$moved" FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  # A moved head is the normal life of an open pull request, so the cycle keeps
+  # waiting: this watcher runs out its bound rather than reporting anything.
+  case "$rc" in
+    0|124) ;;
+    *) fail "re-bind watcher failed (rc=$rc): $(cat "$dir/watch.err")" ;;
+  esac
+  grep -F -- "--json state,headRefOid" "$dir/gh.log" >/dev/null \
+    || fail "the poll never read the pull request's live head"
+  grep -qxF "pr_head=$moved" "$state/task-a.meta" \
+    || fail "watcher did not re-bind the recorded head to the live one"
+  [ "$(grep -c '^pr_head=' "$state/task-a.meta")" -eq 1 ] \
+    || fail "re-binding left more than one recorded head"
+  grep -qxF 'pr=https://github.com/o/r/pull/1' "$state/task-a.meta" \
+    || fail "re-binding lost the recorded pull request"
+  grep -qxF 'mode=direct-PR' "$state/task-a.meta" \
+    || fail "re-binding dropped an unrelated metadata line"
+  [ "$(file_mode "$state/task-a.meta")" = 600 ] || fail "re-bound metadata is not private"
+  ! grep -F 'check:' "$dir/watch.out" >/dev/null \
+    || fail "a moved head woke the supervisor: $(cat "$dir/watch.out")"
+  ! grep -F 'check' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "a moved head queued a durable wake: $(cat "$state/.wake-queue")"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "re-binding disturbed the armed poll"
+  pass "an open pull request's moved head is re-bound every cycle without waking the supervisor"
+}
+
+# fm_pr_meta_rebind_head is what writes that value, so the refusals that keep a
+# head nobody saw out of the record are proven on it directly.
+test_recorded_head_refuses_what_the_forge_did_not_return() {
+  local dir state good bad
+  good=cafebabecafebabecafebabecafebabecafebabe
+  dir=$(make_case rebind-head-refusals)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+
+  for bad in '' not-a-sha 0123456789ABCDEF0123456789ABCDEF01234567 \
+    0123456789abcdef0123456789abcdef0123456; do
+    fm_pr_meta_rebind_head "$state" task-a github github.com o/r 1 "$bad" \
+      && fail "a head that is not a commit id was recorded: '$bad'"
+    assert_no_grep 'pr_head=' "$state/task-a.meta" "a refused head reached metadata"
+  done
+
+  # A poll that read one pull request must never overwrite the head of another:
+  # the identity it validated against has to still be the recorded one.
+  fm_pr_meta_rebind_head "$state" task-a github github.com o/r 2 "$good" \
+    && fail "a head was recorded against a different pull request number"
+  fm_pr_meta_rebind_head "$state" task-a github github.com o/other 1 "$good" \
+    && fail "a head was recorded against a different project"
+  fm_pr_meta_rebind_head "$state" task-a gitlab github.com o/r 1 "$good" \
+    && fail "a head was recorded against a different forge"
+  assert_no_grep 'pr_head=' "$state/task-a.meta" "a mismatched identity reached metadata"
+
+  fm_pr_meta_rebind_head "$state" task-a github github.com o/r 1 "$good" \
+    || fail "a matching identity could not record the forge's head"
+  grep -qxF "pr_head=$good" "$state/task-a.meta" || fail "the forge's head was not recorded"
+  fm_pr_meta_rebind_head "$state" task-a github github.com o/r 1 "$good" \
+    || fail "re-recording the same head was not a no-op"
+  [ "$(grep -c '^pr_head=' "$state/task-a.meta")" -eq 1 ] \
+    || fail "re-recording the same head duplicated it"
+
+  # A task with no pull request recorded at all has no identity to match.
+  fm_write_meta "$state/task-b.meta" 'window=fm-task-b'
+  fm_pr_meta_rebind_head "$state" task-b github github.com o/r 1 "$good" \
+    && fail "a head was recorded for a task with no pull request"
+  assert_no_grep 'pr_head=' "$state/task-b.meta" "a head reached a task with no pull request"
+  pass "only a commit id read for the recorded pull request becomes its recorded head"
 }
 
 test_atomic_interruption_leaves_no_partial_artifact() {
@@ -1504,6 +1627,10 @@ assert_poll_absent() {
   done
 }
 
+# The armed poll and the canonical record it points at. The recorded head is
+# excluded on purpose: the poll re-binds it to the pull request's live commit
+# on every cycle, so it is the one part of the record that is MEANT to move,
+# and a caller that cares about it asserts on it directly.
 poll_artifact_snapshot() {
   local state=$1 id=$2 suffix path
   for suffix in check.sh pr-poll pr-poll-registration pr-poll-retirement meta; do
@@ -1513,7 +1640,11 @@ poll_artifact_snapshot() {
       printf 'link %s %s\n' "$suffix" "$(readlink "$path")"
     elif [ -f "$path" ]; then
       printf 'file %s %s ' "$suffix" "$(file_mode "$path")"
-      shasum -a 256 "$path" | awk '{print $1}'
+      if [ "$suffix" = meta ]; then
+        grep -v '^pr_head=' "$path" | shasum -a 256 | awk '{print $1}'
+      else
+        shasum -a 256 "$path" | awk '{print $1}'
+      fi
     else
       printf 'other %s\n' "$suffix"
     fi
@@ -1538,7 +1669,12 @@ test_merged_poll_retires_once() {
   case "$first" in check:*task-a.check.sh:*merged) ;; *) fail "first merged notification was not preserved: $first" ;; esac
   ack_watcher_cycle "$state" || fail "first merged notification handling acknowledgement failed"
   assert_poll_absent "$state" task-a
-  [ "$(cat "$state/task-a.meta")" = "$meta_before" ] || fail "merged retirement changed canonical metadata"
+  # Retirement still changes nothing about the canonical identity, and now adds
+  # exactly one thing: the commit the merge landed, read by the poll that saw it.
+  [ "$(grep -v '^pr_head=' "$state/task-a.meta")" = "$meta_before" ] \
+    || fail "merged retirement changed canonical metadata"
+  grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
+    || fail "merged retirement did not record the commit the merge landed"
 
   rm -f "$state/.last-check"
   set +e
@@ -2026,6 +2162,22 @@ test_external_merge_transition_retires_only_terminal_poll() {
     [ "$rc" -eq 0 ] || fail "$label watcher cycle failed: $(cat "$dir/$label.err")"
     case "$(cat "$dir/$label.out")" in check:*z-stop.check.sh:*stop-cycle) ;; *) fail "$label did not reach the control check" ;; esac
     [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "$label changed the armed poll"
+    case "$label" in
+      open-green|open-red|closed-unmerged|malformed)
+        # The forge answered, so the recorded head is now the one it returned.
+        grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
+          || fail "$label left the recorded head unbound"
+        ;;
+      *)
+        # It did not, so nothing may be recorded from a read that never landed.
+        assert_no_grep 'pr_head=' "$state/task-a.meta" \
+          "$label recorded a head from a read that did not succeed"
+        ;;
+    esac
+    # Start the next label from an unbound head, so each one proves its own
+    # read rather than inheriting the previous label's.
+    grep -v '^pr_head=' "$state/task-a.meta" > "$dir/meta-without-head"
+    cat "$dir/meta-without-head" > "$state/task-a.meta"
     ack_watcher_cycle "$state" || fail "$label control wake acknowledgement failed"
   done
 
@@ -2818,6 +2970,8 @@ test_valid_recording_and_merge_derivation
 test_arm_only_arms_without_announcing_ready
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
+test_poll_rebinds_the_recorded_head
+test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication
 test_poll_publication_refuses_unsafe_destinations
