@@ -666,6 +666,9 @@ if [ "$READ_ONLY" -eq 0 ]; then
   # session-start result. A context re-emit is not another session start.
   if [ "$REEMIT" -eq 0 ]; then
     "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+    # The captain's board republishes on the same events, detached and best
+    # effort, so a session start never waits on it and never fails for it.
+    "$SCRIPT_DIR/fm-bearings-board.sh" refresh --best-effort </dev/null >/dev/null 2>&1 &
   fi
   # Every network call and the potentially slow inactive-outcome startup scan
   # are launched HERE, detached and bounded, so they run concurrently with the

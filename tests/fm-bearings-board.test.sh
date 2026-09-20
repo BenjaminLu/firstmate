@@ -1096,6 +1096,50 @@ test_build_refuses_a_payload_that_occupies_the_reconcile_value() {
   pass "build refuses a payload that occupies the reserved reconcile value"
 }
 
+# A build is the only place PR discovery happens, so it is the only place a
+# merge card is composed. It stores that card like a decision card, because a
+# fleet-triggered refresh has no PR view of its own and would otherwise
+# publish a board with the captain's Merge now control deleted.
+test_build_stores_the_merge_card_it_publishes() {
+  local home data card
+  home=$(make_home merge-persist)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the build failed"
+  card=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-captain-hold.sh" card merge.sample-task) \
+    || fail "the build published a merge card and stored nothing for it"
+  printf '%s' "$card" | jq -e '
+    .key == "merge.sample-task" and .type == "merge"
+    and .pr_url == "https://github.com/example/sample/pull/1"
+    and ([.options[].value] == ["merge", "hold"])
+  ' >/dev/null || fail "the stored merge card is not the one published: $card"
+  pass "a build stores the merge card it publishes, keyed by the card key"
+}
+
+# Landing is the one thing that retires a merge card, and a build reconciles
+# the payload before it publishes. Storing the ORIGINAL payload afterwards
+# would write the dropped card straight back, and it would return to the
+# board as soon as its landed row aged out of the bounded roll-up.
+test_build_does_not_restore_the_merge_card_it_just_dropped() {
+  local home data out
+  home=$(make_home merge-dropped)
+  data="$home/payload.json"
+  write_valid_payload "$data"
+  # The merge card's own pull request among the landed rows: the evidence the
+  # reconciliation drops it on.
+  jq '.landed += [{"id":"sample-task","repo":"sample","what":"Merged sample change",
+        "owner":"(main)","pr_url":"https://github.com/example/sample/pull/1"}]' \
+    "$data" > "$data.tmp" && mv "$data.tmp" "$data"
+  out=$(run_board "$home" build "$data" 2>&1) || fail "the build failed: $out"
+  assert_contains "$out" "dropped-landed-card: merge.sample-task" \
+    "the build did not report dropping the landed merge card: $out"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-captain-hold.sh" card merge.sample-task >/dev/null 2>&1 \
+    && fail "the build re-stored the merge card its own reconciliation dropped"
+  pass "a build does not re-store a merge card its reconciliation dropped"
+}
+
 test_build_refuses_a_nondecision_reconcile_value() {
   local home data rc out
   home=$(make_home merge-reconcile-reserved)
@@ -1912,7 +1956,18 @@ test_compose_consolidates_a_task_held_more_than_once() {
     ([.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"])
     and (.captains_call[1] | .key == "pick-route" and (.decide.en | test("held 2 times")))
   ' "$skeleton" >/dev/null || fail "a repeated hold was not consolidated: $(cat "$skeleton")"
-  pass "compose consolidates a task held more than once into one card"
+
+  # The deterministic path has no composer to instruct, so it consolidates
+  # silently - and what it emits must be publishable as it stands.
+  run_board "$home" compose --deterministic --snapshot "$home/snapshot.json" \
+    --out "$home/deterministic.json" >/dev/null \
+    || fail "a deterministic compose refused a snapshot holding one task twice"
+  jq -e '[.captains_call[].key] == ["gated-work", "pick-route", "merge.ship-task"]' \
+    "$home/deterministic.json" >/dev/null \
+    || fail "a deterministic compose did not consolidate the repeated hold: $(cat "$home/deterministic.json")"
+  run_board "$home" build "$home/deterministic.json" >/dev/null \
+    || fail "the deterministic consolidation cannot be published as composed"
+  pass "compose consolidates a task held more than once into one publishable card"
 }
 
 test_compose_refuses_to_card_a_merge_two_prs_claim() {
@@ -2055,6 +2110,8 @@ test_build_fails_when_reconcile_cannot_establish_a_listener
 test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
+test_build_stores_the_merge_card_it_publishes
+test_build_does_not_restore_the_merge_card_it_just_dropped
 test_build_accepts_trilingual_copy_and_five_question_fields
 test_build_refuses_malformed_copy_and_card_fields
 test_compose_maps_every_section_from_the_recorded_snapshot

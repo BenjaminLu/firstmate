@@ -4,8 +4,9 @@
 //
 // Usage: node board-render-harness.mjs <built-board.html> [click] [relang]
 // Prints one JSON document:
-//   { stats:[{n,label}], underway:[{title,sub,badges,ack}],
-//     charted:[{title,sub,badges,pickable,ack}], empty, more,
+//   { stats:[{n,label}], underway:[{title,sub,badges,progress,ack}],
+//     progress: { steps:[{text,cls,title}], meta, quiet, activity, detail },
+//     charted:[{title,sub,badges,pickable,progress,ack}], empty, more,
 //     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips,ack,
 //             hidden, tabs:[{label,selected}],
 //             panels:[{hidden,figures,notes,rows,label,cost,
@@ -240,6 +241,27 @@ const stats = strip.children.map((t) => ({
   label: t.children.find((c) => c.className.includes("bb-stat__label"))?.textContent,
 }));
 
+/* An Underway row's progress block: the step ladder as rendered chips (text,
+   the tone class the template chose, and the tooltip that names the step's
+   status), the timing line, the pipeline's last-activity line, and the raw
+   evidence detail. null when the row carries no progress at all. */
+const progressOf = (main) => {
+  const box = main?.children.find((c) => c.className.split(/\s+/).includes("bb-prog"));
+  if (!box) return null;
+  const ladder = box.children.find((c) => c.className.includes("bb-prog__ladder"));
+  const partText = (cls) =>
+    box.children.find((c) => c.className.includes(cls))?.textContent ?? "";
+  return {
+    steps: ladder
+      ? ladder.children.map((c) => ({ text: c.textContent, cls: c.className, title: c.title }))
+      : [],
+    meta: partText("bb-prog__meta"),
+    quiet: box.children.some((c) => c.className.includes("bb-prog__meta--quiet")),
+    activity: partText("bb-prog__activity"),
+    detail: partText("bb-prog__detail"),
+  };
+};
+
 /* The pill the click or the payload put on the row, and a refusal's reason. */
 const ackOf = (n) => {
   if (!n) return null;
@@ -263,6 +285,7 @@ const rowsOf = (container) =>
         sub: main?.children.find((c) => c.className.includes("bb-row__sub"))?.textContent ?? "",
         badges: badgesOf(row),
         pickable: row.children.some((c) => c.className.includes("bb-pick") && !c.className.includes("spacer")),
+        progress: progressOf(main),
         ack: ackOf(main),
       };
     });

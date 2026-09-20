@@ -1064,6 +1064,10 @@ spawn_remote_secondmate() {
   fm_lock_release "$registry_lock" || true
   fm_lock_release "$SPAWN_TASK_LOCK" || true
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  # The captain's board republishes on the same fleet events as the summary,
+  # detached and best effort, so it is never more than one supervision poll
+  # behind and can never change this result.
+  "$SCRIPT_DIR/fm-bearings-board.sh" refresh --best-effort </dev/null >/dev/null 2>&1 &
   if ! "$SCRIPT_DIR/fm-procevent-remote-reply.sh" arm "$id" >/dev/null; then
     echo "error: remote secondmate $id launched, but its reply source could not be armed; endpoint metadata is preserved" >&2
     return 1
@@ -4514,6 +4518,10 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
 "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+# The captain's board republishes on the same fleet events as the summary,
+# detached and best effort, so it is never more than one supervision poll
+# behind and can never change this result.
+"$SCRIPT_DIR/fm-bearings-board.sh" refresh --best-effort </dev/null >/dev/null 2>&1 &
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")

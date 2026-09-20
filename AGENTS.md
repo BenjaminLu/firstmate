@@ -108,6 +108,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
+  <id>/board-card.json  the durable Captain's Call card the board last published under that card key, which is what lets the board refresh itself with no model in the loop; bin/fm-captain-hold.sh owns the store. For a task held for the captain the key is the task id, and a re-hold retires the card so the previous call's question can never answer for the new one. A merge card is stored under its own `merge.<task-id>` key - never a task's own directory - and retires only on proof its pull request landed, never because a pull-request view came back without it
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth

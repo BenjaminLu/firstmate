@@ -35,6 +35,35 @@
 #   fm-captain-hold.sh reconcile list
 #   fm-captain-hold.sh reconcile close <task-id> --evidence-file <path>
 #   fm-captain-hold.sh reconcile note <task-id> --note-file <path>
+#   fm-captain-hold.sh card <task-id> [--store <path> | --retire]
+#
+# THE STORED BOARD CARD.
+# A captain call reaches the captain as one board card, and the board is
+# refreshed on fleet events with no model in the loop, so the copy a board
+# build composed must be durable rather than re-composed prose. That copy
+# lives at data/<task-id>/board-card.json, and the board owns writing it.
+# `card <task-id>` prints the stored card, exiting 1 when there is none;
+# `card <task-id> --store <path>` stores one (replacing any stored card),
+# which is how a board build persists the copy its composer wrote so every
+# later refresh reuses it. A stored card must be a JSON object whose `key` is
+# exactly the task id, because the key IS the keyed-answer intake address.
+# What `hold` owns is RETIREMENT: a stored card is valid only for the hold it
+# was written for, so holding a task AGAIN after its last hold was resolved
+# drops it. The captain must never be shown one question while his answer
+# routes to another. Re-stating a hold that is still active is the same call
+# and keeps the copy he has already been shown. A task with no stored card is
+# carded from its verified packet, or degraded to its title and hold reason,
+# by the board's own composing rules.
+#
+# A MERGE card is stored under its own `merge.<task-id>` key and no hold ever
+# covers it, so `hold` cannot retire it. It retires on proof its pull request
+# reached a terminal state: landing, which the board sees in its own landed
+# rows, or a firstmate verification at answer time that finds the pull request
+# closed rather than open. `card <key> --retire` is how that second proof is
+# recorded, and it is the only other way a stored card is dropped. Absence is
+# never proof - a failed, capped or narrowed pull-request view returns the same
+# nothing as a pull request that stopped being merge-ready - so a verification
+# that could not complete retires nothing and leaves the card alone.
 #
 # `hold` places an existing task under an active captain hold, or creates the
 # task first when no work item exists to hold (--title required to create; the
@@ -1045,6 +1074,73 @@ refuse_archived_reuse() {  # <task-id>
     || fail "task $id is already closed and archived; a new captain call needs its own task"
 }
 
+# --- the stored board card ---------------------------------------------------
+
+board_card_path() {  # <task-id>
+  printf '%s/%s/board-card.json\n' "$DATA" "$1"
+}
+
+# Write <file> as the task's stored card, atomically. The key check is the same
+# rule the board validator applies: one card key is one intake address, so a
+# card stored under the wrong task could answer the wrong call.
+store_board_card() {  # <task-id> <source-file>
+  local id=$1 src=$2 card tmp
+  card=$(board_card_path "$id")
+  jq -e --arg id "$id" 'type == "object" and .key == $id' "$src" >/dev/null 2>&1 \
+    || fail "a stored board card must be a JSON object whose key is exactly $id"
+  (umask 077; mkdir -p "${card%/*}") || fail "cannot create ${card%/*}"
+  tmp=$(umask 077; mktemp "${card%/*}/.board-card.XXXXXX") \
+    || fail "cannot stage the board card for $id"
+  if ! jq -c . "$src" > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot stage the board card for $id"
+  fi
+  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$card"; }; then
+    rm -f -- "$tmp"
+    fail "cannot publish the board card for $id"
+  fi
+}
+
+# Drop the stored card a PREVIOUS hold was written for. A card left behind
+# outlives the question it answered, while the keyed answer resolves the
+# CURRENT hold, so the captain would pick an option from one call to settle
+# another. Silent by design: a hold must never fail because a card could not
+# be retired, and a task that never had one simply has nothing to drop.
+retire_board_card() {  # <task-id>
+  rm -f -- "$(board_card_path "$1")" 2>/dev/null || true
+}
+
+command_card() {
+  local id=${1:-} src='' retire=0 card
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --store) shift; [ "$#" -ge 1 ] || { usage >&2; exit 2; }; src=$1 ;;
+      --retire) retire=1 ;;
+      *) usage >&2; exit 2 ;;
+    esac
+    shift
+  done
+  validate_slug task-id "$id"
+  [ "$retire" -eq 0 ] || [ -z "$src" ] || { usage >&2; exit 2; }
+  card=$(board_card_path "$id")
+  if [ "$retire" -eq 1 ]; then
+    retire_board_card "$id"
+    printf 'retired: %s\n' "$card"
+    return 0
+  fi
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  if [ -n "$src" ]; then
+    [ -f "$src" ] || fail "board card source does not exist: $src"
+    store_board_card "$id" "$src"
+    printf 'card: %s\n' "$card"
+    return 0
+  fi
+  [ -f "$card" ] || { printf 'fm-captain-hold: no stored board card for %s\n' "$id" >&2; exit 1; }
+  cat "$card"
+}
+
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0
@@ -1141,6 +1237,10 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
+  # A hold that was already active is the same call, so the copy the captain
+  # has been shown stays; any other hold begins a call whose question he has
+  # not been shown, and the previous call's card must not answer for it.
+  [ "$preserve_hold_set" -eq 1 ] || retire_board_card "$id"
   record_hold_gate_call "$id" "$occurrence" \
     "$(show_field_value "$show" title)" "$reason" "$origin"
   printf '%s\n' "$id"
@@ -2602,6 +2702,7 @@ case "${1:-}" in
   open) shift; command_open "$@" ;;
   diverged) shift; command_diverged "$@" ;;
   reconcile) shift; command_reconcile "$@" ;;
+  card) shift; command_card "$@" ;;
   -h|--help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

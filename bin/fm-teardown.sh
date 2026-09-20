@@ -959,6 +959,7 @@ remote_secondmate_teardown_locked() {
 
 if remote_secondmate_teardown_locked; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  "$SCRIPT_DIR/fm-bearings-board.sh" refresh --best-effort </dev/null >/dev/null 2>&1 &
   exit 0
 else
   remote_teardown_rc=$?
@@ -3626,6 +3627,8 @@ fi
 # state directory. Do not let the side-band refresh recreate that retired home.
 if [ -d "$STATE" ]; then
   "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  # Same fleet event, same detached best-effort republication of the board.
+  "$SCRIPT_DIR/fm-bearings-board.sh" refresh --best-effort </dev/null >/dev/null 2>&1 &
 fi
 # Cleanup is the moment the work is known to have landed, so it is the moment
 # the captain's board should stop showing it underway. Guarded like the refresh
