@@ -4215,3 +4215,56 @@ test_a_multi_run_check_reports_its_newest_run() {
 }
 
 test_a_multi_run_check_reports_its_newest_run
+
+# A check genuinely named with a trailing space renders exactly like an unnamed
+# one. Deciding the sentinel on the rendered row renamed it, so the refusal named
+# a check that does not exist and --allow-red could never match the real name.
+test_a_real_name_is_never_renamed_to_the_unnamed_sentinel() {
+  local case_dir rc head=2323232323232323232323232323232323232323
+
+  case_dir=$(make_case github-trailing-space-name)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" \
+    "$(check_run 'Lint ' COMPLETED FAILURE 2026-09-20T09:00:00Z)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-trailing-space-name: a red check must not merge"
+  assert_grep "check 'Lint ' failed" "$case_dir/stderr" \
+    "github-trailing-space-name: a real name was renamed to the sentinel"
+  assert_no_grep 'unnamed check' "$case_dir/stderr" \
+    "github-trailing-space-name: the refusal named a check that does not exist"
+
+  # And the waiver matches that real name, which it could not do if the row had
+  # been renamed.
+  case_dir=$(make_case github-trailing-space-waiver)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" \
+    "$(check_run 'Lint ' COMPLETED FAILURE 2026-09-20T09:00:00Z)"
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    --allow-red 'Lint ' > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-trailing-space-waiver: --allow-red should match the real name"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 96 example/repo --squash
+
+  # A genuinely unnamed check still reaches the sentinel.
+  case_dir=$(make_case github-genuinely-unnamed)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" \
+    "$(check_run '' COMPLETED FAILURE 2026-09-20T09:00:00Z)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-genuinely-unnamed: a red unnamed check must not merge"
+  assert_grep "check '(unnamed check)' failed" "$case_dir/stderr" \
+    "github-genuinely-unnamed: an unnamed check lost its sentinel"
+  pass "the unnamed sentinel is decided on the name, so a real name is never renamed to it"
+}
+
+test_a_real_name_is_never_renamed_to_the_unnamed_sentinel

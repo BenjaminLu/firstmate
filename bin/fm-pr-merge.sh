@@ -632,16 +632,26 @@ github_checks_not_green() {
         | if .__typename == "CheckRun" then
             {
               kind: "check_run",
-              name: (.name // ""),
+              # The sentinel is decided here, on the name itself, never on the
+              # rendered row: a check genuinely named "Lint " renders exactly
+              # like an unnamed one, and --allow-red matches the name parsed
+              # back out of that row. Deciding it downstream would let a real
+              # name be renamed to the sentinel, so the refusal would name a
+              # check that does not exist and one waiver would cover every
+              # unnamed check at once.
+              name: (if (.name // "") == "" then "(unnamed check)" else .name end),
               why: (if .status != "COMPLETED" then (.status // "UNKNOWN")
                     else (.conclusion // "UNKNOWN") end),
               completed: (.status == "COMPLETED"),
               ok: (.status == "COMPLETED" and (.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED")),
               at: (.startedAt | settled_at)
             }
-            | . + {group: (if .name == "" then ["", $i] else [.name, -1] end)}
+            | . + {group: (if .name == "(unnamed check)" then ["", $i] else [.name, -1] end)}
           else
-            {kind: "status_context", name: (.context // ""), why: (.state // "UNKNOWN"), ok: (.state == "SUCCESS")}
+            {kind: "status_context",
+             name: (if (.context // "") == "" then "(unnamed check)" else .context end),
+             why: (.state // "UNKNOWN"),
+             ok: (.state == "SUCCESS")}
           end
       ]
     | . as $entries
@@ -686,7 +696,6 @@ github_checks_not_green() {
           | .why + " " + .name
         )
       )
-    | if (. | endswith(" ")) then . + "(unnamed check)" else . end
   ' 2>/dev/null || return 1
 }
 
