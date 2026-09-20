@@ -633,8 +633,24 @@ archived_without_answer() {  # <task-id>
 # Durable state of one captain call: an active captain hold (annotations
 # surviving even when a date gate has expired) or a recorded captain answer,
 # wherever this home's backlog keeps the row - the active file or its archive.
-verify_hold_durable() {  # <task-id> [<attested-entry>]
-  local id=$1 entry=${2:-$1} show state hold_kind body archived archived_status=0
+# The command that retires an unrecoverable entry differs by WHERE the
+# refusal is raised. From `verify` the inventory is already stored, so
+# `complete <origin> --drop-unrecoverable <entry>` is complete in itself.
+# From inside `complete`'s own durability loop the metadata has not been
+# written yet - that happens after the loop this refusal aborts - so the
+# entry lives only in the argument list the caller just typed, and the
+# remedy has to repeat it. Printing the shorter form there names a command
+# guaranteed to answer "there is nothing to drop", which is the whole of R20
+# and R25.
+drop_remedy_command() {  # <origin> <entry> [<supplied-ids>]
+  printf 'bin/fm-captain-hold.sh complete %s%s --drop-unrecoverable %s' \
+    "$1" "${3:+ $3}" "$2"
+}
+
+verify_hold_durable() {  # <task-id> [<attested-entry>] [<drop-remedy>]
+  local id=$1 entry=${2:-$1} drop_remedy=${3:-} show state hold_kind body archived archived_status=0
+  [ -n "$drop_remedy" ] \
+    || drop_remedy="bin/fm-captain-hold.sh complete <origin> --drop-unrecoverable $entry"
   if ! task_show "$id"; then
     # Retention is not a resolution. An archived row proves durability only
     # through the captain answer recorded in it; an archived row without one,
@@ -646,7 +662,7 @@ verify_hold_durable() {  # <task-id> [<attested-entry>]
     [ "$archived_status" -eq 0 ] \
       || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
     body_has_resolution_record "$archived" \
-      || fail "attested captain call $entry $ARCHIVED_UNANSWERABLE; it is not a durable captain call and never can be. To carry the question forward, $RAISE_AGAIN_REMEDY; then retire this one from the inventory with bin/fm-captain-hold.sh complete <origin> --drop-unrecoverable $entry, which records the drop rather than skipping it"
+      || fail "attested captain call $entry $ARCHIVED_UNANSWERABLE; it is not a durable captain call and never can be. To carry the question forward, $RAISE_AGAIN_REMEDY; then retire this one from the inventory with $drop_remedy, which records the drop rather than skipping it"
     return 0
   fi
   show=$TASK_SHOW_OUTPUT
@@ -948,8 +964,8 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
 # answered, which is not the same as an unknown entry and must not be spent
 # as absence. On success prints "<id> <how>" so the caller can keep the
 # attestation evidence.
-verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
-  local origin=$1 entry=$2 resolved resolve_status=0
+verify_entry_durable() {  # <origin-or-empty> <entry> [<supplied-ids>]; prints "<id> <how>"
+  local origin=$1 entry=$2 supplied=${3:-} resolved resolve_status=0
   resolved=$(resolve_entry "$origin" "$entry") || resolve_status=$?
   if [ "$resolve_status" -ne 0 ]; then
     [ "$resolve_status" -ne 124 ] \
@@ -960,7 +976,8 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
   # The attested spelling travels with the resolved row, so a refusal names
   # the entry the metadata actually holds rather than an identity the caller
   # cannot find there.
-  verify_hold_durable "${resolved%% *}" "$entry"
+  verify_hold_durable "${resolved%% *}" "$entry" \
+    "$(drop_remedy_command "$origin" "$entry" "$supplied")"
 }
 
 # The closed-task refusal above, for a row the active backlog no longer lists.
@@ -2149,7 +2166,7 @@ command_complete() {
   if [ -n "$keys" ]; then
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
-      resolved=$(verify_entry_durable "$origin" "$entry") || exit $?
+      resolved=$(verify_entry_durable "$origin" "$entry" "$supplied") || exit $?
       resolved_how=${resolved##* }
       resolved=${resolved%% *}
       if [ "$resolved_how" = migrated-prefix ]; then

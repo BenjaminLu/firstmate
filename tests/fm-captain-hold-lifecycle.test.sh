@@ -193,10 +193,15 @@ run_shim() {  # <home> <command args...>
 # whichever clause ends the step - a comma or a dashed aside. Read back
 # rather than retyped, so a test cannot quietly pass while the refusal names
 # a prefix of the command that actually works.
-named_captain_hold_command() {  # <refusal text>
+named_captain_hold_command() {  # <refusal text> [<phrase the command follows>]
   local named
-  named=$(printf '%s\n' "$1" | LC_ALL=C awk '
+  named=$(printf '%s\n' "$1" | LC_ALL=C awk -v after="${2:-}" '
     {
+      if (after != "") {
+        a = index($0, after)
+        if (a == 0) next
+        $0 = substr($0, a + length(after))
+      }
       lead = "bin/fm-captain-hold.sh "
       i = index($0, lead)
       if (i == 0) next
@@ -4579,7 +4584,7 @@ test_a_drop_judges_the_row_the_gate_judges() {
 # and it leaves no decision_dropped= and no dropped event, which is exactly
 # the trace this branch built.
 test_the_drop_works_on_a_first_attestation() {
-  local home origin call good out
+  local home origin call good out gate
   home=$(make_home drop-first-attestation)
   origin=sample-first-attest
   call=sample-first-unrecoverable
@@ -4609,10 +4614,14 @@ test_the_drop_works_on_a_first_attestation() {
     && fail "the first attestation passed an unanswered captain call: $out"
   assert_contains "$out" "--drop-unrecoverable $call" "the gate named no exit: $out"
 
-  # Exactly what the refusal named, on the same command line as the ids it
-  # was attesting - which is the only shape that path has.
-  out=$(run_captain "$home" complete "$origin" "$call" "$good" --drop-unrecoverable "$call" 2>&1) \
-    || fail "the drop the gate named was refused on the path it was named for: $out"
+  # Exactly what the refusal named, read back out of it rather than retyped.
+  # Retyping is how the previous round's version of this test came to run a
+  # shape the message does not print, and pass while the printed one failed.
+  gate=$(named_captain_hold_command "$out" "retire this one from the inventory with ") \
+    || fail "the gate refusal named no runnable drop command: $out"
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  out=$(run_captain "$home" $gate 2>&1) \
+    || fail "the drop the gate printed was refused on the path it printed it for: $gate ($out)"
   assert_contains "$out" "dropped as unrecoverable: $call" "the drop was not reported: $out"
   assert_grep "decision_dropped=$call" "$home/state/$origin.meta" \
     "the retired call left no record in the origin's metadata"
