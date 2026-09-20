@@ -481,7 +481,7 @@ test_an_oversized_budget_is_cut_to_fit_and_named() {
   pass "a budget that cannot fit the watcher's bound is cut and the cut is named"
 }
 
-test_an_unreadable_board_is_unknown_not_clean() {
+test_a_board_with_no_payload_is_unknown_not_clean() {
   local home out report
   home=$(make_home board-broken)
   printf '<html><body>no payload here</body></html>\n' > "$home/.lavish/bearings-board.html"
@@ -490,7 +490,92 @@ test_an_unreadable_board_is_unknown_not_clean() {
   report=$(cat "$out")
   assert_contains "$report" "carries no readable payload" "a board with no payload was passed over as having no stale card"
   assert_contains "$report" "unknown:" "an unreadable board did not produce an unknown answer"
-  pass "a board whose payload cannot be read is unknown, not clean"
+  pass "a board whose payload slot is missing is unknown, not clean"
+}
+
+test_a_board_file_that_cannot_be_read_is_unknown_not_clean() {
+  local home out report
+  # Distinct from the case above: the page exists and holds a payload, but this
+  # home cannot open the file at all. Silence here is the merged card sitting on
+  # the board, which is the eight hours this check was built for.
+  home=$(make_home board-unreadable)
+  board "$home" "delta=$PR_BASE/11"
+  forge_pr "$home" "$SLUG" 11 MERGED "$(commit 5)" 1 1
+  chmod 000 "$home/.lavish/bearings-board.html"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  chmod 644 "$home/.lavish/bearings-board.html"
+  [ -s "$out" ] || fail "a board file that cannot be read produced silence, which means all four obligations are met"
+  assert_contains "$report" "cannot be read" "an unopenable board file was not named as the reason"
+  assert_contains "$report" "unknown:" "an unopenable board file did not produce an unknown answer"
+  pass "a board file that cannot be opened is unknown, not clean"
+}
+
+test_a_board_payload_that_is_not_json_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home board-not-json)
+  {
+    printf '<html><body>\n'
+    printf '<script id="bearings-data" type="application/json">\n'
+    printf '{"schema":"fm-bearings-board.v1","captains_call":[ THIS IS NOT JSON\n'
+    printf '</script>\n'
+    printf '</body></html>\n'
+  } > "$home/.lavish/bearings-board.html"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a board payload that is not JSON produced silence"
+  assert_contains "$report" "is not readable JSON" "a corrupt board payload was not named as the reason"
+  assert_contains "$report" "unknown:" "a corrupt board payload did not produce an unknown answer"
+  pass "a board payload that will not parse is unknown, not clean"
+}
+
+test_a_board_with_no_jq_to_read_it_is_unknown_not_clean() {
+  local home out report status=0
+  # One of the two gaps this change states outright. A stated gap that reports
+  # nothing is an unstated gap, so the statement has to be executable.
+  home=$(make_home board-no-jq)
+  board "$home" "delta=$PR_BASE/11"
+  out="$home/out.txt"
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=0 FM_CHECK_TIMEOUT=30 \
+    PATH="$(fm_test_base_path_sans "$PATH" jq)" "$CHECK" > "$out" 2>&1 || status=$?
+  expect_code 0 "$status" "check exit"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a board this home has no jq to read produced silence"
+  assert_contains "$report" "jq is not installed" "the absent tool was not named"
+  assert_contains "$report" "unknown:" "an absent jq with a board present did not produce an unknown answer"
+  pass "a board with no jq to read it is unknown naming the tool, not clean"
+}
+
+test_targets_the_budget_never_reached_are_named_not_dropped() {
+  local home out report
+  # The single-target case exercises one call's own bound. This is the other
+  # one: the budget is gone before the sweep reaches the remaining pull
+  # requests at all, and budget_note is the only thing between them and
+  # silence.
+  home=$(make_home budget-unreached)
+  forge_pr "$home" "$SLUG" 41 OPEN "$(commit 1)" 0 0
+  forge_pr "$home" "$SLUG" 42 OPEN "$(commit 2)" 0 0
+  forge_pr "$home" "$SLUG" 43 OPEN "$(commit 3)" 0 0
+  task "$home" t41 "kind=ship" "pr=$PR_BASE/41" "pr_head=$(commit 1)"
+  task "$home" t42 "kind=ship" "pr=$PR_BASE/42" "pr_head=$(commit 2)"
+  task "$home" t43 "kind=ship" "pr=$PR_BASE/43" "pr_head=$(commit 3)"
+  out="$home/out.txt"
+  run "$home" "$out" FM_OBLIGATION_BUDGET_SECS=2 GH_FIXTURE_HANG=5
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a sweep that never reached two of its three pull requests produced silence"
+  assert_contains "$report" "the time budget ran out before the rest of the forge reads" \
+    "the sweep did not say the budget stopped it"
+  # The aggregate alone would let the individual pull requests vanish. Each one
+  # the sweep never reached has to be named, which is what the header promises.
+  assert_contains "$report" "$PR_BASE/42 was not read" \
+    "a pull request the budget never reached was dropped instead of named"
+  assert_contains "$report" "$PR_BASE/43 was not read" \
+    "a pull request the budget never reached was dropped instead of named"
+  assert_not_contains "$report" "owed:" "a pull request the budget never reached was reported as owed"
+  pass "every pull request the budget never reached is named, not dropped"
 }
 
 # --- silence means all four were checked and met ----------------------------
@@ -939,7 +1024,11 @@ test_a_gitlab_merge_request_is_a_named_gap_not_a_pass
 test_a_read_that_times_out_says_so_rather_than_saying_nothing
 test_the_budget_running_out_is_unknown_not_dropped
 test_an_oversized_budget_is_cut_to_fit_and_named
-test_an_unreadable_board_is_unknown_not_clean
+test_a_board_with_no_payload_is_unknown_not_clean
+test_a_board_file_that_cannot_be_read_is_unknown_not_clean
+test_a_board_payload_that_is_not_json_is_unknown_not_clean
+test_a_board_with_no_jq_to_read_it_is_unknown_not_clean
+test_targets_the_budget_never_reached_are_named_not_dropped
 test_a_home_where_all_four_are_met_is_silent
 test_an_empty_home_is_silent
 test_the_check_changes_nothing_but_its_own_record
