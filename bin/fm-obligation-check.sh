@@ -611,9 +611,17 @@ discovery_other_remotes() {
   status=$?
   case "$status" in
     "$GIT_READ_OK") ;;
-    # No remote at all is not possible here - origin was just read - so a clean
-    # refusal means git answered with an empty list, which is the same "none".
-    "$GIT_READ_REFUSED") printf ''; return "$GIT_READ_OK" ;;
+    # Everything else is passed through, including a clean refusal.
+    #
+    # This arm used to answer a refusal with "no other remotes", on the reading
+    # that an empty remote list arrives that way. It cannot: git_read maps exit
+    # zero with empty output to UNESTABLISHED, and `git remote` with no remotes
+    # exits zero, so an empty list is already an unknown before it gets here.
+    # What can actually reach a refusal is git failing between the origin read
+    # that just succeeded and this one - a worktree going away mid-sweep, which
+    # is what a concurrent teardown does. Reporting that as a determinate "no
+    # other remotes" is an unknown converted into an answer, which is the one
+    # conversion this check may never make.
     *) return "$status" ;;
   esac
   printf '%s' "$GIT_OUT" | grep -v '^origin$' | grep -v '^[[:space:]]*$' \
@@ -717,9 +725,14 @@ discover_task_pull_request() {
   # So the remotes are listed - a local read, no forge call - and the gap is
   # reported whenever there is somewhere else this branch could have gone.
   other_remotes=$(discovery_other_remotes "$wt")
+  # Anything that is not a completed read leaves this undeterminable. Matching
+  # only the two statuses it was expected to produce meant a third fell through
+  # to the empty-list branch below and was reported as "no other remotes",
+  # which is the conversion this arm exists to prevent.
   case "$?" in
+    "$GIT_READ_OK") ;;
     "$GIT_READ_BUDGET_SPENT") budget_note; return 0 ;;
-    "$GIT_READ_UNESTABLISHED")
+    *)
       unknown "$id's branch $branch has no open pull request in $slug, and its other remotes could not be listed, so whether it has one elsewhere could not be established"
       return 0
       ;;
