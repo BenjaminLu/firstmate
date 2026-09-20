@@ -23,7 +23,7 @@
 #      "task":"<task id>","verdict":"decided|escalated|refused|deferred",
 #      "what":"<what the call was about>","grounds":"<why>",
 #      "link":"<url or empty>","key":"<routing key or empty>",
-#      "truncated":true|false}
+#      "truncated":true|false,"rejected":"<comma-separated field names>"}
 #
 #   The four verdicts are the whole vocabulary:
 #     decided   - firstmate ruled on its own authority and did not escalate.
@@ -35,6 +35,17 @@
 #   `grounds` is the only field allowed to span lines, because a refusal is
 #   often a list of conditions and flattening it loses which one failed; the
 #   newlines survive as \n inside the one-line record.
+#
+#   TWO SEVERITIES OF BAD INPUT, because they cost different things.
+#   `site` and `task` say which call this is, and `verdict`, `what` and
+#   `grounds` are the call itself: a bad one of those refuses the whole
+#   record, because a record naming the wrong call or stating no reason is
+#   worse than a reported gap. `link` and `key` are presentation - a board
+#   opens one and lines the other up against a review - so a malformed one is
+#   dropped, its name is listed in `rejected`, and the call is still recorded.
+#   A pasted URL with a trailing space must not cost a well-formed ruling its
+#   place in the log; that is the same silent loss arriving by a politer door.
+#   `rejected` is empty when everything was accepted.
 #
 #   Nothing in this library reads the log. Rendering it is a separate surface;
 #   the log is the durable record that surface will read.
@@ -180,12 +191,12 @@ fm_gate_call_one_line() {  # <text>
 
 # Assemble the record line. The log and the drops sidecar both reach the file
 # through this, so they carry byte-identical objects apart from "dropped".
-fm_gate_call_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated> [dropped]
+fm_gate_call_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated> <rejected> [dropped]
   local at=$1 site=$2 task=$3 verdict=$4 what=$5 grounds=$6 link=$7 key=$8
-  local truncated=$9 dropped=${10:-} tail=''
+  local truncated=$9 rejected=${10} dropped=${11:-} tail=''
   [ -z "$dropped" ] \
     || tail=$(printf ',"dropped":"%s"' "$(fm_gate_call_json_escape "$dropped")")
-  printf '{"at":"%s","site":"%s","task":"%s","verdict":"%s","what":"%s","grounds":"%s","link":"%s","key":"%s","truncated":%s%s}' \
+  printf '{"at":"%s","site":"%s","task":"%s","verdict":"%s","what":"%s","grounds":"%s","link":"%s","key":"%s","truncated":%s,"rejected":"%s"%s}' \
     "$(fm_gate_call_json_escape "$at")" \
     "$(fm_gate_call_json_escape "$site")" \
     "$(fm_gate_call_json_escape "$task")" \
@@ -195,6 +206,7 @@ fm_gate_call_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <k
     "$(fm_gate_call_json_escape "$link")" \
     "$(fm_gate_call_json_escape "$key")" \
     "$truncated" \
+    "$(fm_gate_call_json_escape "$rejected")" \
     "$tail"
 }
 
@@ -204,11 +216,11 @@ fm_gate_call_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <k
 # shortened again, and the identity fields left behind are capped above, so
 # what remains always fits. Publishes FM_GATE_CALL_BOUNDED_LINE.
 FM_GATE_CALL_BOUNDED_LINE=
-fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated> [dropped]
+fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated> <rejected> [dropped]
   local at=$1 site=$2 task=$3 verdict=$4 what=$5 grounds=$6 link=$7 key=$8
-  local truncated=$9 dropped=${10:-} line
+  local truncated=$9 rejected=${10} dropped=${11:-} line
   line=$(fm_gate_call_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
-    "$link" "$key" "$truncated" "$dropped")
+    "$link" "$key" "$truncated" "$rejected" "$dropped")
   while [ "$(fm_gate_call_bytes "$line")" -gt "$FM_GATE_CALL_MAX_LINE" ]; do
     truncated=true
     if [ -n "$grounds" ]; then
@@ -219,7 +231,7 @@ fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <
       break
     fi
     line=$(fm_gate_call_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
-      "$link" "$key" "$truncated" "$dropped")
+      "$link" "$key" "$truncated" "$rejected" "$dropped")
   done
   FM_GATE_CALL_BOUNDED_LINE=$line
 }
@@ -227,9 +239,9 @@ fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <
 # Report a call that could not be recorded: the drops sidecar first, then the
 # stderr line either way. Never exits, always returns 1; the caller's mandatory
 # `|| true` is what keeps that 1 from stopping the fleet action.
-fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated>
+fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated> <rejected>
   local state=$1 reason=$2 at=$3 site=$4 task=$5 verdict=$6 what=$7 grounds=$8
-  local link=$9 key=${10} truncated=${11} drops line where='stderr only'
+  local link=$9 key=${10} truncated=${11} rejected=${12} drops line where='stderr only'
   drops=$(fm_gate_calls_drops_path "$state")
   # A call refused for an over-long identity field still has to be written
   # down, so here - and only here, where the record already says it was
@@ -243,7 +255,7 @@ fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what
   [ "${#key}" -le "$FM_GATE_CALL_CAP_KEY" ] \
     || { key=${key:0:$FM_GATE_CALL_CAP_KEY}; truncated=true; }
   fm_gate_call_bounded_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
-    "$link" "$key" "$truncated" "$reason"
+    "$link" "$key" "$truncated" "$rejected" "$reason"
   line=$FM_GATE_CALL_BOUNDED_LINE
   if [ ! -L "$drops" ] && printf '%s\n' "$line" >> "$drops" 2>/dev/null; then
     where=$drops
@@ -262,7 +274,7 @@ fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what
 fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> [link] [key]
   local state=${1:-} site=${2:-} task=${3:-} verdict=${4:-} what=${5:-} grounds=${6:-}
   local link=${7:-} key=${8:-}
-  local at log line truncated=false known found=0 link_ok=1
+  local at log line truncated=false rejected='' known found=0 link_ok=1 key_ok=1
 
   at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
 
@@ -276,7 +288,7 @@ fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> 
   # it is handed to already be presentable, so validate before shortening.
   if [ -z "$at" ]; then
     fm_gate_call_drop "$state" 'the clock could not be read' \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
   for known in $FM_GATE_CALL_VERDICTS; do
@@ -284,47 +296,51 @@ fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> 
   done
   if [ "$found" -ne 1 ]; then
     fm_gate_call_drop "$state" "verdict must be one of: $FM_GATE_CALL_VERDICTS" \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
   case "$site" in
     '' | -* | *[!a-z0-9-]*)
       fm_gate_call_drop "$state" 'site must be a lowercase dashed name' \
-        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
       return 1 ;;
   esac
   if [ "${#site}" -gt "$FM_GATE_CALL_CAP_SITE" ]; then
     fm_gate_call_drop "$state" "site must be at most $FM_GATE_CALL_CAP_SITE characters" \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
   case "$task" in
     '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
       fm_gate_call_drop "$state" 'task must be a task id' \
-        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
       return 1 ;;
   esac
   if [ "${#task}" -gt "$FM_GATE_CALL_CAP_TASK" ]; then
     fm_gate_call_drop "$state" "task must be at most $FM_GATE_CALL_CAP_TASK characters" \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
   if [ -z "$what" ]; then
     fm_gate_call_drop "$state" 'the call must say what it was about' \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
   if [ -z "$grounds" ]; then
     fm_gate_call_drop "$state" 'the call must state its grounds' \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
   if ! fm_gate_call_one_line "$what" || ! fm_gate_call_one_line "$link" \
     || ! fm_gate_call_one_line "$key"; then
     fm_gate_call_drop "$state" 'only the grounds may span lines' \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
+  # link and key are presentation, not identity: a malformed one is dropped
+  # and named in `rejected` so the degradation is visible in the record, and
+  # the call itself - who, what, why, the verdict - is still logged. See TWO
+  # SEVERITIES OF BAD INPUT above.
   if [ -n "$link" ]; then
     link_ok=1
     case "$link" in
@@ -334,44 +350,37 @@ fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> 
         esac ;;
       *) link_ok=0 ;;
     esac
+    [ "${#link}" -le "$FM_GATE_CALL_CAP_LINK" ] || link_ok=0
     if [ "$link_ok" -ne 1 ]; then
-      fm_gate_call_drop "$state" 'link must be one http or https URL' \
-        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
-      return 1
-    fi
-    if [ "${#link}" -gt "$FM_GATE_CALL_CAP_LINK" ]; then
-      fm_gate_call_drop "$state" "link must be at most $FM_GATE_CALL_CAP_LINK characters" \
-        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
-      return 1
+      link=''
+      rejected='link'
     fi
   fi
   if [ -n "$key" ]; then
+    key_ok=1
     case "$key" in
-      *[!A-Za-z0-9._:-]*)
-        fm_gate_call_drop "$state" 'key must be a routing key' \
-          "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
-        return 1 ;;
+      *[!A-Za-z0-9._:-]*) key_ok=0 ;;
     esac
-    if [ "${#key}" -gt "$FM_GATE_CALL_CAP_KEY" ]; then
-      fm_gate_call_drop "$state" "key must be at most $FM_GATE_CALL_CAP_KEY characters" \
-        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
-      return 1
+    [ "${#key}" -le "$FM_GATE_CALL_CAP_KEY" ] || key_ok=0
+    if [ "$key_ok" -ne 1 ]; then
+      key=''
+      rejected="${rejected:+$rejected,}key"
     fi
   fi
 
   fm_gate_call_bounded_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
-    "$link" "$key" "$truncated"
+    "$link" "$key" "$truncated" "$rejected"
   line=$FM_GATE_CALL_BOUNDED_LINE
 
   log=$(fm_gate_calls_path "$state")
   if [ -L "$log" ]; then
     fm_gate_call_drop "$state" 'the gate-call log is a symlink, not the append-only file' \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
   if ! printf '%s\n' "$line" >> "$log" 2>/dev/null; then
     fm_gate_call_drop "$state" 'the gate-call log could not be appended to' \
-      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
   return 0

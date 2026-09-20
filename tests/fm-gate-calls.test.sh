@@ -76,8 +76,67 @@ test_a_decided_call_is_recorded_with_every_field() {
   printf '%s' "$(log_field "$log" 1 at)" | grep -Eq \
     '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' \
     || fail "decided: the timestamp is not a UTC ISO-8601 instant"
+  assert_equals '' "$(log_field "$log" 1 rejected)" \
+    "decided: a clean record claimed a field was rejected"
   assert_absent "$home/state/gate-calls.drops" "decided: a clean record wrote a drop"
   pass "a decided call is recorded with when, what, why, the link and the key"
+}
+
+test_a_malformed_link_loses_the_link_and_not_the_call() {
+  local home log rc=0
+  home=$(make_home bad-link)
+  log="$home/state/gate-calls.jsonl"
+
+  run_gate_call "$home" record --site captain-hold --task clone-worker-launch \
+    --verdict escalated --what 'which board implementation ships' \
+    --grounds 'an unmeasured blast radius on his own permission rules is his call' \
+    --link 'https://github.com/example/repo/pull/1 ' --key R1 \
+    >/dev/null 2> "$home/stderr" || rc=$?
+
+  expect_code 0 "$rc" "bad-link: a trailing space on a link must not cost the call"
+  expect_code 1 "$(log_lines "$log")" "bad-link: the call did not reach the log"
+  assert_absent "$home/state/gate-calls.drops" \
+    "bad-link: a well-formed ruling was filed as a system failure"
+  assert_equals escalated "$(log_field "$log" 1 verdict)" "bad-link: the verdict was lost"
+  assert_contains "$(log_field "$log" 1 grounds)" 'unmeasured blast radius' \
+    "bad-link: the grounds were lost"
+  assert_equals R1 "$(log_field "$log" 1 key)" "bad-link: a valid key was thrown out too"
+  assert_equals '' "$(log_field "$log" 1 link)" "bad-link: the malformed link was recorded anyway"
+  assert_equals link "$(log_field "$log" 1 rejected)" \
+    "bad-link: the dropped link is invisible in the record"
+  pass "a malformed link is dropped and named, and the ruling still reaches the log"
+}
+
+test_a_malformed_key_is_named_beside_a_malformed_link() {
+  local home log rc=0
+  home=$(make_home bad-both)
+  log="$home/state/gate-calls.jsonl"
+
+  run_gate_call "$home" record --task task-b --verdict decided \
+    --what 'a ruling typed by hand' --grounds 'both optional fields fat-fingered' \
+    --link 'github.com/example/repo/pull/2' --key 'R2 (the second one)' \
+    >/dev/null 2>&1 || rc=$?
+
+  expect_code 0 "$rc" "bad-both: two malformed optional fields must not cost the call"
+  assert_equals 'link,key' "$(log_field "$log" 1 rejected)" \
+    "bad-both: the record does not name both dropped fields"
+  assert_equals decided "$(log_field "$log" 1 verdict)" "bad-both: the verdict was lost"
+  pass "both dropped presentation fields are named in the record"
+}
+
+test_a_bad_task_id_still_costs_the_whole_record() {
+  local home rc=0
+  home=$(make_home bad-task)
+
+  run_gate_call "$home" record --task 'not a task id' --verdict decided \
+    --what 'a call naming no identifiable task' --grounds 'testing the severity split' \
+    >/dev/null 2> "$home/stderr" || rc=$?
+
+  expect_code 1 "$rc" "bad-task: an unidentifiable task must still refuse the record"
+  assert_absent "$home/state/gate-calls.jsonl" \
+    "bad-task: a record naming no real task reached the log"
+  assert_present "$home/state/gate-calls.drops" "bad-task: the refusal left no durable trace"
+  pass "a bad identity field still costs the record, unlike a bad presentation field"
 }
 
 test_every_verdict_in_the_vocabulary_is_accepted() {
@@ -366,6 +425,9 @@ test_a_hold_still_lands_when_its_gate_call_cannot_be_recorded() {
 }
 
 test_a_decided_call_is_recorded_with_every_field
+test_a_malformed_link_loses_the_link_and_not_the_call
+test_a_malformed_key_is_named_beside_a_malformed_link
+test_a_bad_task_id_still_costs_the_whole_record
 test_every_verdict_in_the_vocabulary_is_accepted
 test_a_call_with_no_grounds_is_refused_and_reported
 test_a_multi_line_refusal_keeps_its_structure_on_one_line
