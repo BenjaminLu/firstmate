@@ -15,6 +15,13 @@ The reviewed-PR path is what a `direct-PR` ship task looks like end to end.
 `AGENTS.md` section 7 owns delivery-mode selection and merge authority and does not restate this procedure.
 `bin/fm-brief.sh`'s `--review` contract is the single owner of what the reviewer itself owes; read the generated brief rather than restating its disciplines here or in a steer.
 
+## Ground truth
+
+`AGENTS.md` says a status line is a wake event rather than current-state truth, and names what owns the truth instead.
+Every report in this path is the same shape.
+A reviewer verifies against the commits and the CI run, never against the pull request body and never against a firstmate ruling: a ruling is a claim like any other, and a review that finds one wrong against the artifact is reporting a defect rather than defying you - rule on it as a finding.
+Where a task carries a design record, that record owns intent, so the pull request body, the brief, a steer, and a ruling are all subordinate to it - and a disagreement between one of them and the record is a defect in the other thing, not in the record.
+
 ## The path, end to end
 
 1. **The worker implements and pushes.**
