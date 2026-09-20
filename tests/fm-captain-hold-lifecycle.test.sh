@@ -4618,6 +4618,54 @@ test_the_drop_works_on_a_first_attestation() {
   pass "the drop works on a first attestation, and still refuses a durable call"
 }
 
+# `reconcile note` refuses a row it cannot read, and its refusal names the
+# archive. That claim has to be true rather than decorative: command_open
+# guards the path today, so the message is reached only in the window between
+# that guard and the read - which is exactly the window a future change to
+# the guard would widen. The window is staged here rather than reasoned
+# about, by retiring the row between the two reads.
+test_the_note_refusal_reads_what_it_says_it_read() {
+  local home id out
+  home=$(make_home note-archive-claim)
+  id=sample-note-window
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$id" "A call that retires mid-command" --repo sample >/dev/null \
+    || fail "could not create the note-window fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the note-window fixture"
+  request_reconciles "$home" note-window-src "$id" || fail "could not file the request"
+  printf 'Still open: nothing has shipped and the choice is unchanged.\n' > "$home/note.txt"
+
+  # The row is retired between the guard's read and the read the message is
+  # attached to, so that message is the one that fires.
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = show ] && [ "${2:-}" = sample-note-window ]; then
+  if [ -e "$FM_HOME/show-once" ] && [ ! -e "$FM_HOME/retired" ]; then
+    : > "$FM_HOME/retired"
+    "$REAL_TASKS_AXI" done sample-note-window >/dev/null 2>&1
+  else
+    : > "$FM_HOME/show-once"
+  fi
+fi
+exec "$REAL_TASKS_AXI" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+  out=$(run_captain "$home" reconcile note "$id" --note-file "$home/note.txt" 2>&1) \
+    && fail "a note was recorded on a row that had been archived: $out"
+  assert_present "$home/retired" "the fixture never reached the window it exists to stage"
+  assert_grep "$id" "$home/data/done-archive.md" "the fixture did not archive the row"
+  assert_contains "$out" "closed and archived" \
+    "the refusal did not say what the archive actually holds: $out"
+  assert_not_contains "$out" "absent from this home's configured backlog and its archive" \
+    "the refusal claimed the row is in neither half when the archive holds it: $out"
+  assert_present "$home/state/reconcile-requests/$id.request" \
+    "the refused note retired its own pending request"
+  pass "the note refusal reads the archive it says it read"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4832,6 +4880,7 @@ test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act
 test_a_drop_judges_the_row_the_gate_judges
 test_the_drop_works_on_a_first_attestation
 test_the_remaining_reads_see_the_archive_too
+test_the_note_refusal_reads_what_it_says_it_read
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
 test_an_interrupted_close_still_finishes_when_a_worker_appears

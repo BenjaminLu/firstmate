@@ -1946,7 +1946,7 @@ replay_archived_reconciliation() {  # <task-id>
 # The still-active outcome. The hold survives, so the call stays the captain's
 # and stays on Captain's Call, now carrying what the re-check found.
 reconcile_note() {
-  local id=${1:-} note_file='' note show body stamp tmp note_digest marker
+  local id=${1:-} note_file='' note show body stamp tmp note_digest marker note_archived_status
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1970,9 +1970,22 @@ reconcile_note() {
   command_open "$id" \
     || fail "task $id is not an open captain call; a note cannot keep a closed call open"
   # command_open refuses a closed row one line above, so a retired row cannot
-  # reach this read today. The message still names both halves, because an
-  # unreachable wrong message is a wrong message waiting for its guard to move.
-  task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+  # reach this read today - but an unreachable wrong message is a wrong
+  # message waiting for its guard to move, and the previous attempt at this
+  # one claimed both halves had been read when only the active file had. So
+  # the archive is actually consulted here, and the two outcomes are told
+  # apart: a retired row cannot take a note, because tasks-axi will not write
+  # an archived row, and a row in neither half is gone.
+  if ! task_show "$id"; then
+    note_archived_status=0
+    archived_row_body "$id" >/dev/null || note_archived_status=$?
+    [ "$note_archived_status" -ne 2 ] \
+      || fail "the backlog archive could not be read while resolving captain-held task $id"
+    [ "$note_archived_status" -ne 0 ] \
+      || fail "captain-held task $id is closed and archived, so a note cannot be added to it (tasks-axi cannot write an archived row)"
+    fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+  fi
+  show=$TASK_SHOW_OUTPUT
   body=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the existing body for $id"
   note_digest=$(sha256_text "$note")
