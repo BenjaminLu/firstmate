@@ -665,6 +665,90 @@ test_a_secondmate_is_not_a_work_item() {
   pass "a secondmate is not a work item and owes none of the four"
 }
 
+# --- the undeterminable paths obligation 1's discovery added ----------------
+#
+# Each of these was silent, and each is proven non-vacuous by removing its own
+# unknown and watching the case go red. They are separated from the cases above
+# because they all live in discover_task_pull_request, which is the
+# neighbourhood the suite could not see.
+
+test_a_task_record_with_an_unusable_id_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home bad-id)
+  # A space is outside the characters a task id may use, and a record the
+  # check cannot name is a record whose obligations it cannot check.
+  printf 'kind=ship\n' > "$home/state/bad id.meta"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a task record with an unusable id was dropped in silence"
+  assert_contains "$report" "does not carry a usable task id" "the unusable id was not named"
+  assert_contains "$report" "unknown:" "an unusable task id did not produce an unknown answer"
+  pass "a task record whose id cannot be used is unknown, not clean"
+}
+
+test_a_task_that_records_no_worktree_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home no-worktree-key)
+  printf 'kind=ship\nendpoint_task_id=omega\n' > "$home/state/omega.meta"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a task recording no worktree was passed over as having no pull request"
+  assert_contains "$report" "omega records no worktree" "the missing worktree record was not named"
+  assert_contains "$report" "unknown:" "a task recording no worktree did not produce an unknown answer"
+  pass "a task that records no worktree is unknown, not clean"
+}
+
+test_a_worktree_with_no_origin_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home no-origin)
+  task "$home" omega "kind=ship"
+  git -C "$home/wt/omega" checkout -q -B fm/no-origin 2>/dev/null
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a branch with no origin to ask was reported as having no pull request"
+  assert_contains "$report" "no readable origin" "the missing origin was not named"
+  assert_contains "$report" "unknown:" "a worktree with no origin did not produce an unknown answer"
+  pass "a worktree with no origin to ask is unknown, not clean"
+}
+
+test_discovery_with_no_gh_is_unknown_not_clean() {
+  local home out report status=0
+  home=$(make_home discover-no-gh)
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/no-gh
+  rm -f "$home/bin/gh"
+  out="$home/out.txt"
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=0 FM_CHECK_TIMEOUT=30 \
+    PATH="$(fm_test_base_path_sans "$PATH" gh)" "$CHECK" > "$out" 2>&1 || status=$?
+  expect_code 0 "$status" "check exit"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "discovery with no gh to ask produced silence"
+  assert_contains "$report" "gh is not installed, so whether omega has a pull request" \
+    "the absent tool was not named as the reason discovery could not answer"
+  assert_contains "$report" "unknown:" "discovery without gh did not produce an unknown answer"
+  pass "discovery with no gh installed is unknown naming the tool, not clean"
+}
+
+test_a_discovery_read_the_forge_refuses_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home discover-refused)
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/refused
+  out="$home/out.txt"
+  run "$home" "$out" GH_FIXTURE_FAIL=1
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a discovery read the forge refused produced silence"
+  assert_contains "$report" "the open pull requests for omega's branch fm/refused could not be read" \
+    "a refused discovery read was not named"
+  assert_contains "$report" "unknown:" "a refused discovery read did not produce an unknown answer"
+  assert_not_contains "$report" "owed:" "a refused discovery read was turned into an owed obligation"
+  pass "a discovery read the forge refuses is unknown, not clean"
+}
+
 # --- undeterminable is its own answer ---------------------------------------
 
 test_an_unreachable_forge_is_unknown_not_clean() {
@@ -1343,6 +1427,11 @@ test_a_steered_task_with_a_design_record_is_silent
 test_a_steered_scout_with_a_report_is_silent
 test_a_task_that_was_never_steered_is_silent
 test_a_secondmate_is_not_a_work_item
+test_a_task_record_with_an_unusable_id_is_unknown_not_clean
+test_a_task_that_records_no_worktree_is_unknown_not_clean
+test_a_worktree_with_no_origin_is_unknown_not_clean
+test_discovery_with_no_gh_is_unknown_not_clean
+test_a_discovery_read_the_forge_refuses_is_unknown_not_clean
 test_an_unreachable_forge_is_unknown_not_clean
 test_a_missing_gh_is_unknown_not_clean
 test_a_gitlab_merge_request_is_a_named_gap_not_a_pass
