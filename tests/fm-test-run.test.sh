@@ -1763,11 +1763,17 @@ test_herdr_ci_family_run_has_a_step_timeout() {
   json=$(ruby -ryaml -rjson -e '
 doc = YAML.load_file(ARGV[0])
 job = doc.fetch("jobs").fetch("tests-herdr")
-step = job.fetch("steps").find { |s|
-  s.is_a?(Hash) && s["name"] == "Run real-Herdr family (serial, required)"
+# The step name carries the shard number, so match its stable prefix rather
+# than a literal that a matrix rename would silently break. Only top-level
+# step names are considered, so a nested with.name artifact key cannot
+# masquerade as the step contract.
+steps = job.fetch("steps").select { |s|
+  s.is_a?(Hash) && s["name"].to_s.start_with?("Run real-Herdr shard")
 }
-raise "missing family-run step" if step.nil?
-raise "family-run step has no timeout-minutes" unless step.key?("timeout-minutes")
+raise "missing suite-run step" if steps.empty?
+raise "more than one suite-run step" unless steps.length == 1
+step = steps.first
+raise "suite-run step has no timeout-minutes" unless step.key?("timeout-minutes")
 puts JSON.generate(
   "job_timeout" => job.fetch("timeout-minutes"),
   "step_timeout" => step.fetch("timeout-minutes")
@@ -1781,9 +1787,9 @@ puts JSON.generate(
   [ "$job_timeout" = 75 ] \
     || fail "tests-herdr job backstop must stay 75 minutes, got $job_timeout"
   [ "$step_timeout" = 20 ] \
-    || fail "family-run step timeout must be 20 minutes, got $step_timeout"
+    || fail "Herdr suite-run step timeout must be 20 minutes, got $step_timeout"
   [ "$step_timeout" -lt "$job_timeout" ] \
-    || fail "family-run step timeout must be below the job backstop"
+    || fail "Herdr suite-run step timeout must be below the job backstop"
   pass "Herdr CI family-run step times out at 20 min under a 75 min job backstop"
 }
 
