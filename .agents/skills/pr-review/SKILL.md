@@ -24,7 +24,8 @@ The reviewed-PR path is what a `direct-PR` ship task looks like end to end.
    The worker opens it at its first commit and reports the URL in a nonterminal `working:` line, which `bin/fm-dod-lib.sh`'s `direct-PR` definition of done owns; arm on that line with `bin/fm-pr-check.sh <id> <PR url> --arm-only` rather than waiting, as section 7 requires.
    The worker's later `done: PR <url>` line is the finish, not the opening.
 3. **A reviewer reviews it on the pull request.**
-   Dispatch it as soon as the pull request exists.
+   Dispatch it on the worker's `done: PR <url>` line, which is the finish: this path produces one review, so it is spent on the whole change rather than on the first of ten commits.
+   The early URL from step 2 is what the captain watches and what `--arm-only` arms on; it is not a dispatch trigger.
    Do not wait for the checks: a reviewer reading the diff and a CI run watching the same commit are independent, and serializing them buys nothing.
 4. **Firstmate reads the findings, rules, and posts the ruling on the pull request.**
 5. **Fixes land as commits on the same pull request**, by the same worker, one finding per commit.

@@ -12,8 +12,9 @@
 # line that bin/fm-spawn.sh checks a ship brief against.
 # The direct-PR block is the one owner of that mode's open-the-PR-early default:
 # the worker pushes and opens the pull request at its first commit and reports the
-# URL in a nonterminal status line, so review and implementation run in parallel
-# and the work is visible from its first commit rather than only when it is done.
+# URL in a nonterminal status line, so the work is visible from its first commit
+# rather than only when it is done. Opening early is for watching and for arming
+# the merge poll; the `pr-review` skill owns when the one review is dispatched.
 # It is likewise the one owner of the fix-round technique a no-mistakes worker
 # applies to its own commit, to how it answers a Fix gate, and to the
 # third-round refusal that returns a narrow-remedy instruction to firstmate,
@@ -349,7 +350,7 @@ fm_dod_block() {  # <mode> <task-id>
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
 
-**Open the pull request early, not at the end.** As soon as your first commit is on \`fm/$id\`, push the branch and open the PR with \`gh-axi\`, then append \`working: PR {url} open, work continuing\` to the status file and carry straight on - that line is nonterminal under rule 4, and it is what lets firstmate and the captain follow this work from its first commit instead of seeing it only once it is finished. Firstmate dispatches a reviewer against the open PR, so the review runs beside the rest of your implementation.
+**Open the pull request early, not at the end.** As soon as your first commit is on \`fm/$id\`, push the branch and open the PR with \`gh-axi\`, then append \`working: PR {url} open, work continuing\` to the status file and carry straight on - that line is nonterminal under rule 4, and it is what lets firstmate and the captain follow this work from its first commit instead of seeing it only once it is finished. The review comes after you report done, so an open PR is not a request for one and you keep working.
 Push each later commit to that same PR as you make it; never hold work back to make the PR look finished, and say in the PR body that the work is still in progress.
 Do not open it as a draft: the reviewer and the merge path both act on an ordinary open pull request.
 
