@@ -225,7 +225,7 @@ test_a_missing_approval_is_a_blocker() {
   out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
     || fail "outside-approval fixture was refused"
   case "$out" in
-    *'NO APPROVAL AT HEAD'*'(the review at this head is from an account with no standing)'*) ;;
+    *'NO APPROVAL AT HEAD'*'(an approval at this head is from an account with no standing)'*) ;;
     *) fail "a stranger's approval must be named as such, got: $out" ;;
   esac
 
@@ -282,6 +282,54 @@ test_a_missing_approval_is_a_blocker() {
     *) fail "an unreadable approval must be reported, not omitted, got: $out" ;;
   esac
   pass "each way of being unapproved is reported apart, the way the merge path reports them"
+}
+
+# Every other fixture in this suite is a SINGLE review at the head, which is why
+# a decline hidden behind an approval survived three rounds. These are the
+# combinations, and each asserts the same condition bin/fm-pr-merge.sh names for
+# the same payload.
+test_combinations_at_one_head_agree_with_the_gate() {
+  local out
+  local head=c2eac54c17a1ddc2633ad51b83e21e5fe888142e
+
+  # (A) A standing approval beside a standing decline. The gate refuses on the
+  # decline; silence here would report a declined pull request as review-ready.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r1"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T08:00:00Z","body":"Review verdict: APPROVED"},{"state":"CHANGES_REQUESTED","authorAssociation":"COLLABORATOR","author":{"login":"r2"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Fix R1."}]}' run_state) \
+    || fail "approval-beside-decline fixture was refused"
+  [ -n "$out" ] \
+    || fail "(A) a declined pull request read as ready: the preview printed nothing while the gate refuses it"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "(A) an approval hid a decline, got: $out" ;;
+  esac
+
+  # (B) A decline from an account with no standing. The gate's refusal test does
+  # not ask about standing, so this is a decline on both surfaces.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"CHANGES_REQUESTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"No."}]}' run_state) \
+    || fail "nonstanding-decline fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "(B) a decline from an account with no standing was not reported as a decline, got: $out" ;;
+  esac
+
+  # The same decline written as a body verdict rather than a forge state.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: NOT APPROVED"}]}' run_state) \
+    || fail "nonstanding-verbal-decline fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "(B) a verbal decline from an account with no standing was not reported as a decline, got: $out" ;;
+  esac
+
+  # (D) A standing review with no verdict beside an approval from an account
+  # with no standing. The gate reports the outside approval, not the verdict.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r1"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T08:00:00Z","body":"Notes, no verdict."},{"state":"COMMENTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "verdictless-beside-outside fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(an approval at this head is from an account with no standing)'*) ;;
+    *) fail "(D) the preview named a different condition than the gate, got: $out" ;;
+  esac
+  [ -n "$head" ]
+  pass "combinations at one head are reported the way the gate reports them, and an approval never hides a decline"
 }
 
 test_required_failure_is_a_blocker() {
@@ -378,6 +426,7 @@ test_changes_requested_decision_is_never_silent
 test_authors_own_changes_requested_review_is_not_a_blocker
 test_review_required_decision_is_not_itself_a_blocker
 test_a_missing_approval_is_a_blocker
+test_combinations_at_one_head_agree_with_the_gate
 test_required_failure_is_a_blocker
 test_unreported_required_checks_are_unconfirmed
 test_no_reported_checks_is_unverified

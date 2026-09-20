@@ -4067,3 +4067,65 @@ test_each_non_green_check_says_what_is_wrong_with_it() {
 }
 
 test_each_non_green_check_says_what_is_wrong_with_it
+
+# Every other fixture here is a SINGLE review at the head. These are the
+# combinations, and they assert the same condition bin/fm-pr-state.sh names for
+# the same payload, so the gate and its preview cannot drift apart again.
+test_combinations_at_one_head_refuse_for_the_named_reason() {
+  local case_dir rc head=2121212121212121212121212121212121212121
+
+  # (A) A standing approval beside a standing decline: the decline wins, and it
+  # is tested before the approval is looked at.
+  case_dir=$(make_case github-approval-beside-decline)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(approving_review "$head" r1),$(review_entry CHANGES_REQUESTED "$head" r2 'Fix R1.' 2026-09-20T10:00:00Z)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-approval-beside-decline: a decline must not be merged over"
+  assert_grep 'does not approve' "$case_dir/stderr" \
+    "github-approval-beside-decline: an approval hid a decline"
+
+  # (B) A decline from an account with no standing still declines: the gate's
+  # refusal test does not ask about standing.
+  case_dir=$(make_case github-nonstanding-decline)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry CHANGES_REQUESTED "$head" stranger 'No.' 2026-09-20T09:00:00Z NONE)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-nonstanding-decline: it must not merge"
+  assert_grep 'does not approve' "$case_dir/stderr" \
+    "github-nonstanding-decline: a decline from an account with no standing was not named as a decline"
+
+  # (D) A standing review with no verdict beside an approval from an account
+  # with no standing: the outside approval is the condition reported.
+  case_dir=$(make_case github-verdictless-beside-outside)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" r1 'Notes, no verdict.' 2026-09-20T08:00:00Z),$(approving_review "$head" stranger NONE)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-verdictless-beside-outside: it must not merge"
+  assert_grep 'an approval counts only from OWNER, MEMBER, or COLLABORATOR' "$case_dir/stderr" \
+    "github-verdictless-beside-outside: the refusal did not name the outside approval"
+  assert_grep 'stranger' "$case_dir/stderr" \
+    "github-verdictless-beside-outside: the refusal did not name the account that approved"
+  assert_no_grep 'states no verdict' "$case_dir/stderr" \
+    "github-verdictless-beside-outside: the refusal named a condition its preview does not"
+  pass "combinations at one head refuse for the condition the preview names, and a decline is never hidden by an approval"
+}
+
+test_combinations_at_one_head_refuse_for_the_named_reason

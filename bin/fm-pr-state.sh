@@ -185,9 +185,10 @@ if ! APPROVAL_ROWS=$(gh pr view "$URL" --json reviews --jq '
   | .[]
   | (.commit.oid // "") as $oid
   | if (submitted | not) then $oid + " D"
-    elif (standing | not) then $oid + " X"
-    elif .state == "APPROVED" then $oid + " A"
     elif .state == "CHANGES_REQUESTED" then $oid + " N"
+    elif (.state == "APPROVED" and standing) then $oid + " A"
+    elif .state == "APPROVED" then $oid + " O"
+    elif (standing | not) then $oid + " X" + tail_line
     else $oid + " T" + tail_line
     end
   ' 2>/dev/null); then
@@ -203,6 +204,7 @@ else
   DECLINED_AT_HEAD=0
   WITHDRAWN_AT_HEAD=0
   OUTSIDE_AT_HEAD=0
+  NONSTANDING_AT_HEAD=0
   NEWEST_REVIEWED=
   while IFS= read -r row; do
     [ -n "$row" ] || continue
@@ -213,9 +215,21 @@ else
     [ "$row_commit" = "$HEAD" ] || continue
     case "$row_verdict" in
       D) WITHDRAWN_AT_HEAD=1 ;;
-      X) OUTSIDE_AT_HEAD=1 ;;
+      N) DECLINED_AT_HEAD=1 ;;
+      O) NONSTANDING_AT_HEAD=1; OUTSIDE_AT_HEAD=1 ;;
+      X*)
+        # A review from an account with no standing, its verdict in the body.
+        # The gate reports an approval from such an account apart from any
+        # other review from one, because the two want different remedies, and a
+        # decline counts whoever wrote it - the gate's refusal test does not ask
+        # about standing either.
+        NONSTANDING_AT_HEAD=1
+        case "${row_verdict#X}" in
+          "$FM_REVIEW_VERDICT_APPROVED") OUTSIDE_AT_HEAD=1 ;;
+          "$FM_REVIEW_VERDICT_DECLINED") DECLINED_AT_HEAD=1 ;;
+        esac
+        ;;
       A) STANDING_AT_HEAD=1; APPROVED_AT_HEAD=1 ;;
-      N) STANDING_AT_HEAD=1; DECLINED_AT_HEAD=1 ;;
       T*)
         # The verdict literals are compared here rather than inside the jq
         # program, so bin/fm-review-verdict-lib.sh stays their only owner. A
@@ -231,15 +245,23 @@ else
   done <<APPROVAL_ROWS
 $APPROVAL_ROWS
 APPROVAL_ROWS
-  if [ "$APPROVED_AT_HEAD" -ne 1 ]; then
-    if [ "$DECLINED_AT_HEAD" -eq 1 ]; then
-      printf 'NO APPROVAL AT HEAD: %s (a review at this head does not approve)\n' "$HEAD"
-    elif [ "$REVIEWS_SEEN" -eq 0 ]; then
+  # The order below is bin/fm-pr-merge.sh's refusal chain, branch for branch.
+  # A refusal is tested FIRST and UNCONDITIONALLY, exactly as the gate tests
+  # `refusing` before it looks at `approving`: an approval standing beside a
+  # decline does not clear the decline, and silence here is what firstmate reads
+  # as ready, so a hidden decline would report a declined pull request as
+  # review-ready before the gate ever got the chance to refuse it.
+  if [ "$DECLINED_AT_HEAD" -eq 1 ]; then
+    printf 'NO APPROVAL AT HEAD: %s (a review at this head does not approve)\n' "$HEAD"
+  elif [ "$APPROVED_AT_HEAD" -ne 1 ]; then
+    if [ "$REVIEWS_SEEN" -eq 0 ]; then
       printf 'NO APPROVAL AT HEAD: %s (no review has been posted)\n' "$HEAD"
+    elif [ "$OUTSIDE_AT_HEAD" -eq 1 ]; then
+      printf 'NO APPROVAL AT HEAD: %s (an approval at this head is from an account with no standing)\n' "$HEAD"
     elif [ "$STANDING_AT_HEAD" -eq 1 ]; then
       printf 'NO APPROVAL AT HEAD: %s (the review at this head states no verdict)\n' "$HEAD"
-    elif [ "$OUTSIDE_AT_HEAD" -eq 1 ]; then
-      printf 'NO APPROVAL AT HEAD: %s (the review at this head is from an account with no standing)\n' "$HEAD"
+    elif [ "$NONSTANDING_AT_HEAD" -eq 1 ]; then
+      printf 'NO APPROVAL AT HEAD: %s (a review at this head is from an account with no standing)\n' "$HEAD"
     elif [ "$WITHDRAWN_AT_HEAD" -eq 1 ]; then
       printf 'NO APPROVAL AT HEAD: %s (every review at this head is withdrawn or unsubmitted)\n' "$HEAD"
     else
