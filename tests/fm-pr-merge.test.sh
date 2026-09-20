@@ -332,7 +332,7 @@ write_mr_json() {
   local file=$1 kv key value
   local state=opened detail=mergeable conflicts=false discussions=true
   local head=$MR_HEAD pipeline_sha=$MR_HEAD pipeline_status=success pipeline=present
-  local merge_when_pipeline_succeeds=false merge_after=null
+  local merge_when_pipeline_succeeds=false merge_after=null author=mrauthor
   shift
   for kv in "$@"; do
     key=${kv%%=*}
@@ -348,18 +348,22 @@ write_mr_json() {
       pipeline) pipeline=$value ;;
       merge_when_pipeline_succeeds) merge_when_pipeline_succeeds=$value ;;
       merge_after) merge_after=$value ;;
+      author) author=$value ;;
       *) fail "write_mr_json: unknown field '$key'" ;;
     esac
   done
   if [ "$pipeline" = present ]; then
     pipeline=$(printf '{"sha":"%s","status":"%s"}' "$pipeline_sha" "$pipeline_status")
   fi
-  printf '{"iid":7,"state":"%s","detailed_merge_status":"%s","has_conflicts":%s,' \
-    "$state" "$detail" "$conflicts" > "$file"
-  printf '"blocking_discussions_resolved":%s,"sha":"%s","head_pipeline":%s,' \
-    "$discussions" "$head" "$pipeline" >> "$file"
-  printf '"merge_when_pipeline_succeeds":%s,"merge_after":%s}\n' \
-    "$merge_when_pipeline_succeeds" "$merge_after" >> "$file"
+  {
+    printf '{"iid":7,"state":"%s","detailed_merge_status":"%s","has_conflicts":%s,' \
+      "$state" "$detail" "$conflicts"
+    printf '"blocking_discussions_resolved":%s,"sha":"%s","head_pipeline":%s,' \
+      "$discussions" "$head" "$pipeline"
+    printf '"author":{"username":"%s"},' "$author"
+    printf '"merge_when_pipeline_succeeds":%s,"merge_after":%s}\n' \
+      "$merge_when_pipeline_succeeds" "$merge_after"
+  } > "$file"
 }
 
 # make_gitlab_case <name> [<field>=<value> ...]: a case dir with both forge
@@ -3753,3 +3757,28 @@ $line")"
 }
 
 test_the_brief_verdict_line_is_what_the_gate_accepts
+
+# The GitLab path has the author and the approvers in hand, so it makes the same
+# two-case disclosure the GitHub path does. A notice printed on one of two
+# parallel paths reads as a guarantee on the other.
+test_gitlab_discloses_a_self_approval() {
+  local case_dir
+  case_dir=$(make_gitlab_case gitlab-self-approval author=solo)
+  printf '{"approved_by":[{"user":{"username":"solo"}}]}\n' > "$case_dir/glab-approvals.json"
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "gitlab-self-approval: the merge should proceed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'cannot separate the two here' "$case_dir/stderr" \
+    "gitlab-self-approval: an approval by the merge request's own author passed with no disclosure"
+
+  case_dir=$(make_gitlab_case gitlab-other-approval author=worker)
+  printf '{"approved_by":[{"user":{"username":"reviewer"}}]}\n' > "$case_dir/glab-approvals.json"
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "gitlab-other-approval: the merge should proceed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'does not include the account that opened the merge request' "$case_dir/stderr" \
+    "gitlab-other-approval: a different-account approval passed with no disclosure"
+  assert_grep 'reports no association' "$case_dir/stderr" \
+    "gitlab-other-approval: the notice implied a standing check GitLab does not support"
+  pass "a GitLab merge discloses whether its approver is the account that opened the merge request"
+}
+
+test_gitlab_discloses_a_self_approval

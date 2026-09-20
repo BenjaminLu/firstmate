@@ -412,10 +412,12 @@ fi
 # GitLab accepts an approval from the account that opened the merge request, so
 # its native approval state is reachable here and is the whole record; unlike
 # GitHub, no verdict written into a body is needed or accepted.
-# What GitLab does not report is which commit an approval covers, so this cannot
-# bind the approval to the head the way the GitHub path does. That limit is
-# disclosed on every GitLab merge rather than left to look like the same
-# guarantee.
+# Two things GitLab does not report, both disclosed on every merge rather than
+# left to look like the GitHub path's guarantees: which commit an approval
+# covers, so the approval cannot be bound to the head here, and any association
+# for the approver, so there is no equivalent of the GitHub standing check.
+# Whether the approver is also the account that opened the merge request IS
+# knowable, and gitlab_verify_mergeable says which of those two cases it saw.
 gitlab_read_approvals() {
   local encoded body
   encoded=$(printf '%s' "$PR_PATH" | sed 's|/|%2F|g')
@@ -441,7 +443,7 @@ gitlab_verify_mergeable() {
   local total=0 named=0 refusals=''
   local state='' detail='' conflicts='' discussions=''
   local live_head='' pipeline_sha='' pipeline_status='' async_configured=''
-  local approval_total=0 approval_named=0 approval_count='' approvers=''
+  local approval_total=0 approval_named=0 approval_count='' approvers='' mr_author=''
 
   # GITLAB_HOST is set to the same host the project URL already carries, so the
   # instance is taken from the parsed URL by both signals and never from the
@@ -464,7 +466,8 @@ gitlab_verify_mergeable() {
         "head=" + ((.sha // "") | tostring),
         "pipeline_sha=" + ((.head_pipeline.sha // "") | tostring),
         "pipeline_status=" + ((.head_pipeline.status // "") | tostring),
-        "async_configured=" + (if .merge_when_pipeline_succeeds == true or (.merge_after != null) then "true" else "false" end)
+        "async_configured=" + (if .merge_when_pipeline_succeeds == true or (.merge_after != null) then "true" else "false" end),
+        "author=" + ((.author.username // .author.name // "") | tostring)
       else
         error("merge request payload is not an object")
       end' 2>/dev/null); then
@@ -482,6 +485,7 @@ gitlab_verify_mergeable() {
       pipeline_sha=*) pipeline_sha=${line#pipeline_sha=} ;;
       pipeline_status=*) pipeline_status=${line#pipeline_status=} ;;
       async_configured=*) async_configured=${line#async_configured=} ;;
+      author=*) mr_author=${line#author=} ;;
       *) continue ;;
     esac
     named=$((named + 1))
@@ -491,7 +495,7 @@ FIELDS
   # Every field named exactly once and no unnamed line: a value carrying a
   # newline would split into a line no name matches, so it is refused here
   # rather than silently truncated into a value a check could accept.
-  if [ "$named" -ne 8 ] || [ "$total" -ne 8 ]; then
+  if [ "$named" -ne 9 ] || [ "$total" -ne 9 ]; then
     echo "error: could not read the GitLab merge request state before merging" >&2
     return 1
   fi
@@ -557,8 +561,23 @@ APPROVALS
       "merge merge request $PR_NUMBER in $PR_PATH" "$refusals"
     return 1
   fi
-  printf 'notice: approved by %s; GitLab does not report which commit an approval covers, so unlike the GitHub path this approval is not proven to cover head %s and that binding rests on the project resetting approvals on push\n' \
-    "${approvers:-an unnamed approver}" "$live_head" >&2
+  # The same disclosure the GitHub path makes, on the same two cases, because a
+  # notice printed on one of two parallel paths reads as a guarantee on the
+  # other. GitLab accepts an approval from the account that opened the merge
+  # request, so the approver and the author being one account is possible here
+  # too, and it is the operator's to judge.
+  case ", $approvers, " in
+    *", $mr_author, "*)
+      printf 'notice: %s approved, and %s is also the account that opened the merge request; GitLab cannot separate the two here, so the approver being someone other than the worker rests on how firstmate dispatched it, not on this check\n' \
+        "${approvers:-an unnamed approver}" "$mr_author" >&2
+      ;;
+    *)
+      printf 'notice: approved by %s, which does not include the account that opened the merge request (%s); GitLab reports no association for an approver, so this is not evidence that firstmate dispatched one, which this check cannot establish\n' \
+        "${approvers:-an unnamed approver}" "${mr_author:-unreadable}" >&2
+      ;;
+  esac
+  printf 'notice: GitLab does not report which commit an approval covers, so unlike the GitHub path this approval is not proven to cover head %s and that binding rests on the project resetting approvals on push\n' \
+    "$live_head" >&2
   printf 'verified: %s is open and mergeable, approved, with a successful pipeline at head %s\n' \
     "$URL" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
