@@ -312,16 +312,26 @@ test_a_malformed_message_is_refused_rather_than_guessed_at() {
   pass "a message this port cannot read is refused by name rather than guessed at"
 }
 
-test_reading_the_board_still_needs_no_token() {
+test_reading_the_board_needs_no_token_which_is_exposure_not_a_guarantee() {
   local home port got
   home=$(make_home inbound-read) || fail "could not build a home"
   port=$(serve_home "$home") || fail "the server did not start"
+  # Two facts this pins, and the second is the uncomfortable one. Subscribing
+  # is unchanged, which is what the boards already built depend on. And an
+  # allowed origin needs no token, so a sandboxed cross-origin frame - which
+  # presents exactly this Origin - is sent the captain's whole board. That is
+  # accepted exposure, recorded here so it cannot quietly become a belief that
+  # the origin check covers reading.
   got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 8000) \
     || fail "a subscriber carrying no token was not sent the board"
   assert_equals state "$(printf '%s' "$got" | jq -r '.[0].type')" \
     "the outbound half started demanding a credential the pages already built do not carry"
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 8000 --origin null) \
+    || fail "a subscriber presenting Origin: null could not reach the server"
+  assert_equals Alpha "$(printf '%s' "$got" | jq -r '.[0].payload.underway[0].name')" \
+    "the exposure this records has changed; the header and the docs must change with it"
   FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
-  pass "subscribing is unchanged; only answering is proved"
+  pass "subscribing needs no token from any allowed origin, Origin: null included - exposure, not a guarantee"
 }
 
 test_the_page_carries_the_answer_and_shows_what_came_back() {
@@ -761,5 +771,5 @@ test_an_answer_is_durable_before_anything_is_attempted_with_it
 test_the_reconcile_choice_is_not_recorded_as_an_answer
 test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked
 test_a_malformed_message_is_refused_rather_than_guessed_at
-test_reading_the_board_still_needs_no_token
+test_reading_the_board_needs_no_token_which_is_exposure_not_a_guarantee
 test_the_page_carries_the_answer_and_shows_what_came_back

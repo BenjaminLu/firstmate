@@ -238,6 +238,9 @@ Nothing has to be set up for that either - a board build issues the token and bi
 `state/board-inbound.jsonl` records each authenticated answer as it arrives, without its token, before anything is attempted with it.
 `bin/fm-board-live.sh status` says whether a board built in this home can answer at all, without printing the token.
 
+Only writing is proved: reading the board needs no token, so any page on an origin the allowlist admits - a sandboxed cross-origin frame presenting `Origin: null`, or a page served from a local dev server on `http://localhost` - can subscribe and watch the whole live payload, including every open captain's call and its wording.
+That is accepted exposure rather than a defence, it predates the allowlist this adds, and closing it would mean the page must send the token to subscribe.
+
 `bin/fm-board-live.sh`'s header owns the publish kinds, the lifecycle commands, what proves an inbound message is the captain's and what that proof does not claim.
 `bin/fm-board-live.mjs`'s header owns what an event may change, why the wire carries whole board state rather than deltas, why a change needing new prose marks the board behind instead of being guessed at, and the inbound message and reply shapes.
 `bin/fm-board-answer.sh`'s header owns what an accepted answer then reaches, and `.agents/skills/bearings/assets/live-transport.js` owns the `window.fmBoardLive` seam a board calls to send one.

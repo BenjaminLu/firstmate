@@ -80,13 +80,31 @@
 #   this machine is either a file (Origin: null) or served on loopback, and
 #   only those are allowed.
 #
-# WHAT THIS DOES NOT CLAIM. The boundary it proves is the machine's own user
-# account. A process already running as the captain can read the token file -
-# and could equally edit the backlog directly, so there was never anything to
-# defend there. Reading the board state still needs no token, only an allowed
-# origin, because the same state is readable in this home's own files; a
-# sandboxed frame can therefore still subscribe and watch. Writing is the half
-# that can change something, and writing is the half that is proved.
+# WHAT THIS DOES NOT CLAIM, AND IT IS MORE THAN IT SOUNDS. Only WRITING is
+# proved. Two separate exposures are left open, deliberately, and neither is
+# what it would be comfortable to call them.
+#
+#   A process running as the captain can read the token file and answer as
+#   him. There was never anything to defend there: the same process could edit
+#   the backlog directly.
+#
+#   READING THE BOARD NEEDS NO TOKEN AT ALL - only an allowed origin. Every
+#   origin the allowlist admits can subscribe and be sent the whole payload,
+#   repainted live: every open captain's call and its wording, every pull
+#   request URL, every task id, and what each worker is doing. That includes a
+#   sandboxed cross-origin frame, which presents `Origin: null` exactly as a
+#   board opened from a file does, and any page served from a local dev server
+#   on http://localhost. The port is one of four thousand, which a scan finds
+#   in a moment. So a website the captain merely has open can watch his fleet.
+#   This is NOT the same as a local file read - a web page can read no local
+#   file - and saying it were would be a reason that does not hold dressed up
+#   as one that does.
+#
+# It is left open because closing it means the page must send the token to
+# subscribe, which changes the board's own half and every board already built.
+# That is a posture decision with a cost on another branch, and it belongs to
+# the captain. It is also not new: before the origin allowlist above there was
+# no check at all and any origin could already subscribe.
 #
 # AND IT CAN ONLY EVER CARRY AN ANSWER. Nothing an inbound message says is an
 # instruction: the one thing it can express is which option the captain picked
