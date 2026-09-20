@@ -1485,6 +1485,13 @@ __FM_BEARINGS_BOARD_DATA__
              field, and that must stay the foot button, which answers in his
              own words rather than choosing an option for him */
           choose.type = "button";
+          /* And it obeys the same rule as the foot button. Leaving these live
+             while the foot button is disabled put three controls inside the
+             card that undo its own disclosure: pressing one queued nothing and
+             rewrote the honest up-front message into the after-the-fact one,
+             so a captain correctly told the board cannot take an answer was
+             told, one press later, that his answer was not recorded. */
+          if (!answerChannel()) choose.disabled = true;
           choose.addEventListener("click", function () { queueAnswer(o.value); });
           panel.appendChild(choose);
           addTab(pick(o.label), DOTS[i % DOTS.length], panel);

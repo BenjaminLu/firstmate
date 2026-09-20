@@ -466,6 +466,12 @@ const cards = deck.children
       .filter((n) => n.className.includes("is-visible"))
       .map((n) => n.textContent)[0] ?? "",
     is_queued: card.className.split(/\s+/).includes("is-queued"),
+    /* The per-option buttons inside a packet card. They are controls like any
+       other and must become unavailable with the rest of the card, so both
+       their labels and whether a person could press them are reported. */
+    choose_buttons: findAll(card, "fm-btn")
+      .filter((b) => b.type === "button" && b.textContent.length)
+      .map((b) => ({ text: b.textContent, disabled: b.disabled === true })),
     /* What a call that carried no options says in place of them. Empty on
        every ordinary card, which is what makes its presence meaningful. */
     thin_note: findAll(card, "bb-thin").map((n) => n.textContent)[0] ?? "",

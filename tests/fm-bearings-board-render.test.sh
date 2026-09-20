@@ -428,6 +428,43 @@ test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
 }
 
 # Colour repeats the risk, so the plot reads without counting pixels.
+# R16. The card's render-time refusal was attached to ONE control. A packet
+# card carries a "Choose X" button inside every option tab, and those stayed
+# live on a board that cannot send - so pressing one queued nothing and
+# rewrote the honest up-front message into the after-the-fact one. A captain
+# correctly told the board cannot take an answer was told, one press later,
+# that his answer was not recorded.
+test_the_per_option_buttons_go_dead_with_the_rest_of_the_card() {
+  local home out
+  home=$(make_home choose-no-channel)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_payload "$home" "$(packet_payload en "[]")")
+
+  # The card is in the state this is about: foot button dead, reason on screen.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "true" ] \
+    || fail "the fixture card could still send, so this proves nothing: $out"
+  # Read before the harness's own Enter probe touches the card, which would
+  # otherwise replace the render-time wording with the send-time one.
+  assert_contains "$(printf '%s' "$out" | jq -r '.at_click[0].limit')" "cannot take an answer" \
+    "the fixture card did not carry the render-time refusal: $out"
+  # Every sibling control obeys the same rule.
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].choose_buttons[]] | length')" != "0" ] \
+    || fail "the fixture card has no per-option buttons, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].choose_buttons[] | select(.disabled | not)] | length')" = "0" ] \
+    || fail "a per-option button stayed live on a board that cannot send: $out"
+  pass "the per-option buttons go dead with the rest of the card"
+}
+
+# And they stay live when the board can send, or the fix would have taken the
+# control away rather than made it honest.
+test_the_per_option_buttons_stay_live_on_a_working_board() {
+  local home out
+  home=$(make_home choose-live)
+  out=$(render_payload "$home" "$(packet_payload en "[]")")
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].choose_buttons[] | select(.disabled)] | length')" = "0" ] \
+    || fail "a per-option button was dead on a board that can send: $out"
+  pass "the per-option buttons stay live on a board that can send"
+}
+
 # R15. The plainest form of the captain's own sentence, and on a HEALTHY board
 # rather than a degraded one: the answer channel is up, the button is live, he
 # presses before choosing, and the page does nothing and says nothing. Worse
@@ -2083,3 +2120,5 @@ test_a_reason_with_no_words_never_shows_the_captain_a_machine_token
 test_the_map_says_which_bubbles_are_the_first_mates_own_assessment
 test_pressing_answer_with_nothing_chosen_says_so
 test_an_empty_press_does_not_wipe_a_standing_refusal
+test_the_per_option_buttons_go_dead_with_the_rest_of_the_card
+test_the_per_option_buttons_stay_live_on_a_working_board
