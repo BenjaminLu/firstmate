@@ -188,6 +188,18 @@ run_shim() {  # <home> <command args...>
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-decision-hold.sh" "$@"
 }
 
+# The bin/fm-captain-hold.sh command a refusal names, as its own argument list
+# and nothing more: everything between the script name and the clause that
+# ends the step. Read back rather than retyped, so a test cannot quietly pass
+# while the refusal names a prefix of the command that actually works.
+named_captain_hold_command() {  # <refusal text>
+  local named
+  named=$(printf '%s\n' "$1" \
+    | sed -n 's/.*completion gate with bin\/fm-captain-hold\.sh \([^,]*\),.*/\1/p' | head -1)
+  [ -n "$named" ] || return 1
+  printf '%s\n' "$named"
+}
+
 write_origin_meta() {  # <home> <id> [kind]
   local home=$1 id=$2 kind=${3:-scout}
   fm_write_meta "$home/state/$id.meta" \
@@ -4418,7 +4430,7 @@ test_answer_will_not_close_a_row_whose_worker_is_still_up() {
 # mode, `reconcile close` has none and must stand the worker down first. Each
 # refusal is checked by running exactly what it told the reader to run.
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
-  local home id out show ship
+  local home id out show ship gate
   home=$(make_home live-worker-remedies)
   id=sample-live-reconcile
   mkdir -p "$home/data/$id" "$home/projects/sample" "$home/projects/$id"
@@ -4441,15 +4453,19 @@ test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
   assert_contains "$out" "fm-teardown.sh" \
     "the reconcile refusal did not name the remedy that works here: $out"
   # On a scout, cleanup has a prerequisite of its own, so a remedy that named
-  # only cleanup would be refused in turn. The refusal must name that step.
-  assert_contains "$out" "complete $id" \
-    "the scout refusal sent the reader to a command that refuses in turn: $out"
+  # only cleanup would be refused in turn. The refusal must name that step -
+  # and it is read back out of the refusal rather than retyped here, because a
+  # substring assertion cannot tell a complete command from a prefix of one.
+  gate=$(named_captain_hold_command "$out") \
+    || fail "the scout refusal named no bin/fm-captain-hold.sh command to run: $out"
   assert_present "$home/state/reconcile-requests/$id.request" \
     "the refused reconciliation retired its own pending request"
 
-  # Run what the refusal said to run, in the order it named, and nothing else.
-  run_captain "$home" complete "$id" "$id" >/dev/null \
-    || fail "the completion gate the refusal named refused the still-held call"
+  # Run what the refusal said to run, in the order it named, and nothing else:
+  # the command below is the refusal's own words, word-split into arguments.
+  # shellcheck disable=SC2086  # Deliberate: the refusal's argument list.
+  run_captain "$home" $gate >/dev/null \
+    || fail "the command the scout refusal named was itself refused: $gate"
   run_teardown "$home" "$id" >/dev/null 2> "$home/remedy-teardown.err" \
     || fail "the named remedy could not stand the worker down: $(cat "$home/remedy-teardown.err")"
   run_captain "$home" reconcile close "$id" --evidence-file "$home/live-evidence.txt" >/dev/null \
