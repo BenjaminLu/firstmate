@@ -453,6 +453,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/board-clone-e2e.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/claude-launch-dialogs.md",
       "audience": "maintainer-verification"
     },

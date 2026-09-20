@@ -296,14 +296,21 @@
      alone: overwriting them on a guess would be a worse sentence than the one
      being corrected. */
   function correctEmptyDesk() {
-    var sub = document.getElementById("bb-call-sub");
     var slot = document.getElementById(SLOT_ID);
-    if (!sub || !slot) return;
+    if (!slot) return;
     var payload;
     try { payload = JSON.parse(slot.textContent); } catch (e) { return; }
     if (!payload || !Array.isArray(payload.captains_call)) return;
     if (payload.captains_call.length > 0) return;
-    sub.textContent = say(UNKNOWN_DESK);
+    var sub = document.getElementById("bb-call-sub");
+    if (sub) sub.textContent = say(UNKNOWN_DESK);
+    /* Both places the board says it, because correcting only the caption
+       leaves the sentence standing underneath it - which is the same defect
+       one line lower down the page. The deck's own markup is read rather than
+       rebuilt, so nothing here has a second opinion about how it is shaped. */
+    var deck = document.getElementById("bb-call");
+    var empty = deck && deck.querySelector(".bb-empty");
+    if (empty) empty.textContent = say(UNKNOWN_DESK_BODY);
   }
 
   /* Two facts, and neither may stand in for the other: whether the page is

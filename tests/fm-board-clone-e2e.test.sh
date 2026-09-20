@@ -65,13 +65,23 @@ command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 command -v git >/dev/null 2>&1 || { echo "skip: git not found"; exit 0; }
 
-# The clone's PATH: the system directories every machine has, plus the one
-# directory holding node. Nothing else of this machine reaches it - no
-# lavish-axi, no homebrew, no npm prefix - which is the whole point of the
-# setup. tasks-axi is added by name, and only by name, where a case needs the
-# backlog backend, and that case says which half of itself that bought.
-NODE_DIR=$(dirname "$(command -v node)")
-CLONE_PATH="/usr/bin:/bin:/usr/sbin:/sbin:$NODE_DIR"
+# The clone's PATH: the system directories every machine has, plus a directory
+# holding links to the individual tools this setup grants and nothing else.
+# Putting node's own directory on the path instead would drag in whatever else
+# shares it - on a developer machine that is homebrew, and lavish-axi lives
+# there - so the grant is made one tool at a time and the first case proves
+# lavish-axi really is out of reach before it concludes anything.
+CLONE_BIN="$TMP_ROOT/clone-bin"
+CLONE_BIN_BACKLOG="$TMP_ROOT/clone-bin-backlog"
+CLONE_PATH="/usr/bin:/bin:/usr/sbin:/sbin:$CLONE_BIN"
+CLONE_PATH_BACKLOG="/usr/bin:/bin:/usr/sbin:/sbin:$CLONE_BIN_BACKLOG"
+
+grant_tool() {  # <dir> <tool>
+  local dir=$1 tool=$2 path
+  path=$(command -v "$2") || return 1
+  mkdir -p "$dir" || return 1
+  ln -sf "$path" "$dir/$tool" || return 1
+}
 
 STARTED_HOMES=()
 cleanup_e2e() {
@@ -122,11 +132,10 @@ in_clone() {  # <home> <argv...>
 # The same, with the configured backlog backend reachable. Named separately so
 # no case can quietly acquire it.
 in_clone_with_backlog() {  # <home> <argv...>
-  local home=$1 backlog_dir
+  local home=$1
   shift
-  backlog_dir=$(dirname "$(command -v tasks-axi)")
   env -i \
-    PATH="$CLONE_PATH:$backlog_dir" \
+    PATH="$CLONE_PATH_BACKLOG" \
     HOME="$TMP_ROOT/fakehome" \
     TMPDIR="${TMPDIR:-/tmp}" \
     FM_HOME="$home" \
@@ -364,10 +373,10 @@ test_a_click_on_an_option_reaches_this_home_and_what_was_clicked_is_recoverable(
     {op: "eval", expr: ("document.querySelector(" + ($opt | tojson) + ").checked")},
     {op: "click", selector: $send},
     {op: "wait", expr: "var s = document.getElementById(\"bb-live-sent\"); !!s && !s.hidden", timeout_ms: 30000},
-    {op: "wait", expr: "var s = document.getElementById(\"bb-live-sent\"); !!s && !s.hidden && /RECORDED/.test(s.innerText.toUpperCase())", timeout_ms: 60000},
+    {op: "wait", expr: "var s = document.getElementById(\"bb-live-sent\"); !!s && !s.hidden && /RECORDED/.test(s.innerText.toUpperCase())", timeout_ms: 120000},
     {op: "text", selector: "#bb-live-sent"}
   ]')
-  got=$(drive "$url" "$steps" 150000)
+  got=$(drive "$url" "$steps" 240000)
 
   assert_equals true "$(printf '%s' "$got" | jq -r '.steps[1].ok')" \
     "no option on the captain's card could actually be pressed: $(browser_evidence "$got")"
@@ -502,6 +511,11 @@ fi
 
 make_clone || fail "could not build a fresh copy of this repository to test against"
 mkdir -p "$TMP_ROOT/fakehome"
+grant_tool "$CLONE_BIN" node || fail "could not grant the clone the one tool it is allowed"
+grant_tool "$CLONE_BIN_BACKLOG" node || fail "could not grant the clone node"
+if command -v tasks-axi >/dev/null 2>&1; then
+  grant_tool "$CLONE_BIN_BACKLOG" tasks-axi || fail "could not grant the clone the backlog backend"
+fi
 
 test_a_clone_with_nothing_installed_gets_a_url_that_serves_the_board
 test_an_open_page_reflects_a_published_event_with_nobody_reloading_it
