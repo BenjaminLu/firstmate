@@ -1611,6 +1611,33 @@ test_report_declines_a_record_it_cannot_use() {
   pass "report declines a record it cannot use instead of answering all four met"
 }
 
+test_check_and_report_agree_about_a_record_neither_can_use() {
+  local home out
+  # Teaching report to refuse a record and leaving check trusting the same
+  # bytes made the two actions answer differently about one file: report
+  # declined it while the very next check matched its fresh findings against
+  # that record's own owed lines, read the repeat horizon out of it, and
+  # printed nothing while the obligation was owed. check is the action the
+  # watcher runs, so that is a false silence.
+  home=$(make_home record-divergence)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 2
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "epsilon has been steered 2 times" "the fixture did not record an owed obligation"
+
+  # The one unusable shape that is reached at the end of record_read rather
+  # than by an early return, so it is the one that can leave data behind.
+  grep -v '^epoch=' "$home/state/.fleet-obligations" > "$home/state/.fleet-obligations.new"
+  mv -f "$home/state/.fleet-obligations.new" "$home/state/.fleet-obligations"
+  assert_report_declines "$home" "carries no reading" "record with no epoch"
+
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "epsilon has been steered 2 times" \
+    "check trusted a record report refuses to read, and went silent while the obligation was owed"
+  pass "check and report agree about a record neither of them can use"
+}
+
 test_report_leaks_no_raw_shell_error() {
   local home out
   # The unreadable case used to put a bash redirect error on the operator's
@@ -1806,6 +1833,7 @@ test_the_forge_is_asked_only_about_this_home_s_own_work
 test_an_overlong_report_says_how_much_is_not_shown
 test_report_states_plainly_when_nothing_is_owed
 test_report_declines_a_record_it_cannot_use
+test_check_and_report_agree_about_a_record_neither_can_use
 test_report_leaks_no_raw_shell_error
 test_invalid_settings_and_actions_refuse
 test_arm_registers_the_check_and_disarm_retires_it

@@ -1106,6 +1106,25 @@ record_read() {
   # the epoch line record_write always writes is what makes it a reading. This
   # covers the empty file too, which has no lines at all.
   [ "$saw_epoch" = 1 ] || RECORD_UNUSABLE="the record at $RECORD carries no reading"
+  # Every unusable shape must look identical to a home with no previous
+  # reading, to EVERY consumer. The four shapes above return early with these
+  # fields still at their defaults; this last one is reached at the end of the
+  # function with whatever it managed to parse, so it is reset here.
+  #
+  # Leaving it populated made the two actions disagree about one file: report
+  # declined the record while the very next check compared its fresh findings
+  # against that same record's owed lines, matched, read the repeat horizon out
+  # of it, and printed nothing while the obligation was owed. check is the
+  # action the watcher runs, so that is a false silence - the one outcome this
+  # design forbids outright.
+  if [ -n "$RECORD_UNUSABLE" ]; then
+    RECORD_EPOCH=0
+    RECORD_REPORTED_AT=0
+    RECORD_OWED_LOCAL=
+    RECORD_UNKNOWN_LOCAL=
+    RECORD_OWED_FORGE=
+    RECORD_UNKNOWN_FORGE=
+  fi
   return 0
 }
 
