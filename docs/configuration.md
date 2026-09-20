@@ -677,6 +677,7 @@ Bootstrap arms it with `arm --if-needed`, which arms only a home that has a live
 Four obligations are reported, each computed from this home's durable records plus the forge:
 
 - A task's own open pull request with no review and no comment posted on it.
+  A task whose records name no pull request is not assumed to have none: the forge is asked by the task's own branch, so the obligation does not depend on firstmate having remembered to record one.
 - An armed merge poll whose recorded head is not the pull request's live head, or that watches a pull request closed unmerged.
 - A Captain's Call card on the board whose pull request is no longer open.
 - A live task firstmate has steered that has no design record at `data/<task>/design.md` or `data/<task>/report.md`.

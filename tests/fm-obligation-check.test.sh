@@ -49,7 +49,7 @@ make_gh() {
 #!/usr/bin/env bash
 set -u
 printf '%s\n' "$*" >> "$GH_LOG"
-mode= repo= number= program=
+mode= repo= number= program= head=
 args=("$@")
 i=0
 while [ "$i" -lt "${#args[@]}" ]; do
@@ -57,6 +57,7 @@ while [ "$i" -lt "${#args[@]}" ]; do
     list) mode=list ;;
     view) i=$((i + 1)); mode=view; number=${args[i]} ;;
     --repo) i=$((i + 1)); repo=${args[i]} ;;
+    --head) i=$((i + 1)); head=${args[i]} ;;
     --jq) i=$((i + 1)); program=${args[i]} ;;
     --json|--limit|--state) i=$((i + 1)) ;;
   esac
@@ -71,7 +72,11 @@ lc=$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')
 file="$GH_FORGE/${lc//\//__}.json"
 [ -f "$file" ] || { printf 'no such repository\n' >&2; exit 1; }
 if [ "$mode" = list ]; then
-  jq -c '[.[] | select(.state == "OPEN")]' "$file" | jq -r "$program"
+  if [ -n "$head" ]; then
+    jq -c --arg h "$head" '[.[] | select(.state == "OPEN" and .headRefName == $h)]' "$file" | jq -r "$program"
+  else
+    jq -c '[.[] | select(.state == "OPEN")]' "$file" | jq -r "$program"
+  fi
 else
   jq -c --arg n "$number" '.[] | select((.number | tostring) == $n)' "$file" | jq -r "$program"
 fi
@@ -79,17 +84,17 @@ SH
   chmod 0755 "$home/bin/gh"
 }
 
-# forge_pr <home> <slug> <number> <state> <head> <reviews> <comments>
+# forge_pr <home> <slug> <number> <state> <head> <reviews> <comments> [branch]
 forge_pr() {
-  local home=$1 slug=$2 number=$3 state=$4 head=$5 reviews=$6 comments=$7 file tmp
+  local home=$1 slug=$2 number=$3 state=$4 head=$5 reviews=$6 comments=$7 branch=${8:-} file tmp
   local lc
   lc=$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')
   file="$home/forge/${lc//\//__}.json"
   [ -f "$file" ] || printf '[]\n' > "$file"
   tmp="$file.tmp"
-  jq --argjson n "$number" --arg s "$state" --arg h "$head" \
+  jq --argjson n "$number" --arg s "$state" --arg h "$head" --arg b "$branch" \
     --argjson r "$reviews" --argjson c "$comments" --arg u "https://github.com/$slug/pull/$number" \
-    '. + [{number: $n, url: $u, state: $s, headRefOid: $h,
+    '. + [{number: $n, url: $u, state: $s, headRefOid: $h, headRefName: $b,
            reviews: [range($r) | {state: "COMMENTED"}],
            comments: [range($c) | {body: "a note"}]}]' "$file" > "$tmp"
   mv -f "$tmp" "$file"
@@ -101,16 +106,37 @@ sha() { printf '%040d\n' "$1" | tr '0' "${2:-a}" | cut -c1-40; }
 commit() { printf '%s%036d\n' "$1" "$1" | cut -c1-40 | tr ' ' '0'; }
 
 # task <home> <id> [extra meta lines...]
+#
+# The worktree is a real repository, because obligation 1 reads the task's own
+# branch out of it when the records name no pull request. It starts on a
+# detached HEAD, which is where bin/fm-brief.sh starts every task and which
+# means the task has not branched and so can have no pull request yet.
 task() {
-  local home=$1 id=$2
+  local home=$1 id=$2 wt
   shift 2
+  wt="$home/wt/$id"
+  mkdir -p "$wt"
+  git -C "$wt" init -q 2>/dev/null
+  git -C "$wt" -c user.name=fmtest -c user.email=fmtest@example.invalid \
+    commit -q --allow-empty -m base 2>/dev/null
+  git -C "$wt" checkout -q --detach 2>/dev/null
   {
     printf 'window=default:w1:p1\n'
     printf 'endpoint_task_id=%s\n' "$id"
-    printf 'worktree=%s/wt/%s\n' "$home" "$id"
+    printf 'worktree=%s\n' "$wt"
     local line
     for line in "$@"; do printf '%s\n' "$line"; done
   } > "$home/state/$id.meta"
+}
+
+# task_branch <home> <id> <branch> [remote-url]: put the task's worktree on a
+# branch with an origin, which is what obligation 1's discovery path reads.
+task_branch() {
+  local home=$1 id=$2 branch=$3 remote=${4:-git@github.com:fmtest/repo.git} wt
+  wt="$home/wt/$id"
+  git -C "$wt" checkout -q -B "$branch" 2>/dev/null
+  git -C "$wt" remote remove origin 2>/dev/null
+  git -C "$wt" remote add origin "$remote" 2>/dev/null
 }
 
 # poll <home> <id> <url>: the armed merge poll's own sidecar.
@@ -221,6 +247,110 @@ test_a_closed_pull_request_is_not_owed_a_review() {
   run "$home" "$out"
   assert_silent "$out" "a pull request that is no longer open was reported as owing a review"
   pass "only an OPEN pull request is owed a review"
+}
+
+test_a_pull_request_nobody_recorded_is_still_found() {
+  local home out
+  # The finding this closes: a pull request reached obligation 1 only through
+  # pr= in the task's records, and writing that key is firstmate's own
+  # remembered action. So the detector built because firstmate forgets was
+  # blind to exactly the pull request nobody registered.
+  home=$(make_home discover-owed)
+  forge_pr "$home" "$SLUG" 55 OPEN "$(commit 8)" 0 0 fm/discover-owed
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/discover-owed
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "nothing posted on $PR_BASE/55" \
+    "an unreviewed pull request that no task record names was not found"
+  assert_contains "$(cat "$out")" "not recorded in its own records" \
+    "the report did not say the pull request was missing from the task's records"
+  pass "an unreviewed pull request nobody recorded is found from the task's own branch"
+}
+
+test_a_discovered_pull_request_that_is_reviewed_is_silent() {
+  local home out
+  home=$(make_home discover-met)
+  forge_pr "$home" "$SLUG" 55 OPEN "$(commit 8)" 1 0 fm/discover-met
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/discover-met
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a discovered pull request that already has a review was reported as unreviewed"
+  pass "a discovered pull request with a review posted is silent"
+}
+
+test_a_branch_with_no_pull_request_is_silent() {
+  local home out
+  # The forge answering "none" is a determinate answer, not an unknown.
+  home=$(make_home discover-none)
+  forge_pr "$home" "$SLUG" 55 OPEN "$(commit 8)" 0 0 fm/someone-else
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/discover-none
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a branch the forge says has no open pull request was reported"
+  pass "a branch with no open pull request is a determinate none, not an unknown"
+}
+
+test_a_task_that_has_not_branched_yet_is_silent_and_costs_nothing() {
+  local home out calls
+  # Every task starts at a detached HEAD, so this is the common state. It can
+  # have no pull request, which is determinate, and it must not spend a read.
+  home=$(make_home discover-detached)
+  task "$home" omega "kind=ship"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a task that has not branched yet was reported"
+  calls=0
+  [ ! -e "$home/gh.log" ] || calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 0 ] || fail "a task that cannot have a pull request still cost $calls forge reads"
+  pass "a task still on a detached HEAD is silent and asks the forge nothing"
+}
+
+test_discovery_is_skipped_for_a_task_that_already_records_its_pull_request() {
+  local home out calls
+  # Asking again would buy no coverage, so it must not be paid for.
+  home=$(make_home discover-skip)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 1 1 fm/discover-skip
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  task_branch "$home" alpha fm/discover-skip
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a task with a reviewed recorded pull request was reported"
+  calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 1 ] \
+    || fail "a task that already records its pull request cost $calls reads, so discovery ran when it buys nothing"
+  pass "a task that already records its pull request is not discovered again"
+}
+
+test_a_worktree_that_cannot_be_read_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home discover-noworktree)
+  task "$home" omega "kind=ship"
+  rm -rf "$home/wt/omega"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a task whose worktree is gone produced silence about whether it has a pull request"
+  assert_contains "$report" "is not there, so whether it has a pull request of its own could not be established" \
+    "a missing worktree was not named as the reason obligation 1 could not be established"
+  assert_contains "$report" "unknown:" "a missing worktree did not produce an unknown answer"
+  pass "a task whose worktree cannot be read is unknown, not clean"
+}
+
+test_a_non_github_origin_is_a_named_gap_not_a_pass() {
+  local home out report
+  home=$(make_home discover-gitlab)
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/elsewhere "git@gitlab.example.com:grp/proj.git"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  assert_contains "$report" "is not a GitHub remote, and this check reads GitHub only" \
+    "a task on a non-GitHub remote was passed over instead of being named"
+  assert_contains "$report" "unknown:" "a non-GitHub remote did not produce an unknown answer"
+  pass "a task whose origin is not GitHub is a named unknown rather than a silent pass"
 }
 
 # --- obligation 2: an armed merge poll bound to the wrong commit ------------
@@ -1009,6 +1139,13 @@ test_open_pull_request_with_nothing_posted_is_reported
 test_a_reviewed_pull_request_is_silent
 test_a_commented_pull_request_is_silent
 test_a_closed_pull_request_is_not_owed_a_review
+test_a_pull_request_nobody_recorded_is_still_found
+test_a_discovered_pull_request_that_is_reviewed_is_silent
+test_a_branch_with_no_pull_request_is_silent
+test_a_task_that_has_not_branched_yet_is_silent_and_costs_nothing
+test_discovery_is_skipped_for_a_task_that_already_records_its_pull_request
+test_a_worktree_that_cannot_be_read_is_unknown_not_clean
+test_a_non_github_origin_is_a_named_gap_not_a_pass
 test_a_poll_bound_to_a_superseded_commit_is_reported
 test_a_poll_bound_to_the_live_commit_is_silent
 test_a_poll_on_a_closed_pull_request_is_reported

@@ -34,7 +34,10 @@
 #   1. A task's own OPEN pull request with nothing posted on it - no review and
 #      no comment. The recorded cost: three of three open pull requests had zero
 #      reviews, against a delivery path whose merge gate requires every finding
-#      ruled.
+#      ruled. A task whose records name no pull request is not assumed to have
+#      none: the forge is asked by the task's own branch, so this does not rest
+#      on firstmate having remembered to record one. See
+#      discover_task_pull_request.
 #   2. An armed merge poll whose recorded head is not the pull request's live
 #      head, or that watches a pull request which is closed and unmerged. The
 #      recorded cost: six of eight armed polls were watching superseded commits
@@ -76,10 +79,12 @@
 # COST. One `gh pr view` per DISTINCT pull request this home is actually
 # watching - a task's own pull request, an armed poll's, a board card's - and
 # one read covers all three when they name the same pull request. Measured 0.59
-# and 0.60 seconds per call against cli/cli on 2026-09-20. Obligation 4 costs no
-# forge call at all, and a home with no pull request and no board makes no call
-# at all. view_pull_request's own comment records why this is not one listing
-# per repository, with the measurements that decided it.
+# and 0.60 seconds per call against cli/cli on 2026-09-20. Plus one
+# `gh pr list --head` for each task whose records name no pull request, which is
+# obligation 1's discovery path, measured 0.67 and 0.74 seconds. Obligation 4
+# costs no forge call at all, and a home with no task and no board makes none.
+# view_pull_request's own comment records why this is not one listing per
+# repository, with the measurements that decided it.
 #
 # Each call is bounded by FM_OBLIGATION_CALL_SECS (default 12) and the whole
 # sweep by FM_OBLIGATION_BUDGET_SECS (default 20). Twelve is not a guess and not
@@ -280,6 +285,10 @@ STEER_FLOOR=$FM_SETTING
 # The smallest bound a call can be given, because fm_run_timed treats a
 # non-positive bound as no bound.
 CALL_MIN_SECS=1
+# A local git read of a task's own worktree. Bounded far tighter than a forge
+# call because it touches no network, and bounded at all because a worktree on
+# a stalled mount must not hang the sweep.
+LOCAL_READ_SECS=5
 # Both clocks count whole seconds, so a call can start when the arithmetic says
 # a second is left while almost none of it really is.
 CLOCK_ROUNDING_SECS=1
@@ -463,6 +472,113 @@ add_target() {
 "
 }
 
+# A bounded read of the task's own worktree. Local, but bounded anyway: a
+# worktree on a stalled mount must not hang the sweep.
+GIT_OUT=
+git_read() {
+  local wt=$1 bound left
+  GIT_OUT=
+  shift
+  left=$(budget_left)
+  bound=$LOCAL_READ_SECS
+  [ "$left" -ge "$CALL_MIN_SECS" ] || left=$CALL_MIN_SECS
+  [ "$left" -ge "$bound" ] || bound=$left
+  GIT_OUT=$(fm_run_timed "$bound" git -C "$wt" "$@" 2>/dev/null) || return 1
+  [ -n "$GIT_OUT" ] || return 1
+  return 0
+}
+
+# owner/repo of a GitHub remote URL, in either the ssh or the https spelling.
+github_slug_from_remote() {
+  local raw=$1 path
+  case "$raw" in
+    git@github.com:*) path=${raw#git@github.com:} ;;
+    ssh://git@github.com/*) path=${raw#ssh://git@github.com/} ;;
+    https://github.com/*) path=${raw#https://github.com/} ;;
+    http://github.com/*) path=${raw#http://github.com/} ;;
+    *) return 1 ;;
+  esac
+  path=${path%.git}
+  path=${path%/}
+  case "$path" in
+    */*/*|*/) return 1 ;;
+    */*) printf '%s\n' "$path" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Obligation 1's discovery path, used for a task whose records name no pull
+# request of its own.
+#
+# WHY THIS EXISTS. A pull request used to reach this check only through `pr=` in
+# state/<id>.meta, and AGENTS.md section 7 makes writing that key firstmate's
+# own remembered action at the moment a pull request appears. So the detector
+# built because firstmate forgets was fed by a step firstmate has to remember,
+# and it was blind to exactly the pull request nobody registered - while "no
+# reviewer dispatched on any open pull request" is one of the recorded misses
+# it exists to answer. A check that holds only when someone notices is not held.
+#
+# The forge is asked instead, by the one thing the task cannot be without: its
+# own branch. bin/fm-spawn.sh writes `worktree=` when it creates the task, and
+# the branch and the origin remote are read out of that worktree, so the chain
+# is task creation rather than a remembered follow-up action.
+#
+# It runs ONLY for a task with no recorded pull request, because a task that has
+# one is already visible and asking again would buy no coverage. Cost is one
+# `gh pr list --head` for such a task, measured 0.67 and 0.74 seconds against
+# BenjaminLu/firstmate on 2026-09-20.
+#
+# A worktree still on a detached HEAD has no branch, so no pull request of this
+# task's work can exist yet: that is a determinate "none", not an unknown, and
+# it stays silent. A recorded worktree that cannot be read, a remote that is not
+# a GitHub one, and a forge read that fails are each undeterminable and say so,
+# because each of them hides whether a pull request is sitting there unreviewed.
+discover_task_pull_request() {
+  local id=$1 meta=$2 wt branch slug remote
+  wt=$(meta_value "$meta" worktree)
+  if [ -z "$wt" ]; then
+    unknown "$id records no worktree, so whether it has a pull request of its own could not be established"
+    return 0
+  fi
+  if [ ! -d "$wt" ]; then
+    unknown "$id's worktree $wt is not there, so whether it has a pull request of its own could not be established"
+    return 0
+  fi
+  if ! git_read "$wt" symbolic-ref --quiet --short HEAD; then
+    # No branch yet. bin/fm-brief.sh starts every task at a detached HEAD and
+    # the worker creates its branch, so this is a task that has not branched
+    # and therefore cannot have a pull request - a determinate none.
+    return 0
+  fi
+  branch=$GIT_OUT
+  if ! git_read "$wt" remote get-url origin; then
+    unknown "$id's worktree has no readable origin, so whether it has a pull request of its own could not be established"
+    return 0
+  fi
+  remote=$GIT_OUT
+  if ! slug=$(github_slug_from_remote "$remote"); then
+    unknown "$id's origin $remote is not a GitHub remote, and this check reads GitHub only"
+    return 0
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    unknown "gh is not installed, so whether $id has a pull request of its own could not be established"
+    return 0
+  fi
+  if ! budget_allows; then
+    budget_note
+    return 0
+  fi
+  if ! run_gh pr list --repo "$slug" --head "$branch" --state open --limit 1 \
+    --json url --jq '.[0].url // ""'; then
+    unknown "the open pull requests for $id's branch $branch could not be read: $FORGE_ERROR"
+    return 0
+  fi
+  # An empty answer here is the forge saying there is no open pull request on
+  # that branch, which is a determinate none.
+  [ -n "$GH_OUT" ] || return 0
+  add_target "$GH_OUT" taskpr "$id (not recorded in its own records)"
+}
+
 collect_task_targets() {
   local id meta poll url head
   while IFS= read -r id; do
@@ -472,6 +588,8 @@ collect_task_targets() {
     url=$(meta_value "$meta" pr)
     if [ -n "$url" ]; then
       add_target "$url" taskpr "$id"
+    else
+      discover_task_pull_request "$id" "$meta"
     fi
     # The armed poll is bound by its sidecar, so the sidecar's own URL is what
     # that poll actually watches - not necessarily what the metadata now says.
