@@ -349,10 +349,14 @@ LIVE_TRANSPORT="${FM_BOARD_LIVE_TRANSPORT:-$SCRIPT_DIR/../.agents/skills/bearing
 LIVE_ANCHOR='<script id="bearings-data" type="application/json">'
 LIVE_ENDPOINT_SLOT='__FM_BOARD_LIVE_ENDPOINT__'
 # The other half of the same connection: what the board sends the captain's
-# answer back with. bin/fm-board-live.sh's header owns what it proves. It is
-# a credential, so it reaches only a board written to a file at mode 0600 -
-# printing a derived board to a terminal prints it too, which is why `build`
-# and every caller that keeps a board use --out.
+# answer back with. bin/fm-board-live.sh's header owns what it proves. It is a
+# credential, so it is injected ONLY into a board being written to a file at
+# mode 0600, never into one going to stdout, where it would be read in a
+# terminal, pasted into a report and captured in a log. That is a mechanism
+# and not a convention on purpose: the natural way to look at a derived board
+# is to run `derive` without --out, so relying on the caller to remember would
+# put the captain's answer credential in a transcript the first time anyone
+# debugged a board.
 LIVE_TOKEN_SLOT='__FM_BOARD_LIVE_TOKEN__'
 BOARD_SCHEMA=fm-bearings-board.v1
 PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
@@ -417,8 +421,8 @@ live_endpoint() {
 # captures the board's markup BEFORE the shipped script renders into it, which
 # is what lets a repaint restore first paint exactly and lets the board's own
 # error card be undone. Fails rather than emitting a board that cannot update.
-derive_live_board() {  # <endpoint> <destination>
-  local endpoint=$1 dest=$2 anchors token
+derive_live_board() {  # <endpoint> <destination> <may-carry-token 0|1>
+  local endpoint=$1 dest=$2 with_token=${3:-0} anchors token
   [ -f "$LIVE_TRANSPORT" ] && [ ! -L "$LIVE_TRANSPORT" ] \
     || { printf 'the live transport is missing: %s\n' "$LIVE_TRANSPORT" >&2; return 1; }
   grep -qF "$LIVE_ENDPOINT_SLOT" "$LIVE_TRANSPORT" \
@@ -428,10 +432,16 @@ derive_live_board() {  # <endpoint> <destination>
   anchors=$(grep -cxF "$LIVE_ANCHOR" "$TEMPLATE")
   [ "$anchors" -eq 1 ] \
     || { printf 'board template does not carry exactly one data slot opening: %s\n' "$TEMPLATE" >&2; return 1; }
-  # A board that cannot send an answer back is a picture of a board, so this
-  # refuses rather than emitting one whose buttons would do nothing.
-  token=$("$SCRIPT_DIR/fm-board-live.sh" token) \
-    || { printf 'cannot issue the answer token this board would need to reach firstmate\n' >&2; return 1; }
+  # A board that cannot send an answer back is a picture of a board, so a
+  # board being KEPT refuses rather than being written with buttons that would
+  # do nothing. A board going to stdout is an inspection copy: it is emitted
+  # with an empty slot, and says on the page that it cannot answer, because
+  # the alternative is a credential on a terminal.
+  token=""
+  if [ "$with_token" = 1 ]; then
+    token=$("$SCRIPT_DIR/fm-board-live.sh" token) \
+      || { printf 'cannot issue the answer token this board would need to reach firstmate\n' >&2; return 1; }
+  fi
 
   local filled
   filled=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-board-live-transport.XXXXXX") || return 1
@@ -1362,7 +1372,7 @@ command_build() {
   if endpoint=$(live_endpoint); then
     derived=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-live.XXXXXX") \
       || fail "cannot stage the live board"
-    if derive_live_board "$endpoint" "$derived"; then
+    if derive_live_board "$endpoint" "$derived" 1; then
       source_page=$derived
       printf 'live: %s\n' "$endpoint"
     else
@@ -1517,7 +1527,16 @@ command_derive() {
   fi
   derived=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-derive.XXXXXX") \
     || fail "cannot stage the live board"
-  derive_live_board "$endpoint" "$derived" || { rm -f -- "$derived"; fail "cannot derive the live board"; }
+  # Only a board being written to a file carries the answer token; see the
+  # slot comment above. Without --out this goes to a terminal.
+  if [ -n "$out" ]; then
+    derive_live_board "$endpoint" "$derived" 1 \
+      || { rm -f -- "$derived"; fail "cannot derive the live board"; }
+  else
+    derive_live_board "$endpoint" "$derived" 0 \
+      || { rm -f -- "$derived"; fail "cannot derive the live board"; }
+    printf 'fm-bearings-board: printed without the answer token, so this copy cannot send the captain'"'"'s answers; use --out for a board he can act on\n' >&2
+  fi
   json=$(jq -c . "$data") || { rm -f -- "$derived"; fail "cannot compact the board data"; }
   json=${json//</\\u003c}
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-derived.XXXXXX") \

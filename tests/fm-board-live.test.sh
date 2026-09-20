@@ -122,6 +122,27 @@ test_a_board_is_built_able_to_answer() {
   pass "a board is built able to answer, with one stable token kept to the captain's own account"
 }
 
+test_the_answer_token_never_reaches_a_terminal() {
+  local home token printed
+  home=$(make_home inbound-derive-stdout) || fail "could not build a home"
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  # Running derive without --out is the natural way to look at a board, and
+  # its output is read in terminals, pasted into reports and captured in logs.
+  printed=$(FM_HOME="$home" "$BOARD" derive "$home/payload.json" \
+    --endpoint "ws://127.0.0.1:1/board-live" 2>/dev/null) \
+    || fail "derive could not print a board"
+  case $printed in
+    *"$token"*) fail "derive printed the captain's answer credential to stdout" ;;
+  esac
+  assert_contains "$printed" "fm-board-live" \
+    "the printed board is not the live board at all, so this proves nothing"
+  # And the board that is KEPT still carries it, or the fix would have made
+  # every board unable to answer.
+  assert_contains "$(cat "$home/.lavish/bearings-board.html")" "$token" \
+    "a board written to a file lost the way to send an answer back"
+  pass "the answer token reaches a board written to a file and never a terminal"
+}
+
 test_a_rotated_token_stops_an_old_board_answering() {
   local home token rotated port got
   home=$(make_answering_home inbound-rotate) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
@@ -803,6 +824,7 @@ test_a_page_that_stopped_receiving_says_how_long_ago
 test_the_status_never_covers_the_language_switch
 test_publishing_sites_reach_the_board
 test_a_board_is_built_able_to_answer
+test_the_answer_token_never_reaches_a_terminal
 test_a_rotated_token_stops_an_old_board_answering
 test_a_message_from_another_origin_never_reaches_the_port
 test_a_message_with_no_token_is_refused_out_loud
