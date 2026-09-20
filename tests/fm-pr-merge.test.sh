@@ -3874,8 +3874,8 @@ test_a_failed_forge_read_is_never_reported_as_a_missing_approval() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-read-fails: an unanswered forge read must not merge"
-  assert_grep 'could not read the GitHub pull request state' "$case_dir/stderr" \
-    "github-read-fails: the refusal did not say the read failed"
+  assert_grep 'the forge did not answer the read' "$case_dir/stderr" \
+    "github-read-fails: the refusal did not say the forge failed to answer"
   assert_no_grep 'no review has been posted' "$case_dir/stderr" \
     "github-read-fails: an unanswered read was reported as a missing approval"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
@@ -3915,6 +3915,8 @@ JSON
     "github-genuinely-unreviewed: the refusal did not say a review is missing"
   assert_no_grep 'could not read' "$case_dir/stderr" \
     "github-genuinely-unreviewed: a missing approval was reported as a failed read"
+  assert_no_grep 'did not answer' "$case_dir/stderr" \
+    "github-genuinely-unreviewed: a missing approval was reported as an unanswered forge"
   pass "a forge that will not answer, an unreadable reviews list, and a pull request with no review each refuse with their own message"
 }
 
@@ -3966,3 +3968,49 @@ test_a_nonstanding_verdictless_review_names_the_standing_problem() {
 }
 
 test_a_nonstanding_verdictless_review_names_the_standing_problem
+
+# Four different read failures used to print one sentence, and one of them was
+# the checks read. They send an operator to different places: a forge that did
+# not answer clears on its own, a payload this cannot parse never will.
+test_each_failed_read_says_which_read_failed() {
+  local case_dir rc head=1919191919191919191919191919191919191919
+
+  # The payload is not JSON this can parse.
+  case_dir=$(make_case github-unparseable-payload)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  printf '%s\n' '{"state":"OPEN", this is not json' > "$case_dir/github-view.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-unparseable-payload: it must not merge"
+  assert_grep 'could not parse' "$case_dir/stderr" \
+    "github-unparseable-payload: the refusal did not say the payload would not parse"
+  assert_no_grep 'did not answer' "$case_dir/stderr" \
+    "github-unparseable-payload: an answered forge was reported as unanswered"
+
+  # The checks rollup is a shape this cannot read.
+  case_dir=$(make_case github-unreadable-checks)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  cat > "$case_dir/github-view.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","author":{"login":"worker"},"reviews":[$(approving_review "$head")],"statusCheckRollup":"not-an-array"}
+JSON
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-unreadable-checks: it must not merge"
+  assert_grep 'could not read the GitHub pull request checks' "$case_dir/stderr" \
+    "github-unreadable-checks: a failed checks read was not named as one"
+  assert_no_grep 'reviews before merging' "$case_dir/stderr" \
+    "github-unreadable-checks: a failed checks read was reported as a reviews read"
+  pass "a forge that did not answer, an unparseable payload, and an unreadable checks rollup each name their own read"
+}
+
+test_each_failed_read_says_which_read_failed

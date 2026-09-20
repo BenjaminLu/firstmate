@@ -18,7 +18,13 @@
 # approver it cannot tell apart. Every failing condition is reported, not
 # just the first, and the same list is recorded as this task's `refused` gate
 # call through bin/fm-gate-calls-lib.sh, which owns that record and never lets
-# it change the merge. The verified head is then passed to gh as
+# it change the merge.
+# A read that does not produce a verdict says which read failed and whether
+# retrying can clear it: the forge not answering is one message, a payload that
+# will not parse another, fields that do not read back a third, and the checks
+# and reviews reads their own. They send an operator to different places - a
+# network problem clears on its own, a shape this cannot parse never will.
+# The verified head is then passed to gh as
 # --match-head-commit, so a push that lands between that read and the merge
 # fails the merge instead of landing commits nothing verified. Reading that
 # state needs gh and jq, and either one absent stops the merge before any
@@ -773,7 +779,7 @@ github_verify_mergeable() {
 
   if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup,reviews,author 2>/dev/null) \
     || [ -z "$json" ]; then
-    echo "error: could not read the GitHub pull request state before merging" >&2
+    echo "error: the forge did not answer the read of $URL before merging; nothing was merged" >&2
     return 1
   fi
   if ! fields=$(printf '%s' "$json" | jq -r '
@@ -787,7 +793,7 @@ github_verify_mergeable() {
       else
         error("pull request payload is not an object")
       end' 2>/dev/null); then
-    echo "error: could not read the GitHub pull request state before merging" >&2
+    echo "error: the forge answered with a pull request payload this could not parse; retrying will not clear it" >&2
     return 1
   fi
   while IFS= read -r line; do
@@ -806,7 +812,7 @@ github_verify_mergeable() {
 $fields
 FIELDS
   if [ "$named" -ne 6 ] || [ "$total" -ne 6 ] || [ -z "$base" ]; then
-    echo "error: could not read the GitHub pull request state before merging" >&2
+    echo "error: the pull request's own fields did not read back cleanly, so its state is unknown; retrying will not clear it" >&2
     return 1
   fi
 
@@ -815,7 +821,7 @@ FIELDS
     return 1
   fi
   if ! red=$(github_checks_not_green "$json"); then
-    echo "error: could not read the GitHub pull request state before merging" >&2
+    echo "error: could not read the GitHub pull request checks before merging; retrying will not clear it" >&2
     return 1
   fi
   if ! approval=$(github_approval_state "$json" "$live_head"); then
