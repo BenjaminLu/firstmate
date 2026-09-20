@@ -554,8 +554,9 @@ github_slug_from_remote() {
 # the branch and the origin remote are read out of that worktree, so the chain
 # is task creation rather than a remembered follow-up action.
 #
-# It runs ONLY for a task with no recorded pull request, because a task that has
-# one is already visible and asking again would buy no coverage. Cost is one
+# It runs ONLY for a task whose records name no pull request at all - neither
+# `pr=` nor its armed poll's sidecar - because a task that has one is already
+# visible and asking again would buy no coverage. Cost is one
 # `gh pr list --head` for such a task, measured 0.67 and 0.74 seconds against
 # BenjaminLu/firstmate on 2026-09-20.
 #
@@ -695,25 +696,36 @@ discover_task_pull_request() {
 }
 
 collect_task_targets() {
-  local id meta poll url head
+  local id meta poll url poll_url head
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     meta="$STATE/$id.meta"
     readable_file "$meta" || continue
+
+    # The armed poll is bound by its sidecar, so the sidecar's own URL is what
+    # that poll actually watches - not necessarily what the metadata now says.
+    # It is read FIRST because it is the task's second record of its own pull
+    # request: consulted afterwards, a task whose poll named its pull request
+    # still spent a discovery call, and the finding then said its records do
+    # not name it, which points firstmate at the wrong repair.
+    poll_url=
+    poll="$STATE/$id.pr-poll"
+    if readable_file "$poll"; then
+      poll_url=$(sed -n '2p' "$poll" 2>/dev/null)
+    fi
+
     url=$(meta_value "$meta" pr)
     if [ -n "$url" ]; then
       add_target "$url" taskpr "$id"
+    elif [ -n "$poll_url" ]; then
+      add_target "$poll_url" taskpr "$id"
     else
       discover_task_pull_request "$id" "$meta"
     fi
-    # The armed poll is bound by its sidecar, so the sidecar's own URL is what
-    # that poll actually watches - not necessarily what the metadata now says.
-    poll="$STATE/$id.pr-poll"
-    readable_file "$poll" || continue
-    url=$(sed -n '2p' "$poll" 2>/dev/null)
-    [ -n "$url" ] || continue
+
+    [ -n "$poll_url" ] || continue
     head=$(meta_value "$meta" pr_head)
-    add_target "$url" poll "$id" "$head"
+    add_target "$poll_url" poll "$id" "$head"
   done <<< "$LIVE_TASKS"
 }
 

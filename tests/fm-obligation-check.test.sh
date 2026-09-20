@@ -321,6 +321,30 @@ test_a_task_that_has_not_branched_yet_is_silent_and_costs_nothing() {
   pass "a task still on a detached HEAD is silent and asks the forge nothing"
 }
 
+test_a_pull_request_named_only_by_the_armed_poll_costs_no_discovery() {
+  local home out calls report
+  # The poll sidecar is the task's second record of its own pull request.
+  # Consulted after the branch on pr= alone, it let the task spend a discovery
+  # call anyway - and the finding then said the task's records do not name the
+  # pull request when its armed poll does, pointing at the wrong repair.
+  home=$(make_home poll-names-it)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0 fm/poll-names-it
+  task "$home" alpha "kind=ship"
+  task_branch "$home" alpha fm/poll-names-it
+  poll "$home" alpha "$PR_BASE/7"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 1 ] \
+    || fail "a task whose armed poll names its pull request cost $calls forge calls, so the sidecar is still read too late"
+  assert_contains "$report" "nothing posted on $PR_BASE/7 (task alpha)" \
+    "the pull request its armed poll names was not reported against the task"
+  assert_not_contains "$report" "which its own records do not name" \
+    "the report claimed the task's records do not name a pull request its armed poll names"
+  pass "a pull request named only by the armed poll costs no discovery call and no wrong repair"
+}
+
 test_discovery_is_skipped_for_a_task_that_already_records_its_pull_request() {
   local home out calls
   # Asking again would buy no coverage, so it must not be paid for.
@@ -1405,6 +1429,7 @@ test_a_pull_request_nobody_recorded_is_still_found
 test_a_discovered_pull_request_that_is_reviewed_is_silent
 test_a_branch_with_no_pull_request_is_silent
 test_a_task_that_has_not_branched_yet_is_silent_and_costs_nothing
+test_a_pull_request_named_only_by_the_armed_poll_costs_no_discovery
 test_discovery_is_skipped_for_a_task_that_already_records_its_pull_request
 test_a_worktree_that_is_gone_is_unknown_not_clean
 test_a_worktree_that_is_not_a_repository_is_unknown_not_clean
