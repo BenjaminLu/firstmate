@@ -5216,7 +5216,135 @@ test_teardown_refuses_a_ship_when_the_captain_hold_cannot_be_read
 test_verify_resolves_a_hold_migrated_to_beads_notes
 test_verify_resolves_a_hold_migrated_under_the_configured_prefix
 test_marker_noted_row_wins_over_a_prefix_namesake
+# ---- the card a captain call carries -------------------------------------
+# The captain ruled on 2026-09-20 that cards must arrive without firstmate
+# rebuilding the board, so a call records the card's content at the moment it
+# is raised. These pin the three behaviours that ruling turns on.
+
+card_block() {  # <path>
+  jq -n '{
+    key:"grant-mechanism",
+    title:"How the launch carries a worker readable directories",
+    decide:"Flag, settings key, or park it?",
+    if_nothing:"The branch stays parked and nothing ships.",
+    reversible:"yes", risk:"medium", recommend_value:"add-dir",
+    recommend_why:"the unmeasured assumption disappears",
+    options:[{value:"add-dir", label:"Carry them as a launch flag",
+              consequence:"the permissions object is never written"},
+             {value:"settings-keep", label:"Keep them in the inline settings",
+              consequence:"may replace the operator own rules"}]}' > "$1"
+}
+
+test_a_call_with_a_card_file_records_its_options_at_the_moment_it_is_raised() {
+  local home card rec
+  home=$(make_home card-full)
+  tasks_in "$home" add grant-mechanism "How the launch carries directories" \
+    --kind ship --repo sample >/dev/null
+  card="$home/card.json"; card_block "$card"
+
+  run_captain "$home" hold grant-mechanism --reason "mechanism choice is the captain's" \
+    --card-file "$card" >/dev/null || fail "a hold carrying a card file was refused"
+
+  rec="$home/state/board-cards/grant-mechanism.json"
+  [ -f "$rec" ] || fail "no card record was written for a call that carried one"
+  printf '%s' "$(cat "$rec")" | jq -e '
+    .schema == "fm-board-card.v1" and .thin == false and .state == "open"
+    and (.options | length) == 2
+    and (.options[0].value == "add-dir")
+    and (.recommend_value == "add-dir")
+    and (.key | startswith("captain-hold-grant-mechanism-"))
+  ' >/dev/null || fail "the card record did not carry the options it was given: $(cat "$rec")"
+
+  pass "a call given a card file records its options when it is raised"
+}
+
+# The narrow obligation, tested as narrow: a call that wants no full option
+# card passes no card file and is completely unaffected. PR #33's removal of
+# the blanket packet obligation stands, and this is what proves it still does.
+test_a_call_with_no_card_file_is_recorded_as_visibly_thin() {
+  local home rec
+  home=$(make_home card-thin)
+  tasks_in "$home" add sweep-timing "When to run the review sweep" \
+    --kind ship --repo sample >/dev/null
+
+  run_captain "$home" hold sweep-timing --reason "after the board branches land" >/dev/null \
+    || fail "a hold with no card file was refused, which would be the blanket obligation back"
+
+  rec="$home/state/board-cards/sweep-timing.json"
+  [ -f "$rec" ] || fail "no card record was written for a thin call"
+  printf '%s' "$(cat "$rec")" | jq -e '
+    .thin == true and (.options | length) == 0
+    and (.decide == "after the board branches land")
+  ' >/dev/null || fail "a thin card was not recorded as thin: $(cat "$rec")"
+
+  pass "a call with no card file is recorded as visibly thin, not as a full card with no options"
+}
+
+# The failure that must be loud. A caller that MEANT to ship options and
+# shipped an unusable file must hear about it: the alternative is a card the
+# captain answers believing he saw the choices.
+test_a_card_file_that_cannot_be_used_refuses_the_hold_instead_of_going_thin() {
+  local home bad out show
+  home=$(make_home card-bad)
+  tasks_in "$home" add broken-card "A call whose card file is unusable" \
+    --kind ship --repo sample >/dev/null
+  bad="$home/bad.json"
+  # One option is not a choice, so this cannot render as an option card.
+  jq -n '{title:"Only one way", options:[{value:"only", label:"Only"}]}' > "$bad"
+
+  if out=$(run_captain "$home" hold broken-card --reason "should refuse" \
+    --card-file "$bad" 2>&1); then
+    fail "an unusable card file was accepted: $out"
+  fi
+  assert_contains "$out" "cannot be used as a full option card" \
+    "the refusal did not say why the card file was unusable: $out"
+
+  [ ! -f "$home/state/board-cards/broken-card.json" ] \
+    || fail "a refused hold still wrote a card record"
+  show=$(tasks_in "$home" show broken-card --full)
+  assert_contains "$show" "held: no" "a refused hold still held the task"
+
+  pass "an unusable card file refuses the hold instead of silently going thin"
+}
+
+test_answering_a_call_closes_its_card() {
+  local home rec
+  home=$(make_home card-answered)
+  tasks_in "$home" add answered-call "A call that gets answered" \
+    --kind ship --repo sample >/dev/null
+  run_captain "$home" hold answered-call --reason "needs the captain" >/dev/null
+  printf 'use the flag\n' > "$home/go.txt"
+  run_captain "$home" answer answered-call --decision-file "$home/go.txt" >/dev/null \
+    || fail "the answer was refused"
+
+  rec="$home/state/board-cards/answered-call.json"
+  printf '%s' "$(cat "$rec")" | jq -e '.state == "answered"' >/dev/null \
+    || fail "an answered call left its card open: $(cat "$rec")"
+
+  pass "answering a call closes its card"
+}
+
+test_a_dated_deferral_leaves_the_live_call_list() {
+  local home rec
+  home=$(make_home card-deferred)
+  tasks_in "$home" add later-call "A call deferred to a date" \
+    --kind ship --repo sample >/dev/null
+  run_captain "$home" hold later-call --reason "revisit after the cutover" \
+    --until 2026-12-01 >/dev/null || fail "a dated hold was refused"
+
+  rec="$home/state/board-cards/later-call.json"
+  printf '%s' "$(cat "$rec")" | jq -e '.state == "deferred"' >/dev/null \
+    || fail "a dated deferral left its card looking unanswered: $(cat "$rec")"
+
+  pass "a dated deferral records its card as deferred"
+}
+
 test_complete_accepts_a_migrated_inventory_on_beads
 test_verify_names_the_unresolvable_legacy_id_once
 test_verify_resolves_a_pre_collapse_key_through_its_derived_marker
 test_captain_hold_mutations_address_the_beads_backend
+test_a_call_with_a_card_file_records_its_options_at_the_moment_it_is_raised
+test_a_call_with_no_card_file_is_recorded_as_visibly_thin
+test_a_card_file_that_cannot_be_used_refuses_the_hold_instead_of_going_thin
+test_answering_a_call_closes_its_card
+test_a_dated_deferral_leaves_the_live_call_list
