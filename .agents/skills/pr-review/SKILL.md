@@ -27,7 +27,7 @@ The reviewed-PR path is what a `direct-PR` ship task looks like end to end.
    Do not wait for the checks: a reviewer reading the diff and a CI run watching the same commit are independent, and serializing them buys nothing.
 4. **Firstmate reads the findings, rules, and posts the ruling on the pull request.**
 5. **Fixes land as commits on the same pull request**, by the same worker, one finding per commit.
-6. **A reviewer reviews again, reading only what is new**, and steps 4 and 5 repeat until a review approves.
+6. **A reviewer reviews again**, and the path from step 4 repeats until a review approves.
 7. **The merge gate is: checks green, every finding ruled, and a reviewer's approval of the exact commit that would merge.**
    Merge authority itself is unchanged and stays with section 7 - `yolo` on means firstmate merges through `bin/fm-pr-merge.sh`, `yolo` off means the captain's word.
 
@@ -38,7 +38,8 @@ Nothing merges red - section 7 owns that rule and the single named waiver.
 ## Rounds, and why they are not a pipeline
 
 A round is not a stage and not a phase: it is what happens when a review does not approve and a fix lands.
-The next reviewer reads the next range, and that is the whole mechanism.
+A round is also what happens when the review at the head stops standing - withdrawn, or never submitted - because the pull request is then unapproved with no fix landed and no commit moved.
+Either way the next reviewer reads a range and posts a verdict, and that is the whole mechanism.
 There is no round record, no per-round gate, and no transition table, because a path that needs those to describe it is the pipeline this one exists to replace.
 Firstmate knows which round it is because it dispatched them and the pull request shows them, not because anything keeps a count.
 
@@ -70,6 +71,7 @@ A re-review is the same call with a new task id, because the previous reviewer w
 What changes is the `--spec`, and four things belong in it:
 
 - **The range.** Name the last reviewed commit; a re-review reads only what is new since that head, never the pull request from the beginning.
+  A round that began because a review stopped standing has nothing new since that head, so it reads the same range the last one did rather than an empty one - the rulings on that ground still stand.
 - **What is closed.** Ground already ruled on is not reopened, and a finding firstmate declined stays declined - re-raising it is not a new finding.
 - **The numbering.** New findings continue the earlier sequence rather than restarting at `R1`, so no two findings on one pull request share an id and no ruling is ambiguous about which one it answered.
 - **What the fixes were.** The finding ids that were fixed and the commits that fixed them, so the reviewer checks each fix against the finding it answers.
