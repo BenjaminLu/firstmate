@@ -166,8 +166,14 @@
 # board would then keep a watcher alive to report on nothing. A home that has a
 # task already needs that watcher, so arming there costs nothing new, and a home
 # whose last task is gone keeps the check for its board - which is the eight
-# hours a merged pull request sat on one. It never disarms itself: `disarm` is
-# the deliberate end of that need.
+# hours a merged pull request sat on one. It never disarms itself.
+#
+# `disarm` is not permanent, and saying otherwise would be a contract this code
+# does not keep: it retires the check now, and the next locked bootstrap of a
+# home that still has a task or a board arms it again. That is deliberate - a
+# detector a home can quietly end up without is the failure this exists to
+# catch - but it means `disarm` is for retiring the check in a home that should
+# not have it at this moment, not for turning it off for good.
 #
 # REPORTING ONCE, AND REPORTING AGAIN. The record state/.fleet-obligations holds
 # the whole finding set the last report was made from, uncut, so the same owed
@@ -219,6 +225,7 @@ Usage:
   fm-obligation-check.sh arm --if-needed
                                    arm only a home that has a live task or a board
   fm-obligation-check.sh disarm    retire the check, its trust binding, and the record
+                                   (the next locked bootstrap arms it again)
 
 Reads durable records in this home plus the forge. Writes nothing but its own
 report record. See this script's header for the four obligations, the cost
@@ -1079,6 +1086,7 @@ action_disarm() {
   fi
   rm -f -- "$RECORD"
   printf 'disarmed: state/%s.check.sh\n' "$CHECK_ID"
+  printf 'note: the next locked bootstrap arms it again while this home has a task or a board\n'
   return 0
 }
 

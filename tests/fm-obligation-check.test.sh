@@ -936,7 +936,11 @@ test_arm_registers_the_check_and_disarm_retires_it() {
   assert_absent "$home/state/fleet-obligations.check.sh" "disarm left the check shim behind"
   assert_absent "$home/state/fleet-obligations.check-trust" "disarm left the trust binding behind"
   assert_absent "$home/state/.fleet-obligations" "disarm left the report record behind"
-  pass "arm registers a trusted check and disarm retires every trace of it"
+  # disarm is not permanent, and it has to say so: the next locked bootstrap
+  # arms the check again for any home with a task or a board.
+  FM_HOME="$home" "$CHECK" disarm 2>&1 | grep -q 'the next locked bootstrap arms it again' \
+    || fail "disarm did not say that bootstrap re-arms the check"
+  pass "arm registers a trusted check, and disarm retires it and says it is not permanent"
 }
 
 test_if_needed_arms_only_a_home_with_something_to_report_on() {
