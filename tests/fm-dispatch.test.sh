@@ -53,6 +53,7 @@ EOF
   git -C "$case_dir/project" worktree add --quiet -b "pooled-$name" "$case_dir/wt"
   printf 'add a summary toggle to the report view\nkeep the existing layout\n' > "$case_dir/ask.md"
   printf 'Implement the toggle in the report renderer; out of scope: the settings page.\n' > "$case_dir/spec.md"
+  printf 'Render the toggle from the existing view state; no new store.\n' > "$case_dir/design.md"
   printf '%s\n' "$case_dir"
 }
 
@@ -62,9 +63,19 @@ RESOLVER_KEY=''
 PANE_PATH=''
 
 # run_dispatch <case-dir> [fm-dispatch args...]
+#
+# fm-dispatch requires the task's design record on every call, so this supplies
+# the case's own --design unless the caller states its own choice. A case that
+# exercises the design flags themselves passes --design or --no-design and keeps it.
 run_dispatch() {
-  local case_dir=$1 home fakebin launchlog
+  local case_dir=$1 home fakebin launchlog arg design_given=0
   shift
+  for arg in "$@"; do
+    case "$arg" in
+      --design|--no-design) design_given=1 ;;
+    esac
+  done
+  [ "$design_given" -eq 1 ] || set -- "$@" --design "$case_dir/design.md"
   home="$case_dir/home"
   fakebin="$case_dir/fakebin"
   launchlog="$case_dir/launch.log"
@@ -662,6 +673,473 @@ test_resolver_off_with_rules_stops_before_filing() {
   pass "a rules file with the resolver off stops before filing instead of resolving statically"
 }
 
+# Firstmate's plan for a task is not optional machinery it can forget at the end
+# of an intake: exactly one of --design or --no-design is required, and the refusal
+# lands before anything is written, so a call that omitted it leaves no half-made
+# task behind.
+test_design_record_choice_is_required_and_exclusive() {
+  local case_dir id out status home fakebin
+  case_dir=$(make_case design-required)
+  : > "$case_dir/empty-design.md"
+  home="$case_dir/home"
+  fakebin="$case_dir/fakebin"
+
+  # The primary branch: neither flag passed. run_dispatch supplies --design for
+  # every other case in this file, so this one call deliberately bypasses it and
+  # invokes the script with the same environment and nothing to choose from.
+  id=dispatch-design-absent
+  mkdir -p "$home/user-home"
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$home/user-home" \
+    CLAUDE_CONFIG_DIR='' \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="${TMUX:-fake,1,0}" \
+    TYPESAFE_API_KEY='' PATH="$fakebin:$PATH" \
+    "$DISPATCH" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "omitting both design flags should refuse: $out"
+  assert_contains "$out" "--design <file> or --no-design <reason> required" \
+    "the refusal did not name the two flags that satisfy it"
+  assert_contains "$out" "$home/data/$id/design.md" \
+    "the refusal did not name the record the plan belongs in"
+  assert_contains "$out" "a decision that gets recorded rather than a step that gets skipped" \
+    "the refusal did not say why declaring no design is still an answer"
+  assert_absent "$home/data/$id/brief.md" "a refused call still scaffolded a brief"
+  assert_absent "$home/data/$id/design.md" "a refused call still wrote a design record"
+  assert_no_grep "$id" "$home/data/backlog.md" "a refused call still filed an item"
+  assert_absent "$home/state/$id.meta" "a refused call still spawned"
+
+  id=dispatch-design-missing
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --no-design '')
+  status=$?
+  [ "$status" -ne 0 ] || fail "a blank --no-design reason should refuse: $out"
+  assert_contains "$out" "--no-design requires a reason carrying text" \
+    "blank reason refusal did not say what a reason is for"
+  assert_absent "$case_dir/home/data/$id/brief.md" "a refused call still scaffolded a brief"
+  assert_absent "$case_dir/home/data/$id/design.md" "a refused call still wrote a design record"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "a refused call still filed an item"
+
+  id=dispatch-design-both
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md" --no-design 'nothing to decide')
+  status=$?
+  [ "$status" -ne 0 ] || fail "--design with --no-design should refuse: $out"
+  assert_contains "$out" "--design and --no-design are exclusive" "both-flags refusal missing"
+  assert_absent "$case_dir/home/data/$id/brief.md" "a refused call still scaffolded a brief"
+
+  id=dispatch-design-empty
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/empty-design.md")
+  status=$?
+  [ "$status" -ne 0 ] || fail "an empty --design file should refuse: $out"
+  assert_contains "$out" "must carry firstmate's decisions and why" "empty-plan refusal missing"
+  assert_absent "$case_dir/home/data/$id/brief.md" "a refused call still scaffolded a brief"
+  pass "fm-dispatch: the design record is required, exclusive, and refused before any record is made"
+}
+
+# The two accepted answers write two different records, and both leave a file the
+# worker can open. A re-run reuses what is already there, exactly as it reuses an
+# already-filled brief, so a retry after a refused spawn is safe.
+test_design_record_is_filled_from_the_plan_or_the_declaration() {
+  local case_dir id out status record before
+  case_dir=$(make_case design-filled)
+
+  id=dispatch-design-plan
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a dispatch carrying a plan should succeed: $out"
+  record="$case_dir/home/data/$id/design.md"
+  assert_contains "$out" "design: filled $record" "the filled record was not reported"
+  assert_grep "Render the toggle from the existing view state; no new store." "$record" \
+    "the plan's bytes did not reach the design record"
+  assert_no_grep "{DESIGN}" "$record" "the design placeholder survived the fill"
+  grep -qF -- "$record" "$case_dir/home/data/$id/brief.md" \
+    || fail "the brief does not point the worker at the filled record"
+
+  id=dispatch-design-none
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --no-design 'a one-line typo fix with nothing to decide')
+  status=$?
+  expect_code 0 "$status" "a dispatch declaring no design should succeed: $out"
+  record="$case_dir/home/data/$id/design.md"
+  assert_grep "a one-line typo fix with nothing to decide" "$record" \
+    "the declaration's reason did not reach the record"
+  # Dated, so a record that later goes quiet is visibly a record that stopped
+  # rather than one that was never written.
+  grep -qE 'None recorded at dispatch \([0-9]{4}-[0-9]{2}-[0-9]{2}\):' "$record" \
+    || fail "the no-design declaration is undated: $(cat "$record")"
+  assert_no_grep "{DESIGN}" "$record" "the design placeholder survived the declaration"
+
+  before=$(cat "$record")
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  assert_contains "$out" "design: reused $record" "a re-run did not report the record as reused"
+  [ "$(cat "$record")" = "$before" ] || fail "a re-run overwrote a design record that was already written"
+  pass "fm-dispatch: --design writes the plan, --no-design writes a dated declaration, and a re-run reuses both"
+}
+
+# A task briefed before design records existed has none. Re-dispatching it must
+# give it one rather than leaving the call with nothing to fill.
+# Detection and replacement share one assumption, so they share one boundary, and
+# they share it through one parser rather than two that agree on the easy shapes.
+# The quoted placeholder here sits in a FENCED block, which is how anyone would
+# actually write a plan about this scaffold in Markdown, and which is the shape a
+# section-tracking loop written in shell gets wrong: it is the fence the two
+# parsers disagree about, so pinning the unfenced form would pin the case that
+# works. A heading inside that fence is here for the same reason - it must not end
+# the section the real placeholder lives in either.
+test_design_fill_is_bounded_to_the_decisions_section() {
+  local case_dir id record out status hits
+  case_dir=$(make_case design-bounded-fill)
+  id=dispatch-design-bounded
+  mkdir -p "$case_dir/home/data/$id"
+  record="$case_dir/home/data/$id/design.md"
+  printf '%s\n' '# Design - a record with a worked example below' '' \
+    '## Notes for whoever fills this' \
+    'The scaffold writes its placeholder on a line of its own:' '' \
+    '```markdown' \
+    '## Decisions' \
+    '{DESIGN}' \
+    '```' '' \
+    'and the dispatch replaces that one line.' '' \
+    '## Decisions' '{DESIGN}' > "$record"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a record with a placeholder outside its section should fill: $out"
+  hits=$(grep -c 'Render the toggle from the existing view state; no new store.' "$record")
+  assert_equals "1" "$hits" "the plan was spliced into every placeholder line, not just the section's"
+  grep -qx -- '{DESIGN}' "$record" \
+    || fail "the placeholder inside the fenced example was consumed; it is the record's own example text"
+  grep -qx -- '## Decisions' "$record" \
+    || fail "the fenced example's heading was consumed"
+  pass "fm-dispatch: the fill replaces the real ## Decisions placeholder and leaves a fenced example alone"
+}
+
+# The detector strips whitespace before comparing, so a placeholder carrying
+# stray whitespace reads as intact. An exact match in the fill then found no such
+# line, and that combination hit an `exit` inside a `{ ... } > file` group, which
+# unwinds past the handler attached to that group: firstmate got a bare status
+# with nothing said and one .design.md.dispatch.<pid> per attempt. Both sides now
+# compare the same way, so the case fills instead of reaching any refusal, and the
+# refusal that remains returns rather than exiting.
+test_design_fill_matches_what_the_detector_accepted() {
+  local case_dir id record out status leftovers
+  case_dir=$(make_case design-fill-refusal)
+  id=dispatch-design-refusal
+  mkdir -p "$case_dir/home/data/$id"
+  record="$case_dir/home/data/$id/design.md"
+  # A placeholder with stray whitespace: intact to the detector, and the case the
+  # fill must now match too rather than refusing.
+  printf '%s\n' '# Design - whitespace around the placeholder' '' \
+    '## Decisions' '  {DESIGN}  ' > "$record"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a placeholder with stray whitespace should fill, not refuse: $out"
+  assert_grep 'Render the toggle from the existing view state; no new store.' "$record" \
+    "the detector accepted the padded placeholder and the fill did not replace it"
+  assert_no_grep '{DESIGN}' "$record" "the padded placeholder survived the fill"
+
+  # The visible consequence of that unwind was a temp file per attempt. Nothing
+  # this dispatch did may leave one, on the path that fills or any other.
+  leftovers=$(find "$case_dir/home/data" -name '.design.md.dispatch.*' -o -name '.brief.md.dispatch.*' | wc -l | tr -d ' ')
+  assert_equals "0" "$leftovers" "a dispatch left a .design.md.dispatch temp file behind"
+  pass "fm-dispatch: the fill matches what the detector accepted and leaves no temp file"
+}
+
+# The same refusal, at the dispatch's own copy of it. Reaching that copy takes an
+# EXISTING brief: with no brief the call runs bin/fm-brief.sh at step 2, whose own
+# refusal - same wording, deliberately - fires first and files nothing, so a case
+# built without a brief would pass with this check deleted and prove nothing.
+# bin/fm-spawn.sh says the same sentence later for the same reason, and what
+# separates it is WHEN: the design step is step 3 and the backlog item is step 5,
+# so a dispatch refusing its own check files nothing while one running through to
+# the spawn has already filed.
+test_dispatch_refuses_a_design_record_that_is_not_a_file() {
+  local case_dir id record brief out status
+  case_dir=$(make_case design-notfile)
+  id=dispatch-design-notfile
+  # A brief already filled, so step 2 reuses it and never calls fm-brief.sh.
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  expect_code 0 "$?" "the setup dispatch should succeed: $out"
+  brief="$case_dir/home/data/$id/brief.md"
+  assert_present "$brief" "the setup dispatch left no brief to reuse"
+  record="$case_dir/home/data/$id/design.md"
+  rm -f "$record"
+  mkdir -p "$record"
+
+  id=dispatch-design-notfile-second
+  mkdir -p "$case_dir/home/data/$id"
+  cp "$brief" "$case_dir/home/data/$id/brief.md"
+  record="$case_dir/home/data/$id/design.md"
+  mkdir -p "$record"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  [ "$status" -ne 0 ] || fail "a directory at the design record's path should refuse: $out"
+  assert_contains "$out" "exists but is not a readable regular file" \
+    "the refusal did not use the wording every script on this path shares"
+  assert_contains "$out" "brief: reused" \
+    "the brief was rebuilt, so fm-brief.sh refused first and this case proves nothing"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" \
+    "the dispatch ran past its own design check and was refused later by the spawn instead"
+  assert_absent "$case_dir/home/state/$id.meta" "a refused dispatch still spawned"
+  rmdir "$record"
+  pass "fm-dispatch: a design record that is not a file the worker can open is refused"
+}
+
+# Bounding the contract read gave an empty result a second meaning - the line is
+# there and no reader can see it - whose consequence is the opposite of the first.
+# The --scout guard reads empty as "not a ship brief", so a SHIP brief dispatched
+# with --scout got past it: item filed, kind flipped to scout, and a worker
+# launched on a brief whose Definition of done still says push and open a pull
+# request. An unclosed fence above the heading produces the same empty, and used
+# to be refused before any record was made.
+test_unreachable_delivery_contract_is_refused_not_read_as_absent() {
+  local case_dir id brief out status
+
+  case_dir=$(make_case unreachable-renamed)
+  id=dispatch-unreachable-renamed
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  printf '%s\n' 'You are a crewmate.' '' \
+    '# Task' "## Captain's intent" 'Ship the toggle.' '' \
+    '## Firstmate spec' 'Leave the settings page alone.' '' \
+    '# Done' 'Delivery contract: mode=direct-PR' > "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  [ "$status" -ne 0 ] || fail "a ship brief whose contract is unreachable should refuse --scout: $out"
+  assert_contains "$out" "no reader can reach" \
+    "the refusal reported the contract as absent rather than unreachable"
+  assert_contains "$out" "Delivery contract: mode=direct-PR" \
+    "the refusal did not name the line that caused it"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" \
+    "the item was filed before the unreachable contract was noticed"
+  assert_absent "$case_dir/home/state/$id.meta" "a worker was launched on an unreachable contract"
+
+  # An unclosed fence above the heading hides it from every reader, and must be
+  # refused here rather than at the spawn after the item is already filed.
+  case_dir=$(make_case unreachable-fence)
+  id=dispatch-unreachable-fence
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  printf '%s\n' 'You are a crewmate.' '' \
+    '# Task' "## Captain's intent" 'Ship the toggle.' '' \
+    '## Firstmate spec' 'The scaffold writes:' '```' 'left open' '' \
+    '# Definition of done' 'Delivery contract: mode=direct-PR' > "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unclosed fence hiding the contract should refuse: $out"
+  assert_contains "$out" "no reader can reach" "the fence case was not reported as unreachable"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" \
+    "the item was filed before the hidden contract was noticed"
+
+  # The `# Task` exclusion, seeded with a brief so the dispatch reuses it and the
+  # exclusion is what decides the call rather than the scaffold. 2877225d claimed
+  # a test pinned this; the case below it dispatched with no brief on disk, so
+  # fm-brief.sh rebuilt one and the quoted line never reached the check.
+  case_dir=$(make_case unreachable-excluded)
+  id=dispatch-unreachable-excluded
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  printf '%s\n' 'You are a crewmate.' '' \
+    '# Task' "## Captain's intent" 'Work out why briefs record the wrong mode.' \
+    'The brief carries this line:' 'Delivery contract: mode=no-mistakes' \
+    'and the spawn reads it.' '' \
+    '## Firstmate spec' 'Report what you find.' '' \
+    '# Definition of done' 'Write your findings to report.md.' > "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a contract line inside the captain's own words should not refuse: $out"
+  assert_contains "$out" "brief: reused" \
+    "the brief was rebuilt, so the seeded captain's words never reached the check"
+  assert_not_contains "$out" "no reader can reach" \
+    "the captain's own quoted words were reported as an unreachable contract"
+
+  # A contract line quoted in a CLOSED fence outside `# Task` is a quotation like
+  # any other. The parser is fence-aware precisely so quoted text is not read as
+  # structure; reading this one as a contract nothing can reach is the class this
+  # branch exists to close. Nil from any scaffold - all six generated shapes were
+  # driven and none produces it - and reachable only through a hand-edited section,
+  # which bin/fm-brief.sh's own help sanctions.
+  case_dir=$(make_case unreachable-fenced-quote)
+  id=dispatch-unreachable-fenced
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  printf '%s\n' 'You are a crewmate.' '' \
+    '# Task' "## Captain's intent" 'Investigate the contract line.' '' \
+    '## Firstmate spec' 'Report what you find.' '' \
+    '# Notes firstmate added by hand' 'The generated block opens with:' \
+    '```' 'Delivery contract: mode=no-mistakes' '```' '' \
+    '# Definition of done' 'Write your findings to report.md.' > "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a contract line quoted in a closed fence should not refuse: $out"
+  assert_contains "$out" "brief: reused" \
+    "the brief was rebuilt, so the hand-edited fenced section never reached the check"
+  assert_not_contains "$out" "no reader can reach" \
+    "a fenced quotation outside # Task was read as an unreachable contract"
+
+  # And the case bounding the read was FOR must still dispatch: a scout brief
+  # whose captain's ask quotes the contract line records no contract of its own.
+  case_dir=$(make_case unreachable-quoted-scout)
+  id=dispatch-unreachable-quoted
+  cat > "$case_dir/quoting-ask.md" <<'ASK'
+Work out why briefs record the wrong delivery mode.
+
+The brief carries this line and the spawn reads it:
+
+```
+Delivery contract: mode=no-mistakes
+```
+
+Report what you find.
+ASK
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/quoting-ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a scout whose ask quotes the contract line should dispatch: $out"
+  assert_grep 'Delivery contract: mode=no-mistakes' "$case_dir/home/data/$id/brief.md" \
+    "the captain's quoted line was scrubbed instead of left alone"
+  pass "fm-dispatch: a contract no reader can reach is refused, and a quoted one still dispatches"
+}
+
+# first-body-line is body-scoped like body and mark, so it must stop where they
+# stop. It did not: an EMPTY `# Definition of done` reported the heading that ends
+# it as its first body line. Inert today only because every caller post-filters
+# for a contract line and a heading is not one - and that mode now lives in shared
+# machinery where the next caller need not have that filter.
+test_first_body_line_stops_at_the_section_end() {
+  local file
+  file="$TMP_ROOT/first-body-line-terminator.md"
+  mkdir -p "$TMP_ROOT"
+  printf '%s\n' '# Definition of done' '# Next section' 'Delivery contract: mode=no-mistakes' > "$file"
+  assert_equals "" "$(fm_brief_heading_parse "$file" "# Definition of done" first-body-line)" \
+    "an empty section reported the heading that ends it as its own first body line"
+
+  # A deeper heading is body, exactly as it is for body and mark mode.
+  printf '%s\n' '# Definition of done' '## Sub' 'Delivery contract: mode=direct-PR' > "$file"
+  assert_equals "## Sub" "$(fm_brief_heading_parse "$file" "# Definition of done" first-body-line)" \
+    "a deeper heading inside the section was treated as ending it"
+
+  # Blank lines before the first real line are skipped, not reported.
+  printf '%s\n' '# Definition of done' '' '' 'Delivery contract: mode=direct-PR' > "$file"
+  assert_equals "direct-PR" "$(fm_brief_delivery_mode "$file")" \
+    "blank lines under the heading stopped the contract being found"
+  pass "fm-dod-lib: first-body-line stops at the section end like its two siblings"
+}
+
+test_dispatch_scaffolds_a_design_record_an_older_brief_never_had() {
+  local case_dir id out status brief record
+  case_dir=$(make_case design-legacy)
+  id=dispatch-design-legacy
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  cat > "$brief" <<'EOF'
+You are a crewmate.
+
+# Task
+## Captain's intent
+Ship the legacy toggle.
+
+## Firstmate spec
+Leave the settings page alone.
+
+# Definition of done
+Delivery contract: mode=direct-PR
+EOF
+  record="$case_dir/home/data/$id/design.md"
+  assert_absent "$record" "the legacy fixture already had a design record"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "re-dispatching a legacy brief should succeed: $out"
+  assert_contains "$out" "brief: reused $brief" "the legacy brief was not reused"
+  assert_present "$record" "re-dispatching a legacy brief left it without a design record"
+  assert_grep "Render the toggle from the existing view state; no new store." "$record" \
+    "the plan did not reach the newly scaffolded record"
+  pass "fm-dispatch: a brief predating design records is given one on the next dispatch"
+}
+
+# The captain's own words reach the brief verbatim, and they can contain anything -
+# including this contract line, quoted inside a CLOSED code fence in an ask about
+# delivery modes. The heading and unclosed-fence guards do not cover it: it is a
+# structural line, not a heading. Read unbounded, that quote came first and won,
+# and the task was undispatchable until someone hand-edited the captain's text.
+# The promoted shape is here because it is what a first-section rule would break:
+# a promoted scout carries its own Definition of done AND the superseding one
+# bin/fm-promote.sh appends, and the contract belongs to the second.
+test_delivery_contract_is_read_from_its_own_section() {
+  local case_dir id brief out status
+  case_dir=$(make_case delivery-quoted)
+  id=dispatch-delivery-quoted
+  cat > "$case_dir/quoting-ask.md" <<'ASK'
+Stop briefs from recording the wrong delivery mode.
+
+The generated brief carries this line and the spawn reads it:
+
+```
+Delivery contract: mode=no-mistakes
+```
+
+That line is what the two refusals compare against.
+ASK
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/quoting-ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "an ask quoting the contract line should dispatch, not refuse: $out"
+  brief="$case_dir/home/data/$id/brief.md"
+  assert_grep 'Delivery contract: mode=no-mistakes' "$brief" \
+    "the captain's quoted line was scrubbed instead of left alone"
+  assert_equals "direct-PR" "$(fm_brief_delivery_mode "$brief")" \
+    "the quoted line in the ask was read as the brief's delivery contract"
+  assert_equals "in_flight" "$(row_state "$case_dir" "$id")" "the quoting ask never reached the spawn"
+
+  # A promoted scout brief: two Definition of done sections, contract in the second.
+  # This case is the only guard on that shape. 9000e617's message claimed
+  # tests/fm-control-relaunch.sh covered it; the file is
+  # tests/fm-control-relaunch.test.sh, and what it asserts there is a whole-file
+  # `assert_grep "Delivery contract: mode=$mode"` on the launch payload, which
+  # finds the string in either section and so would stay green against a
+  # first-section-only read. That claim named a guard that does not guard.
+  brief="$case_dir/promoted-brief.md"
+  {
+    printf '%s\n' '# Task' '## Captain'"'"'s intent' 'investigate' '' \
+      '# Definition of done' 'Write your findings to report.md.' '' \
+      '# Current ship Firstmate spec' 'now ship it' ''
+    printf '%s\n' '# Definition of done' 'Delivery contract: mode=local-only' 'and stop.'
+  } > "$brief"
+  assert_equals "local-only" "$(fm_brief_delivery_mode "$brief")" \
+    "a promoted brief's superseding contract was missed; the scout section came first"
+  pass "fm-dod-lib: the delivery contract is read from its own section, not from anywhere in the brief"
+}
+
 test_full_call_files_briefs_and_spawns
 test_second_call_reuses_item_and_brief
 test_empty_ask_refuses_before_any_record
@@ -679,3 +1157,12 @@ test_resolver_escalate_stops_before_filing
 test_resolver_off_with_rules_stops_before_filing
 test_review_call_files_a_review_item_and_spawns_a_scout
 test_review_flag_conflicts_and_brief_mismatch_refuse
+test_design_record_choice_is_required_and_exclusive
+test_design_record_is_filled_from_the_plan_or_the_declaration
+test_dispatch_scaffolds_a_design_record_an_older_brief_never_had
+test_design_fill_is_bounded_to_the_decisions_section
+test_design_fill_matches_what_the_detector_accepted
+test_dispatch_refuses_a_design_record_that_is_not_a_file
+test_delivery_contract_is_read_from_its_own_section
+test_unreachable_delivery_contract_is_refused_not_read_as_absent
+test_first_body_line_stops_at_the_section_end

@@ -7,7 +7,7 @@ This record owns concurrent isolation evidence for the portable parallel candida
 ## Verification
 
 - Date: 2026-08-20
-- Command: `bin/fm-test-isolation-proof.sh --jobs 4 --json /tmp/fm-isolation-proof.json`
+- Command: `bin/fm-test-isolation-proof.sh --jobs 4 --json "$(mktemp -d)/fm-isolation-proof.json"`
 - Result: `FM_ISOLATION_SUMMARY total=24 failed=0 concurrency=4 duration_ms=113278`
 
 | Field | Value |
@@ -260,7 +260,7 @@ A candidate failure fails the aggregate run and requires investigation rather th
 
 ```sh
 bin/fm-test-isolation-proof.sh --list
-bin/fm-test-isolation-proof.sh --jobs 4 --json /tmp/fm-isolation-proof.json
+bin/fm-test-isolation-proof.sh --jobs 4 --json "$(mktemp -d)/fm-isolation-proof.json"
 bin/fm-test-run.sh --check-coverage
 ```
 

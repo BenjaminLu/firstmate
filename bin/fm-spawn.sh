@@ -15,6 +15,11 @@
 #   ship or scout spawn also refuses leftover `{TASK}` / `{FIRSTMATE_SPEC}`
 #   placeholders, an empty Task, an incomplete pair of Task subsections, or a
 #   `## Captain's intent` line opening with a Captain label or address.
+#   It likewise refuses a ship or scout task whose design record at
+#   data/<task-id>/design.md still carries its `{DESIGN}` placeholder, because the
+#   brief points the worker at that file by absolute path; a task briefed before
+#   design records existed has none at all and warns once rather than being
+#   refused, so a relaunch of in-flight work is never wedged by the new gate.
 #   Every ship or scout spawn renders `launch-brief.md`; for a no-mistakes ship
 #   it also carries the current `--intent` contract and the extracted captain
 #   intent. A legacy mixed Task is accepted there only under bin/fm-dod-lib.sh's
@@ -2635,6 +2640,33 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     echo "error: $BRIEF ## Captain's intent has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address before spawn, since the heading already records provenance" >&2
     exit 1
   fi
+  # The brief points the worker at this task's design record by absolute path, so
+  # a record still carrying its placeholder would hand the worker a file that says
+  # nothing. Absence is two different situations and the brief tells them apart:
+  # a brief with no `# Design record` section predates design records and points
+  # the worker nowhere, so it warns and launches rather than wedging the relaunch
+  # of every task briefed before they existed; a brief that DOES name the path
+  # while nothing is there sends the worker to a file that is not, which is an
+  # instruction it cannot follow, so that one is refused. A path that exists but
+  # is not a readable regular file is refused for the same reason and in the same
+  # words bin/fm-dispatch.sh uses. bin/fm-dod-lib.sh owns the path and the
+  # placeholder this reads.
+  DESIGN_RECORD=$(fm_design_record_path "$DATA" "$ID")
+  if [ -e "$DESIGN_RECORD" ] && { [ ! -f "$DESIGN_RECORD" ] || [ ! -r "$DESIGN_RECORD" ]; }; then
+    echo "error: $DESIGN_RECORD exists but is not a readable regular file; the brief hands the worker that path, so it must be a file the worker can open" >&2
+    exit 1
+  fi
+  if fm_design_placeholder_intact "$DESIGN_RECORD"; then
+    echo "error: $DESIGN_RECORD holds nothing but $FM_DESIGN_PLACEHOLDER under ## Decisions; write firstmate's plan for this task there, or record why it has none, before handing a worker a brief that points at it" >&2
+    exit 1
+  fi
+  if [ ! -e "$DESIGN_RECORD" ]; then
+    if fm_brief_heading_present "$BRIEF" "# Design record"; then
+      echo "error: $BRIEF sends the worker to $DESIGN_RECORD and there is no such file; restore the record or re-scaffold the brief, rather than launching a worker against a path that is not there" >&2
+      exit 1
+    fi
+    echo "warning: task $ID has no design record at $DESIGN_RECORD and its brief names none (briefed before ship and scout tasks carried one); firstmate's plan for this task is written down nowhere a worker or a later session can read it" >&2
+  fi
   if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
     if fm_brief_task_heading_present "$BRIEF" "## Captain's intent"; then
       CAPTAIN_INTENT=$(fm_brief_task_heading_body "$BRIEF" "## Captain's intent")
@@ -2688,6 +2720,15 @@ if [ "$KIND" = ship ]; then
   PROJ_NAME=$(basename "$PROJ_ABS")
   BRIEF_MODE=$(fm_brief_delivery_mode "$BRIEF")
   if [ -z "$BRIEF_MODE" ]; then
+    # Absent and unreachable are different facts. The warning below excuses a
+    # brief scaffolded before ship briefs recorded a contract; a brief that
+    # carries one this reader cannot see is not that, and launching a worker on
+    # it would put its instructions and the task record out of agreement exactly
+    # where this check exists to keep them together.
+    if UNREACHABLE_CONTRACT=$(fm_brief_delivery_contract_unreachable "$BRIEF"); then
+      echo "error: $BRIEF carries a delivery contract no reader can reach, at line ${UNREACHABLE_CONTRACT%%:*}: ${UNREACHABLE_CONTRACT#*:}; it is not the first line under a \`# Definition of done\` heading, or an unclosed code fence above it hides that heading. Repair the brief or re-scaffold it rather than launching on the explicit --mode $MODE" >&2
+      exit 1
+    fi
     echo "warning: $BRIEF records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode $MODE - confirm its definition of done matches" >&2
   elif [ "$BRIEF_MODE" != "$MODE" ]; then
     echo "error: delivery mismatch for $ID: the brief says mode=$BRIEF_MODE but this spawn passed --mode $MODE; correct the flag or re-scaffold the brief so the worker's instructions and the task record agree" >&2

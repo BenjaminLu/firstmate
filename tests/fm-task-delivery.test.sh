@@ -51,12 +51,20 @@ write_brief() {  # <home> <id> [<recorded-mode>]
   } > "$home/data/$id/brief.md"
 }
 
+# Make a scaffolded brief dispatch-ready: fill both Task subsections and, when the
+# scaffold wrote one beside it, the task's design record, which the spawn gate
+# refuses while it still carries its placeholder.
 fill_brief_subsections() {  # <file> <intent> <spec>
-  local file=$1 intent=$2 spec=$3 content
+  local file=$1 intent=$2 spec=$3 content design
   content=$(cat "$file")
   content=${content//'{TASK}'/$intent}
   content=${content//'{FIRSTMATE_SPEC}'/$spec}
   printf '%s\n' "$content" > "$file"
+  design="$(dirname "$file")/design.md"
+  [ -f "$design" ] || return 0
+  content=$(cat "$design")
+  content=${content//'{DESIGN}'/One decision: exercise the delivery contract exactly as briefed.}
+  printf '%s\n' "$content" > "$design"
 }
 
 run_spawn() {  # <home> <fakebin> <spawn-args...>
@@ -153,6 +161,21 @@ EOF
   out=$(run_spawn "$home" "$fakebin" delivery-legacy-b3 "$proj" claude --mode local-only --yolo off)
   assert_contains "$out" "records no delivery contract line" "a legacy brief did not warn about its missing contract"
   assert_not_contains "$out" "delivery mismatch" "a legacy brief was treated as a mismatch"
+
+  # A brief that HAS a contract no reader can reach is not that legacy brief, and
+  # excusing it launches a worker whose instructions and the task record disagree
+  # exactly where this check exists to keep them together. 2877225d added this
+  # guard and claimed a test pinned it; nothing did.
+  write_brief "$home" delivery-unreachable-b4
+  printf '%s\n' '# Done' 'Delivery contract: mode=no-mistakes' \
+    >> "$home/data/delivery-unreachable-b4/brief.md"
+  out=$(run_spawn "$home" "$fakebin" delivery-unreachable-b4 "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a brief whose contract no reader can reach should refuse: $out"
+  assert_contains "$out" "no reader can reach" "the spawn excused an unreachable contract as an absent one"
+  assert_not_contains "$out" "records no delivery contract line" \
+    "the spawn reported an unreachable contract with the legacy-brief warning"
+  assert_absent "$home/state/delivery-unreachable-b4.meta" "a refused spawn wrote task metadata"
   pass "fm-spawn: the brief's recorded mode and the spawn's explicit mode must agree"
 }
 
@@ -884,6 +907,113 @@ EOF
 
 test_authorized_intent_keeps_words_without_composed_address
 test_spawn_refreshes_legacy_worker_roles
+# The generated brief points the worker at its design record by absolute path, so
+# a record still carrying its placeholder would hand the worker a file saying
+# nothing. That is refused. A task briefed before design records existed has no
+# record at all: refusing THAT would wedge the relaunch of in-flight work, so it
+# warns and launches, which is the difference between an unwritten plan and an
+# older shape.
+test_spawn_refuses_an_unwritten_design_record() {
+  local rec home proj fakebin id out status record content
+  rec=$(make_home design-gate)
+  IFS='|' read -r home proj fakebin <<EOF
+$rec
+EOF
+
+  id=delivery-design-unwritten
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "design-gate brief should scaffold"
+  record="$home/data/$id/design.md"
+  assert_grep "{DESIGN}" "$record" "the scaffold wrote no design placeholder to leave unwritten"
+  # Fill only the Task subsections, the way a firstmate scaffolding by hand would.
+  content=$(cat "$home/data/$id/brief.md")
+  content=${content//'{TASK}'/Ship the toggle.}
+  content=${content//'{FIRSTMATE_SPEC}'/Leave the settings page alone.}
+  printf '%s\n' "$content" > "$home/data/$id/brief.md"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn with an unwritten design record should exit non-zero"
+  assert_contains "$out" "$record holds nothing but {DESIGN} under ## Decisions" \
+    "the refusal did not name the record the brief points at"
+  assert_contains "$out" "or record why it has none" \
+    "the refusal did not offer the declaration that also clears it"
+  assert_absent "$home/state/$id.meta" "a refused spawn wrote task metadata"
+
+  # Written: the same task launches, and gets past this gate.
+  content=$(cat "$record")
+  content=${content//'{DESIGN}'/Reuse the existing view state; no new store.}
+  printf '%s\n' "$content" > "$record"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  assert_not_contains "$out" "nothing but {DESIGN}" \
+    "a written design record was still refused as unwritten"
+
+  # A written plan about this machinery can itself show the placeholder on a line of
+  # its own. The check is bounded to the ## Decisions body for that reason, the same
+  # way the brief's Task placeholder check is bounded to its subsection: a bare
+  # whole-file match would refuse that plan as unwritten.
+  {
+    printf '%s\n' '# Design - a plan about the scaffold itself' '' '## Decisions' \
+      'Keep the placeholder line the scaffold writes:' '' '{DESIGN}' '' \
+      'and replace it at dispatch rather than at spawn.'
+  } > "$record"
+  grep -qx '{DESIGN}' "$record" || fail "the quoting case never put a bare placeholder line in the record, so it proves nothing"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  assert_not_contains "$out" "nothing but {DESIGN}" \
+    "a written plan that shows the placeholder on its own line was refused as unwritten"
+
+  # Absent, and the brief names none: the older shape. It warns, and it launches.
+  id=delivery-design-legacy
+  write_brief "$home" "$id" direct-PR
+  assert_absent "$home/data/$id/design.md" "the legacy fixture already had a design record"
+  assert_no_grep "# Design record" "$home/data/$id/brief.md" \
+    "the legacy fixture names a design record, so it is not the legacy shape"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  assert_contains "$out" "has no design record at" \
+    "a brief predating design records launched with no word that its plan is unwritten"
+  assert_not_contains "$out" "nothing but {DESIGN}" \
+    "an absent design record was reported as an unfilled one"
+  assert_not_contains "$out" "and there is no such file" \
+    "a brief naming no record was refused as one whose record went missing"
+
+  # Absent while the brief DOES name the path: the worker would be sent to a file
+  # that is not there, which is an instruction it cannot follow. Refused, not warned.
+  id=delivery-design-removed
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "removed-record brief should scaffold"
+  content=$(cat "$home/data/$id/brief.md")
+  content=${content//'{TASK}'/Ship the toggle.}
+  content=${content//'{FIRSTMATE_SPEC}'/Leave the settings page alone.}
+  printf '%s\n' "$content" > "$home/data/$id/brief.md"
+  rm -f "$home/data/$id/design.md"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a brief pointing at a missing record should exit non-zero"
+  assert_contains "$out" "and there is no such file" \
+    "the refusal did not say the path the brief hands the worker is not there"
+  assert_not_contains "$out" "briefed before ship and scout tasks carried one" \
+    "a removed record was excused as a brief that predates design records"
+  assert_absent "$home/state/$id.meta" "a refused spawn wrote task metadata"
+
+  # A path that is not a readable regular file is refused in the same words every
+  # other script on this path uses.
+  id=delivery-design-notfile
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "not-a-file brief should scaffold"
+  content=$(cat "$home/data/$id/brief.md")
+  content=${content//'{TASK}'/Ship the toggle.}
+  content=${content//'{FIRSTMATE_SPEC}'/Leave the settings page alone.}
+  printf '%s\n' "$content" > "$home/data/$id/brief.md"
+  rm -f "$home/data/$id/design.md"
+  mkdir -p "$home/data/$id/design.md"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a directory at the record's path should exit non-zero"
+  assert_contains "$out" "exists but is not a readable regular file" \
+    "the refusal did not use the shared wording for a path that is not a file"
+  rmdir "$home/data/$id/design.md"
+  pass "fm-spawn: an unwritten design record is refused, and one that predates them warns instead"
+}
+
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch
@@ -894,4 +1024,5 @@ test_promote_refuses_a_symlinked_task_record
 test_promotion_delivers_the_real_definition_of_done
 test_project_mode_maps_the_conditional_policy
 test_spawn_and_promote_require_filled_task_subsections
+test_spawn_refuses_an_unwritten_design_record
 echo "# all fm-task-delivery tests passed"

@@ -3,10 +3,21 @@
 # single call, so intake costs firstmate one tool turn instead of several.
 #
 # Usage:
-#   fm-dispatch.sh <task-id> --project <dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --ask <file> --spec <file> [options]
-#   fm-dispatch.sh <task-id> --project <dir> --scout --ask <file> --spec <file> [options]
-#   fm-dispatch.sh <task-id> --project <dir> --review <github-pr-url> --ask <file> --spec <file> [options]
+#   fm-dispatch.sh <task-id> --project <dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --ask <file> --spec <file> <--design <file>|--no-design <reason>> [options]
+#   fm-dispatch.sh <task-id> --project <dir> --scout --ask <file> --spec <file> <--design <file>|--no-design <reason>> [options]
+#   fm-dispatch.sh <task-id> --project <dir> --review <github-pr-url> --ask <file> --spec <file> <--design <file>|--no-design <reason>> [options]
 #   options: [--title <text>] [--reason <text>] [--herdr-lab] [--harness <name>] [--model <name>] [--effort <level>] [--backend <name>]
+#
+# --design and --no-design are the task's design record: firstmate's plan for this
+# task, written to data/<id>/design.md beside the brief so a decision made in a
+# steer does not live only in a steer. Exactly one is REQUIRED, the way --secondmate
+# requires a project list or --no-projects: --design <file> writes the plan, and
+# --no-design <reason> records, dated, that firstmate judged this task to carry no
+# design decisions worth writing down. Omitting both fails here, before anything is
+# written, because a design record that firstmate has to remember at the end of an
+# intake is exactly the one that does not get written. The gate cannot tell a real
+# plan from a thin one; what it converts is silence into a dated statement the
+# captain can read.
 #
 # --project accepts the same forms as fm-spawn: a directory path, or
 # `projects/<name>` resolved against FM_PROJECTS_OVERRIDE, else $FM_HOME/projects.
@@ -52,6 +63,9 @@
 #      NOT ENABLED` without) disagrees with this call's --herdr-lab, or exactly
 #      one of its two Task placeholders is still intact, because filling such a
 #      half-filled brief would splice one file and silently drop the other.
+#      --design must name a readable file carrying text, and --no-design a reason
+#      carrying text; the design record itself is not parsed by section, so no
+#      heading check applies to it.
 #   2. Brief: scaffold data/<id>/brief.md through bin/fm-brief.sh with the same
 #      --mode or --scout, and --herdr-lab when given (mandatory for a task that
 #      drives Herdr lifecycle commands; fm-brief.sh owns that contract), when
@@ -61,7 +75,14 @@
 #      bytes of --spec; a file whose last byte is not a newline gets one so the
 #      next heading stays on its own line. A brief that is already filled is
 #      reused untouched; one still carrying a placeholder is filled in place.
-#   3. Profile. An explicit --harness/--model/--effort is the caller's stated
+#   3. Design record: fill data/<id>/design.md's `{DESIGN}` placeholder with the
+#      bytes of --design, or with the dated --no-design declaration. A record that
+#      an older brief left absent is scaffolded here from the same owner
+#      bin/fm-brief.sh uses (bin/fm-dod-lib.sh), so a re-dispatch of a legacy task
+#      still gets one. A record already filled is reused untouched and reported as
+#      reused, exactly as an already-filled brief is, which is what makes a retry
+#      after a resolver stop or a spawn refusal safe.
+#   4. Profile. An explicit --harness/--model/--effort is the caller's stated
 #      override and skips the resolver. Otherwise, when config/crew-dispatch.json
 #      exists, run bin/fm-dispatch-resolve.sh on the filled brief: on
 #      `status: clear` its `profile:` line, rendered by the resolver as
@@ -74,7 +95,7 @@
 #      records it. The resolver's own usage or configuration error (exit 2)
 #      refuses this call the same way. With no rules file there is nothing to
 #      resolve and the spawn's static harness resolution applies.
-#   4. Backlog item: when this home's automatic backlog transition gate applies
+#   5. Backlog item: when this home's automatic backlog transition gate applies
 #      (bin/fm-backlog-transition-lib.sh's fm_backlog_transition_applies, the
 #      same gate fm-spawn consults) and no item exists for the id, add one
 #      through bin/fm-tasks-axi.sh with the title validated in step 1,
@@ -87,7 +108,7 @@
 #      fm-spawn still decides whether it is dispatchable. When the gate does not apply
 #      (manual backend or no backlog in this home) the step is skipped and
 #      says so.
-#   5. Spawn through bin/fm-spawn.sh with the explicit --mode/--yolo or --scout,
+#   6. Spawn through bin/fm-spawn.sh with the explicit --mode/--yolo or --scout,
 #      the profile flags, and --backend when given; its output passes through.
 #      A successful call ends with `elapsed: <seconds>` for the whole run.
 #
@@ -141,8 +162,8 @@ RULES_PATH="$CONFIG/crew-dispatch.json"
 die() { printf 'error: %s\n' "$1" >&2; exit "${2:-1}"; }
 
 ID='' PROJECT='' MODE='' YOLO='' SCOUT=0 REVIEW='' HERDR_LAB=0 ASK='' SPEC='' TITLE='' REASON=''
-HARNESS='' MODEL='' EFFORT='' BACKEND=''
-MODE_SET=0 YOLO_SET=0
+HARNESS='' MODEL='' EFFORT='' BACKEND='' DESIGN='' NO_DESIGN=''
+MODE_SET=0 YOLO_SET=0 DESIGN_SET=0 NO_DESIGN_SET=0
 need() { [ $# -ge 2 ] || die "$1 requires a value"; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -154,6 +175,8 @@ while [ $# -gt 0 ]; do
     --herdr-lab) HERDR_LAB=1; shift ;;
     --ask) need "$@"; ASK=$2; shift 2 ;;
     --spec) need "$@"; SPEC=$2; shift 2 ;;
+    --design) need "$@"; DESIGN=$2; DESIGN_SET=1; shift 2 ;;
+    --no-design) need "$@"; NO_DESIGN=$2; NO_DESIGN_SET=1; shift 2 ;;
     --title) need "$@"; TITLE=$2; shift 2 ;;
     --reason) need "$@"; REASON=$2; shift 2 ;;
     --harness) need "$@"; HARNESS=$2; shift 2 ;;
@@ -206,6 +229,23 @@ for f in "$ASK" "$SPEC"; do
   [ -f "$f" ] && [ -r "$f" ] || die "not a readable file: $f"
   [ -n "$(tr -d '[:space:]' < "$f")" ] || die "$f is empty; both --ask and --spec must carry text, since the reviewer treats the ask as acceptance criteria"
 done
+# The design record is firstmate's plan for this task. Requiring the choice here,
+# before anything is written, is what makes recording the plan the default; a
+# deliberate "this task has none" is a decision that lands in the record dated,
+# rather than a step that was skipped and left no trace.
+if [ "$DESIGN_SET" -eq 1 ] && [ "$NO_DESIGN_SET" -eq 1 ]; then
+  die "--design and --no-design are exclusive; pass the plan, or the reason there is none, not both"
+fi
+if [ "$DESIGN_SET" -eq 0 ] && [ "$NO_DESIGN_SET" -eq 0 ]; then
+  die "--design <file> or --no-design <reason> required: firstmate's plan for this task lands in its design record at $DATA/$ID/design.md, and judging that it has none is a decision that gets recorded rather than a step that gets skipped"
+fi
+if [ "$DESIGN_SET" -eq 1 ]; then
+  [ -f "$DESIGN" ] && [ -r "$DESIGN" ] || die "not a readable file: $DESIGN"
+  [ -n "$(tr -d '[:space:]' < "$DESIGN")" ] || die "$DESIGN is empty; --design must carry firstmate's decisions and why, or pass --no-design <reason>"
+else
+  [ -n "$(printf '%s' "$NO_DESIGN" | tr -d '[:space:]')" ] || die "--no-design requires a reason carrying text; it is written into the design record as firstmate's dated statement that this task has no design decisions worth recording"
+fi
+
 if ADDRESS_LINE=$(fm_brief_intent_address_line_of_text < "$ASK"); then
   die "--ask $ASK has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address, since the brief heading already records provenance"
 fi
@@ -238,6 +278,17 @@ if [ -e "$BRIEF" ]; then
   [ -f "$BRIEF" ] && [ -r "$BRIEF" ] || die "$BRIEF exists but is not a readable regular file"
   BRIEF_EXISTS=1
   BRIEF_MODE=$(fm_brief_delivery_mode "$BRIEF")
+  # Empty means two different things with opposite consequences: this brief
+  # records no contract, or it records one the readers cannot reach. Every branch
+  # below reports the first, so the second is settled here - otherwise --scout
+  # over a ship brief walks past the guard beneath and files the item anyway.
+  UNREACHABLE_CONTRACT=''
+  if [ -z "$BRIEF_MODE" ]; then
+    UNREACHABLE_CONTRACT=$(fm_brief_delivery_contract_unreachable "$BRIEF") || UNREACHABLE_CONTRACT=''
+  fi
+  if [ -n "$UNREACHABLE_CONTRACT" ]; then
+    die "$BRIEF carries a delivery contract no reader can reach, at line ${UNREACHABLE_CONTRACT%%:*}: ${UNREACHABLE_CONTRACT#*:}. It is not the first line under a \`# Definition of done\` heading, or an unclosed code fence above it hides that heading, so this dispatch and the spawn both read this brief as recording no contract at all. Repair the brief or re-scaffold it; do not dispatch against a contract nothing can see"
+  fi
   if [ "$SCOUT" -eq 1 ]; then
     [ -z "$BRIEF_MODE" ] || die "$BRIEF is a ship brief (Delivery contract: mode=$BRIEF_MODE) but this dispatch is --scout; move that brief aside or drop --scout"
   elif [ -z "$BRIEF_MODE" ]; then
@@ -292,16 +343,45 @@ emit_file_bytes() {  # <file>
 
 if fm_brief_task_placeholders_present "$BRIEF"; then
   BRIEF_TMP="$DATA/$ID/.brief.md.dispatch.$$"
-  {
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        '{TASK}') emit_file_bytes "$ASK" ;;
-        '{FIRSTMATE_SPEC}') emit_file_bytes "$SPEC" ;;
-        *) printf '%s\n' "$line" ;;
-      esac
-    done < "$BRIEF"
-  } > "$BRIEF_TMP" || { rm -f -- "$BRIEF_TMP"; die "could not fill $BRIEF"; }
-  mv -f -- "$BRIEF_TMP" "$BRIEF" || { rm -f -- "$BRIEF_TMP"; die "could not replace $BRIEF"; }
+  # Each placeholder is replaced inside its own subsection, one pass each, so an
+  # ask that quotes `{TASK}` on a line of its own is not spliced into twice, and
+  # so no second section-tracking loop is written here to disagree with the shared
+  # parser about a fenced block.
+  #
+  # It is NOT the same scope its detector uses, and the difference is worth
+  # stating rather than implying. fm_brief_task_placeholder_intact reads two
+  # levels - `# Task`'s body, then the subsection inside it - while this searches
+  # the whole file for `## Captain's intent` and `## Firstmate spec`. A brief with
+  # one of those subsections OUTSIDE `# Task` would be filled here and not seen
+  # there. No scaffold produces that: fm-brief.sh puts `# Task` at line 3 of every
+  # ship, scout and review brief, so the subsections only ever appear inside it,
+  # and only a hand-edited brief could differ. Closing the gap needs a two-level
+  # mark, because fm_brief_task_heading_body returns an extracted body rather than
+  # a position in the file, and that is machinery for a case nothing can reach.
+  # The design record's fill above has no such gap: fm_design_placeholder_intact
+  # reads `## Decisions` from the whole file, which is exactly what its fill marks.
+  fill_brief_subsection() {  # <heading> <placeholder> <file>
+    fm_brief_replace_placeholder_in_heading "$BRIEF_TMP.in" "$1" "$2" emit_file_bytes "$3"
+  }
+  cp -- "$BRIEF" "$BRIEF_TMP.in" || die "could not stage $BRIEF for filling"
+  for pass in "## Captain's intent|{TASK}|$ASK" "## Firstmate spec|{FIRSTMATE_SPEC}|$SPEC"; do
+    PASS_HEADING=${pass%%|*}
+    PASS_REST=${pass#*|}
+    PASS_PLACEHOLDER=${PASS_REST%%|*}
+    PASS_FILE=${PASS_REST#*|}
+    if fm_brief_task_placeholder_intact "$BRIEF_TMP.in" "$PASS_HEADING" "$PASS_PLACEHOLDER"; then
+      if fill_brief_subsection "$PASS_HEADING" "$PASS_PLACEHOLDER" "$PASS_FILE" > "$BRIEF_TMP"; then
+        mv -f -- "$BRIEF_TMP" "$BRIEF_TMP.in" || {
+          rm -f -- "$BRIEF_TMP" "$BRIEF_TMP.in"
+          die "could not stage the filled $PASS_HEADING for $BRIEF"
+        }
+      else
+        rm -f -- "$BRIEF_TMP" "$BRIEF_TMP.in"
+        die "could not fill $BRIEF: its $PASS_HEADING body holds no $PASS_PLACEHOLDER line to replace"
+      fi
+    fi
+  done
+  mv -f -- "$BRIEF_TMP.in" "$BRIEF" || { rm -f -- "$BRIEF_TMP.in"; die "could not replace $BRIEF"; }
   if fm_brief_task_placeholders_present "$BRIEF"; then
     die "$BRIEF still contains {TASK} or {FIRSTMATE_SPEC} after filling; the scaffold's placeholder lines were not where fm-brief.sh puts them"
   fi
@@ -310,7 +390,48 @@ else
   echo "brief: reused $BRIEF"
 fi
 
-# ---- 3. profile ----------------------------------------------------------------------
+# ---- 3. design record ----------------------------------------------------------------
+# A brief scaffolded before design records existed has none, so scaffold it from
+# the same owner fm-brief.sh uses rather than leaving a re-dispatch with nothing
+# to fill.
+DESIGN_RECORD=$(fm_design_record_path "$DATA" "$ID")
+if [ -e "$DESIGN_RECORD" ]; then
+  [ -f "$DESIGN_RECORD" ] && [ -r "$DESIGN_RECORD" ] || die "$DESIGN_RECORD exists but is not a readable regular file"
+else
+  fm_design_record_scaffold "$ID" > "$DESIGN_RECORD" || die "could not scaffold the design record at $DESIGN_RECORD"
+fi
+if fm_design_placeholder_intact "$DESIGN_RECORD"; then
+  DESIGN_TMP="$DATA/$ID/.design.md.dispatch.$$"
+  emit_design_fill() {
+    if [ "$DESIGN_SET" -eq 1 ]; then
+      emit_file_bytes "$DESIGN"
+    else
+      printf '%s\n' \
+        "None recorded at dispatch ($(date -u +%Y-%m-%d)): $NO_DESIGN" \
+        "Firstmate judged this task to carry no design decisions worth recording. A decision made later is appended below as its own dated entry."
+    fi
+  }
+  # Bounded to `## Decisions` by the same parser fm_design_placeholder_intact uses,
+  # so the two cannot disagree about a heading, a fenced block, or a placeholder
+  # carrying stray whitespace. The refusal is reachable: the helper RETURNS, where
+  # an `exit` inside a `{ ... } > file` group would unwind past the handler
+  # attached to it and leave firstmate a bare status with nothing said.
+  if fm_brief_replace_placeholder_in_heading \
+    "$DESIGN_RECORD" "## Decisions" "$FM_DESIGN_PLACEHOLDER" emit_design_fill > "$DESIGN_TMP"; then
+    mv -f -- "$DESIGN_TMP" "$DESIGN_RECORD" || { rm -f -- "$DESIGN_TMP"; die "could not replace $DESIGN_RECORD"; }
+  else
+    rm -f -- "$DESIGN_TMP"
+    die "could not fill $DESIGN_RECORD: its ## Decisions section holds no $FM_DESIGN_PLACEHOLDER line to replace"
+  fi
+  if fm_design_placeholder_intact "$DESIGN_RECORD"; then
+    die "$DESIGN_RECORD's ## Decisions section still holds nothing but $FM_DESIGN_PLACEHOLDER after filling; the scaffold's placeholder line was not where bin/fm-dod-lib.sh puts it"
+  fi
+  echo "design: filled $DESIGN_RECORD"
+else
+  echo "design: reused $DESIGN_RECORD"
+fi
+
+# ---- 4. profile ----------------------------------------------------------------------
 PROFILE_ARGS=()
 if [ -n "$HARNESS" ] || [ -n "$MODEL" ] || [ -n "$EFFORT" ]; then
   [ -z "$HARNESS" ] || PROFILE_ARGS+=(--harness "$HARNESS")
@@ -335,7 +456,7 @@ else
   echo "profile: no rules at $RULES_PATH; spawn resolves the harness statically"
 fi
 
-# ---- 4. backlog item ----------------------------------------------------------------
+# ---- 5. backlog item ----------------------------------------------------------------
 if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
   if fm_backlog_row_probe "$DATA" "$ID"; then
     echo "backlog: reused $ID (${FM_BACKLOG_ROW_STATE%% *})"
@@ -352,7 +473,7 @@ else
   esac
 fi
 
-# ---- 5. spawn ------------------------------------------------------------------------
+# ---- 6. spawn ------------------------------------------------------------------------
 SPAWN_ARGS=("$ID" "$PROJECT")
 if [ "$SCOUT" -eq 1 ]; then
   SPAWN_ARGS+=(--scout)

@@ -10,6 +10,11 @@
 # mode is refused rather than silently rendered as the pipeline contract.
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
+# The direct-PR block is the one owner of that mode's open-the-PR-early default:
+# the worker pushes and opens the pull request at its first commit and reports the
+# URL in a nonterminal status line, so the work is visible from its first commit
+# rather than only when it is done. Opening early is for watching and for arming
+# the merge poll; the `pr-review` skill owns when the one review is dispatched.
 # It is likewise the one owner of the fix-round technique a no-mistakes worker
 # applies to its own commit, to how it answers a Fix gate, and to the
 # third-round refusal that returns a narrow-remedy instruction to firstmate,
@@ -42,6 +47,14 @@
 # conflicting role is superseded rather than duplicated.
 # fm_ship_rule_one owns the mode-specific first ship safety rule shared by an
 # ordinary ship brief and the durable contract written during scout promotion.
+# fm_design_record_path, fm_design_record_scaffold, and fm_design_placeholder_intact
+# own the task's design record - firstmate's plan for one task, written beside the
+# brief at data/<task-id>/design.md so a decision made in a steer does not live
+# only in a steer. bin/fm-brief.sh scaffolds it and points the worker at the file
+# itself rather than at any skill the worker may not have, bin/fm-dispatch.sh fills
+# it from --design or --no-design, and bin/fm-spawn.sh refuses to hand a worker a
+# brief pointing at a record that still carries the placeholder. Those three
+# callers share this owner so the path and the placeholder cannot drift apart.
 
 fm_brief_worker_role() {  # <state-dir> <task-id>
   local state=$1 task_id=$2
@@ -78,6 +91,41 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id>
   esac
 }
 
+FM_DESIGN_PLACEHOLDER='{DESIGN}'
+
+fm_design_record_path() {  # <data-dir> <task-id>
+  printf '%s/%s/design.md\n' "$1" "$2"
+}
+
+# Print the scaffolded design record for one task. The body states what the record
+# is for, that entries are dated and appended rather than rewritten, and where it
+# ranks against the brief's two Task subsections, so the file is self-describing to
+# whoever opens it next.
+fm_design_record_scaffold() {  # <task-id>
+  cat <<EOF
+# Design - $1
+
+Firstmate's design record for this task: what firstmate decided and why, so a decision made in a steer does not live only in a steer.
+Entries are dated and appended, never rewritten. A plan that changes mid-task is a new dated entry, which is what keeps a decision missing from this record visibly missing rather than silently wrong.
+This is firstmate's plan, not the captain's ask. It ranks with the brief's \`## Firstmate spec\` and supersedes it where the two disagree; it never displaces \`## Captain's intent\`, and it is never part of a no-mistakes \`--intent\`.
+
+## Decisions
+$FM_DESIGN_PLACEHOLDER
+EOF
+}
+
+# Return 0 when the record exists and its `## Decisions` body is still nothing but
+# the scaffold placeholder. Bounded to that section for the same reason
+# fm_brief_task_placeholder_intact is bounded to its subsection: a written plan may
+# legitimately quote the token while discussing this machinery, and a bare
+# whole-file match would refuse that plan as unwritten.
+fm_design_placeholder_intact() {  # <file>
+  local file=$1 body
+  [ -f "$file" ] || return 1
+  body=$(fm_brief_heading_body "$file" "## Decisions")
+  [ "$(printf '%s' "$body" | tr -d '[:space:]')" = "$FM_DESIGN_PLACEHOLDER" ]
+}
+
 # Return 0 when one named Task subsection still consists only of its scaffold
 # placeholder. bin/fm-dispatch.sh asks per subsection, because a brief where
 # exactly one is still intact would take only one of its two files.
@@ -103,8 +151,26 @@ fm_brief_task_placeholders_present() {  # <file>
 # at the same or a higher level as <heading> anywhere in the input, the line
 # that would end <heading>'s body, or the opening line of a fence still open
 # at end of input, which would swallow every heading after it; it fails when
-# there is neither.
-fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
+# there is neither. Mark mode prints EVERY input line prefixed with `1` when it
+# is inside <heading>'s body and `0` otherwise, which is what lets a caller
+# rewrite one section of a file without deciding for itself what a heading or a
+# fenced block is. That second decision is the thing this mode exists to
+# prevent: a shell loop tracking `##` by hand and this awk will agree on the
+# easy shapes and disagree on a fenced block, and the disagreement is silent.
+# Mark-fence mode prints that same membership flag followed by a second flag that
+# is `1` when the line is inside or delimiting a code fence, for a caller that
+# must tell quoted text from structure as well as in from out.
+# First-body-line mode prints the first non-blank line under EVERY unfenced
+# occurrence of <heading>. Every occurrence, because a promoted scout brief
+# carries two `# Definition of done` sections - its own, and the superseding one
+# bin/fm-promote.sh appends - and the contract belongs to the second; first-line,
+# because fm_dod_block always opens its block with that contract line, which is a
+# shape this file states and guarantees rather than one that happens to hold.
+# Open-fence mode ignores <heading> entirely and answers one question about the
+# whole input: is a code fence still open at the end of it, and where did it
+# start. A brief that leaves one open hides every heading below it from every
+# mode above, so a reader that returns nothing there is not reporting absence.
+fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator|mark|mark-fence|first-body-line|open-fence>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
     input=/dev/stdin
@@ -139,11 +205,52 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
           fence_marker = marker
           fence_len = marker_len
           fence_open_line = line
+          fence_open_nr = NR
         } else if (marker == fence_marker && marker_len >= fence_len && rest ~ /^[[:space:]]*$/) {
           fenced = 0
         }
       }
 
+      if (mode == "open-fence") next
+      if (mode == "first-body-line") {
+        if (!was_fenced && !is_fence && line == heading) {
+          want = 1
+          next
+        }
+        # Stop where body and mark mode stop. Without it an
+        # empty section reports the heading that ENDS it as its first body line,
+        # which today only the post-filter in each caller makes harmless.
+        if (want && !was_fenced && !is_fence) {
+          level = 0
+          while (substr(scan, level + 1, 1) == "#") level++
+          if (level > 0 && level <= target_level && substr(scan, level + 1, 1) ~ /^[[:space:]]?$/) {
+            want = 0
+            next
+          }
+        }
+        if (want && line ~ /[^[:space:]]/) {
+          print line
+          want = 0
+        }
+        next
+      }
+      if (mode == "mark" || mode == "mark-fence") {
+        if (!found && !was_fenced && line == heading) {
+          found = 1
+          grab = 1
+          if (mode == "mark-fence") printf "00%s\n", line
+          else printf "0%s\n", line
+          next
+        }
+        if (grab && !is_fence && !was_fenced) {
+          level = 0
+          while (substr(scan, level + 1, 1) == "#") level++
+          if (level > 0 && level <= target_level && substr(scan, level + 1, 1) ~ /^[[:space:]]?$/) grab = 0
+        }
+        if (mode == "mark-fence") printf "%d%d%s\n", grab, (is_fence || was_fenced) ? 1 : 0, line
+        else printf "%d%s\n", grab, line
+        next
+      }
       if (mode == "terminator") {
         if (is_fence || was_fenced) next
         level = 0
@@ -173,6 +280,11 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
       print line
     }
     END {
+      if (mode == "open-fence") {
+        if (!fenced) exit 1
+        printf "%d:%s\n", fence_open_nr, fence_open_line
+        exit 0
+      }
       if (mode == "terminator" && !found && fenced) {
         print fence_open_line
         found = 1
@@ -195,6 +307,33 @@ fm_brief_body_terminator_line_of_text() {  # <heading> < text
 
 fm_brief_heading_body() {  # <file> <heading>
   fm_brief_heading_parse "$1" "$2" body
+}
+
+# Rewrite <file> on stdout with the one placeholder line inside <heading>'s body
+# replaced by whatever <emit-cmd> prints. The section is decided by mark mode
+# above, so this shares the detectors' parser rather than being a second opinion
+# about headings and fences. A line matches when its whitespace-stripped form is
+# the placeholder, which is exactly what the intactness checks compare: an exact
+# match here would let a placeholder carrying stray whitespace be accepted by the
+# detector and rejected by the fill, which is the same two-opinions defect in the
+# small. Returns 1 without writing a usable result when that body holds no such
+# line, so the caller refuses instead of saving a record it never filled.
+fm_brief_replace_placeholder_in_heading() {  # <file> <heading> <placeholder> <emit-cmd> [args...]
+  local file=$1 heading=$2 placeholder=$3
+  shift 3
+  local marked flag line found=0
+  while IFS= read -r marked; do
+    flag=${marked:0:1}
+    line=${marked:1}
+    if [ "$found" -eq 0 ] && [ "$flag" = 1 ] &&
+      [ "$(printf '%s' "$line" | tr -d '[:space:]')" = "$placeholder" ]; then
+      found=1
+      "$@"
+      continue
+    fi
+    printf '%s\n' "$line"
+  done < <(fm_brief_heading_parse "$file" "$heading" mark)
+  [ "$found" -eq 1 ]
 }
 
 fm_brief_heading_present() {  # <file> <heading>
@@ -262,8 +401,63 @@ fm_brief_task_content_valid() {  # <file>
 # line existed. This is the one owner of that read: bin/fm-spawn.sh checks it
 # against the spawn's own --mode and bin/fm-dispatch.sh checks it against the
 # dispatch's, and those two refusals must not drift.
+#
+# Bounded to `# Definition of done` through the heading parser above, rather than
+# matched anywhere in the file. A brief carries the captain's own words under
+# `## Captain's intent`, and those words can contain anything - including this
+# contract line, quoted inside a closed code fence, in an ask about delivery
+# modes. Unbounded, that quote won every comparison against the real contract
+# because it comes first, and the task was undispatchable until someone hand-
+# edited the captain's text. Bounding the reader makes the quote harmless, which
+# is better than teaching the ask guard to refuse a legitimate quotation.
 fm_brief_delivery_mode() {  # <file>
-  sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$1" | head -n 1
+  fm_brief_heading_parse "$1" "# Definition of done" first-body-line |
+    sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' | head -n 1
+}
+
+# Print, as `<line-number>:<line>`, a contract line the brief carries that
+# fm_brief_delivery_mode cannot reach; fail when there is none.
+#
+# Empty from that function used to mean exactly one thing: this brief records no
+# contract. Bounding the read gave empty a SECOND meaning - the line is there and
+# the reader cannot see it - whose consequence is the opposite, and every caller
+# reports the first. That is how a ship brief dispatched with --scout gets past
+# the guard that exists to stop it: the guard reads empty as "not a ship brief",
+# files the item, flips kind to scout, and launches a worker whose Definition of
+# done still tells it to push and open a pull request. The callers need this
+# fourth CONDITION, not a fourth parser.
+#
+# A match inside `# Task` is not one of these. That section carries the captain's
+# own words and firstmate's spec, and an ask about delivery modes quoting this
+# line is the exact case bounding the read was for - a scout brief carrying such
+# an ask records no contract and must stay dispatchable. Every scaffold puts both
+# subsections inside `# Task`, so one membership test covers both; a brief with no
+# `# Task` at all has no authored prose to protect and every match counts.
+fm_brief_delivery_contract_unreachable() {  # <file>
+  local file=$1 hit
+  [ -f "$file" ] && [ -r "$file" ] || return 1
+  [ -z "$(fm_brief_delivery_mode "$file")" ] || return 1
+  # An unclosed fence hides every heading below it, so the `# Task` membership
+  # test below cannot be trusted on such a brief: the section never ends and the
+  # contract line reads as authored prose. A brief that leaves a fence open and
+  # carries a contract line is unreachable whatever that test would say.
+  if fm_brief_heading_parse "$file" '' open-fence >/dev/null; then
+    hit=$(grep -n -m 1 '^Delivery contract: mode=' -- "$file") || return 1
+    printf '%s\n' "$hit"
+    return 0
+  fi
+  # Outside `# Task` AND outside any fence. fm_brief_heading_parse is fence-aware
+  # precisely so a quotation is not mistaken for structure, and a contract line
+  # quoted in a closed fence somewhere other than `# Task` is a quotation like any
+  # other; reading it as a contract nothing can reach is this branch's own class,
+  # one more time.
+  hit=$(fm_brief_heading_parse "$file" "# Task" mark-fence |
+    awk 'substr($0, 1, 2) == "00" && substr($0, 3) ~ /^Delivery contract: mode=/ {
+      printf "%d:%s\n", NR, substr($0, 3)
+      exit
+    }')
+  [ -n "$hit" ] || return 1
+  printf '%s\n' "$hit"
 }
 
 # Print the first line of the captain-intent text on stdin that opens with an
@@ -301,8 +495,14 @@ fm_dod_block() {  # <mode> <task-id>
 # Definition of done
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
-The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
+
+**Open the pull request early, not at the end.** As soon as your first commit is on \`fm/$id\`, push the branch and open the PR with \`gh-axi\`, then append \`working: PR {url} open, work continuing\` to the status file and carry straight on - that line is nonterminal under rule 4, and it is what lets firstmate and the captain follow this work from its first commit instead of seeing it only once it is finished. The review comes after you report done, so an open PR is not a request for one and you keep working.
+Push each later commit to that same PR as you make it; never hold work back to make the PR look finished, and say in the PR body that the work is still in progress.
+Do not open it as a draft: the reviewer and the merge path both act on an ordinary open pull request.
+
+The task is complete only when the work is implemented, committed, and pushed to that PR.
+Then append \`done: PR {url}\` to the status file and stop.
+If no PR is open by then - your first commit was also your last, or an early push failed and you recovered - open it now and append the same \`done:\` line.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
       ;;

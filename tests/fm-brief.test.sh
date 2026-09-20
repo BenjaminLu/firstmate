@@ -1284,6 +1284,137 @@ test_ship_and_scout_carry_the_machine_boundary_rules() {
   pass "fm-brief.sh: ship and scout briefs bound what a worker may change outside its worktree"
 }
 
+# The design record is the default, not something firstmate remembers: every task
+# scaffold writes data/<id>/design.md when there is none and points the worker at
+# that FILE by absolute path. A brief naming a skill instead would degrade
+# silently on any machine without it, which is the shape this deliberately avoids.
+# A secondmate charter gets neither: a persistent domain is not a task.
+test_design_record_is_scaffolded_beside_every_task_brief() {
+  local home brief record kind id
+  local -a flags
+  home="$TMP_ROOT/design-scaffold-home"
+  mkdir -p "$home/data"
+  for kind in ship scout review; do
+    id="brief-design-$kind"
+    case "$kind" in
+      ship) flags=(--mode direct-PR) ;;
+      scout) flags=(--scout) ;;
+      review) flags=(--review https://github.com/acme/widget/pull/5) ;;
+    esac
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" alpha "${flags[@]}" >/dev/null 2>&1 \
+      || fail "$kind: scaffold exited non-zero"
+    brief="$home/data/$id/brief.md"
+    record="$home/data/$id/design.md"
+    assert_present "$record" "$kind: no design record was scaffolded beside the brief"
+    assert_grep "{DESIGN}" "$record" "$kind: design record carries no placeholder to fill"
+    assert_grep "# Design record" "$brief" "$kind: brief carries no design-record section"
+    grep -qF -- "$record" "$brief" \
+      || fail "$kind: brief does not name the design record by its absolute path"
+    # What reaches a worker must be a file it can open, never the name of a skill
+    # that lives only in one person's home directory.
+    assert_no_grep "planning skill" "$brief" "$kind: brief sends the worker to a skill instead of the record"
+    assert_no_grep "grilling" "$brief" "$kind: brief sends the worker to a skill instead of the record"
+  done
+  FM_SECONDMATE_CHARTER='Own the widget domain.' FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" brief-design-secondmate --secondmate alpha >/dev/null 2>&1 \
+    || fail "secondmate charter should scaffold"
+  assert_absent "$home/data/brief-design-secondmate/design.md" \
+    "a secondmate charter was given a task design record"
+  assert_no_grep "# Design record" "$home/data/brief-design-secondmate/brief.md" \
+    "a secondmate charter carries a task design-record section"
+  pass "fm-brief.sh: every task scaffold carries a design record and names that file, not a skill"
+}
+
+# An existing record is the same record: a hand-written plan, or one a previous
+# scaffold already holds, must survive untouched rather than be reset to a
+# placeholder that the spawn would then refuse.
+test_design_record_is_never_rewritten() {
+  local home record before out
+  home="$TMP_ROOT/design-reuse-home"
+  mkdir -p "$home/data/brief-design-existing"
+  record="$home/data/brief-design-existing/design.md"
+  printf '# Design - written by hand\n\nKeep the second mechanism and delete the first.\n' > "$record"
+  before=$(cat "$record")
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-design-existing alpha --mode direct-PR 2>&1) \
+    || fail "scaffold beside an existing design record should succeed"
+  [ "$(cat "$record")" = "$before" ] || fail "an existing design record was rewritten by the scaffold"
+  assert_contains "$out" "design record: reused" "the scaffold did not report the record as reused"
+  pass "fm-brief.sh: an existing design record is reused byte-for-byte, never reset"
+}
+
+
+# direct-PR is the mode whose review the captain watches, so its worker opens the
+# pull request at its first commit and reports the URL in a line rule 4 already
+# defines as nonterminal. The other two modes must not acquire the instruction:
+# no-mistakes has the pipeline open its PR, and local-only opens none at all.
+test_direct_pr_opens_the_pull_request_early() {
+  local home brief
+  home="$TMP_ROOT/design-earlypr-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-earlypr-d1 alpha --mode direct-PR >/dev/null 2>&1 \
+    || fail "direct-PR scaffold exited non-zero"
+  brief="$home/data/brief-earlypr-d1/brief.md"
+  assert_grep "Open the pull request early, not at the end." "$brief" \
+    "direct-PR brief does not make the early pull request its default"
+  assert_grep "As soon as your first commit is on \`fm/brief-earlypr-d1\`" "$brief" \
+    "direct-PR brief does not tie the pull request to the first commit"
+  assert_grep "working: PR {url} open, work continuing" "$brief" \
+    "direct-PR brief does not give the worker the line that reports the early URL"
+  assert_grep "that line is nonterminal under rule 4" "$brief" \
+    "direct-PR brief does not protect the early report from ending the turn"
+  assert_grep "Do not open it as a draft" "$brief" \
+    "direct-PR brief leaves the draft turn open, which the reviewer and merge path cannot act on"
+  assert_grep "done: PR {url}" "$brief" "direct-PR brief lost its terminal done line"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-earlypr-n1 alpha --mode no-mistakes >/dev/null 2>&1 \
+    || fail "no-mistakes scaffold exited non-zero"
+  assert_no_grep "Open the pull request early" "$home/data/brief-earlypr-n1/brief.md" \
+    "no-mistakes brief took the direct-PR early-pull-request instruction, which its pipeline owns"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-earlypr-l1 alpha --mode local-only >/dev/null 2>&1 \
+    || fail "local-only scaffold exited non-zero"
+  assert_no_grep "Open the pull request early" "$home/data/brief-earlypr-l1/brief.md" \
+    "local-only brief was told to open a pull request it must never open"
+  pass "fm-brief.sh: direct-PR opens its pull request at the first commit and no other mode does"
+}
+
+# All three scripts on this path hand the worker the record's absolute path, so
+# all three must refuse a path that is not a file the worker can open. The
+# scaffold's own refusal was asserted nowhere: deleting it left the suite green.
+test_design_record_must_be_a_file_the_worker_can_open() {
+  local home record out status
+  home="$TMP_ROOT/design-notfile-home"
+  mkdir -p "$home/data/brief-design-notfile"
+  record="$home/data/brief-design-notfile/design.md"
+  mkdir -p "$record"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-design-notfile alpha --mode direct-PR 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a directory at the design record's path should refuse"
+  assert_contains "$out" "exists but is not a readable regular file" \
+    "the refusal did not use the wording every script on this path shares"
+  assert_absent "$home/data/brief-design-notfile/brief.md" \
+    "a refused scaffold still wrote a brief pointing at a path the worker cannot open"
+  rmdir "$record"
+
+  # Unreadable is the same hole: the path exists and is a regular file, and the
+  # worker still cannot open it. Skipped when running as a user that ignores the
+  # mode bits, because a check that cannot verify something must say so.
+  mkdir -p "$home/data/brief-design-unreadable"
+  record="$home/data/brief-design-unreadable/design.md"
+  printf '# Design\n' > "$record"
+  chmod 000 "$record"
+  if [ -r "$record" ]; then
+    printf 'ok - skipped (this user reads a mode-000 file; the unreadable case cannot be exercised here)\n'
+  else
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-design-unreadable alpha --mode direct-PR 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "an unreadable design record should refuse"
+    assert_contains "$out" "exists but is not a readable regular file" \
+      "the unreadable case did not use the shared refusal wording"
+  fi
+  chmod 644 "$record"
+  pass "fm-brief.sh: a design record that is not a file the worker can open is refused"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1316,3 +1447,7 @@ test_review_brief_names_the_repository_on_every_gh_axi_call
 test_review_brief_writes_nothing_and_rules_on_nothing
 test_review_refuses_what_it_cannot_post_to
 test_ship_and_scout_carry_the_machine_boundary_rules
+test_design_record_is_scaffolded_beside_every_task_brief
+test_design_record_is_never_rewritten
+test_direct_pr_opens_the_pull_request_early
+test_design_record_must_be_a_file_the_worker_can_open

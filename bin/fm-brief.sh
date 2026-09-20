@@ -77,6 +77,17 @@
 # Every scaffold also carries the steering-inbox receive-and-ack section:
 # process state/<id>.inbox/*.msg in order and acknowledge each by moving it to
 # handled/ (record, doorbell, and ladder owned by bin/fm-task-inbox-lib.sh).
+# Every ship, scout, and review scaffold also writes the task's design record at
+# data/<task-id>/design.md when there is none, and carries a `# Design record`
+# section naming that file by absolute path. The record is firstmate's plan for
+# the task, so a decision made in a steer does not live only in a steer; the brief
+# names a FILE the worker can always open rather than a skill it may not have.
+# bin/fm-dod-lib.sh owns the record's path, scaffold body, and `{DESIGN}`
+# placeholder; bin/fm-dispatch.sh fills it from --design or --no-design; and
+# bin/fm-spawn.sh refuses to launch a worker whose record still carries the
+# placeholder. An existing record is never rewritten here: a hand-written one is
+# the same record, and rewriting it would discard what it already holds.
+# A secondmate charter gets none - a persistent domain is not a task.
 # Ship tasks include a project-memory section so durable project-intrinsic
 # learnings can be committed to AGENTS.md through the project's delivery path;
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
@@ -362,6 +373,33 @@ fi
 
 REPO=${POS[1]}
 
+# Firstmate's plan for this task lives beside the brief. Scaffolding it here, and
+# naming it in the brief below, is what makes writing the plan down the default
+# rather than something firstmate has to remember at the end of an intake.
+DESIGN_RECORD=$(fm_design_record_path "$DATA" "$ID")
+if [ -e "$DESIGN_RECORD" ]; then
+  # The brief below hands the worker this path, so it must be a file the worker
+  # can open. Refused in the same words bin/fm-dispatch.sh and bin/fm-spawn.sh use.
+  if [ ! -f "$DESIGN_RECORD" ] || [ ! -r "$DESIGN_RECORD" ]; then
+    echo "error: $DESIGN_RECORD exists but is not a readable regular file" >&2
+    exit 1
+  fi
+  DESIGN_STATE=reused
+else
+  fm_design_record_scaffold "$ID" > "$DESIGN_RECORD" || {
+    echo "error: could not scaffold the design record at $DESIGN_RECORD" >&2
+    exit 1
+  }
+  DESIGN_STATE=scaffolded
+fi
+IFS= read -r -d '' DESIGN_SECTION <<EOF || true
+# Design record
+Firstmate's plan for this task is the file \`$DESIGN_RECORD\`. Read it before you build, and read it again whenever firstmate steers you.
+It holds firstmate's own decisions and why - it may record that this task has none. It ranks with \`## Firstmate spec\` above and supersedes it where the two disagree; \`## Captain's intent\` stays the captain's ask and outranks both, and this record is never part of a no-mistakes \`--intent\`.
+Firstmate appends dated entries as the plan changes, so the record can lag an instruction you have just received: where a steering message and the record disagree the steering message is the newer decision and it wins, and naming that in the status line you send at your next phase change is what gets it written into the record instead of left in your inbox.
+EOF
+DESIGN_SECTION=${DESIGN_SECTION%$'\n'}
+
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
 # shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
@@ -422,6 +460,8 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+
+$DESIGN_SECTION
 
 $HERDR_SECTION
 
@@ -516,6 +556,7 @@ The posted review is the deliverable. Everything below exists so firstmate and t
 
 EOF
 echo "scaffolded: $BRIEF (review of $PR_URL; replace {TASK} and {FIRSTMATE_SPEC}; spawn with --scout)"
+echo "design record: $DESIGN_STATE $DESIGN_RECORD"
 exit 0
 fi
 
@@ -529,6 +570,8 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+
+$DESIGN_SECTION
 
 $HERDR_SECTION
 
@@ -594,6 +637,7 @@ When the report is complete, append \`done: {one-line conclusion}\` to the statu
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
 echo "scaffolded: $BRIEF (scout; replace {TASK} and {FIRSTMATE_SPEC})"
+echo "design record: $DESIGN_STATE $DESIGN_RECORD"
 exit 0
 fi
 
@@ -621,6 +665,8 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 $TASK_SECTION
+
+$DESIGN_SECTION
 
 $HERDR_SECTION
 
@@ -692,3 +738,4 @@ Keep it proportionate: skip \`AGENTS.md\` edits for trivial tasks that produced 
 $DOD
 EOF
 echo "scaffolded: $BRIEF (ship, mode=$MODE; replace {TASK} and {FIRSTMATE_SPEC})"
+echo "design record: $DESIGN_STATE $DESIGN_RECORD"

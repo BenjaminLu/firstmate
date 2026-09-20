@@ -108,6 +108,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
+  <id>/design.md     per-task design record: firstmate's plan and why, named to the worker by absolute path; scaffolded beside the brief and written at dispatch (bin/fm-brief.sh, bin/fm-dispatch.sh); dated entries are appended, never rewritten; survives teardown
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               runtime records and signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
@@ -176,6 +177,7 @@ state/               runtime records and signals; gitignored
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
+Compose a file you intend to hand to another tool in a per-session directory of your own - the harness's scratchpad where it provides one, otherwise `mktemp -d` - and never at a fixed path another session could also write: a pull request body composed at a shared `/tmp` path was appended to by two sessions and published to the wrong pull request.
 
 ## 3. Session start (run once at every session start)
 
@@ -345,7 +347,8 @@ Treat file or subsystem overlap as a risk signal rather than an automatic reason
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
 Write the task-specific brief under section 11 before spawning.
 Fill the task subsections according to section 11.
-Once intake has resolved the project, mode, `yolo` posture, ask, spec, and any deviation reason, `bin/fm-dispatch.sh` scaffolds and fills the brief, resolves the profile, files the item with its repo and mode note, and spawns in one call; with a `config/crew-dispatch.json` present, any resolution that is not `clear` stops before filing and hands the profile back to you to re-run with explicit `--harness/--model/--effort`; the intake above still owns every judgment and that script owns only the mechanics.
+Write your plan for the task into its design record rather than only into a steer; `bin/fm-dispatch.sh` requires either that plan or your dated statement that the task has none, and `bin/fm-brief.sh` owns the record and points the worker at the file.
+Once intake has resolved the project, mode, `yolo` posture, ask, spec, design record, and any deviation reason, `bin/fm-dispatch.sh` scaffolds and fills the brief, resolves the profile, files the item with its repo and mode note, and spawns in one call; with a `config/crew-dispatch.json` present, any resolution that is not `clear` stops before filing and hands the profile back to you to re-run with explicit `--harness/--model/--effort`; the intake above still owns every judgment and that script owns only the mechanics.
 
 ### Dispatch and supervision handoff
 
@@ -355,6 +358,7 @@ When the configured tasks-axi backlog gate applies, the spawn itself moves the w
 After spawning, confirm the worker is processing the brief and handle any trust dialog through `harness-adapters`.
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 
+When a steer carries a design decision, append it to that task's design record as a dated entry in the same turn; the record is append-only, so a decision left out of it is visibly missing rather than silently contradicted.
 Steer a worker with ordinary text through fail-closed `fm-send`: the message becomes a durable record in the task's steering inbox (multi-line text is legal, local and remote alike) and the worker's terminal receives only a constant doorbell line, with the watcher re-ringing an unacknowledged local message and escalating a stuck one (`bin/fm-task-inbox-lib.sh`; `bin/fm-send.sh` owns the typed-plane carve-outs).
 A remote secondmate steer rides the same durable-inbox model through the remote transport; after an unconfirmed delivery, only the exact `FM_PENDING_REPLY_EXISTING_CORR=<id>` resend command printed by `fm-send` is safe because it preserves the request body for remote enqueue deduplication (`bin/fm-send.sh` header).
 When a steer answers an open keyed decision or blocker, pass `fm-send`'s `--resolve-key` so the answer itself closes that decision record at answer time, identically for local and remote workers (contract: `bin/fm-send.sh` header).
@@ -418,7 +422,7 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 
 ### PR ready, landing, and teardown
 
-For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
+For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` opens its pull request at its first commit, reports that URL in a nonterminal line, and reports `done: PR <url>` once the work on it is finished.
 Run `bin/fm-pr-check.sh <id> <PR url> --arm-only` as soon as a PR URL exists for a live task - the worker's pr step opening one, or a listing that shows one - rather than waiting for the worker to finish: it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll without announcing the work as ready.
 Run the same command without `--arm-only` once the task's own ready signal has arrived, which additionally publishes the child's PR-ready line to a parent channel.
 Both forms are idempotent, and arming is not a one-time cost: the armed poll runs on every `*.check.sh` sweep for as long as it stays armed, so arming at the PR rather than at the ready signal buys forge polls across the whole validation phase.
@@ -581,6 +585,7 @@ Preserve durable structured identifiers, dependencies, and completion artifact l
 ## 11. Crewmate briefs
 
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
+That scaffold also writes the task's design record beside the brief and points the worker at that file, never at a skill the worker may not have; planning and grilling the requirements are yours, whatever you use for them, and what reaches a worker is the record they produced.
 Use its scaffold as the contract, then fill `## Captain's intent` (`{TASK}`) with the captain's own ask and any boundary the captain stated, plus the context needed to read it, including the substance of any report, decision, or PR the ask refers to; never widen the ask there into a general goal or an enumerated coverage list, because the reviewer treats that subsection as acceptance criteria.
 Fill `## Firstmate spec` (`{FIRSTMATE_SPEC}`) with only the build instructions that ask requires, naming what stays out of scope when the ask is narrow; a generalization, consistency sweep, or extra hardening the captain did not ask for is follow-up work to note, not scope to add.
 `bin/fm-dod-lib.sh` owns intent authoring without added speaker labels or direct address, its provenance markers, what a no-mistakes worker may pass as `--intent`, the string's self-sufficiency rule, and the fix-round technique a no-mistakes worker applies.
