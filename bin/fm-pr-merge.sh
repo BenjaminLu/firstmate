@@ -532,7 +532,7 @@ FIELDS
   fi
 
   if ! fm_pr_head_valid "$live_head"; then
-    echo "error: could not read the GitLab merge request head commit before merging" >&2
+    echo "error: the merge request's head commit did not read back as a commit, so there is nothing to bind the merge to; retrying will not clear it" >&2
     return 1
   fi
   # A rebase moves the head and leaves the recorded value behind, so the
@@ -899,7 +899,7 @@ FIELDS
   fi
 
   if ! fm_pr_head_valid "$live_head"; then
-    echo "error: could not read the GitHub pull request head commit before merging" >&2
+    echo "error: the pull request's head commit did not read back as a commit, so there is nothing to bind the merge to; retrying will not clear it" >&2
     return 1
   fi
   if ! red=$(github_checks_not_green "$json"); then

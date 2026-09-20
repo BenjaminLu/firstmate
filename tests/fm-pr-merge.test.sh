@@ -1833,7 +1833,7 @@ test_gitlab_invalid_head_refuses() {
   set -e
 
   expect_code 1 "$rc" "gitlab-invalid-head: fm-pr-merge should refuse"
-  assert_grep 'could not read the GitLab merge request head commit before merging' \
+  assert_grep "head commit did not read back as a commit" \
     "$case_dir/stderr" "gitlab-invalid-head: refusal did not name the unreadable head"
   [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
     || fail "gitlab-invalid-head: a merge was bound to a head that is not a commit"
@@ -4453,3 +4453,37 @@ test_a_failed_post_merge_confirmation_quotes_the_forge() {
 }
 
 test_a_failed_post_merge_confirmation_quotes_the_forge
+
+# The head-commit read was the one failure on each forge naming neither its
+# condition nor whether retrying clears it, and the GitHub side was pinned by
+# nothing while its GitLab twin was pinned - an asymmetry inside one class.
+test_an_unreadable_head_commit_names_its_condition() {
+  local case_dir rc head=2525252525252525252525252525252525252525
+  case_dir=$(make_case github-head-not-a-commit)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  # headRefOid null passes the six-field guard - the field is present, just
+  # empty - and fails the commit check below it.
+  cat > "$case_dir/github-view.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":null,"baseRefName":"main","author":{"login":"worker"},"reviews":[$(approving_review "$head")],"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-head-not-a-commit: an unreadable head must not merge"
+  assert_grep 'head commit did not read back as a commit' "$case_dir/stderr" \
+    "github-head-not-a-commit: the refusal did not name its condition"
+  assert_grep 'retrying will not clear it' "$case_dir/stderr" \
+    "github-head-not-a-commit: the refusal did not say whether retrying clears it"
+  assert_no_grep 'own fields did not read back' "$case_dir/stderr" \
+    "github-head-not-a-commit: an unreadable head was reported as a short field read"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-head-not-a-commit: gh pr merge ran with no head to bind to"
+  pass "an unreadable head commit names its own condition and its retryability, on the forge where nothing pinned it"
+}
+
+test_an_unreadable_head_commit_names_its_condition
