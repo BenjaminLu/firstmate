@@ -14,8 +14,8 @@
 #   4. A sha ending a sentence is still read, while a UUID - whose dashes sit
 #      on the inside, where nothing strips them - is still left alone.
 #   5. A value that resolves in another object database this home can see - the
-#      project clone, firstmate itself - is not refused, and a remote target is
-#      not judged against this host at all.
+#      project clone, or firstmate's own repository under its own override - is
+#      not refused, and a remote target is not judged against this host at all.
 #   6. No readable RECORDED copy steps aside rather than blocking a steer it
 #      cannot judge, even where firstmate's own repository is readable.
 # The codex case below passes a literal `$...` message on purpose (the point is
@@ -199,6 +199,31 @@ test_a_commit_that_resolves_in_another_object_database_is_not_refused() {
   pass "fm-send: a commit the slot has not fetched yet is not refused"
 }
 
+test_a_firstmate_commit_named_to_another_projects_worker_is_accepted() {
+  local dir err rc sha
+  dir=$(setup_case firstmate-commit)
+  err="$dir/send.err"
+  # A separate repository standing in for firstmate's own checkout, holding a
+  # commit that exists in neither of the task's recorded copies. This is the
+  # case the third source exists for; without it the suite would pass with that
+  # source deleted.
+  fm_git_init_commit "$dir/firstmate"
+  sha=$(git -C "$dir/firstmate" rev-parse HEAD)
+  run_send "$dir" "$err" FM_ROOT_OVERRIDE="$dir/firstmate" -- task-a \
+    "this mirrors what landed in firstmate as ${sha:0:8}"
+  rc=$?
+  expect_code 0 "$rc" "a firstmate commit named to another project's worker must be accepted:"$'\n'"$(cat "$err")"
+  # And it accepts only: with the recorded copies readable, a value in no
+  # repository at all still refuses.
+  run_send "$dir" "$err" FM_ROOT_OVERRIDE="$dir/firstmate" -- task-a \
+    'verify against deadbeefdeadbeef'
+  rc=$?
+  expect_code 2 "$rc" "firstmate's repository must not accept a value nothing holds"
+  assert_contains "$(cat "$err")" "$dir/firstmate" \
+    "the refusal must name firstmate's repository among the copies it looked in"
+  pass "fm-send: firstmate's own repository accepts a real firstmate commit and nothing else"
+}
+
 test_a_remote_targets_recorded_paths_are_not_judged_locally() {
   local dir err
   dir=$(setup_case remote-target)
@@ -357,6 +382,7 @@ test_accepts_a_message_naming_a_commit_that_resolves
 test_ordinary_prose_with_hex_like_words_is_not_treated_as_a_commit
 test_a_commit_ending_a_sentence_is_still_read
 test_a_commit_that_resolves_in_another_object_database_is_not_refused
+test_a_firstmate_commit_named_to_another_projects_worker_is_accepted
 test_a_remote_targets_recorded_paths_are_not_judged_locally
 test_a_plain_number_is_not_a_commit_ish
 test_the_typed_planes_are_not_guarded
