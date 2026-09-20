@@ -173,7 +173,7 @@ No fast mode, path skips, reduced checks, or paid runner provisioning is part of
 
 **Byte weight balances the partitions; it does not balance their duration, and the gap is large.**
 Partitions are packed by byte weight, and on green run [35479482522](https://github.com/BenjaminLu/firstmate/actions/runs/35479482522) that packing was as close to exact as it can get - both partitions held 7065522 bytes, to the byte - yet partition 1 ran 313 s against partition 2's 586 s, with 498.84 s of CPU against 871.98 s.
-Neither root bytes nor the transitive `# shellcheck source=` closure explains it: the closures differ by 6% while the wall differs by 87%.
+Neither root bytes nor the transitive `# shellcheck source=` closure explains it: taking each partition's `--list-files` roots and following `# shellcheck source=` transitively into one deduplicated set gives 251 files and 7704758 bytes against 244 files and 7757479 bytes, so the closures differ by **0.7%** while the wall differs by 87%.
 Measured per root on one machine, ShellCheck cost ranges from 102 ms/KB to 10122 ms/KB, a hundredfold spread, so file size carries almost no information about analysis cost.
 Raising `n` therefore splits the same mispredicted weight into more bins rather than correcting it; expect the partitions to stay uneven at any count until the weight itself is measured rather than estimated.
 Treat `shard_*_weight_bytes` in the telemetry as the scheduling proxy it is, and read the measured `wall_seconds` beside it before concluding a partition is balanced.
