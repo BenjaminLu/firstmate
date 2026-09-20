@@ -2103,6 +2103,16 @@ fi
 
 # Shared by both the first-notification and already-notified paths below so
 # the retirement sequence (bin/fm-pr-lib.sh) is stated once.
+# The head a task's record names at this instant, empty when it names none.
+# Every row about a re-bind is built from this rather than from what the path
+# that failed assumed it had left behind: a clear that did not happen leaves the
+# arming-time head in place, and a task armed without one never had a head to be
+# stale. A durable row that asserts either without looking is the same defect
+# this whole poll exists to end, one level up.
+recorded_pr_head() {  # <id>
+  grep '^pr_head=' "$STATE/$1.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
 retire_merged_pr_poll() {  # <id>
   local id=$1
   if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" merged; then
@@ -2274,6 +2284,149 @@ while :; do
           run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
             "$provider" "$url" "$host" "$path" "$number" || exit 1
           out=$FM_CHECK_RESULT
+          # The poll reads the pull request's head on the same call that reads
+          # its state (bin/fm-pr-poll.sh owns that output contract), so the
+          # recorded head is re-bound to the live one every cycle instead of
+          # staying on whatever was captured when the poll was armed. A head
+          # line is not supervisor-actionable - an open pull request's head
+          # moves with every push - so it is consumed here and clears $out
+          # rather than waking. A merged line carries the pull request's head at
+          # the moment the merge was seen - the last commit on its branch, NOT
+          # the commit created on the base, which under this fleet's default
+          # squash is a different object entirely - and that is what the record
+          # is for and what every consumer reads it as. Only a head this poll
+          # just read reaches metadata, and a line this watcher does not
+          # recognise is left alone and still surfaces as an ordinary wake.
+          poll_head=
+          unconfirmed_head=0
+          case "$out" in
+            'merged '*) poll_head=${out#merged }; out=merged ;;
+            'head '*) poll_head=${out#head }; out= ;;
+          esac
+          rebind_rc=0
+          if [ -n "$poll_head" ]; then
+            fm_pr_meta_rebind_head "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" "$poll_head" || rebind_rc=$?
+          elif [ "$out" = merged ] && [ "$provider" = github ]; then
+            # GitHub merged, and the forge would not give up a head. What the
+            # record still holds is the arming-time value - the superseded head
+            # this whole branch exists to stop anyone trusting - and the poll
+            # retires below, so nothing will ever correct it. Drop it rather
+            # than leave a head nobody has seen standing as the merged one;
+            # every consumer resolves a head live when none is recorded. The row
+            # is queued either way, because reporting while leaving the false
+            # record in place would fix only the half nobody reads.
+            #
+            # GitHub only, and the guard is the whole point. A bare merged from
+            # GitLab is that provider's DOCUMENTED output, not a degradation:
+            # plain glab exposes the head only inside JSON, so bin/fm-pr-poll.sh
+            # never emits one and bin/fm-pr-check.sh never records one to be
+            # stale. Reading a contract as a failure queued a durable row
+            # describing an incident that did not happen, on every GitLab merge,
+            # forever - which is the crowding the report-once record exists to
+            # stop, arriving through the path added to stop silence.
+            fm_pr_meta_clear_head "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" || rebind_rc=$?
+            unconfirmed_head=1
+          fi
+          # A re-bind never holds this loop up, and it never fails quietly.
+          # This branch exists because a poll bound to a stale head failed
+          # silently for hours; reporting its own failure only into the
+          # absorbed-wake debug log, which AGENTS.md calls never relied on and
+          # safe to delete, would be that same bug one level up. So anything
+          # that leaves the record off the head the forge just returned is
+          # queued as an actionable row.
+          #
+          # Exactly one case is exempt, and it is narrow: LIVE contention (2)
+          # on a poll that is not terminal. A relaunch owns the task record for
+          # as long as a spawn takes, the record is untouched, and the next poll
+          # re-reads the head, so it corrects itself. Every other lock failure
+          # is 1, because it is permanent - a stale lock nothing will reclaim,
+          # a timeout helper that would not load - and a later poll meets it
+          # again. Nothing on the merged path is exempt at all, contention
+          # included: the outcome publishes and the poll retires in this same
+          # cycle, so whatever the record holds then it holds forever.
+          if [ -n "$poll_head" ] && [ "$rebind_rc" -eq 0 ] && [ "${unconfirmed_head:-0}" = 0 ]; then
+            # A head was actually recorded, so anything reported before is
+            # answered and the next failure - even an identical one - is news
+            # again. The poll_head test is load-bearing: rebind_rc starts at 0
+            # and STAYS 0 on a sweep where no re-bind was even attempted, which
+            # is what a silent poll produces (an unreachable forge, a gh
+            # failure, an unparseable head). Dropping the record then would
+            # re-queue an already-reported condition on every forge hiccup,
+            # which is the crowding this record exists to prevent. "The re-bind
+            # did not fail" is not the same fact as "a head was recorded".
+            rm -f "$STATE/.pr-head-reported-$id"
+          fi
+          if [ "$rebind_rc" -ne 0 ] || [ "${unconfirmed_head:-0}" = 1 ]; then
+            if [ "$out" = merged ]; then
+              # Merged: the poll retires in this same cycle, so whatever the
+              # record holds now it holds forever. Read it rather than assume
+              # it - a clear or a re-bind that failed leaves the previous value
+              # standing, and telling a supervisor "no head is recorded" while a
+              # superseded one is exactly what is recorded points them away from
+              # the problem instead of at it.
+              # Two independent facts, each read rather than inferred: whether
+              # the forge gave a head at all, and what the record holds now.
+              # The row carries both, because "the head is X" and "the record
+              # says Y" are different things and a supervisor needs each. It
+              # also predicts nothing about a retirement that has not run yet.
+              left=$(recorded_pr_head "$id")
+              if [ -n "$poll_head" ]; then
+                merged_note="merged at $poll_head, but its record could not be updated"
+              else
+                merged_note="merged, but its pull request head could not be read"
+              fi
+              if [ -n "$left" ]; then
+                merged_note="$merged_note and still names $left, which is not confirmed to be the commit that landed"
+              elif [ -n "$poll_head" ]; then
+                merged_note="$merged_note and now names no head at all"
+              else
+                merged_note="$merged_note, so no head is recorded for what landed"
+              fi
+              triage_log "merged poll for $id: $merged_note (rc=$rebind_rc)"
+              fm_wake_append check "pr-head-$id" "check: $id $merged_note: $url" || exit 1
+            elif [ "$rebind_rc" -eq 2 ]; then
+              triage_log "deferred re-binding the recorded head of $id to $poll_head; the task record was locked"
+            else
+              # The one path here that repeats: the poll stays armed, so this
+              # cycle's failure recurs on every sweep until someone acts. The
+              # rc=1 causes are largely persistent - a record rebound to another
+              # pull request, a link count, a device mismatch - so an ungated row
+              # per sweep would crowd the queue that is meant to be the first
+              # work list. Report each distinct condition once, keyed on the
+              # task and the head it could not reach, exactly as this repo
+              # already does for pending tool updates and dead endpoints.
+              triage_log "could not re-bind the recorded head of $id to $poll_head (rc=$rebind_rc)"
+              rebind_marker="$STATE/.pr-head-reported-$id"
+              # Same rule as the merged path: a task armed without a head - no
+              # worktree, or no gh on PATH (bin/fm-pr-check.sh) - has no stale
+              # head to name, so the row must not claim one.
+              left=$(recorded_pr_head "$id")
+              if [ -n "$left" ]; then
+                left_note="so it still names $left"
+              else
+                left_note="so it still names no head at all"
+              fi
+              if [ "$(cat "$rebind_marker" 2>/dev/null || true)" = "$poll_head $rebind_rc" ]; then
+                triage_log "absorbed a repeat re-bind failure for $id (already reported once)"
+              else
+                fm_wake_append check "pr-head-$id" \
+                  "check: $id's record could not be updated to the head its pull request is on ($poll_head), $left_note: $url" \
+                  || exit 1
+                # Unguarded, like every other marker write in this file - the
+                # .dead-reported-* sibling this record was modelled on writes
+                # exactly this way. The row is already appended by the time this
+                # runs, so a failed write costs one duplicate row on the next
+                # sweep; exiting would cost the supervision cycle itself, which
+                # is a far worse answer to a failure this record exists only to
+                # make tidier. Ordering is the half that does matter and is kept:
+                # append first, then mark.
+                printf '%s %s\n' "$poll_head" "$rebind_rc" > "$rebind_marker" \
+                  || triage_log "could not write the report-once record for $id; a duplicate row may follow"
+              fi
+            fi
+          fi
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
           custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT
           run_check_capture "$custom_snapshot" || exit 1

@@ -29,6 +29,7 @@ FM_PR_DATA_URL=
 FM_PR_DATA_HOST=
 FM_PR_DATA_PATH=
 FM_PR_DATA_NUMBER=
+FM_PR_META_TMP=
 FM_PR_META_PROVIDER=
 FM_PR_META_URL=
 FM_PR_META_HOST=
@@ -1263,4 +1264,200 @@ fm_pr_poll_merge_notified_remove() {  # <state> <id>
   [ -e "$marker" ] || [ -L "$marker" ] || return 0
   [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
   rm -f -- "$marker"
+}
+
+# fm_pr_meta_write_pr <state> <meta> <state-device> <provider> <host> <path>
+#                     <number> <url> [head]
+#
+# Replace <meta> with a copy carrying exactly this pr= and, when <head> is given,
+# this pr_head=. The single owner of that rewrite: bin/fm-pr-check.sh records the
+# pair when a poll is armed and fm_pr_meta_rebind_head re-records the head on
+# every poll after that, and one invariant governs both -
+# fm_pr_metadata_identity_parse accepts no unrecognised line after pr=, so the
+# pair is stripped while copying and re-appended together at the end, never
+# appended in place.
+#
+# The caller holds the metadata lock and decides what to do on failure; this
+# validates the replacement before and after publishing it, and publishes whole
+# or not at all. FM_PR_META_TMP names the staged file while it exists so an
+# interrupted caller's own cleanup can remove it, and is cleared once the
+# rename has succeeded.
+fm_pr_meta_write_pr() {  # <state> <meta> <state-device> <provider> <host> <path> <number> <url> [head]
+  local state=$1 meta=$2 state_device=$3 provider=$4 host=$5 path=$6 number=$7 url=$8
+  local head=${9-} status=0 line
+  FM_PR_META_TMP=
+  [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
+  [ "$(fm_pr_file_link_count "$meta")" = 1 ] || return 1
+  [ "$(fm_pr_file_device "$meta")" = "$state_device" ] || return 1
+  [ -z "$head" ] || fm_pr_head_valid "$head" || return 1
+  umask 077
+  FM_PR_META_TMP=$(mktemp "$state/.fm-pr-meta.XXXXXX") || { FM_PR_META_TMP=; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      pr=*|pr_head=*) ;;
+      *) printf '%s\n' "$line" >> "$FM_PR_META_TMP" || status=1 ;;
+    esac
+  done < "$meta"
+  if [ "$status" -eq 0 ]; then
+    printf 'pr=%s\n' "$url" >> "$FM_PR_META_TMP" || status=1
+  fi
+  if [ "$status" -eq 0 ] && [ -n "$head" ]; then
+    printf 'pr_head=%s\n' "$head" >> "$FM_PR_META_TMP" || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    chmod 0600 "$FM_PR_META_TMP" \
+      && fm_pr_private_file_valid "$FM_PR_META_TMP" 600 "$state_device" \
+      && _fm_pr_meta_identity_is "$FM_PR_META_TMP" "$provider" "$host" "$path" "$number" "$url" \
+      && fm_pr_regular_destination_on_device_or_absent "$meta" "$state_device" \
+      && mv -f -- "$FM_PR_META_TMP" "$meta" \
+      || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    FM_PR_META_TMP=
+    fm_pr_private_file_valid "$meta" 600 "$state_device" \
+      && _fm_pr_meta_identity_is "$meta" "$provider" "$host" "$path" "$number" "$url" \
+      || status=1
+  fi
+  if [ -n "$FM_PR_META_TMP" ]; then
+    rm -f -- "$FM_PR_META_TMP"
+    FM_PR_META_TMP=
+  fi
+  return "$status"
+}
+
+# The canonical identity <file> records is exactly this one.
+_fm_pr_meta_identity_is() {  # <file> <provider> <host> <path> <number> <url>
+  local file=$1 provider=$2 host=$3 path=$4 number=$5 url=$6
+  fm_pr_metadata_identity_parse "$file" || return 1
+  [ "$FM_PR_META_PROVIDER" = "$provider" ] \
+    && [ "$FM_PR_META_HOST" = "$host" ] \
+    && [ "$FM_PR_META_PATH" = "$path" ] \
+    && [ "$FM_PR_META_NUMBER" = "$number" ] \
+    && [ "$FM_PR_META_URL" = "$url" ]
+}
+
+# --- recorded head re-binding -------------------------------------------------
+# The single owner of writing a task's pr_head= after arming recorded it once.
+# bin/fm-pr-check.sh captures a head at arming time inside its own atomic pr=
+# rewrite; from then on the head moves with every push, rebase and force-push,
+# and this is what puts the recorded value back on the current commit.
+#
+# bin/fm-wake-lib.sh is a canonical lint root in its own right, so reaching its
+# lock primitive stays an analysis boundary, exactly as bin/fm-afk-contract.sh's
+# fm_afk_contract_lock_helpers does.
+_FM_PR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The acquire below is BOUNDED, for the same reason bin/fm-afk-contract.sh's
+# fm_afk_contract_lock_hold is: this runs inside bin/fm-watch.sh's check loop,
+# and the task metadata lock is also taken by bin/fm-spawn.sh, which holds it
+# across backend window creation, worktree setup and launch delivery. An
+# unbounded wait there would stop that whole supervision cycle - every other
+# task's poll included - behind one ordinary relaunch. A re-bind is the one
+# write here that never needs to wait: the next cycle re-reads the head anyway,
+# so it refuses and reports instead.
+_FM_PR_META_LOCK_TIMEOUT=2
+
+fm_pr_lock_helpers() {
+  command -v fm_lock_acquire_wait_bounded >/dev/null 2>&1 && return 0
+  # shellcheck source=/dev/null
+  . "$_FM_PR_LIB_DIR/fm-wake-lib.sh"
+}
+
+# fm_pr_meta_rebind_head <state> <id> <provider> <host> <path> <number> <head>
+#
+# Record <head> as the task's pr_head=, atomically and under the task's own
+# metadata lock. <head> must be a commit id a forge just returned: this never
+# derives one from local git, never keeps a previously recorded value alive, and
+# refuses anything that is not a valid commit id, so no consumer can be handed
+# a head nobody observed.
+#
+# The write happens only while the metadata's own canonical pr= still names the
+# identity the caller validated its head against. A task rebound to a different
+# pull request between that read and this write therefore keeps the new pull
+# request's head instead of being overwritten with the old one's.
+#
+# Returns 0 once the metadata records exactly <head>, including when it already
+# did, having replaced the file wholly or not at all. Two failures are distinct
+# because they mean different things to a supervisor:
+#   2  the metadata lock was still held by a LIVE owner when the bound expired.
+#      Contention is ordinary - a spawn owns that lock for the length of a
+#      relaunch - and the next poll re-reads the head, so the caller carries on.
+#   1  anything else. The record could not be brought to the head the forge
+#      just returned, and nothing about waiting longer would have helped.
+#
+# Only fm_lock_acquire_wait_bounded's 124 is that live-owner case: it returns
+# 124 only after re-reading the owner pid and confirming the process alive.
+# Everything else it can return means something PERSISTENT - a stale lock
+# nothing will reclaim, a timeout helper that could not load, a failing pid
+# read, or 2 for a seconds argument that is not a positive number, which is
+# reachable here because the timeout below can come from the environment. Every
+# later poll meets the same thing and the head never re-binds, so none of them
+# may be reported as the self-correcting case. This maps by what 124 IS rather
+# than by listing what it is not, so a return this comment does not enumerate
+# still lands on the permanent side. Collapsing them was what turned a permanent
+# failure into a line in a log AGENTS.md calls safe to delete.
+fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <head>
+  fm_pr_head_valid "${7-}" || return 1
+  _fm_pr_meta_set_head "$@"
+}
+
+# fm_pr_meta_clear_head <state> <id> <provider> <host> <path> <number>
+#
+# Remove the task's pr_head= entirely, under the same lock, the same identity
+# check and the same return codes. For the one case where a head cannot be
+# confirmed and never will be: a merged pull request whose head the forge would
+# not give up. What is recorded then is the arming-time value, which is exactly
+# the superseded head this whole contract exists to stop anyone trusting, and
+# the poll retires in that same cycle so nothing will ever correct it. Every
+# consumer already handles an absent head by resolving one live, so removing it
+# leaves them right where leaving it would leave them wrong.
+fm_pr_meta_clear_head() {  # <state> <id> <provider> <host> <path> <number>
+  _fm_pr_meta_set_head "$1" "$2" "$3" "$4" "$5" "$6" ''
+}
+
+# The locked core of both. <head> empty means remove the line rather than write
+# one; every other rule - identity, lock bound, return codes - is identical, so
+# they are stated once here instead of drifting in two copies.
+_fm_pr_meta_set_head() {  # <state> <id> <provider> <host> <path> <number> <head-or-empty>
+  local state=$1 id=$2 provider=$3 host=$4 path=$5 number=$6 head=$7
+  local meta lock state_device url status=0 timeout lock_rc
+  fm_pr_task_id_valid "$id" || return 1
+  [ -z "$head" ] || fm_pr_head_valid "$head" || return 1
+  [ -d "$state" ] && [ ! -L "$state" ] || return 1
+  fm_pr_lock_helpers || return 1
+  state_device=$(fm_pr_file_device "$state") || return 1
+  meta="$state/$id.meta"
+  lock=$(fm_meta_lock_path "$meta") || return 1
+  timeout=${FM_TEST_PR_META_LOCK_TIMEOUT:-$_FM_PR_META_LOCK_TIMEOUT}
+  lock_rc=0
+  fm_lock_acquire_wait_bounded "$lock" "$timeout" || lock_rc=$?
+  if [ "$lock_rc" -ne 0 ]; then
+    [ "$lock_rc" -eq 124 ] || return 1
+    return 2
+  fi
+  if ! fm_pr_metadata_identity_parse "$meta" \
+    || [ "$FM_PR_META_PROVIDER" != "$provider" ] \
+    || [ "$FM_PR_META_HOST" != "$host" ] \
+    || [ "$FM_PR_META_PATH" != "$path" ] \
+    || [ "$FM_PR_META_NUMBER" != "$number" ] \
+    || [ "$(fm_pr_file_device "$meta")" != "$state_device" ]; then
+    fm_lock_release "$lock" || true
+    return 1
+  fi
+  url=$FM_PR_META_URL
+  if [ "$(grep '^pr_head=' "$meta" | tail -1 | cut -d= -f2- || true)" = "$head" ]; then
+    fm_lock_release "$lock" || return 1
+    return 0
+  fi
+  fm_pr_meta_write_pr "$state" "$meta" "$state_device" \
+    "$provider" "$host" "$path" "$number" "$url" "$head" || status=1
+  if [ "$status" -eq 0 ]; then
+    if [ -n "$head" ]; then
+      grep -qxF "pr_head=$head" "$meta" || status=1
+    else
+      ! grep -q '^pr_head=' "$meta" || status=1
+    fi
+  fi
+  fm_lock_release "$lock" || status=1
+  return "$status"
 }

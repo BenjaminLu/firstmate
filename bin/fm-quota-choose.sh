@@ -111,7 +111,13 @@ else
 fi
 [ -n "$QUOTA_SNAPSHOT" ] || die "empty quota snapshot"
 
-if printf '%s\n' "$QUOTA_SNAPSHOT" | jq -e 'type == "object"' >/dev/null 2>&1; then
+# Fed by here-string, not through a pipe. `jq -e` decides from the first value
+# and exits; a writer still filling a pipe whose reader has gone takes SIGPIPE,
+# and bash prints that write error to the REAL stderr - a trailing `2>&1` on a
+# pipeline binds to the last command, never to the writer. Callers that compare
+# stderr exactly then see a line this script never meant to emit. No pipe, no
+# race. The slurping read below takes the same shape for the same reason.
+if jq -e 'type == "object"' >/dev/null 2>&1 <<< "$QUOTA_SNAPSHOT"; then
   QUOTA_JSON=$QUOTA_SNAPSHOT
   schema=$(printf '%s\n' "$QUOTA_JSON" | jq -r '.schemaVersion // empty' 2>/dev/null) || schema=
   case "$schema" in
@@ -120,7 +126,7 @@ if printf '%s\n' "$QUOTA_SNAPSHOT" | jq -e 'type == "object"' >/dev/null 2>&1; t
     *) die "unsupported quota-axi schema version: $schema" ;;
   esac
 else
-  QUOTA_JSON=$(printf '%s\n' "$QUOTA_SNAPSHOT" | jq -Rse '
+  QUOTA_JSON=$(jq -Rse '
     def valid_preamble:
       ((length == 2) and
        (.[0] | test("^bin: (quota-axi|.*/quota-axi)$")) and
@@ -304,7 +310,7 @@ else
         end
       end
     end
-  ' 2>/dev/null) || die "invalid quota-axi snapshot"
+  ' 2>/dev/null <<< "$QUOTA_SNAPSHOT") || die "invalid quota-axi snapshot"
 fi
 
 printf '%s\n' "$QUOTA_JSON" | fm_quota_json_valid || die "invalid quota-axi provider data"
