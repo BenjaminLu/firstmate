@@ -661,6 +661,16 @@ github_checks_not_green() {
 # review leaves the pull request unapproved again and the refusal names the
 # commit that was reviewed.
 #
+# A review also has to be one that was submitted and still stands. Only the
+# three states that mean that - APPROVED, CHANGES_REQUESTED, and COMMENTED -
+# are read at all, so DISMISSED, PENDING, and any state GitHub adds later are
+# ignored in both directions rather than falling through to the body text.
+# DISMISSED is a repository saying that approval no longer counts, and PENDING
+# is a draft nobody has submitted and nobody else can see; neither approves,
+# and neither refuses either, because a withdrawn or unsent review is not a
+# verdict. Listing the states that count rather than excluding the ones that do
+# not is what keeps a state GitHub invents next year from arriving permissive.
+#
 # WHO may approve is checked as well as what they wrote, because on a public
 # repository any account with read access can submit a COMMENTED review, and a
 # gate that reads only the text would be satisfied by a stranger typing one
@@ -686,14 +696,19 @@ github_approval_state() {
       | map(sub("\r$"; "") | sub("^[ \t]+"; "") | sub("[ \t]+$"; ""))
       | map(select(. != ""))
       | last // "";
-    def approves: .state == "APPROVED" or (tail_line == "Review verdict: APPROVED");
-    def refuses: .state == "CHANGES_REQUESTED" or (tail_line == "Review verdict: NOT APPROVED");
+    def submitted:
+      (.state // "") as $st
+      | ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] | index($st) != null;
+    def approves:
+      submitted and (.state == "APPROVED" or (tail_line == "Review verdict: APPROVED"));
+    def refuses:
+      submitted and (.state == "CHANGES_REQUESTED" or (tail_line == "Review verdict: NOT APPROVED"));
     def standing:
       (.authorAssociation // "") as $a
       | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
     if type != "object" or (.reviews | type) != "array" then error("no reviews") else . end
     | (.reviews | sort_by(.submittedAt // "")) as $all
-    | ($all | map(select((.commit.oid // "") == $head))) as $at
+    | ($all | map(select((.commit.oid // "") == $head and submitted))) as $at
     | ($at | map(select(approves and standing))) as $ok
     | ($at | map(select(approves and (standing | not)))) as $outside
     | ($at | map(select(refuses))) as $no

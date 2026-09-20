@@ -3659,3 +3659,40 @@ test_the_disclosure_speaks_in_both_cases() {
 test_a_stranger_cannot_supply_the_approval
 test_each_granted_association_may_approve
 test_the_disclosure_speaks_in_both_cases
+
+# A review that was withdrawn, and one nobody submitted, are not approvals.
+test_only_a_submitted_standing_review_counts() {
+  local case_dir rc state head=1212121212121212121212121212121212121212
+  local n=300
+  for state in DISMISSED PENDING SOMETHING_NEW; do
+    n=$((n + 1))
+    case_dir=$(make_case "github-state-$state")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" "$head"
+    write_github_reviews "$case_dir" "$head" \
+      "$(review_entry "$state" "$head" reviewer 'Review verdict: APPROVED')"
+    set +e
+    run_pr_merge "$case_dir" task-x1 "https://github.com/example/repo/pull/$n" \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "github-state-$state: a $state review must not approve"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" \
+      "github-state-$state: gh pr merge ran on a $state review"
+  done
+
+  # And they do not refuse either: a withdrawn decline beside a standing
+  # approval must not hold the merge, or dismissal would mean nothing.
+  case_dir=$(make_case github-state-dismissed-decline)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry DISMISSED "$head" former 'Review verdict: NOT APPROVED'),$(approving_review "$head" reviewer)"
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/310 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-state-dismissed-decline: a dismissed decline should not hold the merge"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 310 example/repo --squash
+  pass "fm-pr-merge reads only submitted standing reviews, so a dismissed or draft one neither approves nor refuses"
+}
+
+test_only_a_submitted_standing_review_counts
