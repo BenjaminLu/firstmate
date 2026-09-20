@@ -640,6 +640,25 @@ case "$mode" in
       --startup) startup=1 ;;
       *) printf 'usage: fm-inactive-reconcile.sh scan [--startup]\n' >&2; exit 2 ;;
     esac
+    # Answer "is this scan even due" before paying for the machinery that
+    # would answer it. The watcher calls this once per poll cycle, and the
+    # cadence gate inside scan() already returns without doing anything on
+    # the overwhelming majority of those calls - but only after a re-exec, a
+    # timeout wrapper and a lock acquisition have been paid for. Measured on
+    # an idle home, that overhead was 0.27s of a 0.43s watcher poll cycle.
+    #
+    # This is the same decision as the gate in scan(), taken one process
+    # earlier, and it is deliberately kept in this file beside that gate so
+    # the two cannot drift. It is equivalent because scan() does nothing
+    # else before that gate for a main home: ledger_pass runs per poll only
+    # when home_secondmate_id succeeds, and the invalid-marker diagnostic is
+    # itself behind the same gate. --startup bypasses the cadence and so
+    # bypasses this too.
+    if [ "$startup" != 1 ] \
+      && ! home_secondmate_id >/dev/null 2>&1 \
+      && [ "$(scan_marker_age)" -lt "$FM_INACTIVE_RECONCILE_SECS" ]; then
+      exit 0
+    fi
     # The scan's own whole-second deadline enforces the budget; this outer
     # process-group kill is only the backstop for a scan wedged outside every
     # bounded section (an unbounded lock wait), so it fires one second after

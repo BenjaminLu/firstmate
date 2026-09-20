@@ -20,6 +20,10 @@ set_mtime() { # <epoch> <path>
   fi
 }
 
+file_mtime() { # <path>
+  if [ "$(uname)" = Darwin ]; then stat -f %m "$1" 2>/dev/null; else stat -c %Y "$1" 2>/dev/null; fi
+}
+
 age() { # <path>...
   local path now
   now=$(( $(date +%s) - 120 ))
@@ -683,6 +687,42 @@ test_heartbeat_cap_does_not_delay_reconciliation() {
   pass "terminal reconciliation ignores heartbeat backoff state"
 }
 
+# The watcher calls a plain `scan` once per poll cycle, so the cadence decision
+# is taken before the re-exec, timeout wrapper and lock that would otherwise be
+# paid for on every quiet cycle. That is only a saving if it decides the same
+# way the gate inside scan() does, so both directions are pinned here: an
+# undue cycle must reconcile nothing and leave the marker where it was, and the
+# same home one second past the interval must still reconcile. A secondmate
+# home is exempt from the early exit entirely - its ledger delivery is per poll
+# rather than per cadence - and test_watcher_poll_delivers_child_ledger_line_to_parent
+# is what proves that exemption still holds.
+test_undue_cycle_reconciles_nothing_and_due_cycle_still_does() {
+  local marker before after
+  make_world undue; write_child "$MAIN" child 'done: PR https://example.test/owner/repo/pull/9 checks green'
+  marker="$MAIN/state/.inactive-outcome-reconcile"
+  # A startup scan establishes the marker and reconciles the first child.
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  [ -f "$marker" ] || fail "the startup scan wrote no scan marker to age from"
+  before=$(file_mtime "$marker")
+  [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 1 ] || fail "the startup scan reconciled nothing"
+
+  # A second child arrives, but an ordinary poll finds the cadence not due.
+  write_child "$MAIN" second 'done: PR https://example.test/owner/repo/pull/10 checks green'
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" \
+    || fail "an undue poll cycle must exit clean rather than fail"
+  after=$(file_mtime "$marker")
+  [ "$before" = "$after" ] || fail "an undue poll cycle rewrote the scan marker"
+  [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 1 ] \
+    || fail "an undue poll cycle reconciled an outcome the cadence had not reached"
+
+  # age() backdates 120s, past the 60s interval run_reconcile configures.
+  age "$marker"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN"
+  [ "$(wake_count "$MAIN" 'inactive-outcome:')" = 2 ] \
+    || fail "a due poll cycle did not reconcile the outcome waiting for it"
+  pass "the per-poll cadence decision reconciles nothing when undue and still scans when due"
+}
+
 # Only authoritative terminal states qualify. A captain-held item is excluded too.
 test_scan_marker_replaces_symlink_safely() {
   make_world marker; write_child "$MAIN" child 'done: green'
@@ -916,6 +956,7 @@ test_reused_task_id_reports_each_incarnation
 test_legacy_metadata_rewrite_keeps_receipt_identity
 test_relaunch_cannot_replace_metadata_during_state_snapshot
 test_heartbeat_cap_does_not_delay_reconciliation
+test_undue_cycle_reconciles_nothing_and_due_cycle_still_does
 test_scan_marker_replaces_symlink_safely
 test_nonterminal_and_captain_held_states_do_not_report
 test_watcher_hook_and_idle_secondmate_exemption
