@@ -45,13 +45,26 @@
 #   is completeness would be the defect it exists to prevent. Truncating it is
 #   a captain-approved manual act.
 #
-# OBSERVER, NEVER A GATE
+# OBSERVER, NEVER A GATE - AND `|| true` IS MANDATORY, NOT A CONVENIENCE
 #
-# Recording a call must never change its outcome. Every entry point here
-# returns a status and never exits, so a caller records with
-# `fm_gate_call_record ... || true` and proceeds exactly as it did before this
-# library existed. A caller that lets a failed record change what it does has
-# turned an observer into a gate and is wrong.
+# Recording a call must never change its outcome. Nothing here ever calls
+# `exit`, and every entry point signals a failed record by returning 1.
+#
+# That is not enough on its own, and the distinction matters to anyone adding
+# a site. Under `set -e` a function returning 1 as a plain statement exits the
+# shell, whatever this file does. So the property this library actually has is
+# "safe if every caller guards the call", and the guard is required:
+#
+#     fm_gate_call_record ... || true      # or an `if`, or a `&&`/`||` chain
+#
+# The consequence of forgetting it is the exact inversion this section names.
+# In bin/fm-captain-hold.sh's `command_hold` the record call sits one line
+# before the `printf` that hands the caller the task id: an unguarded call
+# that dropped would kill the script AFTER the hold had already landed and
+# BEFORE anything told the caller it had. The observer would have become a
+# gate, and a silent one. Every live site guards today - bin/fm-captain-hold.sh
+# and bin/fm-pr-merge.sh with `|| true`, bin/fm-gate-call.sh inside an `if` -
+# and a new site must do the same.
 #
 # A MISSING RECORD IS VISIBLE AS MISSING
 #
@@ -112,7 +125,8 @@
 # delay the fleet action this library only observes.
 #
 # Sourced, never executed. bin/fm-gate-call.sh is the command-line entry point.
-# No side effects on source. set -u / set -e safe.
+# No side effects on source. Safe to source under `set -u` and `set -e`;
+# CALLING a function under `set -e` requires the guard above.
 
 # Assembled-line byte bound. Set below the measured 1024-byte stdout flush
 # (see BOUNDS above), with margin for the newline, so one append is one
@@ -211,8 +225,8 @@ fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <
 }
 
 # Report a call that could not be recorded: the drops sidecar first, then the
-# stderr line either way. Never exits, always returns 1, so a caller's `|| true`
-# keeps the fleet action moving.
+# stderr line either way. Never exits, always returns 1; the caller's mandatory
+# `|| true` is what keeps that 1 from stopping the fleet action.
 fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated>
   local state=$1 reason=$2 at=$3 site=$4 task=$5 verdict=$6 what=$7 grounds=$8
   local link=$9 key=${10} truncated=${11} drops line where='stderr only'
@@ -242,7 +256,9 @@ fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what
 # Append one gate call to the log.
 #   fm_gate_call_record <state-dir> <site> <task> <verdict> <what> <grounds> [link] [key]
 # Returns 0 when the line is in the log, 1 when the call was dropped and
-# reported. Never exits, whatever the caller's set -e.
+# reported. Never exits - but see OBSERVER, NEVER A GATE above: under `set -e`
+# the caller must guard the call with `|| true` or an `if`, or that 1 exits
+# the caller's shell and this observer becomes a gate.
 fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> [link] [key]
   local state=${1:-} site=${2:-} task=${3:-} verdict=${4:-} what=${5:-} grounds=${6:-}
   local link=${7:-} key=${8:-}
