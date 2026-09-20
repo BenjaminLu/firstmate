@@ -733,12 +733,14 @@ github_approval_state() {
       | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
     if type != "object" or (.reviews | type) != "array" then error("no reviews") else . end
     | (.reviews | sort_by(.submittedAt // "")) as $all
-    | ($all | map(select((.commit.oid // "") == $head and submitted))) as $at
+    | ($all | map(select((.commit.oid // "") == $head))) as $at_any
+    | ($at_any | map(select(submitted))) as $at
     | ($at | map(select(approves and standing))) as $ok
     | ($at | map(select(approves and (standing | not)))) as $outside
     | ($at | map(select(refuses))) as $no
     | "pr_author=" + ((.author.login // "") | tostring),
       "reviews_total=" + (($all | length) | tostring),
+      "at_head_any=" + (($at_any | length) | tostring),
       "at_head=" + (($at | length) | tostring),
       "approving=" + (($ok | length) | tostring),
       "outside=" + (($outside | length) | tostring),
@@ -759,7 +761,7 @@ github_verify_mergeable() {
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
   local approval_total=0 approval_named=0
-  local pr_author='' reviews_total='' at_head='' approving='' outside='' refusing=''
+  local pr_author='' reviews_total='' at_head_any='' at_head='' approving='' outside='' refusing=''
   local approver='' approver_assoc='' outside_approver='' outside_assoc=''
   local refuser='' newest_reviewed=''
 
@@ -819,6 +821,7 @@ FIELDS
     case "$line" in
       pr_author=*) pr_author=${line#pr_author=} ;;
       reviews_total=*) reviews_total=${line#reviews_total=} ;;
+      at_head_any=*) at_head_any=${line#at_head_any=} ;;
       at_head=*) at_head=${line#at_head=} ;;
       approving=*) approving=${line#approving=} ;;
       outside=*) outside=${line#outside=} ;;
@@ -836,9 +839,9 @@ FIELDS
 $approval
 APPROVAL
   # A login or commit carrying a newline would split into a line no name
-  # matches, so a payload that does not read as exactly these twelve fields is
+  # matches, so a payload that does not read as exactly these thirteen fields is
   # a failed read rather than one an approval count could be taken from.
-  if [ "$approval_named" -ne 12 ] || [ "$approval_total" -ne 12 ]; then
+  if [ "$approval_named" -ne 13 ] || [ "$approval_total" -ne 13 ]; then
     echo "error: could not read the GitHub pull request reviews before merging" >&2
     return 1
   fi
@@ -875,11 +878,18 @@ APPROVAL
     elif [ "$outside" -gt 0 ]; then
       refusals="$refusals  - the only approval at the current head $live_head is by ${outside_approver:-an unnamed account}, whose association with this repository is \"${outside_assoc:-unreadable}\"; an approval counts only from OWNER, MEMBER, or COLLABORATOR
 "
-    elif [ "$at_head" -eq 0 ]; then
-      refusals="$refusals  - the newest review is of commit ${newest_reviewed:-unreadable}, not the current head $live_head, so nothing has approved what would merge
+    elif [ "$at_head" -gt 0 ]; then
+      refusals="$refusals  - the review at the current head $live_head states no verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
+"
+    elif [ "$at_head_any" -gt 0 ]; then
+      # Reviews exist at this head but none of them is one that still stands:
+      # every one is dismissed, unsubmitted, or in a state this does not read.
+      # Saying the head was never reviewed would send the operator to push a
+      # commit that already has a review sitting on it.
+      refusals="$refusals  - every review at the current head $live_head has been withdrawn or was never submitted, so none of them counts; the head does not need a new commit, it needs a review that stands
 "
     else
-      refusals="$refusals  - the review at the current head $live_head states no verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
+      refusals="$refusals  - the newest review is of commit ${newest_reviewed:-unreadable}, not the current head $live_head, so nothing has approved what would merge
 "
     fi
   fi

@@ -3782,3 +3782,45 @@ test_gitlab_discloses_a_self_approval() {
 }
 
 test_gitlab_discloses_a_self_approval
+
+# A refusal must not name the same commit as both terms of a contrast. When the
+# only review at the head is withdrawn or unsubmitted, the head was reviewed and
+# the review stopped counting - which sends the operator somewhere different
+# from "your approval is of an older commit".
+test_a_withdrawn_review_at_the_head_is_not_reported_as_a_stale_one() {
+  local case_dir rc head=1414141414141414141414141414141414141414
+  local older=1515151515151515151515151515151515151515
+  case_dir=$(make_case github-withdrawn-at-head)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$older" past 'Review verdict: APPROVED' 2026-09-19T09:00:00Z),$(review_entry DISMISSED "$head" reviewer 'Review verdict: APPROVED' 2026-09-20T09:00:00Z)"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-withdrawn-at-head: a withdrawn approval must not merge"
+  assert_grep 'withdrawn or was never submitted' "$case_dir/stderr" \
+    "github-withdrawn-at-head: the refusal did not name the withdrawn review"
+  assert_no_grep "not the current head $head" "$case_dir/stderr" \
+    "github-withdrawn-at-head: the refusal claimed the head was never reviewed"
+
+  # The genuinely stale case keeps its own message, and its two commits differ.
+  case_dir=$(make_case github-stale-not-withdrawn)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" "$(approving_review "$older")"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-stale-not-withdrawn: a stale approval must not merge"
+  assert_grep "of commit $older, not the current head $head" "$case_dir/stderr" \
+    "github-stale-not-withdrawn: the stale refusal lost its two distinct commits"
+  pass "a withdrawn review at the head and an approval of an older commit get different refusals"
+}
+
+test_a_withdrawn_review_at_the_head_is_not_reported_as_a_stale_one
