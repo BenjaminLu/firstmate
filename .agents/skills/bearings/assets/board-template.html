@@ -635,6 +635,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "The full packet",
       freeform: "or answer in your own words…", queue_answer: "Queue answer", queued: "queued",
       too_long: "Answer is too long to queue (512 bytes maximum).",
+      nothing_chosen: "Nothing to send yet. Pick one of the options, or write your answer in the box.",
       no_channel: "Not sent. This board has no way to reach firstmate from here, so your answer was not recorded.",
       no_channel_dispatch: "Not sent. This board has no way to reach firstmate from here, so nothing was dispatched.",
       no_channel_yet: "This board cannot reach firstmate from here, so it cannot take an answer right now.",
@@ -705,6 +706,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "完整的決策說明",
       freeform: "或用你自己的話回答…", queue_answer: "送出回答", queued: "已排入",
       too_long: "回答太長，無法排入（上限 512 bytes）。",
+      nothing_chosen: "還沒有東西可以送。選一個選項，或者直接把你的回答寫在框裡。",
       no_channel: "沒有送出。這個看板從這裡連不到 firstmate，所以你的回答沒有被記錄。",
       no_channel_dispatch: "沒有送出。這個看板從這裡連不到 firstmate，所以沒有派工。",
       no_channel_yet: "這個看板從這裡連不到 firstmate，現在沒辦法接收回答。",
@@ -775,6 +777,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "完整的决策说明",
       freeform: "或用你自己的话回答…", queue_answer: "提交回答", queued: "已排入",
       too_long: "回答太长，无法排入（上限 512 bytes）。",
+      nothing_chosen: "还没有东西可以送。选一个选项，或者直接把你的回答写在框里。",
       no_channel: "没有送出。这个看板从这里连不到 firstmate，所以你的回答没有被记录。",
       no_channel_dispatch: "没有送出。这个看板从这里连不到 firstmate，所以没有派工。",
       no_channel_yet: "这个看板从这里连不到 firstmate，现在没办法接收回答。",
@@ -1611,16 +1614,25 @@ __FM_BEARINGS_BOARD_DATA__
         queueAnswer(new FormData(form).get("answer"));
       });
 
+      /* Every refusal this card can make goes through here, so a press can
+         never leave the captain with nothing. The alert is written, not
+         cleared: clearing first and then deciding what to say is how a silent
+         press came to erase the message an earlier press had earned. */
+      function refuseAnswer(message) {
+        answerLimit.textContent = message;
+        answerLimit.className = "bb-limit is-visible";
+      }
       function queueAnswer(value) {
-        answerLimit.className = "bb-limit";
         var note = (new FormData(form).get("note") || "").trim();
         var displayAnswer = value ? (note ? value + " - " + note : value) : note;
-        if (!displayAnswer) return;
-        if (utf8ByteLength(displayAnswer) > 512) {
-          answerLimit.textContent = t("too_long");
-          answerLimit.className = "bb-limit is-visible";
-          return;
-        }
+        /* He pressed before choosing anything. The button is live and the
+           board is healthy, so the press has to answer him - saying nothing
+           here is the original complaint on the one control this whole
+           surface exists to make answer him, and it used to wipe any standing
+           refusal on its way out. */
+        if (!displayAnswer) { refuseAnswer(t("nothing_chosen")); return; }
+        answerLimit.className = "bb-limit";
+        if (utf8ByteLength(displayAnswer) > 512) { refuseAnswer(t("too_long")); return; }
         /* Nothing below this point may run unless the answer actually left.
            Marking the card answered, drawing its acknowledgement and dealing
            the next card are the three things that tell the captain he has
@@ -1628,11 +1640,7 @@ __FM_BEARINGS_BOARD_DATA__
            exact "pressed it and nothing happened" complaint, made worse by
            the page insisting it worked. */
         var send = answerChannel();
-        if (!send) {
-          answerLimit.textContent = t("no_channel");
-          answerLimit.className = "bb-limit is-visible";
-          return;
-        }
+        if (!send) { refuseAnswer(t("no_channel")); return; }
         /* The versioned context keeps the selected option separate from its
            note, while close carries the composer-declared completion mode.
            The prompt text uses the English title so the answer reads the

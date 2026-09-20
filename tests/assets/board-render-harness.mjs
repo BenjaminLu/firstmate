@@ -228,8 +228,18 @@ const answerDealtCard = () => {
   if (radio) radio.checked = true;
   dealt.dispatch("submit", { preventDefault() {} });
 };
+/* Pressing the card's own button with NOTHING chosen and nothing typed, which
+   is what a captain does who presses before he has decided. The button is live
+   and the board is healthy, so this is a press that must be answered. */
+const answerDealtCardEmpty = () => {
+  const dealt = nodesWhere(byId.get("bb-call"), (n) => n.tagName === "form")[0];
+  if (!dealt) return;
+  dealt.dispatch("submit", { preventDefault() {} });
+};
 const click = process.argv[3] || "";
-if (click === "dispatch") {
+if (click === "answer-empty") {
+  answerDealtCardEmpty();
+} else if (click === "dispatch") {
   const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
   for (const p of picks) { p.checked = true; p.dispatch("change"); }
   const btn = byId.get("bb-dispatch-btn");
@@ -258,6 +268,18 @@ if (click === "dispatch") {
 } else if (click) {
   throw new Error("unknown click: " + click);
 }
+
+/* What the cards looked like AT THE PRESS, before anything else touched them.
+   The `on_enter` probe below submits each card's form to report what Enter
+   would send, and a probe that succeeds clears the alert the scripted click
+   had just written - so a test reading `.limit` afterwards sees the probe's
+   result rather than the captain's press. This snapshot is the press itself. */
+const atClick = (byId.get("bb-call") || new Node("div")).children.map((c) => ({
+  limit: c.querySelectorAll(".bb-limit")
+    .filter((n) => n.className.includes("is-visible"))
+    .map((n) => n.textContent)[0] ?? "",
+  is_queued: c.className.split(/\s+/).includes("is-queued"),
+}));
 
 /* Then, optionally, a REBUILD of the board: a different build of the same
    board, loaded into the same page with the same browser storage, exactly as
@@ -511,6 +533,7 @@ const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map(
 process.stdout.write(
   JSON.stringify({ stats, underway, charted, empty, more, cards, headings, error: errorText,
     dispatch, live_answers: liveAnswers, intervals: intervals.size,
+    at_click: atClick,
     map: bubbles, call_list: callList, map_note: byId.get("bb-map-note")?.textContent ?? "",
     /* The fleet as lanes: the label, the count it shows, and which workers it
        holds. The "could not be placed" column is read the same way as any

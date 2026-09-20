@@ -428,6 +428,42 @@ test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
 }
 
 # Colour repeats the risk, so the plot reads without counting pixels.
+# R15. The plainest form of the captain's own sentence, and on a HEALTHY board
+# rather than a degraded one: the answer channel is up, the button is live, he
+# presses before choosing, and the page does nothing and says nothing. Worse
+# than the bar's version was, because the bar at least greyed itself out.
+test_pressing_answer_with_nothing_chosen_says_so() {
+  local home out
+  home=$(make_home answer-empty)
+  out=$(render_click "$home" "$(no_channel_payload)" answer-empty)
+
+  # The board is healthy: the button was pressable and nothing is degraded.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "false" ] \
+    || fail "the fixture board was not healthy, so this proves nothing: $out"
+  # Nothing was sent, and the card must NOT look answered.
+  # Read at the press itself, before the harness's own Enter probe touches
+  # the card - otherwise a successful probe clears what the press wrote.
+  [ "$(printf '%s' "$out" | jq -r '.at_click[0].is_queued')" = "false" ] \
+    || fail "an empty press marked the card answered: $out"
+  # And he was told why, in the card's own alert.
+  assert_contains "$(printf '%s' "$out" | jq -r '.at_click[0].limit')" "Pick one of the options" \
+    "pressing with nothing chosen said nothing at all: $out"
+  pass "pressing answer with nothing chosen says what is missing"
+}
+
+# The second half of R15: the silent press also CLEARED any refusal already on
+# screen, so his second press removed the explanation his first press earned.
+test_an_empty_press_does_not_wipe_a_standing_refusal() {
+  local home out
+  home=$(make_home answer-empty-keeps)
+  # No channel, so the card carries the render-time refusal before any press.
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(no_channel_payload)" answer-empty)
+
+  [ "$(printf '%s' "$out" | jq -r '.at_click[0].limit')" != "" ] \
+    || fail "an empty press wiped the refusal that was already on screen: $out"
+  pass "an empty press never wipes the message already telling him something"
+}
+
 # R7. A thin call carries no risk and no reversibility, because nobody wrote
 # either. Reading those absences as "medium, fairly reversible" puts a claim on
 # the captain's plot that nobody made - under a note promising the opposite.
@@ -2045,3 +2081,5 @@ test_the_map_makes_no_risk_claim_nobody_made
 test_a_floor_count_reads_as_a_floor_not_a_total
 test_a_reason_with_no_words_never_shows_the_captain_a_machine_token
 test_the_map_says_which_bubbles_are_the_first_mates_own_assessment
+test_pressing_answer_with_nothing_chosen_says_so
+test_an_empty_press_does_not_wipe_a_standing_refusal
