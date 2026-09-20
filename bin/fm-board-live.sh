@@ -47,13 +47,16 @@
 #           and why.
 #
 # start     Start the server if this home has none, and print its endpoint.
-#           Idempotent: a second start prints the running endpoint and exits 0.
+#           Idempotent while the running server is on this code: a second start
+#           prints the running endpoint and exits 0. A server running code that
+#           has since changed is REPLACED rather than reported as already
+#           running; see WHAT A RUNNING SERVER IS RUNNING below.
 #           Nothing about this is a step a person has to remember - the board
 #           build starts it, so a clone that has never heard of this script
 #           still gets a live board.
 # stop      Stop this home's server. Exits 0 when none is running.
-# status    Print whether a server is running here, its endpoint, and how many
-#           events the log holds.
+# status    Print whether a server is running here, its endpoint, whether it is
+#           on the code now on disk, and how many events the log holds.
 # endpoint  Print the endpoint URL a page should connect to, from the running
 #           server's own record, or exit 1 when none is running.
 # token     Print this home's inbound token, creating it on first use, and
@@ -65,7 +68,25 @@
 #           and is the way out if a token is ever exposed.
 # doctor    Report what is and is not set up here, and exit 0 when the home is
 #           in a complete state - including the complete state of having no
-#           board at all.
+#           board at all. A running server that is not on this code is NOT a
+#           complete state and exits nonzero.
+#
+# WHAT A RUNNING SERVER IS RUNNING, AND WHY ANYONE HAS TO ASK. This server is
+# started once and then outlives every change to its own code, because nothing
+# restarts it: `start` was idempotent on the fact that a process existed. A
+# board was served for five hours on 2026-09-20 by a process older than the
+# code that carried the captain's click to firstmate, so every press went
+# nowhere - silently, while `status` said a board built here could send his
+# answers back. From outside, that process was indistinguishable from a healthy
+# one, and a captain has nothing but the outside.
+#
+# So a start records what the process is about to run, `status` and `doctor`
+# compare that against the code now on disk and say `current`, `STALE` or
+# `unknown` out loud, and a start that finds a stale server replaces it. Since
+# every board build starts the server, an update now reaches the captain's
+# board at his next build. Open boards are not disturbed by the replacement:
+# the page's transport reconnects on its own and the first message on any
+# connection is the whole state.
 #
 # THE CLICK COMES BACK, AND WHAT PROVES IT IS THE CAPTAIN'S. The socket carries
 # the fleet out to the board and the captain's answer back, and the second half
@@ -147,6 +168,7 @@ PIDFILE="$STATE/board-live.pid"
 ENDPOINT="$STATE/board-live.endpoint"
 TOKEN="$STATE/board-live.token"
 SERVER="$SCRIPT_DIR/fm-board-live.mjs"
+CODE="$STATE/board-live.code"
 
 # The whole header, found by where it ends rather than by a line number: a
 # hardcoded range silently drops whatever is added past it, which is how this
@@ -167,6 +189,41 @@ json_string() {  # <text>
   # reader, so anything below space that survived the cases above is dropped.
   out=$(printf '%s' "$s" | tr -d '\000-\010\013\014\016-\037')
   printf '"%s"' "$out"
+}
+
+# WHICH CODE THE RUNNING SERVER IS ACTUALLY ON. A server is started once and
+# then outlives every update to the code it is running, because `start` is
+# idempotent and nothing else ever restarts it. On 2026-09-20 a board was
+# served by a process that had started at 08:39 by code that had been replaced
+# at 13:56, so every click the captain made reached a server that had no way to
+# carry it - and `status` said, in those words, that a board built in this home
+# could send his answers back. The process was indistinguishable from a healthy
+# one from outside it, which is the property removed here.
+#
+# The fingerprint is of bin/fm-board-live.mjs and nothing else, because that is
+# the only file a running server holds: it re-reads the token on every message
+# and runs bin/fm-board-answer.sh as a fresh process for every answer, so
+# neither can go stale in it. Content and not mtime, because `git checkout`
+# stamps every file it touches and a fleet sync that changed nothing would
+# otherwise report the whole fleet stale. cksum is POSIX and on every machine a
+# clone runs on, so this needs nothing installed; it is a change detector
+# between two versions of one file and is not, and is not used as, a
+# tamper-proof digest.
+code_fingerprint() {
+  [ -f "$SERVER" ] || return 1
+  cksum < "$SERVER" 2>/dev/null | tr -s ' ' | tr -d '\n' || return 1
+}
+
+# "current", "stale", or "unknown" - never silence, because silence is what the
+# captain already read as health. `unknown` is a server this script did not
+# start, whose code therefore cannot be proved either way.
+code_state() {
+  local recorded current
+  current=$(code_fingerprint) || { printf 'unknown\n'; return; }
+  [ -f "$CODE" ] || { printf 'unknown\n'; return; }
+  recorded=$(cat "$CODE" 2>/dev/null) || { printf 'unknown\n'; return; }
+  [ -n "$recorded" ] || { printf 'unknown\n'; return; }
+  if [ "$recorded" = "$current" ]; then printf 'current\n'; else printf 'stale\n'; fi
 }
 
 server_pid() {
@@ -248,9 +305,23 @@ command_start() {
     esac
   done
   if pid=$(server_pid); then
-    printf 'already-running: %s\n' "$pid"
-    [ -f "$ENDPOINT" ] && cat "$ENDPOINT"
-    return 0
+    # A server on code that has moved is replaced rather than reported as
+    # already running. Every board build calls this, so an update to the server
+    # reaches the captain's board at his next build instead of at whatever
+    # later moment someone happened to restart it - which in practice was
+    # never. The open boards reconnect on their own: the transport reopens with
+    # a backoff and the first message on any connection is the whole state.
+    case $(code_state) in
+      current)
+        printf 'already-running: %s\n' "$pid"
+        [ -f "$ENDPOINT" ] && cat "$ENDPOINT"
+        return 0
+        ;;
+      *)
+        command_stop >/dev/null 2>&1 || true
+        printf 'replaced: %s was running code that has since changed\n' "$pid"
+        ;;
+    esac
   fi
   command -v node >/dev/null 2>&1 || {
     printf 'fm-board-live: node is required to serve the live board\n' >&2
@@ -261,12 +332,24 @@ command_start() {
     printf 'fm-board-live: cannot create %s\n' "$STATE" >&2
     return 1
   }
+  # Taken before the fork, so what is recorded is the code node is about to
+  # read rather than whatever the file became while the server was coming up.
+  local fingerprint
+  fingerprint=$(code_fingerprint) || {
+    printf 'fm-board-live: cannot read the server to record what it is running: %s\n' "$SERVER" >&2
+    return 1
+  }
   # Detached, with its own output kept, so a server that refused its port says
   # why in a file rather than dying invisibly behind a build.
   ( umask 077
     FM_HOME="$FM_HOME" nohup node "$SERVER" serve \
       ${port_args[@]+"${port_args[@]}"} >"$STATE/board-live.log" 2>&1 </dev/null &
     printf '%s\n' "$!" > "$PIDFILE" )
+  ( umask 077; printf '%s\n' "$fingerprint" > "$CODE" ) || {
+    printf 'fm-board-live: cannot record what this server is running; %s\n' \
+      "status would call it healthy without being able to check" >&2
+    return 1
+  }
   # The endpoint record is written by the server once it has the port, so its
   # appearance - not the fork - is what proves the server took one.
   local waited=0
@@ -295,7 +378,7 @@ command_stop() {
     sleep 0.1
     waited=$((waited + 1))
   done
-  rm -f -- "$PIDFILE"
+  rm -f -- "$PIDFILE" "$CODE"
   printf 'stopped: %s\n' "$pid"
 }
 
@@ -306,6 +389,17 @@ command_status() {
   if pid=$(server_pid); then
     printf 'running: %s\n' "$pid"
     [ -f "$ENDPOINT" ] && printf 'endpoint: %s' "$(cat "$ENDPOINT")" && printf '\n'
+    # Said before the inbound line below, because the inbound line is the one
+    # that was believed while every click went nowhere: a token this home can
+    # issue proves a board can SEND, and only this proves the process it sends
+    # to is the one that knows what to do with it.
+    case $(code_state) in
+      current) printf 'code: current\n' ;;
+      stale) printf 'code: STALE - this server is running code that has since changed; restart it with: %s start\n' \
+        "${BASH_SOURCE[0]}" ;;
+      *) printf 'code: unknown - this server was not started from here, so what it is running cannot be checked; restart it with: %s start\n' \
+        "${BASH_SOURCE[0]}" ;;
+    esac
   else
     printf 'running: no\n'
   fi
@@ -396,6 +490,11 @@ command_doctor() {
     printf 'board: none built in this home yet\n'
   fi
   command_status
+  # A home with no server is complete; a home whose server is not on this code
+  # is not, and it is the case that looked healthy for five hours.
+  if server_pid >/dev/null 2>&1 && [ "$(code_state)" != current ]; then
+    ok=1
+  fi
   return $ok
 }
 

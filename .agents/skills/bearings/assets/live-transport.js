@@ -203,6 +203,29 @@
     }
   };
 
+  /* The one sentence a behind board may not say. The board counts the calls it
+     was given and says the desk is empty when there are none, which is only
+     true of a board that is complete. A change the fleet could not word is
+     exactly a captain's call missing from the payload that count was taken
+     from, so the two statements were shown together on 2026-09-20 - "nothing
+     needs you, captain" directly under a badge saying changes were waiting -
+     and the captain believed the sentence, which is the one written for him.
+     Freshness is this file's to own, so the claim the board could only take at
+     face value is replaced here rather than left standing beside its own
+     contradiction. */
+  var UNKNOWN_DESK = {
+    en: "this board is behind, so it cannot tell you your desk is empty",
+    hant: "這塊板還沒跟上，所以不能跟你說你沒有事要處理",
+    hans: "这块板还没跟上，所以不能跟你说你没有事要处理"
+  };
+  /* The same correction where the board writes it out at length, in the deck
+     that has no cards to deal. */
+  var UNKNOWN_DESK_BODY = {
+    en: "This is not an empty desk. Changes have reached this home that firstmate has not yet put on this board, so what is missing from here cannot be counted from here.",
+    hant: "這不是「沒事了」。有變更已經到這個 home，但 firstmate 還沒把它們放上這塊板，所以少了什麼，在這裡是數不出來的。",
+    hans: "这不是「没事了」。有变更已经到这个 home，但 firstmate 还没把它们放上这块板，所以少了什么，在这里是数不出来的。"
+  };
+
   function lang() {
     try {
       var stored = window.localStorage && window.localStorage.getItem("fm-bearings-lang");
@@ -265,6 +288,24 @@
   var sentState = null;
   var sentDetail = "";
 
+  /* Read from the data slot the board just rendered from rather than from
+     anything this file tracks separately, so it is the count the subtitle was
+     actually taken from and cannot drift from it. Only ever reached while the
+     board is behind, which is rare, so a large payload is not parsed on an
+     ordinary repaint. A slot that will not parse leaves the board's own words
+     alone: overwriting them on a guess would be a worse sentence than the one
+     being corrected. */
+  function correctEmptyDesk() {
+    var sub = document.getElementById("bb-call-sub");
+    var slot = document.getElementById(SLOT_ID);
+    if (!sub || !slot) return;
+    var payload;
+    try { payload = JSON.parse(slot.textContent); } catch (e) { return; }
+    if (!payload || !Array.isArray(payload.captains_call)) return;
+    if (payload.captains_call.length > 0) return;
+    sub.textContent = say(UNKNOWN_DESK);
+  }
+
   /* Two facts, and neither may stand in for the other: whether the page is
      still being updated, and whether what it is showing is everything there
      is. A connection that is perfectly healthy while a captain's call is
@@ -278,6 +319,7 @@
       behind.textContent = say(behindCount === 1 ? BEHIND.one : BEHIND.many)
         .replace("{n}", String(behindCount));
       behind.hidden = false;
+      correctEmptyDesk();
     } else {
       var existing = document.getElementById(BEHIND_ID);
       if (existing) existing.hidden = true;
