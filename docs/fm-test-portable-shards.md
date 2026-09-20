@@ -194,7 +194,7 @@ Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one
 Both portable parallel lanes carry the same isolation proof and were given `--jobs 2` together; one kept it and one did not, and the difference is entirely which of those two shapes the lane has.
 Measured on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) against the three green baseline runs cited above.
 That run was **cancelled** by per-PR supersession: eight of its nineteen jobs were still queued and never executed, so it establishes nothing about this layout's concurrency.
-What survives cancellation is the four lane jobs this table quotes, which all completed green on their own runners before the cancellation, so their walls and their uploaded timing artifacts are sound.
+What survives cancellation is the two parallel lane jobs this table quotes, which both completed green on their own runners before the cancellation, so their walls and their uploaded timing artifacts are sound.
 Read anything else from that run with the caution the closing paragraph of this section asks for.
 
 Every cell is that lane's own measurement: the serial columns are the three baseline runs, the `jobs=2` columns are run 35484461648, and the script-sum and longest-script columns carry the serial median against that one run.
