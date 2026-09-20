@@ -154,15 +154,40 @@ CAPS
 # The two portable parallel lanes carry the same isolation proof, so nothing in
 # the runner or the coverage guard distinguishes them - both would accept
 # --jobs. What separates them is measured shape: lane 1 is packing-bound and
-# gains, lane 2 is bounded by one script that is two thirds of it and gains
-# nothing while costing 36% more runner-seconds. This branch is the
-# demonstration that the distinction is easy to lose: both lanes were given the
-# flag together on one argument, and only the measurement said one was wrong.
-# Pin it here, because no other gate in this repository would catch it coming
-# back.
+# gains, lane 2 holds one script that is the whole lane and gains nothing while
+# costing more runner-seconds. This branch is the demonstration that the
+# distinction is easy to lose: both lanes were given the flag together on one
+# argument, and only the measurement said one was wrong.
+#
+# Those worker counts are also an input to a model now. bin/fm-test-run.sh packs
+# the lanes by each one's projected WALL, and a lane's wall is its makespan over
+# the workers CI actually gives it - so if this file and that script disagree
+# about the counts, the model is projecting a lane that does not exist and the
+# packing it approves means nothing. Assert against the runner's own reported
+# numbers rather than literals, so the two can only be changed together.
 test_parallel_lane_concurrency_matches_the_measured_shape() {
-  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "parallel lane concurrency contract"
+  local walls
+  # --check-lane-walls rather than --check-coverage: it reports the same worker
+  # counts, budget and cap in milliseconds rather than seconds, because it does
+  # not re-prove the whole test inventory to do it. This file is itself a member
+  # of a CI shard, so what it costs to assert the packing is part of the packing.
+  walls=$("$ROOT/bin/fm-test-run.sh" --check-lane-walls) || true
+  [ -n "$walls" ] || fail "could not read the runner's lane-wall projection"
+  ruby -ryaml - "$CI_WORKFLOW" "$walls" <<'RUBY' || fail "parallel lane concurrency contract"
 jobs = YAML.load_file(ARGV[0]).fetch("jobs")
+walls = ARGV[1]
+
+def reported(walls, key)
+  match = walls[/#{key}=(\d+)/, 1]
+  raise "bin/fm-test-run.sh --check-lane-walls did not report #{key}" if match.nil?
+  match.to_i
+end
+
+def lane_jobs(walls, lane)
+  row = walls.lines.find { |l| l.start_with?("lane=#{lane} ") }
+  raise "--check-lane-walls did not report lane #{lane}" if row.nil?
+  reported(row, "jobs")
+end
 
 # Comments in these steps quote the measured --jobs 2 numbers, so match the
 # executable lines only; matching the prose would assert on the explanation
@@ -173,16 +198,43 @@ def run_step(job)
   steps.first.fetch("run").lines.reject { |l| l.strip.start_with?("#") }.join
 end
 
-one = run_step(jobs.fetch("tests-portable-parallel-1"))
-two = run_step(jobs.fetch("tests-portable-parallel-2"))
+# What the workflow actually asks for: an explicit "--jobs N", or one worker.
+def workflow_jobs(step)
+  step[/--jobs[=\s]+(\d+)/, 1]&.to_i || 1
+end
 
-raise "lane 1 must keep --jobs 2: it is packing-bound and measured 546s -> 356s" \
-  unless one.include?("--jobs 2")
+lanes = {
+  1 => jobs.fetch("tests-portable-parallel-1"),
+  2 => jobs.fetch("tests-portable-parallel-2"),
+}
 
-raise "lane 2 must stay serial: it is bounded by one script, measured 393s against a 347-415s serial band, for 36% more runner-seconds. See docs/fm-test-portable-shards.md before changing this." \
-  if two =~ /--jobs(\s|=)/
+lanes.each do |n, job|
+  asked = workflow_jobs(run_step(job))
+  modeled = lane_jobs(walls, n)
+  raise "shard #{n} runs with #{asked} worker(s) here but bin/fm-test-run.sh models #{modeled}; the wall projection that packs these lanes is describing a lane that does not exist" \
+    unless asked == modeled
+end
+
+raise "lane 1 must keep more than one worker: it is packing-bound and its wall is a makespan, not a sum" \
+  unless workflow_jobs(run_step(lanes.fetch(1))) > 1
+
+raise "lane 2 must stay serial: it is one script that is the whole lane, so a second worker has nothing to run. See docs/fm-test-portable-shards.md before changing this." \
+  unless workflow_jobs(run_step(lanes.fetch(2))) == 1
+
+# The cap the model is held against is this file's, and the model only mirrors
+# it. Mirrors drift; this is what stops one drifting unnoticed.
+modeled_cap = reported(walls, "cap_ms")
+lanes.each do |n, job|
+  cap = job.fetch("timeout-minutes") * 60_000
+  raise "shard #{n} caps at #{cap}ms but bin/fm-test-run.sh models its lanes against #{modeled_cap}ms" \
+    unless cap == modeled_cap
+end
+
+budget = reported(walls, "budget_ms")
+raise "the modeled packing budget #{budget}ms must stay below the #{modeled_cap}ms job cap it protects" \
+  unless budget < modeled_cap
 RUBY
-  pass "portable parallel lane 1 runs concurrent and lane 2 stays serial"
+  pass "portable parallel lane worker counts and job cap match the model that packs them"
 }
 
 test_ci_matrices_match_executable_partitions() {

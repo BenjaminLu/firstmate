@@ -75,17 +75,28 @@ jobs:
       - name: Prove complete regression partition
         run: bin/fm-test-run.sh --check-coverage
 
-  # Two duration-balanced portable parallel shards of the Phase 2 proven-isolated
-  # set only. Composition owner: bin/fm-test-run.sh (docs/fm-test-portable-shards.md).
+  # Two portable parallel shards of the Phase 2 proven-isolated set only, packed
+  # to balance each lane's projected WALL rather than its hint sum: this job runs
+  # its shard with two workers and the next runs its shard serially, so equal
+  # sums describe unequal walls and only a wall can be compared with the cap
+  # below. The projection also walks the order the runner really dispatches in
+  # rather than the best available order, because modelling the better one is
+  # how a doomed pack got past the guard once already. Composition and the
+  # projection are owned by bin/fm-test-run.sh
+  # (docs/fm-test-portable-shards.md).
   tests-portable-parallel-1:
     name: Behavior portable parallel 1
     runs-on: ubuntu-latest
-    # This cap is intended as a hang tripwire, but the previous lane 1 reached
-    # it; the former "~1 min of serial sum" estimate no longer applies.
-    # Compare it with the derived hints from fm-test-run.sh --check-coverage
-    # and completed job timings, allowing for setup and runner-speed spread.
-    # A packed hint sum is not a measured job wall time or proof of headroom.
-    # Evidence and refresh procedure: docs/fm-test-portable-shards.md.
+    # A hang tripwire, and on 2026-09-20 both parallel lanes proved it is also a
+    # live wall that a mis-modelled packing walks into. What protects this cap
+    # now is not the cap: bin/fm-test-run.sh projects each lane's WALL - over
+    # the worker count this workflow gives it AND over the order the runner
+    # really dispatches in, which for these lanes is alphabetical - and refuses
+    # a pack past 522000 ms, so an overloaded lane reds the five-minute coverage
+    # job rather than being cancelled here ten minutes in. Read the projection
+    # with fm-test-run.sh --check-lane-walls; a hint SUM is not a wall, and a
+    # wall computed over a better schedule than the runner uses is not one
+    # either. Evidence and refresh procedure: docs/fm-test-portable-shards.md.
     # Changes to this cap or the lane count require a separate scope decision.
     timeout-minutes: 10
     steps:
@@ -142,7 +153,9 @@ jobs:
   tests-portable-parallel-2:
     name: Behavior portable parallel 2
     runs-on: ubuntu-latest
-    # Same timeout rationale as portable parallel shard 1 above.
+    # Same timeout rationale as portable parallel shard 1 above. This is the
+    # lane that reached it first on 2026-09-20, with 1.4 seconds of work left to
+    # run; shard 1 then reached it too, on the repack that was meant to fix it.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
@@ -167,14 +180,16 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          # Deliberately serial, unlike shard 1. This lane is bounded by one
-          # long script - tests/fm-captain-hold-lifecycle.test.sh is about
-          # two thirds of it - so extra workers cannot shorten it, while the
-          # contention they add makes that script longer. Measured on run
-          # 35484461648: with --jobs 2 the lane wall was 393s against a
-          # 347-415s serial band, its script sum rose 36% and the
-          # makespan-setting script rose 79s above its slowest serial
-          # sample. See docs/fm-test-portable-shards.md for the rule.
+          # Deliberately serial, unlike shard 1. This lane is bounded by
+          # tests/fm-captain-hold-lifecycle.test.sh, which is most of it, so
+          # extra workers cannot shorten it while the contention they add makes
+          # that script longer. Measured on run 35484461648: with --jobs 2 the
+          # lane wall was 393s against a 347-415s serial band, its script sum
+          # rose 36% and the makespan-setting script rose 79s above its slowest
+          # serial sample. Because this lane runs serial its wall is exactly its
+          # sum, which is also why the projection for it is the accurate one -
+          # it matched a real step to within 0.5% on run 35517549623. See
+          # docs/fm-test-portable-shards.md before changing this.
           bin/fm-test-run.sh --lane portable-parallel-2 \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json"
       - name: Upload shard 2 timing artifact
