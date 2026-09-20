@@ -924,12 +924,18 @@ EOF
   # both cases get a line, because saying nothing in one of them is what makes
   # the other one read as a guarantee. Neither case is checkable here: GitHub
   # records an account's standing, never who firstmate asked to review.
-  if [ -n "$pr_author" ] && [ "$approver" = "$pr_author" ]; then
+  if [ -z "$pr_author" ]; then
+    # Neither of the two cases below can be asserted without an author to
+    # compare against, and claiming one anyway is the same defect as a merge
+    # line implying a separation the forge never checked.
+    printf 'notice: %s approved at head %s as %s; the account that opened the pull request could not be read, so this cannot say whether the approver is that account\n' \
+      "${approver:-an unnamed reviewer}" "$live_head" "${approver_assoc:-an unreadable association}" >&2
+  elif [ "$approver" = "$pr_author" ]; then
     printf 'notice: %s approved at head %s, which is also the account that opened the pull request; GitHub cannot separate the two here, so the reviewer being someone other than the worker rests on how firstmate dispatched it, not on this check\n' \
       "$approver" "$live_head" >&2
   else
-    printf 'notice: %s approved at head %s as %s, and is not the account that opened the pull request; that association is standing on this repository, not evidence that firstmate dispatched this reviewer, which this check cannot establish\n' \
-      "${approver:-an unnamed reviewer}" "$live_head" "${approver_assoc:-an unreadable association}" >&2
+    printf 'notice: %s approved at head %s as %s, and is not the account that opened the pull request (%s); that association is standing on this repository, not evidence that firstmate dispatched this reviewer, which this check cannot establish\n' \
+      "${approver:-an unnamed reviewer}" "$live_head" "${approver_assoc:-an unreadable association}" "$pr_author" >&2
   fi
   printf 'verified: %s is open and mergeable, approved by %s (%s), with every required check green at head %s\n' \
     "$URL" "${approver:-an unnamed reviewer}" "${approver_assoc:-unreadable}" "$live_head" >&2

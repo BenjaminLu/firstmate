@@ -3787,6 +3787,28 @@ test_gitlab_discloses_a_self_approval
 # only review at the head is withdrawn or unsubmitted, the head was reviewed and
 # the review stopped counting - which sends the operator somewhere different
 # from "your approval is of an older commit".
+# The disclosure must not assert a comparison it could not make.
+test_an_unreadable_author_is_not_reported_as_a_different_account() {
+  local case_dir head=1616161616161616161616161616161616161616
+  case_dir=$(make_case github-author-unreadable)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  # Everything readable except the account that opened the pull request.
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  cat > "$case_dir/github-view.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","author":null,"reviews":[$(approving_review "$head" reviewer)],"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-author-unreadable: the merge should proceed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'could not be read' "$case_dir/stderr" \
+    "github-author-unreadable: an unread author was not reported as unread"
+  assert_no_grep 'is not the account that opened the pull request' "$case_dir/stderr" \
+    "github-author-unreadable: the notice asserted a comparison it never made"
+  pass "an approval whose pull request author could not be read says so instead of claiming a different account"
+}
+
 test_a_withdrawn_review_at_the_head_is_not_reported_as_a_stale_one() {
   local case_dir rc head=1414141414141414141414141414141414141414
   local older=1515151515151515151515151515151515151515
@@ -3824,3 +3846,4 @@ test_a_withdrawn_review_at_the_head_is_not_reported_as_a_stale_one() {
 }
 
 test_a_withdrawn_review_at_the_head_is_not_reported_as_a_stale_one
+test_an_unreadable_author_is_not_reported_as_a_different_account
