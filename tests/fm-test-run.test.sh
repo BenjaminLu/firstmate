@@ -978,6 +978,39 @@ SH
   pass "fail-on-gate-skip converts herdr-not-found into a hard failure"
 }
 
+# Two capabilities, two tokens, and neither may be lost by the other being
+# added after it. The flag used to keep one token in one variable, so a lane
+# that owed a second capability silently retired the first the moment it asked
+# for the second - the failure being that it looks exactly like a lane that is
+# still enforcing both.
+test_every_fail_on_gate_skip_token_is_enforced() {
+  local tmp first second rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-fail-skip-many.XXXXXX")
+  first="$tmp/first.test.sh"
+  second="$tmp/second.test.sh"
+  printf '#!/usr/bin/env bash\necho "skip: herdr not found"\nexit 0\n' >"$first"
+  printf '#!/usr/bin/env bash\necho "skip: chrome not found"\nexit 0\n' >"$second"
+  chmod +x "$first" "$second"
+
+  local script
+  for script in "$first" "$second"; do
+    rc=0
+    "$RUNNER" --fail-on-gate-skip 'herdr not found' --fail-on-gate-skip 'chrome not found' \
+      "$script" >"$tmp/out.txt" 2>"$tmp/err.txt" || rc=$?
+    [ "$rc" -ne 0 ] \
+      || { rm -rf "$tmp"; fail "a required gate skip token was not enforced for $(basename "$script")"; }
+  done
+
+  # And the flag still only fails on what it was asked about, or the case above
+  # would pass for a runner that failed every skip.
+  rc=0
+  "$RUNNER" --fail-on-gate-skip 'herdr not found' "$second" >"$tmp/out.txt" 2>"$tmp/err.txt" || rc=$?
+  [ "$rc" -eq 0 ] \
+    || { rm -rf "$tmp"; fail "a skip nobody asked about was failed anyway"; }
+  rm -rf "$tmp"
+  pass "every --fail-on-gate-skip token is enforced, and only the ones given"
+}
+
 test_exclude_family() {
   local listed
   listed=$("$RUNNER" --list --all --exclude-family real-herdr-gated)
@@ -1856,6 +1889,7 @@ test_gate_skip_reason_is_recorded
 test_a_run_that_ran_records_no_skip_reason
 test_live_guards_expect_a_capability_skip_class
 test_fail_on_gate_skip_token
+test_every_fail_on_gate_skip_token_is_enforced
 test_exclude_family
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights

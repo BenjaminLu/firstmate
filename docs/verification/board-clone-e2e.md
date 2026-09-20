@@ -23,6 +23,14 @@ The suite reports `skip: chrome not found` only on a machine with no browser at 
 The portable serial CI lane requires a browser in its own step and passes `--fail-on-gate-skip 'chrome not found'`, so that skip is a lane failure where the code lands.
 `FM_TEST_BROWSER` points the driver at a specific binary when a machine has several.
 
+The case asserting that a behind board never reports an empty desk names a live defect rather than a gap in the suite, and it stays red until the branch that owns that rule closes it.
+The suite's own header says which case that is and why the fix deliberately does not live on the same branch as the assertion.
+
+## Proving the cases can fail
+
+A branch that both asserts a behaviour and provides it can bend the test to fit the code, so the assertion about a stale server was checked against three separate mutations of the fix - `status` no longer reporting staleness, `start` no longer replacing a stale server, and `doctor` no longer refusing the state - each of which must make the case fail, and fail naming what it lost.
+Re-run that with the mutation transcript in this branch's pull request when the fix changes.
+
 ## Verified
 
 FILL_VERIFIED
