@@ -3919,3 +3919,50 @@ JSON
 }
 
 test_a_failed_forge_read_is_never_reported_as_a_missing_approval
+
+# The gate and its own preview must not give different reasons for one payload.
+# A review from an account with no standing that also states no verdict used to
+# be told to add a verdict line - a remedy that produces a different refusal on
+# the next attempt - while bin/fm-pr-state.sh named the standing problem.
+test_a_nonstanding_verdictless_review_names_the_standing_problem() {
+  local case_dir rc head=1818181818181818181818181818181818181818
+  case_dir=$(make_case github-nonstanding-no-verdict)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" drive-by 'Some notes, no verdict.' 2026-09-20T09:00:00Z NONE)"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-nonstanding-no-verdict: it must not merge"
+  assert_grep 'with no standing on this repository' "$case_dir/stderr" \
+    "github-nonstanding-no-verdict: the refusal did not name the standing problem"
+  assert_grep 'drive-by' "$case_dir/stderr" \
+    "github-nonstanding-no-verdict: the refusal did not name the account"
+  assert_no_grep 'states no verdict' "$case_dir/stderr" \
+    "github-nonstanding-no-verdict: the refusal offered a remedy that would not fix it"
+
+  # A standing review with no verdict keeps the verdict remedy, which is the
+  # right one for it.
+  case_dir=$(make_case github-standing-no-verdict)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" reviewer 'Some notes, no verdict.')"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-standing-no-verdict: it must not merge"
+  assert_grep 'states no verdict' "$case_dir/stderr" \
+    "github-standing-no-verdict: a standing review lost the verdict remedy"
+  assert_no_grep 'with no standing' "$case_dir/stderr" \
+    "github-standing-no-verdict: a standing review was reported as having none"
+  pass "the merge path separates a standing review with no verdict from a non-standing one, as its preview does"
+}
+
+test_a_nonstanding_verdictless_review_names_the_standing_problem
