@@ -542,6 +542,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "The full packet",
       freeform: "or answer in your own words…", queue_answer: "Queue answer", queued: "queued",
       too_long: "Answer is too long to queue (512 bytes maximum).",
+      no_channel: "Not sent. This board has no way to reach firstmate from here, so your answer was not recorded.",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -571,6 +572,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "完整的決策說明",
       freeform: "或用你自己的話回答…", queue_answer: "送出回答", queued: "已排入",
       too_long: "回答太長，無法排入（上限 512 bytes）。",
+      no_channel: "沒有送出。這個看板從這裡連不到 firstmate，所以你的回答沒有被記錄。",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -600,6 +602,7 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "完整的决策说明",
       freeform: "或用你自己的话回答…", queue_answer: "提交回答", queued: "已排入",
       too_long: "回答太长，无法排入（上限 512 bytes）。",
+      no_channel: "没有送出。这个看板从这里连不到 firstmate，所以你的回答没有被记录。",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -794,6 +797,22 @@ __FM_BEARINGS_BOARD_DATA__
   }
   var chartedMoreQueued = data.charted_more || 0;
   var chartedMoreWarnings = data.charted_warning_more || 0;
+  /* ---- can an answer actually leave this page? ----------------------
+   The board's answer channel is provided by the surface that serves it.
+   A board opened WITHOUT that surface - a copy opened straight from disk,
+   or a live board whose serving surface is gone - simply has no channel,
+   and every send is a silent no-op.
+   This is one function because the honest behavior has to be identical at
+   every send site. The bug it exists to prevent was a guarded send with an
+   UNGUARDED success path: the answer went nowhere and the card still marked
+   itself answered, drew an acknowledgement, and dealt the next card. A
+   control that looks like it worked and did not is worse than one that says
+   it cannot, because the captain walks away believing he answered. */
+  function answerChannel() {
+  if (!window.lavish || typeof window.lavish.queuePrompt !== "function") return null;
+  return function (text, opts) { return window.lavish.queuePrompt(text, opts); };
+  }
+
   function utf8ByteLength(text) { return new TextEncoder().encode(text).length; }
   var CHECK_SVG = '<svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var CHECK_ROW_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
@@ -861,7 +880,7 @@ __FM_BEARINGS_BOARD_DATA__
     if (document.documentElement) {
       document.documentElement.lang = lang === "en" ? "en" : (lang === "hant" ? "zh-Hant" : "zh-Hans");
     }
-    LANGS.forEach(function (l) {
+  LANGS.forEach(function (l) {
       var b = document.getElementById("bb-lang-" + l);
       b.className = "bb-lang__btn" + (l === lang ? " is-active" : "");
       b.setAttribute("aria-pressed", l === lang ? "true" : "false");
@@ -1311,25 +1330,35 @@ __FM_BEARINGS_BOARD_DATA__
           answerLimit.className = "bb-limit is-visible";
           return;
         }
-        if (window.lavish && window.lavish.queuePrompt) {
-          /* The versioned context keeps the selected option separate from its
-             note, while close carries the composer-declared completion mode.
-             The prompt text uses the English title so the answer reads the
-             same on firstmate's side whatever language the captain viewed. */
-          var ctxData = {
-            schema: "fm-bearings-answer.v1",
-            question: item.key,
-            selection: value || "",
-            note: note
-          };
-          if (item.close) ctxData.close = item.close;
-          var enTitle = typeof item.title === "object" ? (item.title.en || pick(item.title)) : item.title;
-          window.lavish.queuePrompt(
-            "Captain's Call answer - " + enTitle + ": " + displayAnswer,
-            { tag: "choice", text: enTitle + " -> " + displayAnswer, element: form,
-              data: ctxData }
-          );
+        /* Nothing below this point may run unless the answer actually left.
+           Marking the card answered, drawing its acknowledgement and dealing
+           the next card are the three things that tell the captain he has
+           answered; doing any of them for an answer that went nowhere is the
+           exact "pressed it and nothing happened" complaint, made worse by
+           the page insisting it worked. */
+        var send = answerChannel();
+        if (!send) {
+          answerLimit.textContent = t("no_channel");
+          answerLimit.className = "bb-limit is-visible";
+          return;
         }
+        /* The versioned context keeps the selected option separate from its
+           note, while close carries the composer-declared completion mode.
+           The prompt text uses the English title so the answer reads the
+           same on firstmate's side whatever language the captain viewed. */
+        var ctxData = {
+          schema: "fm-bearings-answer.v1",
+          question: item.key,
+          selection: value || "",
+          note: note
+        };
+        if (item.close) ctxData.close = item.close;
+        var enTitle = typeof item.title === "object" ? (item.title.en || pick(item.title)) : item.title;
+        send(
+          "Captain's Call answer - " + enTitle + ": " + displayAnswer,
+          { tag: "choice", text: enTitle + " -> " + displayAnswer, element: form,
+            data: ctxData }
+        );
         rememberAnswered("card", item.key);
         card.classList.add("is-queued");
         ackClicked(pad);
@@ -1498,14 +1527,19 @@ __FM_BEARINGS_BOARD_DATA__
           refreshBar(t("pick_too_long"));
           return;
         }
-        if (window.lavish && window.lavish.queuePrompt) {
-          window.lavish.queuePrompt(
-            "Dispatch order - start this queued work now: " + ids.join(", "),
-            { tag: "choice", text: "Dispatch: " + ids.join(", "), element: bar,
-              queueKey: "dispatch.charted",
-              data: { question: "dispatch.charted", answer: dispatchAnswer } }
-          );
+        /* Same rule as the card: the bar may not report a dispatch it could
+           not send, and no row may be acknowledged for one. */
+        var sendDispatch = answerChannel();
+        if (!sendDispatch) {
+          refreshBar(t("no_channel"));
+          return;
         }
+        sendDispatch(
+          "Dispatch order - start this queued work now: " + ids.join(", "),
+          { tag: "choice", text: "Dispatch: " + ids.join(", "), element: bar,
+            queueKey: "dispatch.charted",
+            data: { question: "dispatch.charted", answer: dispatchAnswer } }
+        );
         dispatchQueued = true;
         bar.classList.add("is-queued");
         /* the answer is about the rows he picked, so that is where it is

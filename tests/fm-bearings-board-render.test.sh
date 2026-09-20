@@ -143,6 +143,66 @@ five_question_payload() {  # <lang>
 # an optional-hans board from rendering an empty cell to a captain reading 简体,
 # so it is pinned here rather than left as template behavior nobody reading the
 # rule would know about.
+# The captain's report on the live board was "打得開,但按了沒反應": it opens, it
+# updates, and pressing a control does nothing. It was worse than nothing. The
+# send was guarded by a check for the answer channel and the SUCCESS path was
+# not, so with no channel the answer went nowhere while the card marked itself
+# answered, drew an acknowledgement, and dealt the next card. He would have
+# walked away believing he had answered.
+# A card the captain can actually answer: it carries the free-form field, so
+# the harness types into it and submits through the page's own listener. A
+# fixture WITHOUT that field renders no field to type in, the submit path
+# never runs, and every assertion about refusing to send passes without
+# exercising anything - which is how the first version of this test was green
+# while the code under it was untouched.
+no_channel_payload() {
+  jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{
+      key:"unreachable", type:"decision", repo:"sample",
+      title:"Does the answer leave the page?",
+      decide:"Answer it and see.", if_nothing:"Nothing is recorded.",
+      reversible:"yes", risk:"low", recommend_value:"yes",
+      allow_freeform:true,
+      options:[{value:"yes", label:"Yes", consequence:"it was sent"},
+               {value:"no", label:"No", consequence:"it was not"}]}]}'
+}
+
+test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered() {
+  local home out
+  home=$(make_home no-channel)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].on_enter')" = "null" ] \
+    || fail "an answer was reported sent with no channel to send it on: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "false" ] \
+    || fail "the card marked itself answered without sending anything: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].ack')" = "null" ] \
+    || fail "the card acknowledged an answer it never sent: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "not recorded" \
+    "the card did not say the answer was not recorded: $out"
+
+  pass "a card with no answer channel refuses visibly instead of looking answered"
+}
+
+# Same rule on the dispatch bar, which had the identical shape: it may not
+# report a dispatch it could not send, and no row may be acknowledged for one.
+test_the_dispatch_bar_refuses_visibly_when_it_cannot_send() {
+  local home out
+  home=$(make_home no-channel-dispatch)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(rebuild_payload 2026-09-20T00:00Z)" dispatch)
+
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.is_queued')" = "false" ] \
+    || fail "the bar reported a dispatch it could not send: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.count')" "not recorded" \
+    "the bar did not say the dispatch was not recorded: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.charted[].ack] | map(select(. != null)) | length')" = "0" ] \
+    || fail "a row was acknowledged for a dispatch that was never sent: $out"
+
+  pass "the dispatch bar with no answer channel refuses visibly"
+}
+
 test_hans_absent_falls_back_to_hant_not_empty() {
   local home payload out
   home=$(make_home hans-fallback)
@@ -1328,3 +1388,5 @@ test_the_deck_does_not_deal_over_a_card_the_captain_paged_to
 test_the_acknowledgement_speaks_the_captains_language
 test_repainting_the_board_never_accumulates_tickers
 test_a_queued_click_survives_a_rebuild_of_the_board
+test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered
+test_the_dispatch_bar_refuses_visibly_when_it_cannot_send

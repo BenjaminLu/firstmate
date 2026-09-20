@@ -117,8 +117,14 @@ const queued = [];
 // The page remembers what the captain clicked so a re-render can put the
 // acknowledgement back; that memory is browser storage, so the shim has one.
 const storage = new Map();
+// A board opened WITHOUT the surface that serves it has no answer channel at
+// all - queuePrompt is simply absent. That is a real state the captain can be
+// in, not a hypothetical, so the shim can reproduce it.
+const noChannel = process.env.BOARD_NO_ANSWER_CHANNEL === "1";
 globalThis.window = {
-  lavish: { queuePrompt: (text, opts) => queued.push({ text, data: opts && opts.data }) },
+  ...(noChannel ? {} : {
+    lavish: { queuePrompt: (text, opts) => queued.push({ text, data: opts && opts.data }) },
+  }),
   localStorage: {
     getItem: (k) => (storage.has(k) ? storage.get(k) : null),
     setItem: (k, v) => { storage.set(k, String(v)); },
@@ -378,6 +384,13 @@ const cards = deck.children
       };
     })(),
     ack: ackOf(card.children.find((c) => c.className.includes("bb-decision__pad"))),
+    /* What the card says when it refused to send, and whether it marked
+       itself answered. A card that could not reach firstmate must show the
+       first and must NOT do the second. */
+    limit: findAll(card, "bb-limit")
+      .filter((n) => n.className.includes("is-visible"))
+      .map((n) => n.textContent)[0] ?? "",
+    is_queued: card.className.split(/\s+/).includes("is-queued"),
     hidden: card.hidden === true,
   }));
 const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
@@ -394,9 +407,14 @@ const errorText = [...byId.entries()]
   .filter(([k]) => k.startsWith("sel:"))
   .flatMap(([, n]) => n.children.map((c) => c.textContent))
   .join(" ");
+const dispatchBar = byId.get("bb-dispatch") || new Node("div");
+const dispatch = {
+  is_queued: dispatchBar.className.split(/\s+/).includes("is-queued"),
+  count: byId.get("bb-dispatch-count")?.textContent ?? "",
+};
 const empty = ch.children.filter((c) => c.className.includes("bb-empty")).map((c) => c.textContent);
 const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map((c) => c.textContent);
 
 process.stdout.write(
   JSON.stringify({ stats, underway, charted, empty, more, cards, headings, error: errorText,
-    intervals: intervals.size }) + "\n");
+    dispatch, intervals: intervals.size }) + "\n");
