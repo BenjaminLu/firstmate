@@ -2137,7 +2137,7 @@ JS
 
 test_hidden_block_geometry_e2e() {
   local project home config sessions session_file snapshot expanded_snapshot calm_off_snapshot restarted_snapshot
-  local version skill_line final_line gap i
+  local version skill_line final_line gap reload_done reload_running
   if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for Pi Calm hidden-block geometry E2E"
     return 0
@@ -2263,21 +2263,6 @@ TS
     return 1
   }
 
-  wait_for_geometry_transition() {
-    local file=$1 transient_text=$2 final_text=$3 attempt=0 saw_transient=0
-    while [ "$attempt" -lt 600 ]; do
-      capture_geometry_viewport "$file" || true
-      if grep -Fq "$transient_text" "$file" 2>/dev/null; then
-        saw_transient=1
-      elif [ "$saw_transient" -eq 1 ] && grep -Fq "$final_text" "$file" 2>/dev/null; then
-        return 0
-      fi
-      sleep 0.01
-      attempt=$((attempt + 1))
-    done
-    return 1
-  }
-
   assert_geometry_gap() {
     local file=$1 label=$2
     skill_line=$(grep -n -m1 '\[skill\] ahoy' "$file" | cut -d: -f1)
@@ -2299,15 +2284,29 @@ TS
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
   wait_for_geometry_text "$snapshot" "visible row two" \
     || fail "Pi Calm hidden-block geometry E2E did not complete the /skill:ahoy turn"
-  i=0
-  while [ "$i" -lt 120 ]; do
-    capture_geometry_viewport "$snapshot"
-    # Pi <=0.84 rendered a "Working..." transcript row; Pi >=0.85 embeds the
-    # indicator in the editor border as "Working". Match either spelling.
-    tail -12 "$snapshot" | grep -Eq "Working(\\.\\.\\.)?([[:space:]]|─|$)" || break
-    sleep 0.05
-    i=$((i + 1))
-  done
+  # Pi <=0.84 rendered a "Working..." transcript row; Pi >=0.85 embeds the
+  # indicator in the editor border as "Working". Both spellings live in the
+  # bottom chrome of this 44-row pane, so the condition stays scoped to the
+  # last twelve rows and stays bounded by the character that follows the token,
+  # exactly as the loop this replaces had it. Only the silence changed: running
+  # out is now a named failure. Widening an absence at the same moment it
+  # becomes fatal is how a wait acquires a way to red a healthy run - a bare
+  # 'Working' over the whole viewport would settle on strictly fewer frames,
+  # and settling is the only way past this line.
+  #
+  # Everything the lines below read is left OUT of this wait on purpose, which
+  # is the opposite of the choice made at the /reload wait further down. Those
+  # lines are the product claims this case exists to make - Calm hid the tool
+  # row, Calm hid the thinking label - and requiring them here would report a
+  # Calm regression as a wait that ran out, which is worse to read than the
+  # assertion that names the row. The two rows assert_geometry_gap needs are
+  # the two asserted immediately above it, so it never reads a frame those
+  # assertions have not already judged. What this wait owns is only that the
+  # turn stopped working.
+  fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
+    --tail 12 \
+    --absent-re 'Working(\.\.\.)?([[:space:]]|─|$)' \
+    || fail "Pi Calm hidden-block geometry E2E left the /skill:ahoy turn still working"
   assert_contains "$(cat "$snapshot")" "[skill] ahoy" "Calm hid the collapsed skill header"
   assert_contains "$(cat "$snapshot")" "CALM_GEOMETRY_FINAL" "Calm hid the final assistant response"
   assert_not_contains "$(cat "$snapshot")" "Thinking..." "Calm left a collapsed thinking label visible"
@@ -2322,12 +2321,38 @@ TS
   grep -Fq 'tool result one' "$session_file" \
     || fail "Calm removed hidden tool results from persisted history"
 
+  # Pi's own words for a finished reload, verified present in every Pi this
+  # suite has recorded evidence against (0.81.1 through 0.86.0). It is a status
+  # row appended to the rebuilt transcript, so it is durable: it arrives only
+  # after session.reload() and the chat rebuild have both succeeded, and it
+  # stays. Waiting instead for the "Reloading..." box Pi shows WHILE it works
+  # is what used to red unrelated pull requests - that box is a frame two
+  # captures can straddle, and missing it failed a reload that had in fact
+  # completed. The box now serves as the must-be-gone half of the end state,
+  # which is the one thing it can prove without being caught in the act.
+  #
+  # The two transcript rows assert_geometry_gap reads are required here too.
+  # They are on screen by the time the status row is - Pi rebuilds the chat
+  # before it writes that row - but that is Pi's call order, not anything this
+  # test states, and the gap assertion gets one shot at whatever capture the
+  # wait leaves behind. Requiring them is what keeps the race removed instead
+  # of moved one line down.
+  #
+  # 600 attempts at this helper's 0.05s cadence is roughly twice the real
+  # budget of the 600 attempts at 0.01s it replaces. Deliberate: a latching
+  # condition is where headroom belongs, and it is spent only by a failure.
+  reload_done='Reloaded keybindings, extensions, skills, prompts, themes, and context files'
+  reload_running='Reloading keybindings, extensions, skills, prompts, themes, and context files...'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/reload'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
-  wait_for_geometry_transition \
-    "$snapshot" \
-    "Reloading keybindings, extensions, skills, prompts, themes, and context files..." \
-    "CALM_GEOMETRY_FINAL" \
+  fm_wait_capture_settled capture_geometry_viewport "$snapshot" 600 \
+    --present "$reload_done" \
+    --present '[skill] ahoy' \
+    --present 'CALM_GEOMETRY_FINAL' \
+    --absent "$reload_running" \
+    --abort 'Reload failed:' \
+    --abort 'Wait for the current response to finish before reloading.' \
+    --abort 'Wait for compaction to finish before reloading.' \
     || fail "Pi Calm hidden-block geometry E2E did not complete the /reload viewport transition"
   assert_geometry_gap "$snapshot" "reloaded native Calm transcript"
 
@@ -2336,14 +2361,26 @@ TS
     || fail "thinking expansion did not restore Calm-hidden reasoning"
   assert_not_contains "$(cat "$expanded_snapshot")" "probe-one.txt" "thinking expansion restored Calm-hidden tool rows"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" C-t
-  i=0
-  while [ "$i" -lt 120 ]; do
-    capture_geometry_viewport "$snapshot"
-    grep -Fq "CALM_GEOMETRY_THINKING_ONE" "$snapshot" || break
-    sleep 0.05
-    i=$((i + 1))
-  done
-  assert_not_contains "$(cat "$snapshot")" "CALM_GEOMETRY_THINKING_ONE" "collapsing thinking restored hidden-row output"
+  # The wait and the assertion are the same claim here, so they are one call:
+  # a separate assert_not_contains after a loop that already required the text
+  # gone could never fire, and the loop running out in silence is what used to
+  # report this as a geometry failure one screen later.
+  #
+  # All three expanded thinking blocks must go, not just the first: a frame
+  # where one collapsed and the others had not is mid-redraw, and its row
+  # geometry is not the geometry assert_geometry_gap is here to measure. The
+  # two rows that assertion reads are named for the same reason they are named
+  # at the /reload wait - it gets one shot at the capture this call leaves
+  # behind. 'CALM_GEOMETRY_FINAL' is a substring of the final thinking block's
+  # own label, so requiring that label gone is also what keeps the required
+  # text unambiguous.
+  fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
+    --absent 'CALM_GEOMETRY_THINKING_ONE' \
+    --absent 'CALM_GEOMETRY_THINKING_TWO' \
+    --absent 'CALM_GEOMETRY_FINAL_THINKING' \
+    --present '[skill] ahoy' \
+    --present 'CALM_GEOMETRY_FINAL' \
+    || fail "collapsing thinking restored hidden-row output"
   assert_geometry_gap "$snapshot" "re-collapsed native Calm transcript"
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/calm'
@@ -2353,15 +2390,22 @@ TS
   assert_contains "$(cat "$calm_off_snapshot")" "Thinking..." "turning Calm off did not restore collapsed thinking labels"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/calm'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
-  i=0
-  while [ "$i" -lt 120 ]; do
-    capture_geometry_viewport "$snapshot"
-    if ! grep -Fq "probe-one.txt" "$snapshot" && ! grep -Fq "Thinking..." "$snapshot"; then
-      break
-    fi
-    sleep 0.05
-    i=$((i + 1))
-  done
+  # Every row the redraw has to hide, not two of them. Calm off restored two
+  # tool calls and two tool results as well as the thinking labels, and a frame
+  # where the first pair had gone and the second had not is a partial redraw
+  # whose gap is not 2 - so waiting on a two-string proxy for "the redraw
+  # finished" and then measuring the exact final geometry is the race written
+  # one line apart. The two rows assert_geometry_gap reads are named for the
+  # same reason.
+  fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
+    --absent 'probe-one.txt' \
+    --absent 'probe-two.txt' \
+    --absent 'tool result one' \
+    --absent 'tool result two' \
+    --absent 'Thinking...' \
+    --present '[skill] ahoy' \
+    --present 'CALM_GEOMETRY_FINAL' \
+    || fail "turning Calm back on did not hide the tool-call and thinking rows again"
   assert_geometry_gap "$snapshot" "Calm redraw of existing transcript"
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/quit'
