@@ -3904,6 +3904,8 @@ JSON
   expect_code 1 "$rc" "github-reviews-absent: an unreadable reviews list must not merge"
   assert_grep 'could not read the GitHub pull request reviews' "$case_dir/stderr" \
     "github-reviews-absent: the refusal did not name the reviews it could not read"
+  assert_grep 'retrying will not clear it' "$case_dir/stderr" \
+    "github-reviews-absent: the refusal did not say whether retrying clears it"
   assert_no_grep 'no review has been posted' "$case_dir/stderr" \
     "github-reviews-absent: an unreadable reviews list was reported as a missing approval"
 

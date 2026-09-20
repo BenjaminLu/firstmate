@@ -797,8 +797,9 @@ github_verify_mergeable() {
     if [ -s "$gh_err" ]; then
       echo "the forge said:" >&2
       sed 's/^/  /' "$gh_err" >&2
+      echo "whether retrying clears it depends on which of those it was" >&2
     else
-      echo "the forge said nothing, so what stopped the read is unknown" >&2
+      echo "the forge said nothing, so what stopped the read is unknown and retrying may or may not clear it" >&2
     fi
     rm -f "$gh_err"
     return 1
@@ -847,7 +848,7 @@ FIELDS
     return 1
   fi
   if ! approval=$(github_approval_state "$json" "$live_head"); then
-    echo "error: could not read the GitHub pull request reviews before merging" >&2
+    echo "error: could not read the GitHub pull request reviews before merging; they came back in a shape this cannot read, so retrying will not clear it" >&2
     return 1
   fi
   while IFS= read -r line; do
@@ -878,7 +879,7 @@ APPROVAL
   # matches, so a payload that does not read as exactly these fifteen fields is
   # a failed read rather than one an approval count could be taken from.
   if [ "$approval_named" -ne 15 ] || [ "$approval_total" -ne 15 ]; then
-    echo "error: could not read the GitHub pull request reviews before merging" >&2
+    echo "error: the pull request's reviews did not read back cleanly, so the approval is unknown; retrying will not clear it" >&2
     return 1
   fi
 
