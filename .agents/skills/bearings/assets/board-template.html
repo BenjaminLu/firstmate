@@ -10,7 +10,23 @@
    Tokens copied verbatim from myfirstmate priv/static/assets/app.css
    (the compiled adoption of .agents/skills/firstmate-design).
    ============================================================ */
-@import url("https://fonts.googleapis.com/css2?family=Chango&family=Jost:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+/* This sheet deliberately pulls in no webfont, and the page makes no REMOTE
+   request at all. It is not inert: the built board opens one LOOPBACK
+   websocket, which is the live push, and that connection is wanted. Saying
+   "this page fetches nothing" would be false about the very build this
+   comment ships in, so the claim is the narrower true one.
+   The board is served to a captain who may be offline, behind a firewall that
+   blocks a font host, or on a clone configured with nothing, and a page whose
+   stated principle is that it has no remote dependency must not have one. A
+   remote font is the quiet kind of dependency: the page still renders, so
+   nothing reports a failure, and the board simply looks like a different
+   product to whoever cannot reach the host.
+   The families below are still named first in every stack, so a machine that
+   has them installed uses them; everyone else gets the system stack, which is
+   the same for every clone rather than depending on where it is opened.
+   tests/fm-bearings-board.test.sh holds the built page to this by scanning it,
+   rather than trusting this comment, and states there what the scan cannot
+   see. */
 
 :root {
   --rust-700: #8f2f17; --rust-600: #a93a1f; --rust-500: #c0452a;
@@ -235,6 +251,61 @@ body {
 .is-queued .bb-queued { display: inline-flex; }
 .bb-limit { display: none; font-size: var(--fs-xs); font-weight: 700; color: var(--status-danger); }
 .bb-limit.is-visible { display: inline; }
+/* A call that offered no options says so here, in the space where the options
+   would have been. It is deliberately not styled as an error: a needs-decision
+   with no option list is the ordinary shape, not a fault. What it must never be
+   is silent, because the captain cannot otherwise tell a call that had nothing
+   to offer from a card whose options went missing on the way to him. */
+.bb-thin { margin: 0 0 10px; font-size: var(--fs-xs); font-weight: 700; color: var(--text-muted);
+  border-left: 2.5px solid var(--border-default); padding-left: 10px; }
+/* ---- the decision map ----
+   The plot is drawn from the payload's own numbers, so nothing here is sized
+   by hand except the box it is drawn in. Bubbles are buttons: the captain
+   reads the shape, then presses the one he wants and the card below is his. */
+.bb-triage { margin: 0 0 14px; }
+.bb-map { width: 100%; max-width: 520px; }
+.bb-map svg { width: 100%; height: auto; display: block; }
+.bb-axlabel { font-family: var(--font-sans); font-size: 9px; font-weight: 700; fill: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em; }
+.bb-quadlabel { font-family: var(--font-sans); font-size: 9px; font-weight: 800; fill: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.08em; }
+.bb-bublabel { font-family: var(--font-sans); font-size: 10px; font-weight: 800; fill: var(--text-strong); }
+.bb-bub { cursor: pointer; }
+.bb-bub:focus { outline: none; }
+.bb-bub:focus circle { stroke-width: 3.5; }
+.bb-map__note { margin: 6px 0 10px; font-size: var(--fs-2xs); color: var(--text-muted); line-height: 1.5; }
+.bb-calllist { display: flex; flex-direction: column; gap: 4px; }
+.bb-clrow { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  font-family: var(--font-sans); font-size: var(--fs-xs); color: var(--text-body);
+  background: none; border: 1.5px solid transparent; border-radius: var(--radius-xs);
+  padding: 5px 8px; cursor: pointer; }
+.bb-clrow:hover { border-color: var(--border-default); }
+.bb-clrow.is-sel { border-color: var(--rust-400); background: var(--surface-card); }
+.bb-clrow__n { font-weight: 800; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.bb-clrow__t { font-weight: 700; color: var(--text-strong); }
+.bb-clrow__meta { margin-left: auto; font-size: var(--fs-2xs); color: var(--text-muted); white-space: nowrap; }
+/* ---- the merge lane ---- */
+.bb-lane { margin: 0 0 12px; }
+.bb-lane__h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 5px;
+  padding-bottom: 4px; border-bottom: 1.5px solid var(--border-soft); }
+.bb-lane__label { font-size: var(--fs-2xs); font-weight: 800; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.07em; }
+.bb-lane__n { margin-left: auto; font-size: var(--fs-2xs); font-weight: 800;
+  color: var(--text-strong); font-variant-numeric: tabular-nums; }
+/* the column that exists so a worker can never silently vanish */
+.bb-lane--unplaced .bb-lane__h { border-bottom-color: var(--status-warn); }
+.bb-lane--unplaced .bb-lane__label { color: var(--status-warn); }
+.bb-mqhead { margin: 0 0 10px; font-size: var(--fs-xs); color: var(--text-body); line-height: 1.6; }
+.bb-mqhead b { color: var(--text-strong); }
+.bb-mq { display: flex; flex-direction: column; gap: 5px; }
+.bb-mqrow { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  padding: 7px 10px; border: 1.5px solid var(--border-default); border-radius: var(--radius-xs);
+  background: var(--surface-card); font-size: var(--fs-xs); }
+.bb-mqrow--ready { border-color: var(--sea-400); }
+.bb-mqrow__pr { font-weight: 800; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.bb-mqrow__repo { color: var(--text-muted); }
+.bb-mqrow__why { margin-left: auto; color: var(--text-body); }
+.bb-mqrow--ready .bb-mqrow__why { color: var(--sea-700); font-weight: 700; }
 .bb-freeform { width: 100%; font-family: var(--font-sans); font-size: var(--fs-sm); color: var(--text-strong);
   background: var(--surface-card); border: 1.5px solid var(--border-default); border-radius: var(--radius-sm); padding: 8px 11px; }
 .bb-freeform:focus { outline: none; border-color: var(--rust-400); box-shadow: var(--focus-ring); }
@@ -431,6 +502,18 @@ body {
       </span>
       <span class="fm-sign fm-sign--muted" id="bb-call-sub"></span>
     </div>
+    <!-- 決策圖像儀表板. The card below says what ONE call is; this says where
+         every open call sits relative to the others, which a pile of cards
+         cannot. Both coordinates are counted from fields the fleet already
+         holds and the rule is printed underneath, so the picture is never a
+         second thing to take on trust. -->
+    <div class="bb-triage">
+      <div class="bb-map" id="bb-map"></div>
+      <p class="bb-map__note" id="bb-map-note"></p>
+      <!-- the same calls in order. The map is the shape; this is the order,
+           and it is the route for anyone reading by ear rather than by eye. -->
+      <div class="bb-calllist" id="bb-calllist"></div>
+    </div>
     <div class="bb-callwrap">
       <div class="bb-call" id="bb-call"></div>
       <!-- nav sits under the stack so the active card's top edge aligns with
@@ -447,6 +530,22 @@ body {
     </div>
   </section>
 
+  <!-- The merge lane. Its whole job is the standing complaint that the
+       captain's merge section is always empty: his own green-only rule empties
+       it, and the board never said so. Every open pull request is listed with
+       the exact reason it is not asking him to merge it. -->
+  <section class="bb-section" id="bb-merge-section" hidden>
+    <div class="bb-section__head">
+      <span class="fm-sign fm-sign--eyebrow">
+        <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+        <span id="bb-t-merge">Merges</span>
+      </span>
+      <span class="fm-sign fm-sign--muted" id="bb-merge-sub"></span>
+    </div>
+    <p class="bb-mqhead" id="bb-merge-head"></p>
+    <div class="bb-mq" id="bb-merge-queue"></div>
+  </section>
+
   <section class="bb-section">
     <div class="bb-section__head">
       <span class="fm-sign fm-sign--eyebrow">
@@ -459,6 +558,11 @@ body {
       <div class="bb-rows" id="bb-charted"></div>
       <div class="bb-dispatch" id="bb-dispatch" hidden>
         <span class="bb-dispatch__count" id="bb-dispatch-count">nothing picked</span>
+        <!-- A refusal is not a count. It gets the same dedicated element, alert
+             role and danger colour the card's refusal gets, because a refusal
+             the captain does not notice is the complaint this board exists to
+             answer arriving one layer up. -->
+        <span class="bb-limit" id="bb-dispatch-limit"></span>
         <span class="bb-queued" id="bb-dispatch-queued">
           <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
           queued
@@ -524,6 +628,12 @@ __FM_BEARINGS_BOARD_DATA__
       risk: "risk {r}", risk_low: "low", risk_medium: "medium", risk_high: "high",
       rev_yes: "reversible", rev_no: "cannot be undone", rev_partly: "partly reversible",
       k_decide: "decide", k_about: "about", k_nothing: "if nothing", k_why: "why", k_evidence: "evidence",
+      k_undoing: "undoing it",
+      merge_state: "checks {c} · review {r}",
+      checks_passing: "all green", checks_failing: "one has failed",
+      checks_pending: "still running", checks_none: "none configured",
+      review_APPROVED: "approved", review_CHANGES_REQUESTED: "changes requested",
+      review_REVIEW_REQUIRED: "none yet", review_none: "none yet",
       packet: "open the packet", rec: "rec",
       tab_diff: "Difference", choose: "Choose {x}",
       tab_note: "Open a tab above to see exactly what that option changes.",
@@ -531,6 +641,60 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "The full packet",
       freeform: "or answer in your own words…", queue_answer: "Queue answer", queued: "queued",
       too_long: "Answer is too long to queue (512 bytes maximum).",
+      nothing_chosen: "Nothing to send yet. Pick one of the options, or write your answer in the box.",
+      no_channel: "Not sent. This board has no way to reach firstmate from here, so your answer was not recorded.",
+      no_channel_dispatch: "Not sent. This board has no way to reach firstmate from here, so nothing was dispatched.",
+      no_channel_yet: "This board cannot reach firstmate from here, so it cannot take an answer right now.",
+      no_channel_dispatch_yet: "This board cannot reach firstmate from here, so it cannot dispatch anything right now.",
+      thin_call: "This call came with no options to choose between. Answer it in your own words.",
+      map_title: "Where each open call sits",
+      map_alt: "Open calls plotted by how much work is stalled behind each and how costly a wrong answer is",
+      map_note: "Up is how much work is stalled behind the call. Right is how expensive a wrong answer is.",
+      map_note_cost: "That cost comes from the call's own risk and how far it can be undone.",
+      map_note_colour: "Colour repeats the risk.",
+      map_note_colour_grey: "Colour repeats the risk, and grey is not one of them - it marks a call nobody gave a risk.",
+      map_note_exact: "The number in a bubble is how many pieces of work stop until you answer.",
+      map_note_stacked: "Some bubbles are left unnamed - where calls land on the same spot, and where a name would have to be written over another bubble or another name. The list underneath names every call, in this order.",
+      map_note_measured: "Nothing here is weighted by hand: every position comes from what the fleet already records.",
+      map_note_soft: "A broken outline means that bubble is not drawn entirely from what the fleet measured, for one of these reasons.",
+      ax_undo_cheap: "cheap to undo", ax_undo_hard: "hard to undo",
+      ax_waits_none: "nothing waits", ax_waits: "work is stalled",
+      quad_first: "decide first", quad_think: "think it through",
+      quad_pick: "just pick one", quad_when: "whenever",
+      map_blocks: "{n} waiting", map_blocks_none: "nothing waiting",
+      map_blocks_atleast: "at least {n} waiting",
+      map_empty: "No open calls to plot.",
+      map_unassessed: "nobody assessed what a wrong answer costs",
+      map_note_unassessed: "Some are missing a value the position needs, and those sit at the left edge because the cost is unknown, not because it is low.",
+      map_note_byhand: "Some carry a risk your first mate wrote when the card was composed, which is his judgement rather than a measurement the fleet made.",
+      map_note_floor: "For some, the list of what is waiting was cut off, so the number in the bubble is a floor and more may be waiting than it shows; those are drawn no higher and no larger than the part that could be read.",
+      map_norev: "risk {r}, but nobody said whether it can be undone, so how costly it is was never worked out",
+      map_byhand: "That risk is your first mate's assessment, not something the fleet recorded",
+      t_merge: "Merges",
+      mq_sub: "Your rule: a pull request that has not gone fully green never becomes a merge call.",
+      mq_none_head: "Nothing is on your desk, and this is why. {n} open, none of them green and clear, so by your own rule none is asking you to merge it. The lane is empty because the rule is working, not because nothing is happening.",
+      mq_some_head: "{r} of {n} open are ready for you. The rest are listed with what is holding each one.",
+      mq_empty_head: "No open pull requests are known here.",
+      mq_ready: "ready for you",
+      mq_checks_failed: "a check has failed",
+      mq_checks_pending: "checks have not gone green yet",
+      mq_not_mergeable: "the forge does not report it as mergeable",
+      mq_changes_requested: "changes were requested on it",
+      mq_not_claimed: "no work item here claims it",
+      mq_unroutable: "its work item cannot take an answer from this board",
+      mq_duplicate: "two open pull requests claim the same work item",
+      mq_backlog_unreadable: "the work list could not be read here",
+      mq_unworded: "held for a reason this board has no words for",
+      lane_working: "Writing", lane_pr: "On a PR · checks running",
+      lane_failed: "A check failed", lane_stuck: "Stuck",
+      lane_waiting: "Waiting on something else", lane_stopped: "Stopped",
+      lane_unreported: "Not reporting", lane_done: "Delivered",
+      lane_unplaced: "Could not be placed",
+      state_working: "working", state_blocked: "stuck", state_parked: "waiting for a review",
+      state_paused: "waiting", state_failed: "stopped", state_unknown: "not reporting",
+      state_done: "delivered",
+      kind_ship: "change", kind_scout: "investigation", kind_captain: "your call",
+      stat_writing: "writing now", stat_stuck: "stuck or failing", stat_prs: "open PRs",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -539,7 +703,7 @@ __FM_BEARINGS_BOARD_DATA__
       more_warn_many: "+{n} more repair warnings - ask firstmate for the full chart",
       needs_repair: "needs repair", waiting: "waiting", pick_aria: "Pick {id} for dispatch",
       pick_none: "pick queued work to dispatch", pick_n: "{n} picked for dispatch",
-      pick_limit: "Selection limit reached (512 bytes maximum). ", pick_too_long: "Selection is too long to queue (512 bytes maximum). ",
+      pick_limit: "Selection limit reached (512 bytes maximum).", pick_too_long: "Selection is too long to queue (512 bytes maximum).",
       dispatch: "Queue dispatch order",
       ack_acting: "acting on it", ack_refused: "not started", ack_late: "still waiting · {t}",
       err_title: "This board could not load", err_ask: " - ask firstmate to rebuild the board."
@@ -553,6 +717,12 @@ __FM_BEARINGS_BOARD_DATA__
       risk: "風險 {r}", risk_low: "低", risk_medium: "中", risk_high: "高",
       rev_yes: "可回頭", rev_no: "回不去", rev_partly: "部分可回頭",
       k_decide: "決定什麼", k_about: "背景", k_nothing: "什麼都不做", k_why: "為什麼", k_evidence: "證據",
+      k_undoing: "要收回的話",
+      merge_state: "檢查 {c} · review {r}",
+      checks_passing: "全綠", checks_failing: "有一項失敗",
+      checks_pending: "還在跑", checks_none: "沒有設定",
+      review_APPROVED: "已核可", review_CHANGES_REQUESTED: "要求修改",
+      review_REVIEW_REQUIRED: "還沒有", review_none: "還沒有",
       packet: "打開 packet", rec: "建議",
       tab_diff: "差在哪", choose: "選 {x}",
       tab_note: "點上面的分頁，看那個選項到底改了什麼。",
@@ -560,6 +730,60 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "完整的決策說明",
       freeform: "或用你自己的話回答…", queue_answer: "送出回答", queued: "已排入",
       too_long: "回答太長，無法排入（上限 512 bytes）。",
+      nothing_chosen: "還沒有東西可以送。選一個選項，或者直接把你的回答寫在框裡。",
+      no_channel: "沒有送出。這個看板從這裡連不到 firstmate，所以你的回答沒有被記錄。",
+      no_channel_dispatch: "沒有送出。這個看板從這裡連不到 firstmate，所以沒有派工。",
+      no_channel_yet: "這個看板從這裡連不到 firstmate，現在沒辦法接收回答。",
+      no_channel_dispatch_yet: "這個看板從這裡連不到 firstmate，現在沒辦法派工。",
+      thin_call: "這個問題沒有附選項，請直接用你自己的話回答。",
+      map_title: "每個待決事項的位置",
+      map_alt: "把待決事項依照「後面卡住多少工作」和「答錯多貴」畫出來",
+      map_note: "往上是後面卡住多少工作。往右是答錯有多貴。",
+      map_note_cost: "這個代價來自這個問題本身的風險和可不可以回頭。",
+      map_note_colour: "顏色重複風險。",
+      map_note_colour_grey: "顏色重複風險，灰色不算 —— 灰色表示沒有人給過這個問題風險。",
+      map_note_exact: "泡泡裡的數字就是你不回答就停住的工作數。",
+      map_note_stacked: "有些泡泡沒有標名字 —— 落在同一個位置的，還有名字只能壓到別的泡泡或別的名字上的。下面的清單會照同樣的順序列出每一個。",
+      map_note_measured: "這張圖沒有任何一項是人手調的：每個位置都來自艦隊本來就記錄的東西。",
+      map_note_soft: "虛線外框表示那個泡泡不是完全照艦隊量到的東西畫的，原因是下面其中之一。",
+      ax_undo_cheap: "容易回頭", ax_undo_hard: "難以回頭",
+      ax_waits_none: "沒有人在等", ax_waits: "工作卡住了",
+      quad_first: "先決定這個", quad_think: "要想清楚",
+      quad_pick: "隨便挑一個", quad_when: "有空再說",
+      map_blocks: "{n} 件在等", map_blocks_none: "沒有人在等",
+      map_blocks_atleast: "至少 {n} 件在等",
+      map_empty: "沒有待決事項可畫。",
+      map_unassessed: "沒有人評估過答錯的代價",
+      map_note_unassessed: "有些缺了位置需要的一項資料，那些靠在最左邊是因為代價不明，不是因為代價低。",
+      map_note_byhand: "有些帶的風險是組卡片的時候大副自己寫的，那是他的判斷，不是艦隊量出來的。",
+      map_note_floor: "有些在等它們的清單被截斷了，所以泡泡裡的數字只是下限，實際可能更多；那些畫得不會比讀得到的那一部分更高、更大。",
+      map_norev: "風險 {r}，但沒有人說過能不能回頭，所以代價有多高從來沒有算出來",
+      map_byhand: "這個風險是大副評估的，不是艦隊記錄的",
+      t_merge: "合併",
+      mq_sub: "你的規則：沒有全綠的 PR 永遠不會變成合併決策。",
+      mq_none_head: "現在沒有東西等你決定，原因在這裡。開著的有 {n} 個，沒有一個是全綠又沒擋住的，所以按你自己的規則，沒有一個在問你要不要合併。這一區是空的代表規則有在運作，不是沒事發生。",
+      mq_some_head: "開著的 {n} 個裡面有 {r} 個等你決定。其餘的下面列出各自卡在哪裡。",
+      mq_empty_head: "這裡沒有已知的開啟中 PR。",
+      mq_ready: "等你決定",
+      mq_checks_failed: "有檢查失敗",
+      mq_checks_pending: "檢查還沒全綠",
+      mq_not_mergeable: "forge 沒有回報它可以合併",
+      mq_changes_requested: "review 要求修改",
+      mq_not_claimed: "這裡沒有工作項目認領它",
+      mq_unroutable: "它的工作項目沒辦法從這個看板接收回答",
+      mq_duplicate: "兩個開啟中的 PR 認領同一個工作項目",
+      mq_backlog_unreadable: "這裡讀不到工作清單",
+      mq_unworded: "被某個這個看板還沒有說法的原因擋著",
+      lane_working: "在寫", lane_pr: "PR 上 · 檢查跑著",
+      lane_failed: "有檢查失敗", lane_stuck: "卡住了",
+      lane_waiting: "在等別的東西", lane_stopped: "停了",
+      lane_unreported: "沒有回報", lane_done: "交付了",
+      lane_unplaced: "放不進任何一欄",
+      state_working: "在做", state_blocked: "卡住", state_parked: "等 review",
+      state_paused: "在等", state_failed: "停了", state_unknown: "沒有回報",
+      state_done: "交付了",
+      kind_ship: "改動", kind_scout: "調查", kind_captain: "你的決定",
+      stat_writing: "正在寫", stat_stuck: "卡住或失敗", stat_prs: "開著的 PR",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -582,6 +806,12 @@ __FM_BEARINGS_BOARD_DATA__
       risk: "风险 {r}", risk_low: "低", risk_medium: "中", risk_high: "高",
       rev_yes: "可回头", rev_no: "回不去", rev_partly: "部分可回头",
       k_decide: "决定什么", k_about: "背景", k_nothing: "什么都不做", k_why: "为什么", k_evidence: "证据",
+      k_undoing: "要收回的话",
+      merge_state: "检查 {c} · review {r}",
+      checks_passing: "全绿", checks_failing: "有一项失败",
+      checks_pending: "还在跑", checks_none: "没有设定",
+      review_APPROVED: "已核可", review_CHANGES_REQUESTED: "要求修改",
+      review_REVIEW_REQUIRED: "还没有", review_none: "还没有",
       packet: "打开 packet", rec: "建议",
       tab_diff: "差在哪", choose: "选 {x}",
       tab_note: "点上面的分页，看那个选项到底改了什么。",
@@ -589,6 +819,60 @@ __FM_BEARINGS_BOARD_DATA__
       packet_all: "完整的决策说明",
       freeform: "或用你自己的话回答…", queue_answer: "提交回答", queued: "已排入",
       too_long: "回答太长，无法排入（上限 512 bytes）。",
+      nothing_chosen: "还没有东西可以送。选一个选项，或者直接把你的回答写在框里。",
+      no_channel: "没有送出。这个看板从这里连不到 firstmate，所以你的回答没有被记录。",
+      no_channel_dispatch: "没有送出。这个看板从这里连不到 firstmate，所以没有派工。",
+      no_channel_yet: "这个看板从这里连不到 firstmate，现在没办法接收回答。",
+      no_channel_dispatch_yet: "这个看板从这里连不到 firstmate，现在没办法派工。",
+      thin_call: "这个问题没有附选项，请直接用你自己的话回答。",
+      map_title: "每个待决事项的位置",
+      map_alt: "把待决事项按照「后面卡住多少工作」和「答错多贵」画出来",
+      map_note: "往上是后面卡住多少工作。往右是答错有多贵。",
+      map_note_cost: "这个代价来自这个问题本身的风险和可不可以回头。",
+      map_note_colour: "颜色重复风险。",
+      map_note_colour_grey: "颜色重复风险，灰色不算 —— 灰色表示没有人给过这个问题风险。",
+      map_note_exact: "泡泡里的数字就是你不回答就停住的工作数。",
+      map_note_stacked: "有些泡泡没有标名字 —— 落在同一个位置的，还有名字只能压到别的泡泡或别的名字上的。下面的清单会照同样的顺序列出每一个。",
+      map_note_measured: "这张图没有任何一项是人手调的：每个位置都来自舰队本来就记录的东西。",
+      map_note_soft: "虚线外框表示那个泡泡不是完全照舰队量到的东西画的，原因是下面其中之一。",
+      ax_undo_cheap: "容易回头", ax_undo_hard: "难以回头",
+      ax_waits_none: "没有人在等", ax_waits: "工作卡住了",
+      quad_first: "先决定这个", quad_think: "要想清楚",
+      quad_pick: "随便挑一个", quad_when: "有空再说",
+      map_blocks: "{n} 件在等", map_blocks_none: "没有人在等",
+      map_blocks_atleast: "至少 {n} 件在等",
+      map_empty: "没有待决事项可画。",
+      map_unassessed: "没有人评估过答错的代价",
+      map_note_unassessed: "有些缺了位置需要的一项资料，那些靠在最左边是因为代价不明，不是因为代价低。",
+      map_note_byhand: "有些带的风险是组卡片的时候大副自己写的，那是他的判断，不是舰队量出来的。",
+      map_note_floor: "有些在等它们的清单被截断了，所以泡泡里的数字只是下限，实际可能更多；那些画得不会比读得到的那一部分更高、更大，就是虚线外框的那几个。",
+      map_norev: "风险 {r}，但没有人说过能不能回头，所以代价有多高从来没有算出来",
+      map_byhand: "这个风险是大副评估的，不是舰队记录的",
+      t_merge: "合并",
+      mq_sub: "你的规则：没有全绿的 PR 永远不会变成合并决策。",
+      mq_none_head: "现在没有东西等你决定，原因在这里。开着的有 {n} 个，没有一个是全绿又没挡住的，所以按你自己的规则，没有一个在问你要不要合并。这一区是空的代表规则有在运作，不是没事发生。",
+      mq_some_head: "开着的 {n} 个里面有 {r} 个等你决定。其余的下面列出各自卡在哪里。",
+      mq_empty_head: "这里没有已知的开启中 PR。",
+      mq_ready: "等你决定",
+      mq_checks_failed: "有检查失败",
+      mq_checks_pending: "检查还没全绿",
+      mq_not_mergeable: "forge 没有回报它可以合并",
+      mq_changes_requested: "review 要求修改",
+      mq_not_claimed: "这里没有工作项目认领它",
+      mq_unroutable: "它的工作项目没办法从这个看板接收回答",
+      mq_duplicate: "两个开启中的 PR 认领同一个工作项目",
+      mq_backlog_unreadable: "这里读不到工作清单",
+      mq_unworded: "被某个这个看板还没有说法的原因挡着",
+      lane_working: "在写", lane_pr: "PR 上 · 检查跑着",
+      lane_failed: "有检查失败", lane_stuck: "卡住了",
+      lane_waiting: "在等别的东西", lane_stopped: "停了",
+      lane_unreported: "没有回报", lane_done: "交付了",
+      lane_unplaced: "放不进任何一栏",
+      state_working: "在做", state_blocked: "卡住", state_parked: "等 review",
+      state_paused: "在等", state_failed: "停了", state_unknown: "没有回报",
+      state_done: "交付了",
+      kind_ship: "改动", kind_scout: "调查", kind_captain: "你的决定",
+      stat_writing: "正在写", stat_stuck: "卡住或失败", stat_prs: "开着的 PR",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -678,6 +962,16 @@ __FM_BEARINGS_BOARD_DATA__
   }
   lang = storedLang() || (LANGS.indexOf(data.lang) >= 0 ? data.lang : "en");
 
+  /* One guarded lookup for every captain-facing string built from a value the
+     page did not choose. t() falls back to the key it was given, so an
+     unworded token would reach the captain as `state_parked` - the class the
+     contract forbids outright. Without a fallback the value keeps its own
+     spelling, which is worse than words and far better than a key. */
+  function words(prefix, value, fallback) {
+    var key = prefix + String(value == null ? "" : value).replace(/-/g, "_");
+    if (t(key) !== key) return t(key);
+    return fallback != null ? fallback : String(value == null ? "" : value);
+  }
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -783,6 +1077,55 @@ __FM_BEARINGS_BOARD_DATA__
   }
   var chartedMoreQueued = data.charted_more || 0;
   var chartedMoreWarnings = data.charted_warning_more || 0;
+  /* ---- can an answer actually leave this page? ----------------------
+   The board's answer channel is provided by the surface that serves it.
+   A board opened WITHOUT that surface - a copy opened straight from disk,
+   or a live board whose serving surface is gone - simply has no channel,
+   and every send is a silent no-op.
+   This is one function because the honest behavior has to be identical at
+   every send site. The bug it exists to prevent was a guarded send with an
+   UNGUARDED success path: the answer went nowhere and the card still marked
+   itself answered, drew an acknowledgement, and dealt the next card. A
+   control that looks like it worked and did not is worse than one that says
+   it cannot, because the captain walks away believing he answered. */
+  /* Two seams, because the page outlived one of them.
+     The board was written when the surface serving it carried every answer.
+     On the captain's own machine that surface is not installed, so on his
+     board EVERY card refused - honestly, but the whole decisions surface was
+     inert, which is 為什麼船長裁決這一塊一直是空的 with a better error
+     message. The live transport now carries answers down the same socket it
+     receives on, and names its seam window.fmBoardLive.
+     The live seam is preferred when it is there AND says it can reach
+     firstmate right now; the serving surface is the fallback; neither present
+     means no channel, and every caller already refuses visibly in that case.
+     Order matters: canAnswer() is asked before falling back, so a live seam
+     that exists but is disconnected does not shadow a working fallback. */
+  function answerChannel() {
+    var live = window.fmBoardLive;
+    if (live && typeof live.answer === "function"
+      && (typeof live.canAnswer !== "function" || live.canAnswer())) {
+      /* The live seam takes the captain's pick as data rather than a composed
+         sentence, which is what lets the fleet record what he actually chose.
+         It returns false when it could not even be sent, and that false must
+         reach the caller: a send that reports success it did not have is the
+         bug this whole path exists to remove. */
+      return function (text, opts) {
+        var d = (opts && opts.data) || {};
+        return live.answer({
+          key: d.question || "",
+          selection: d.selection || d.answer || "",
+          note: d.note || "",
+          label: (opts && opts.text) || text || "",
+          close: d.close
+        }) !== false;
+      };
+    }
+    if (window.lavish && typeof window.lavish.queuePrompt === "function") {
+      return function (text, opts) { window.lavish.queuePrompt(text, opts); return true; };
+    }
+    return null;
+  }
+
   function utf8ByteLength(text) { return new TextEncoder().encode(text).length; }
   var CHECK_SVG = '<svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
   var CHECK_ROW_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
@@ -856,20 +1199,47 @@ __FM_BEARINGS_BOARD_DATA__
       b.setAttribute("aria-pressed", l === lang ? "true" : "false");
     });
     setText("bb-t-call", t("call")); setText("bb-t-charted", t("charted"));
+    setText("bb-t-merge", t("t_merge"));
     setText("bb-t-underway", t("underway")); setText("bb-t-landed", t("landed"));
     document.getElementById("bb-stack-prev").setAttribute("aria-label", t("prev"));
     document.getElementById("bb-stack-next").setAttribute("aria-label", t("next"));
     setText("bb-dispatch-btn", t("dispatch"));
     document.getElementById("bb-provenance").textContent = data.schema + " · " + data.generated;
 
-    /* stat strip */
+    /* The stat strip: what the captain reads before anything else.
+       Every tile is one array length or one lane count and nothing cleverer,
+       so a number on the masthead can always be checked against the region
+       below it. A tile that needed its own derivation would be a third place
+       for the board to disagree with itself. */
     var callTotal = data.captains_call.length;
+    function inLane(id) {
+      return data.underway.filter(function (x) { return x.lane === id; }).length;
+    }
+    /* Which lanes mean "this is not moving without someone looking at it".
+       Named here as a list rather than added up inline, because the tile has
+       to be checkable against the region under it: these are exactly the
+       lanes, and a lane added to the fleet has one place to be counted.
+       `stopped` is a worker whose own run failed, and leaving it out was a
+       masthead saying one thing was stalled while three were. */
+    var STALLED = ["stuck", "failed", "stopped"];
     var stats = [
       { n: callTotal, l: t("stat_need"), call: true },
       { n: data.underway.length, l: t("stat_underway") },
       { n: data.landed.length, l: t("stat_landed") },
       { n: chartedQueued(data.charted).length + chartedMoreQueued, l: t("stat_charted") }
     ];
+    /* The fleet counters, offered only by a board that knows its lanes. An
+       older payload carries none, and a row of zeroes claiming nothing is
+       stuck would be worse than no tile at all. */
+    if (data.underway.some(function (x) { return !!x.lane; })) {
+      stats.splice(1, 0,
+        { n: inLane("working"), l: t("stat_writing") },
+        { n: STALLED.reduce(function (sum, id) { return sum + inLane(id); }, 0),
+          l: t("stat_stuck") });
+    }
+    /* Open pull requests, from the same array the merge lane lists, so the
+       masthead and the lane can never report different totals. */
+    if (data.merge_queue) stats.push({ n: data.merge_queue.length, l: t("stat_prs") });
     var strip = document.getElementById("bb-stats");
     clear(strip);
     stats.forEach(function (s) {
@@ -1071,6 +1441,17 @@ __FM_BEARINGS_BOARD_DATA__
       pad.appendChild(el("h3", "bb-decision__title", pick(item.title)));
 
       if (item.type === "merge" && item.detail) pad.appendChild(el("p", "bb-decision__detail", pick(item.detail)));
+      /* The forge's own words for where the pull request stands, said in the
+         captain's. Codes rather than prose on the payload, so the strings live
+         with the rest of the board copy and a code the table has not learned
+         still shows its own spelling instead of a blank line. */
+      if (item.type === "merge" && item.checks_state) {
+        pad.appendChild(el("p", "bb-decision__detail",
+          t("merge_state", {
+            c: words("checks_", item.checks_state),
+            r: words("review_", item.review_state || "none")
+          })));
+      }
       if (item.type === "merge" && item.pr_url) {
         pad.appendChild(link("bb-decision__link", item.pr_url, item.pr_url));
       }
@@ -1078,12 +1459,25 @@ __FM_BEARINGS_BOARD_DATA__
       if (item.decide) ctx.appendChild(ctxRow(t("k_decide"), pick(item.decide), "decide"));
       if (item.about) ctx.appendChild(ctxRow(t("k_about"), pick(item.about)));
       if (item.if_nothing) ctx.appendChild(ctxRow(t("k_nothing"), pick(item.if_nothing), "nothing"));
-      if (item.reversible_note) ctx.appendChild(ctxRow(reversibleBadge(item.reversible || "yes").textContent, pick(item.reversible_note)));
+      /* Headed by what the call actually said about undoing it, and by a
+         neutral heading when it said nothing. `|| "yes"` headed the row
+         "reversible" on a call where nobody had said it could be undone -
+         the badge twelve lines up is correctly guarded, so the same field on
+         the same card was guarded in one place and invented in the other. */
+      if (item.reversible_note) {
+        ctx.appendChild(ctxRow(
+          item.reversible ? reversibleBadge(item.reversible).textContent : t("k_undoing"),
+          pick(item.reversible_note)));
+      }
       if (ctx.children.length) pad.appendChild(ctx);
 
       var form = document.createElement("form");
       form.setAttribute("data-lavish-question", item.key);
       var packet = packetOf(item);
+      /* Said before the options rather than after them, because it is about
+         what is NOT below. `thin` is set by compose from the record the call
+         wrote; a card that carries no such flag renders exactly as it did. */
+      if (item.thin) form.appendChild(el("p", "bb-thin", t("thin_call")));
       /* Every answer goes through queueAnswer with the value it is answering
          with, passed in. A choose button inside an option's own tab passes
          that option's value - the same value the decision block defines, down
@@ -1175,6 +1569,13 @@ __FM_BEARINGS_BOARD_DATA__
              field, and that must stay the foot button, which answers in his
              own words rather than choosing an option for him */
           choose.type = "button";
+          /* And it obeys the same rule as the foot button. Leaving these live
+             while the foot button is disabled put three controls inside the
+             card that undo its own disclosure: pressing one queued nothing and
+             rewrote the honest up-front message into the after-the-fact one,
+             so a captain correctly told the board cannot take an answer was
+             told, one press later, that his answer was not recorded. */
+          if (!answerChannel()) choose.disabled = true;
           choose.addEventListener("click", function () { queueAnswer(o.value); });
           panel.appendChild(choose);
           addTab(pick(o.label), DOTS[i % DOTS.length], panel);
@@ -1283,6 +1684,20 @@ __FM_BEARINGS_BOARD_DATA__
       var answerLimit = el("span", "bb-limit");
       answerLimit.setAttribute("role", "alert");
       foot.appendChild(answerLimit);
+      /* Asked at RENDER, not only at send, and AFTER the element it writes
+         into exists. With no channel the captain could previously read the
+         options, pick one, type his own words and press - and only then learn
+         it was not recorded. The work is spent before he is told. The function
+         that answers the question is already on this page, so asking it once
+         here costs nothing and turns "I answered and it told me no" into "I
+         could see it could not take an answer".
+         Still refused at send as well: the channel can go away between the
+         two, and the send-time refusal is what keeps that honest. */
+      if (!answerChannel()) {
+        btn.disabled = true;
+        answerLimit.textContent = t("no_channel_yet");
+        answerLimit.className = "bb-limit is-visible";
+      }
       form.appendChild(foot);
 
       form.addEventListener("submit", function (ev2) {
@@ -1290,34 +1705,55 @@ __FM_BEARINGS_BOARD_DATA__
         queueAnswer(new FormData(form).get("answer"));
       });
 
+      /* Every refusal this card can make goes through here, so a press can
+         never leave the captain with nothing. The alert is written, not
+         cleared: clearing first and then deciding what to say is how a silent
+         press came to erase the message an earlier press had earned. */
+      function refuseAnswer(message) {
+        answerLimit.textContent = message;
+        answerLimit.className = "bb-limit is-visible";
+      }
       function queueAnswer(value) {
-        answerLimit.className = "bb-limit";
         var note = (new FormData(form).get("note") || "").trim();
         var displayAnswer = value ? (note ? value + " - " + note : value) : note;
-        if (!displayAnswer) return;
-        if (utf8ByteLength(displayAnswer) > 512) {
-          answerLimit.textContent = t("too_long");
+        /* He pressed before choosing anything. The button is live and the
+           board is healthy, so the press has to answer him - saying nothing
+           here is the original complaint on the one control this whole
+           surface exists to make answer him, and it used to wipe any standing
+           refusal on its way out. */
+        if (!displayAnswer) { refuseAnswer(t("nothing_chosen")); return; }
+        answerLimit.className = "bb-limit";
+        if (utf8ByteLength(displayAnswer) > 512) { refuseAnswer(t("too_long")); return; }
+        /* Nothing below this point may run unless the answer actually left.
+           Marking the card answered, drawing its acknowledgement and dealing
+           the next card are the three things that tell the captain he has
+           answered; doing any of them for an answer that went nowhere is the
+           exact "pressed it and nothing happened" complaint, made worse by
+           the page insisting it worked. */
+        var send = answerChannel();
+        if (!send) { refuseAnswer(t("no_channel")); return; }
+        /* The versioned context keeps the selected option separate from its
+           note, while close carries the composer-declared completion mode.
+           The prompt text uses the English title so the answer reads the
+           same on firstmate's side whatever language the captain viewed. */
+        var ctxData = {
+          schema: "fm-bearings-answer.v1",
+          question: item.key,
+          selection: value || "",
+          note: note
+        };
+        if (item.close) ctxData.close = item.close;
+        var enTitle = typeof item.title === "object" ? (item.title.en || pick(item.title)) : item.title;
+        if (send(
+          "Captain's Call answer - " + enTitle + ": " + displayAnswer,
+          { tag: "choice", text: enTitle + " -> " + displayAnswer, element: form,
+            data: ctxData }
+        ) === false) {
+          /* The channel was there and still could not send. Same consequence
+             as having no channel: nothing below this point may run. */
+          answerLimit.textContent = t("no_channel");
           answerLimit.className = "bb-limit is-visible";
           return;
-        }
-        if (window.lavish && window.lavish.queuePrompt) {
-          /* The versioned context keeps the selected option separate from its
-             note, while close carries the composer-declared completion mode.
-             The prompt text uses the English title so the answer reads the
-             same on firstmate's side whatever language the captain viewed. */
-          var ctxData = {
-            schema: "fm-bearings-answer.v1",
-            question: item.key,
-            selection: value || "",
-            note: note
-          };
-          if (item.close) ctxData.close = item.close;
-          var enTitle = typeof item.title === "object" ? (item.title.en || pick(item.title)) : item.title;
-          window.lavish.queuePrompt(
-            "Captain's Call answer - " + enTitle + ": " + displayAnswer,
-            { tag: "choice", text: enTitle + " -> " + displayAnswer, element: form,
-              data: ctxData }
-          );
         }
         rememberAnswered("card", item.key);
         card.classList.add("is-queued");
@@ -1340,6 +1776,478 @@ __FM_BEARINGS_BOARD_DATA__
       deck.appendChild(card);
     });
 
+    /* ---- the decision map -------------------------------------------------
+       Both coordinates come from the payload and nothing else, and the rule is
+       printed under the plot, so a captain who distrusts the picture can check
+       it against the numbers on the cards. That is the whole reason it is two
+       named quantities rather than one invented urgency score.
+
+       The SVG is built node by node with textContent for every payload string.
+       The packet figure path can take markup because a packet's drawing is a
+       drawing; this is our own geometry with the worker's words in it, and
+       those words must never be able to become markup. */
+    var RISKW = { low: 0, medium: 1, high: 2 };
+    var REVW = { yes: 0, partly: 1, no: 2 };
+    /* A merge call floors at 0.8 because a green pull request holds its whole
+       branch until it lands, whether or not anything names it as a blocker. */
+    function waitingCost(c) {
+      var v = Math.min(c.blocks || 0, 3) / 3;
+      return c.type === "merge" ? Math.max(v, 0.8) : v;
+    }
+    /* Two different questions, kept apart because the answers differ.
+
+       riskKnown: is there a risk to colour the bubble with at all? A thin call
+       has none.
+
+       costDerived: can the HORIZONTAL position be derived from what is
+       recorded? It needs risk AND reversibility, and an absent reversibility
+       used to be weighted exactly like the captain being told the work is
+       fully reversible - so the plot could not be read to tell "he said yes"
+       from "nobody ever said". Every merge card is that case.
+
+       weighedByHand: even when both are present, they may be values FIRSTMATE
+       typed into a {FILL: ...} slot at compose time rather than anything the
+       fleet recorded. The note under the plot claims nothing there is weighted
+       by hand; for those bubbles that is false, and the captain is entitled to
+       know which marks are measurements and which are his first mate's
+       opinion. */
+    function riskKnown(c) { return RISKW[c.risk] != null; }
+    function costDerived(c) { return riskKnown(c) && REVW[c.reversible] != null; }
+    function weighedByHand(c) { return c.weighed_by === "firstmate"; }
+    /* One rule for the broken outline: do not read this position as something
+       the fleet measured. It covers both reasons, and the words say which. */
+    function positionSoft(c) { return !costDerived(c) || weighedByHand(c); }
+    /* The stalled count drives the bubble's HEIGHT and its RADIUS, and a
+       truncated blocker list makes that count a floor. The words already hedge
+       it; the geometry did not, so a call whose list was cut off was drawn
+       lower and smaller than the truth with no mark on it. The picture is what
+       the captain reads first, and the note under it claims both positions
+       come from what the fleet records. */
+    function countSoft(c) { return c.blocks_partial === true; }
+    function wrongCost(c) {
+      if (!costDerived(c)) return 0;
+      return Math.min(1, (RISKW[c.risk] + REVW[c.reversible]) / 4);
+    }
+    function riskFill(risk) {
+      if (risk === "high") return "var(--rust-500)";
+      if (risk === "low") return "var(--sea-500)";
+      if (risk === "medium") return "var(--gold-500)";
+      /* Not a risk colour at all. Amber here would read as "somebody called
+         this medium", and nobody did. */
+      return "var(--text-faint)";
+    }
+    function svgEl(name, attrs) {
+      var n = document.createElementNS("http://www.w3.org/2000/svg", name);
+      for (var k in attrs) { if (attrs.hasOwnProperty(k)) n.setAttribute(k, String(attrs[k])); }
+      return n;
+    }
+    /* A bubble is labelled with the card's own title, cut to something that
+       fits beside a circle. Cutting is done on the rendered string, so it
+       follows the captain's language like everything else. */
+    /* How a stalled-work count is worded, in ONE place so the bubble and the
+       ranked row beside it can never say different things about the same
+       number. A count the fleet could only establish a floor for is said as a
+       floor: the snapshot cuts a long blocker list off, and reporting the
+       remainder as a total would be the board claiming to know more than it
+       read. */
+    function blocksWords(c) {
+      if (!c.blocks) return c.blocks_partial ? t("map_blocks_atleast", { n: 0 }) : t("map_blocks_none");
+      return c.blocks_partial ? t("map_blocks_atleast", { n: c.blocks }) : t("map_blocks", { n: c.blocks });
+    }
+    /* What this bubble's horizontal position actually rests on, said in words
+       so the plot is readable by ear and so the distinction survives anyone
+       who cannot see a broken outline. */
+    function positionWords(c) {
+      if (!riskKnown(c)) return t("map_unassessed");
+      /* Built from parts because both can be true at once, and a merge card is
+         exactly that case: its risk is the first mate's and its reversibility
+         was never stated at all. Returning one of them would drop the other. */
+      var said = [costDerived(c)
+        ? t("risk", { r: t("risk_" + c.risk) })
+        : t("map_norev", { r: t("risk_" + c.risk) })];
+      if (weighedByHand(c)) said.push(t("map_byhand"));
+      return said.join(". ");
+    }
+    function shortLabel(item) {
+      var w = pick(item.title);
+      return w.length > 22 ? w.slice(0, 21) + "\u2026" : w;
+    }
+
+    /* Moves the selection on the picture and the list. renderMap builds it
+       over the nodes it just made, so keeping the map in step with the dealt
+       card is a call rather than a second search of the document - and a
+       repaint cannot leave it pointing at nodes that are no longer there. */
+    var markMapSelection = function () {};
+
+    function renderMap(items, onPick) {
+      var host = document.getElementById("bb-map");
+      var note = document.getElementById("bb-map-note");
+      var list = document.getElementById("bb-calllist");
+      markMapSelection = function () {};
+      if (!host || !note || !list) return;
+      clear(host); clear(list);
+      /* The caption IS the surface, so it is assembled from what is actually on
+         the plot rather than printed and then corrected.
+         The claim that nothing here is weighted by hand is made ONLY when it is
+         true of every bubble; appending its own exception after it left the
+         flat assertion as the sentence the captain reads first, in the sentence
+         he reads to decide how much to trust the picture.
+         And the broken outline has three separate reasons now. Keying one
+         sentence to the mark made it say every broken-outlined bubble sits at
+         the left edge - false for two of the three, and worst for the bubble
+         furthest right, which is the one his own quadrant rule says to decide
+         first. So the mark is described once and each reason speaks only for
+         the bubbles it actually applies to. */
+      if (!items.length) {
+        note.textContent = "";
+        host.appendChild(el("p", "bb-map__note", t("map_empty")));
+        return;
+      }
+      var W = 420, H = 320, x0 = 54, x1 = W - 16, y0 = 22, y1 = H - 46;
+      var midX = (x0 + x1) / 2, midY = (y0 + y1) / 2;
+      var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img" });
+      svg.setAttribute("aria-label", t("map_alt"));
+      var title = svgEl("title", {});
+      title.textContent = t("map_title");
+      svg.appendChild(title);
+
+      /* the quadrant that earns attention: stalled AND costly to get wrong */
+      svg.appendChild(svgEl("rect", { x: midX, y: y0, width: x1 - midX, height: midY - y0,
+        fill: "var(--rust-050)" }));
+      [[x0, midY, x1, midY], [midX, y0, midX, y1]].forEach(function (g) {
+        svg.appendChild(svgEl("line", { x1: g[0], y1: g[1], x2: g[2], y2: g[3],
+          stroke: "var(--border-soft)", "stroke-width": 1, "stroke-dasharray": "3 3" }));
+      });
+      [[x0, y1, x1, y1], [x0, y0, x0, y1]].forEach(function (g) {
+        svg.appendChild(svgEl("line", { x1: g[0], y1: g[1], x2: g[2], y2: g[3],
+          stroke: "var(--ink-900)", "stroke-width": 1.6 }));
+      });
+      function svgText(cls, attrs, words) {
+        var n = svgEl("text", attrs);
+        n.setAttribute("class", cls);
+        n.textContent = words;
+        svg.appendChild(n);
+        return n;
+      }
+      svgText("bb-axlabel", { x: x0, y: y1 + 30 }, t("ax_undo_cheap"));
+      svgText("bb-axlabel", { x: x1, y: y1 + 30, "text-anchor": "end" }, t("ax_undo_hard"));
+      svgText("bb-axlabel", { transform: "translate(" + (x0 - 12) + "," + y1 + ") rotate(-90)" }, t("ax_waits_none"));
+      svgText("bb-axlabel", { transform: "translate(" + (x0 - 12) + "," + y0 + ") rotate(-90)", "text-anchor": "end" }, t("ax_waits"));
+      svgText("bb-quadlabel", { x: x1 - 4, y: y0 - 6, "text-anchor": "end" }, t("quad_first"));
+      svgText("bb-quadlabel", { x: x0 + 4, y: y0 - 6 }, t("quad_think"));
+      svgText("bb-quadlabel", { x: x1 - 4, y: y1 + 14, "text-anchor": "end" }, t("quad_pick"));
+      svgText("bb-quadlabel", { x: x0 + 4, y: y1 + 14 }, t("quad_when"));
+
+      /* Bubbles are inset from every edge by the largest radius plus one
+         label's HEIGHT, so a mark never clips. It is a vertical allowance and
+         nothing more: half a measured name is 60 to 105px, so this inset
+         accommodates no name horizontally at all, and a name that would fall
+         outside the plot is withheld by the containment rule rather than
+         accommodated here. */
+      var INSET = 34;
+      var pts = items.map(function (c, i) {
+        return { c: c, i: i,
+          x: x0 + INSET + wrongCost(c) * (x1 - x0 - INSET * 2),
+          y: y1 - INSET - waitingCost(c) * (y1 - y0 - INSET * 2),
+          r: 11 + Math.min(c.blocks || 0, 3) * 3.5 };
+      });
+      /* NOTHING MOVES A BUBBLE. Two calls can compute to nearly the same point,
+         and the readable thing to do about it is not to shift one of them:
+         both axes here carry meaning, so nudging a mark for legibility trades a
+         true picture for a tidy one and neither failure announces itself. A
+         separation pass along x used to do exactly that - past about eight
+         uncosted calls it pushed one across the middle, so a bubble nobody had
+         costed was drawn in the costly half, in the quadrant that says pick one,
+         while its own words said nobody assessed it.
+         What is actually unreadable when bubbles coincide is their LABELS
+         running through one another, and a label's position carries no meaning,
+         so that is what moves. The mark stays where the data put it. */
+      /* Which marks sit on another. Computed once, because both the labelling
+         and the caption sentence that sends him to the list depend on it. */
+      pts.forEach(function (pt) {
+        pt.overlapped = pts.some(function (o) {
+          if (o === pt) return false;
+          var dx = o.x - pt.x, dy = o.y - pt.y;
+          return Math.sqrt(dx * dx + dy * dy) < o.r + pt.r;
+        });
+      });
+
+
+      /* A LABEL IS DRAWN BESIDE ITS OWN MARK OR NOT AT ALL.
+         Stepping a label clear of its neighbours was the first answer and it
+         was the wrong target. Two bubbles on the same point are the same mark
+         to look at, so one label per bubble promises a correspondence the
+         picture cannot show at any distance - and at twelve coincident calls
+         the furthest label stood 138px from its bubble with eleven others in
+         between, which is the picture asserting a one-to-one mapping it does
+         not have. Distance was only the visible symptom.
+         So a bubble sitting on another is left unlabelled: the count stays in
+         the mark, and the ranked list beneath names every call in the same
+         order. A label whose own place is already taken is dropped for the
+         same reason rather than moved somewhere it would misattribute. */
+      /* THE LABEL IS MEASURED, NOT MODELLED.
+         The rules below decide whether a name covers another mark or another
+         name, so they have to be given the name's real extent. They used to be
+         handed a fixed 58px-wide box for text that is routinely twice that, so
+         rules that could see the whole plot were still deciding on information
+         they did not have - the same failure as a rule that could not see the
+         plot, one layer in, and two names were written through each other at
+         two open calls.
+         So the text node is built, put on the page and asked how wide it is.
+         getComputedTextLength is the SVG measurement for exactly this and every
+         browser has it; the fallback below is for a renderer that does not, and
+         is deliberately generous so such a page withholds more names than it
+         needs rather than drawing one over another. 6.3px per character is not
+         a guess: it is this label's own font at the size it ships at, from a
+         19-character name measured at 119.2px in a browser. Re-measure rather
+         than trust it if the label font or size changes. */
+      var LABEL_UP = 10, LABEL_DOWN = 3;
+      /* The fallback is per-character and a character is not one width. 6.3px
+         is this font at this size measured on LATIN text; the same class
+         measures 9.6px per character in 繁體 and 简体, which this board ships
+         and the captain reads. Calibrating on English and calling the result
+         conservative made it 1.5x SHORT in the locale that matters most - the
+         unsafe direction, and enough to reinstate the very overlap the
+         measurement removes. So the fallback charges every character the wider
+         rate: too generous for English, honest for Chinese, and wrong only in
+         the direction that withholds a name rather than draws one over
+         another. */
+      var LABEL_FALLBACK_PER_CHAR = 9.6;
+      /* Width AND height from the node itself. Measuring one and modelling the
+         other is what produced this whole class: a predicate fed one true
+         extent and one guess cannot be checked against the picture. getBBox
+         reports the em box, so the height is a constant of the font size
+         rather than of the string - but it is a MEASURED constant. */
+      function labelBoxOf(node, words) {
+        if (node && typeof node.getBBox === "function") {
+          try {
+            var b = node.getBBox();
+            if (b && b.width > 0 && b.height > 0) {
+              return { w: b.width, up: (node.getAttribute("y") !== null)
+                ? (parseFloat(node.getAttribute("y")) - b.y) : LABEL_UP,
+                down: b.height - ((node.getAttribute("y") !== null)
+                ? (parseFloat(node.getAttribute("y")) - b.y) : LABEL_UP) };
+            }
+          } catch (e) { /* not rendered: fall through to the measured width */ }
+        }
+        if (node && typeof node.getComputedTextLength === "function") {
+          var w = node.getComputedTextLength();
+          if (w > 0) return { w: w, up: LABEL_UP, down: LABEL_DOWN };
+        }
+        return { w: words.length * LABEL_FALLBACK_PER_CHAR, up: LABEL_UP, down: LABEL_DOWN };
+      }
+      var taken = [];
+      /* Does this label sit on a mark that is not its own? Nearest point of the
+         label box to each other circle, compared against that circle's radius. */
+      function hitsMark(box, pt) {
+        return pts.some(function (o) {
+          if (o === pt) return false;
+          var nx = Math.max(box.l, Math.min(o.x, box.r));
+          var ny = Math.max(box.t, Math.min(o.y, box.b));
+          var dx = o.x - nx, dy = o.y - ny;
+          return (dx * dx + dy * dy) < o.r * o.r;
+        });
+      }
+      function hitsLabel(box) {
+        return taken.some(function (b2) {
+          return box.l < b2.r && box.r > b2.l && box.t < b2.b && box.b > b2.t;
+        });
+      }
+      /* Where a name may sit, in order of preference. Centred on its mark
+         first; if that does not fit, ANCHORED at the mark and running inward.
+         Anchoring moves no mark and does not detach the name - it still starts
+         or ends on the mark it belongs to - so attribution stays true, and the
+         candidate is put through every other rule exactly as the centred one
+         is.
+         It exists because of geometry rather than because a rule was wrong:
+         this plot is 420 wide with its columns at x=88 and x=370, so a name
+         centred on an edge column has about ten Latin characters before it
+         leaves the picture. Anchoring is what lets an edge column carry a name
+         at all; it does not create room that is not there, and on crowded
+         boards names are still withheld. */
+      function labelSpots(pt, m) {
+        var spots = [{ anchor: "middle", l: pt.x - m.w / 2, r: pt.x + m.w / 2 }];
+        if (pt.x < midX) spots.push({ anchor: "start", l: pt.x, r: pt.x + m.w });
+        else spots.push({ anchor: "end", l: pt.x - m.w, r: pt.x });
+        return spots;
+      }
+      function labelFor(pt, m) {
+        /* Four ways a name can be untrue where it lands, and every one of them
+           is a fact about the WHOLE PLOT rather than about this bubble: whose
+           mark it is, whether it covers another mark, whether another name is
+           already there, and whether it is still inside the picture. Offsetting
+           from a mark could see none of them, which is why the same lie kept
+           reappearing somewhere new each time it was pushed out of one place.
+
+           WHAT THIS RULE CONSIDERS, stated because three rounds of findings
+           here were all the same shape - a rule reasoning about a subset of the
+           plot and being read as though it reasoned about the plot. It now
+           considers: whether the mark is distinguishable from its neighbours,
+           the name's own measured width and height, every other mark, every
+           name already placed, and both axes of the picture's bounds.
+
+           WHAT IT STILL DOES NOT CONSIDER, so the next gap is named before it
+           is found: the axis captions and quadrant labels drawn inside those
+           bounds - a name may still sit on one of those, because containment
+           is checked against the plot rect and not against the furniture in it.
+           It does not consider the ranked list below, the card, or anything
+           outside this SVG. It does not reconsider an earlier name when a later
+           one cannot be placed: placement is first-come, so a different order
+           would name a different subset. And it does not move anything - not
+           the mark, not the name - so it can only place a name where it belongs
+           or withhold it.
+
+           WHICH RULES FIRE, measured on the real geometry at this head, after
+           the width stopped being made up AND the horizontal bound was added:
+
+             one call, ordinary board .......... 1 of 1 named
+             two calls ......................... 2 of 2
+             three calls ....................... 2 of 3
+             eight calls ....................... 3 of 8
+             twelve calls ...................... 5 of 12
+             coincident calls, any count ....... 0 named   (same mark)
+
+           Three of the four decide real cases: the same-mark rule, the
+           name-on-name rule, and the name-on-mark rule, which withholds a name
+           on an ordinary two-call board. CONTAINMENT CANNOT FIRE, and this
+           time that is arithmetic rather than an accident: a name is capped at
+           22 characters, the widest of those is 211px in 繁體, and every column
+           has at least 316px of room toward the middle except the centre one,
+           which has 350px centred. Anchoring is what makes that true - before
+           it, containment withheld two thirds of the names. It is kept because
+           the cap, the columns and the plot width are three separate constants
+           and nothing ties them together. Re-measure rather than trust this
+           list if any of them changes. */
+        if (pt.overlapped) return null;
+        var at = pt.y < midY + 20 ? pt.y + pt.r + 12 : pt.y - pt.r - 6;
+        var spots = labelSpots(pt, m);
+        for (var i = 0; i < spots.length; i++) {
+          var box = { l: spots[i].l, r: spots[i].r, t: at - m.up, b: at + m.down };
+          if (box.l < x0 || box.r > x1 || box.t < y0 || box.b > y1) continue;
+          if (hitsMark(box, pt)) continue;
+          if (hitsLabel(box)) continue;
+          taken.push(box);
+          return { y: at, anchor: spots[i].anchor };
+        }
+        return null;
+      }
+      /* On the page BEFORE the names are placed: getComputedTextLength measures
+         what is being rendered, so a label still detached from the document
+         cannot be measured and would silently fall back to the estimate. */
+      host.appendChild(svg);
+      var unnamed = 0;
+      pts.forEach(function (pt) {
+        var c = pt.c;
+        var g = svgEl("g", { "data-key": c.key, tabindex: 0, role: "button" });
+        svg.appendChild(g);
+        g.setAttribute("class", "bb-bub");
+        g.setAttribute("aria-label", pick(c.title) + ". " + blocksWords(c) +
+          ". " + positionWords(c));
+        var circle = svgEl("circle", { cx: pt.x.toFixed(1), cy: pt.y.toFixed(1), r: pt.r,
+          fill: riskFill(c.risk), "fill-opacity": 0.6,
+          stroke: "var(--ink-900)", "stroke-width": 1.8 });
+        /* A broken outline is the second half of saying "not measured": the
+           colour says it and the edge says it, so neither has to be noticed
+           on its own. */
+        if (positionSoft(c) || countSoft(c)) circle.setAttribute("stroke-dasharray", "3 3");
+        g.appendChild(circle);
+        pt.g = g; pt.circle = circle;
+        if (c.blocks) {
+          var n = svgEl("text", { x: pt.x.toFixed(1), y: (pt.y + 3.6).toFixed(1),
+            "text-anchor": "middle", fill: "var(--paper-000)" });
+          n.setAttribute("class", "bb-bublabel");
+          n.textContent = String(c.blocks);
+          g.appendChild(n);
+        }
+        /* Built and attached first so it can be measured, then taken away
+           again when the rules refuse it. Deciding before it exists is what
+           forced a made-up width in the first place. */
+        var words = shortLabel(c);
+        var lab = svgEl("text", { x: pt.x.toFixed(1), "text-anchor": "middle" });
+        /* Measured while centred; the anchor is set below only if the name has
+           to be placed off-centre to stay inside the picture. */
+        lab.setAttribute("class", "bb-bublabel");
+        lab.textContent = words;
+        g.appendChild(lab);
+        var placed = labelFor(pt, labelBoxOf(lab, words));
+        if (placed === null) { g.removeChild(lab); unnamed += 1; }
+        else {
+          lab.setAttribute("y", placed.y.toFixed(1));
+          lab.setAttribute("text-anchor", placed.anchor);
+        }
+        function press() { onPick(pt.i); }
+        g.addEventListener("click", press);
+        g.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); press(); }
+        });
+      });
+
+      /* The bubble's number is a plain count only when no bubble on the plot is
+         a floor. Printed flat and corrected further down, it told a reader who
+         stopped at the number - and a caption exists to be stopped at - that a
+         bubble reading 2 has two behind it, when the fleet established only
+         that it has at least two. Said here rather than among the reasons for a
+         broken outline, because it is a statement about every bubble. */
+      /* EVERY CLAUSE TRUE OF THE PLOT AS DRAWN, ON ITS OWN. A caption is read in
+         fragments, so a clause that needs its neighbour to be honest is not
+         honest: three rounds of this paragraph went wrong by stating something
+         flatly and qualifying it further down. Each sentence below is either
+         unconditionally true of every bubble or is not printed. */
+      var says = [t("map_note")];
+      /* Where the cost comes from is true only of bubbles that HAVE one; a
+         plot carrying a call nobody costed is told the rule and the exception
+         by two sentences rather than one that walks itself back. */
+      if (!items.some(function (c) { return !costDerived(c); })) says.push(t("map_note_cost"));
+      /* Grey is deliberately not a risk colour, and saying "colour repeats the
+         risk" beside a grey bubble is the quieter half of the same defect -
+         this one was never walked back at all. */
+      says.push(items.some(function (c) { return !riskKnown(c); })
+        ? t("map_note_colour_grey") : t("map_note_colour"));
+      if (!items.some(countSoft)) says.push(t("map_note_exact"));
+      /* Said when a name is actually withheld, by WHICHEVER rule withheld it.
+         Keyed on coincident marks alone, two of the four rules could drop a
+         name with nothing in the caption accounting for it - and a picture that
+         silently withholds a name has told the reader there is nothing there.
+         Counted after placement rather than predicted, so the sentence cannot
+         drift from what was drawn. */
+      if (unnamed > 0) says.push(t("map_note_stacked"));
+      var soft = [];
+      if (items.some(function (c) { return !costDerived(c); })) soft.push(t("map_note_unassessed"));
+      if (items.some(weighedByHand)) soft.push(t("map_note_byhand"));
+      if (items.some(countSoft)) soft.push(t("map_note_floor"));
+      note.textContent = says
+        .concat(soft.length ? [t("map_note_soft")].concat(soft) : [t("map_note_measured")])
+        .join(" ");
+
+      /* The same calls in the order the two numbers put them in. */
+      var ordered = pts.slice().sort(function (a, b) {
+        return (waitingCost(b.c) + wrongCost(b.c)) - (waitingCost(a.c) + wrongCost(a.c));
+      });
+      ordered.forEach(function (pt, rank) {
+        var b = el("button", "bb-clrow");
+        b.type = "button";
+        b.setAttribute("data-key", pt.c.key);
+        b.appendChild(el("span", "bb-clrow__n", String(rank + 1)));
+        b.appendChild(el("span", "bb-clrow__t", pick(pt.c.title)));
+        b.appendChild(el("span", "bb-clrow__meta", blocksWords(pt.c)));
+        b.addEventListener("click", function () { onPick(pt.i); });
+        pt.row = b;
+        list.appendChild(b);
+      });
+
+      markMapSelection = function (key) {
+        pts.forEach(function (pt) {
+          var on = pt.c.key === key;
+          if (pt.g) pt.g.setAttribute("class", "bb-bub" + (on ? " is-sel" : ""));
+          if (pt.circle) {
+            pt.circle.setAttribute("fill-opacity", on ? "0.95" : "0.6");
+            pt.circle.setAttribute("stroke-width", on ? "3.5" : "1.8");
+          }
+          if (pt.row) pt.row.className = "bb-clrow" + (on ? " is-sel" : "");
+        });
+      };
+    }
+
     /* stack navigation: one card at a time, dealt off the pile */
     var cards = Array.prototype.slice.call(deck.children);
     var stackCount = document.getElementById("bb-stack-count");
@@ -1354,11 +2262,18 @@ __FM_BEARINGS_BOARD_DATA__
         (answered ? " · " + t("answered", { n: answered }) : "");
       stackPrev.disabled = active === 0;
       stackNext.disabled = active === cards.length - 1;
+      /* the map and the ranked list follow the deal, so the captain can always
+         see which bubble the card in front of him belongs to */
+      markMapSelection(data.captains_call[active] ? data.captains_call[active].key : null);
       /* the pile thins as the deal approaches the bottom */
       deck.className = "bb-call" +
         (active === cards.length - 2 ? " bb-call--penult" : "") +
         (active === cards.length - 1 ? " bb-call--last" : "");
     }
+    /* The map and the list both deal a card rather than owning one, so there
+       is still exactly one place a call is answered. Selecting is reading;
+       the card below stays the only surface that sends anything. */
+    renderMap(data.captains_call, function (i) { showCard(i); });
     if (cards.length) {
       stackPrev.onclick = function () { showCard(active - 1); };
       stackNext.onclick = function () { showCard(active + 1); };
@@ -1377,23 +2292,112 @@ __FM_BEARINGS_BOARD_DATA__
       if (stackNav) stackNav.hidden = true;
     }
 
-    /* Underway */
+    /* The merge lane. The headline is computed from the rows themselves rather
+       than from a second count in the payload, because two numbers that can
+       disagree is how a surface starts lying. */
+    /* A reason code is payload data, and t() falls back to the key it was
+       given, so an unworded code would put a raw machine token - mq_checks_
+       pending - in front of the captain. The payload contract restricts these
+       to eight codes today, and the contract and the copy table live in
+       different files, so the next code added to one is not forced through the
+       other. Same guard riskBadge already uses two hundred lines up. */
+    function reasonWords(code) { return words("mq_", code, t("mq_unworded")); }
+    var mergeSection = document.getElementById("bb-merge-section");
+    var mergeHead = document.getElementById("bb-merge-head");
+    var mergeQueue = document.getElementById("bb-merge-queue");
+    var mergeSub = document.getElementById("bb-merge-sub");
+    if (mergeSection && mergeHead && mergeQueue) {
+      var mq = data.merge_queue || [];
+      clear(mergeQueue);
+      if (mergeSub) mergeSub.textContent = t("mq_sub");
+      /* A board composed before this lane existed carries no merge_queue at
+         all. It renders the board it has rather than an empty lane claiming
+         there are no pull requests, which would be a different statement. */
+      mergeSection.hidden = !data.merge_queue;
+      var readyCount = mq.filter(function (r) { return r.ready; }).length;
+      mergeHead.textContent = !mq.length ? t("mq_empty_head")
+        : (readyCount ? t("mq_some_head", { r: readyCount, n: mq.length })
+                      : t("mq_none_head", { n: mq.length }));
+      mq.forEach(function (r) {
+        var row = el("div", "bb-mqrow" + (r.ready ? " bb-mqrow--ready" : ""));
+        var pr = el("span", "bb-mqrow__pr", "#" + r.num);
+        /* The pull request itself, when the payload recorded its address. The
+           captain reads the repository rather than a summary of it. */
+        if (r.url) { row.appendChild(link("bb-mqrow__pr", "#" + r.num, r.url)); }
+        else { row.appendChild(pr); }
+        row.appendChild(el("span", "bb-mqrow__repo", r.repo));
+        row.appendChild(el("span", "bb-mqrow__why",
+          r.ready ? t("mq_ready") : reasonWords(r.reason)));
+        mergeQueue.appendChild(row);
+      });
+    }
+
+    /* Underway, as the pipeline rather than as a list.
+       我想知道每個agent的進度. Fourteen workers as fourteen rows says nothing; the
+       same fourteen grouped by the lane they are in says "four on pull
+       requests, one check failed, two stuck" without reading a word. The row
+       itself is unchanged - same name, same status line, same acknowledgement
+       - so what this adds is the shape of the pile, not a second surface. */
     var uw = document.getElementById("bb-underway");
     clear(uw);
     if (!data.underway.length) uw.appendChild(el("div", "bb-empty", t("empty_underway")));
-    data.underway.forEach(function (x) {
+    function workerRow(x) {
       var row = el("div", "bb-row");
-      row.appendChild(badge(x.state === "working" ? "online" : "info", x.state));
+      /* The run state and the task kind are internal vocabulary - `parked`,
+         `unreported`, `ship`, `scout` - and putting them on the row raw is the
+         class the contract forbids on a captain-facing surface. Both go
+         through the same guarded lookup the rest of the page uses, and a value
+         with no copy keeps its own spelling rather than rendering blank, so a
+         state this page has not learned yet is still visible. */
+      row.appendChild(badge(x.state === "working" ? "online" : "info", words("state_", x.state)));
       var main = el("div", "bb-row__main");
       /* the snapshot's durable name-or-id label leads the row so a scan says
          WHICH task this is; the run status keeps its place on the second line */
       main.appendChild(el("div", "bb-row__title", pick(x.name)));
       /* captain-facing rows name the repo; the internal task id shows only when
          no repo is known */
-      main.appendChild(el("div", "bb-row__sub", pick(x.doing) + " · " + x.kind + " · " + (x.repo || x.id)));
+      main.appendChild(el("div", "bb-row__sub",
+        pick(x.doing) + " · " + words("kind_", x.kind) + " · " + (x.repo || x.id)));
       row.appendChild(main);
-      uw.appendChild(row);
+      return row;
+    }
+    /* The lanes this page can draw, in the order the work moves through them.
+       A payload naming a lane that is not here is NOT an error - the fleet can
+       grow a state before the board learns to draw it - so everything left
+       over is collected below under a heading that says exactly that. A board
+       that quietly loses a worker is worse than one that admits it cannot
+       place him, and the first build of this region lost one. */
+    var LANES = ["working", "pr", "failed", "stuck", "waiting", "stopped", "unreported", "done"];
+    var placed = {};
+    LANES.forEach(function (id) { placed[id] = []; });
+    var unplaced = [];
+    data.underway.forEach(function (x) {
+      var lane = x.lane;
+      if (lane && placed[lane]) placed[lane].push(x);
+      else unplaced.push(x);
     });
+    function laneBlock(id, label, rows) {
+      if (!rows.length) return;
+      var lane = el("div", "bb-lane bb-lane--" + id);
+      var head = el("div", "bb-lane__h");
+      head.appendChild(el("span", "bb-lane__label", label));
+      head.appendChild(el("span", "bb-lane__n", String(rows.length)));
+      lane.appendChild(head);
+      rows.forEach(function (x) { lane.appendChild(workerRow(x)); });
+      uw.appendChild(lane);
+    }
+    /* A payload composed before lanes existed carries no lane on ANY row. That
+       is an older board, not a fleet that could not be placed, so it renders
+       exactly as it always did rather than filing every worker under an alarm.
+       One row carrying a lane is enough to mean the payload knows about them,
+       and from there anything unplaced is a real finding. */
+    var laneAware = data.underway.some(function (x) { return !!x.lane; });
+    if (!laneAware) {
+      data.underway.forEach(function (x) { uw.appendChild(workerRow(x)); });
+    } else {
+      LANES.forEach(function (id) { laneBlock(id, t("lane_" + id), placed[id]); });
+      laneBlock("unplaced", t("lane_unplaced"), unplaced);
+    }
 
     /* Landed */
     var ld = document.getElementById("bb-landed");
@@ -1419,16 +2423,61 @@ __FM_BEARINGS_BOARD_DATA__
     var bar = document.getElementById("bb-dispatch");
     var barCount = document.getElementById("bb-dispatch-count");
     var barBtn = document.getElementById("bb-dispatch-btn");
+    var barLimit = document.getElementById("bb-dispatch-limit");
+    /* Roled here rather than in the markup, the same way the card roles its
+       own refusal, so a refusal has ONE shape on this page and a test can
+       prove it would be announced rather than trusting the markup. */
+    if (barLimit) barLimit.setAttribute("role", "alert");
     var anyPickable = false;
     clear(ch);
 
     function pickedIds() {
       return Array.prototype.map.call(ch.querySelectorAll(".bb-pick:checked"), function (c) { return c.value; });
     }
-    function refreshBar(limitMessage) {
+    /* The counter says how many rows are picked, and only that. A refusal is a
+       different statement and goes to the bar's own alert element, never into
+       the counter slot: muted uppercase micro-type in a counter is not a
+       refusal the captain will see. This used to take a message to write there
+       instead of the count, which is the shape the rule forbids - no caller
+       passes one now, so the door is closed rather than left open beneath the
+       comment saying it is shut. */
+    function refreshBar() {
       var n = pickedIds().length;
-      barCount.textContent = limitMessage || (n ? t("pick_n", { n: n }) : t("pick_none"));
-      barBtn.disabled = !n;
+      barCount.textContent = n ? t("pick_n", { n: n }) : t("pick_none");
+      /* A picked row is not enough to make this button live: it also has to
+         be able to send. Same reason as the card - do not let him pick rows
+         for a dispatch that cannot leave the page. */
+      var canSend = !!answerChannel();
+      barBtn.disabled = !n || !canSend;
+      /* And a button that greys itself out MUST say why, in its own alert,
+         exactly as the card does. Disabling it silently is the captain's
+         original complaint with the press made impossible instead of ignored:
+         he ticks rows, the button never lights, and nothing anywhere explains
+         it. Every other refusal here is written from inside the click handler,
+         which he can no longer reach. */
+      paintBarRefusal();
+    }
+    /* What the captain's LAST ACTION ran into. Tied to the action rather than
+       stored as standing state: the length guard un-ticks the row it refused,
+       so the moment he touches the selection again he is no longer over any
+       limit and that sentence has stopped being true. Kept beyond that, it
+       became confidently wrong - naming a cause that no longer held while the
+       real reason the button was grey went unnamed, and on a board that cannot
+       send nothing could ever clear it, because only a successful dispatch did
+       and no dispatch can happen. A stale refusal is worse than a missing one. */
+    var barEarned = "";
+    function barRefuse(message) { barEarned = message; paintBarRefusal(); }
+    function paintBarRefusal() {
+      if (!barLimit) return;
+      /* Two independent statements, and when both hold he is told both. Either
+         one suppressing the other is how this went wrong in each direction: he
+         used to get only the channel reason, then only the limit reason, and
+         both were true at once. */
+      var said = [];
+      if (barEarned) said.push(barEarned);
+      if (!answerChannel()) said.push(t("no_channel_dispatch_yet"));
+      barLimit.textContent = said.join(" ");
+      barLimit.className = "bb-limit" + (said.length ? " is-visible" : "");
     }
 
     if (!chartedQueued(data.charted).length && !chartedMoreQueued) {
@@ -1442,9 +2491,16 @@ __FM_BEARINGS_BOARD_DATA__
         pk.type = "checkbox"; pk.className = "bb-pick"; pk.value = x.id;
         pk.setAttribute("aria-label", t("pick_aria", { id: x.id }));
         pk.addEventListener("change", function () {
+          /* Every touch of the selection supersedes what the last one ran
+             into, which is what keeps a refusal from outliving its cause. */
+          barRefuse("");
           if (pk.checked && utf8ByteLength(pickedIds().join(",")) > 512) {
             pk.checked = false;
-            refreshBar(t("pick_limit"));
+            /* His tick just disappeared, so this is a refusal and goes to the
+               bar's own alert - not the counter slot, where it rendered as
+               muted uppercase micro-type with nothing announcing it. */
+            refreshBar();
+            barRefuse(t("pick_limit"));
             return;
           }
           refreshBar();
@@ -1484,17 +2540,28 @@ __FM_BEARINGS_BOARD_DATA__
         var dispatchAnswer = ids.join(",");
         if (!ids.length) return;
         if (utf8ByteLength(dispatchAnswer) > 512) {
-          refreshBar(t("pick_too_long"));
+          barRefuse(t("pick_too_long"));
           return;
         }
-        if (window.lavish && window.lavish.queuePrompt) {
-          window.lavish.queuePrompt(
-            "Dispatch order - start this queued work now: " + ids.join(", "),
-            { tag: "choice", text: "Dispatch: " + ids.join(", "), element: bar,
-              queueKey: "dispatch.charted",
-              data: { question: "dispatch.charted", answer: dispatchAnswer } }
-          );
+        /* Same rule as the card: the bar may not report a dispatch it could
+           not send, and no row may be acknowledged for one. */
+        var sendDispatch = answerChannel();
+        if (!sendDispatch) {
+          barRefuse(t("no_channel_dispatch"));
+          return;
         }
+        if (sendDispatch(
+          "Dispatch order - start this queued work now: " + ids.join(", "),
+          { tag: "choice", text: "Dispatch: " + ids.join(", "), element: bar,
+            queueKey: "dispatch.charted",
+            data: { question: "dispatch.charted", answer: dispatchAnswer } }
+        ) === false) {
+          /* The channel was there and still could not send. Same consequence
+             as having no channel: nothing below may run. */
+          barRefuse(t("no_channel_dispatch"));
+          return;
+        }
+        barRefuse("");
         dispatchQueued = true;
         bar.classList.add("is-queued");
         /* the answer is about the rows he picked, so that is where it is

@@ -491,6 +491,67 @@ test_path_is_stable_and_home_scoped() {
   pass "path prints the stable home-scoped board location"
 }
 
+# Every remote host the built page names, with the ones that are not a fetch
+# removed: loopback is the live push and is wanted, the SVG namespace is an
+# identifier, an author link is the captain clicking, and the payload island is
+# data the page renders as text rather than anything it loads.
+#
+# Deliberately NOT a list of resource-position spellings. The guard this
+# replaces checked seven fixed strings and a protocol-relative webfont - the
+# closest relative of the thing it was written for - walked straight past it.
+# So this removes what is allowed and flags everything else, which cannot be
+# walked past by inventing an eighth spelling.
+board_remote_refs() {  # <page>
+  awk '
+    /<script id="bearings-data"/ { in_payload = 1 }
+    in_payload { if (/<\/script>/) { in_payload = 0 } ; next }
+    { print }
+  ' "$1" \
+    | sed 's/<a [^>]*>//g' \
+    | grep -oE '(https?:)?//[A-Za-z0-9._:-]+' \
+    | grep -vE '^(https?:)?//(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$' \
+    | grep -vE '^https?://www\.w3\.org$' \
+    | sort -u
+}
+
+# The captain may open this board offline, behind a firewall that blocks a font
+# host, or on a clone configured with nothing. A page that fetches at load still
+# renders, so nothing reports a failure - it just silently becomes a different
+# product for whoever cannot reach the host. The assertion is on the BUILT page
+# rather than the template, because the built page is what reaches the captain.
+#
+# WHAT THIS HOLDS, precisely, because a guard that claims more than it checks is
+# the defect this branch exists to attack: the built page names no REMOTE host
+# outside an author link. Loopback is allowed on purpose - the live push is a
+# loopback websocket, so "this page fetches nothing" would be false about the
+# very build being checked, and the narrower claim is the true one.
+#
+# WHAT IT CANNOT SEE, stated rather than left to a green: a URL assembled at
+# runtime from parts never appears as a literal, so no scan of the page finds
+# it. The live transport builds its own endpoint that way.
+test_the_built_board_names_no_remote_host_to_fetch_from() {
+  local home data board refs probe
+  home=$(make_home offline)
+  board="$home/.lavish/bearings-board.html"
+  data="$home/payload.json"
+
+  # A scanner that errors prints nothing, and nothing reads as a clean page -
+  # the guard would then pass by silence, which is the failure it exists to
+  # catch. So prove it can FAIL on a fixture before trusting it on the board.
+  probe="$home/probe.html"
+  printf '<style>@import url("https://fonts.example/x.css");</style>\n' > "$probe"
+  [ -n "$(board_remote_refs "$probe")" ] \
+    || fail "the remote-reference scanner cannot detect a remote reference; its green would mean nothing"
+
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the board did not build"
+
+  refs=$(board_remote_refs "$board")
+  [ -z "$refs" ] || fail "the built board names a remote host to fetch from: $refs"
+
+  pass "the built board names no remote host, and the scanner proved it can fail"
+}
+
 test_build_refuses_malformed_payloads_before_touching_the_board() {
   local home data board rc out
   home=$(make_home refusal)
@@ -1542,6 +1603,346 @@ test_compose_slots_the_risk_a_packet_leaves_out() {
   pass "compose slots only the card fields a verified packet left out"
 }
 
+# --- the card the call itself wrote ------------------------------------------
+# The captain refused a board whose cards are recomposed every time: 看板的卡片
+# 我要一個realtime方案，不要你每次重建，沒意義. So a call writes its card when it
+# is raised and compose READS it. These tests hold the two halves of that: the
+# record outranks everything else a card could be built from, and a thin record
+# reaches the captain looking thin rather than looking complete.
+
+# Write a card record the way bin/fm-captain-hold.sh does, for the fixture task.
+write_card_record() {  # <home> <json>
+  mkdir -p "$1/state/board-cards" || fail "cannot create the card directory"
+  printf '%s\n' "$2" > "$1/state/board-cards/gated-work.json" \
+    || fail "cannot write the fixture card record"
+}
+
+FULL_CARD_RECORD='{"schema":"fm-board-card.v1","task":"gated-work","key":"captain-hold-gated-work-1","at":"2026-09-20T04:00:00Z","state":"open","thin":false,"title":{"en":"Ship the forge loop","hant":"上線 forge 迴圈","hans":"上线 forge 循环"},"repo":"firstmate","decide":"Which way do we ship it?","if_nothing":"the branch waits","reversible":"no","risk":"high","options":[{"value":"now","label":"Ship now","consequence":"fast, unproven"},{"value":"wait","label":"Wait for the review","consequence":"slower, checked"}],"recommend_value":"wait","recommend_why":"the review caught the last one","close":"release","figures":[]}'
+
+test_compose_builds_the_card_the_call_wrote_rather_than_rebuilding_it() {
+  local home skeleton
+  home=$(make_compose_home compose-card-record)
+  write_card_record "$home" "$FULL_CARD_RECORD"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a home whose call wrote a card record"
+  # Every field below is the RECORD's, and every one of them differs from the
+  # verified packet this same fixture also carries, so a pass cannot come from
+  # the packet path by accident.
+  jq -e '.captains_call[0]
+    | .key == "gated-work" and .type == "decision"
+    and .title.en == "Ship the forge loop" and .title.hant == "上線 forge 迴圈"
+    and .decide.en == "Which way do we ship it?"
+    and .if_nothing.en == "the branch waits"
+    and .risk == "high" and .reversible == "no"
+    and .recommend_value == "wait"
+    and .recommend_why.en == "the review caught the last one"
+    and .close == "release"
+    and ([.options[].value] == ["now", "wait"])
+    and (.thin | not)' "$skeleton" >/dev/null \
+    || fail "the card was not built from the record the call wrote: $(cat "$skeleton")"
+  # And no slot on it is left for a composer, which is the whole claim: build
+  # refuses a {FILL: ...} and this card has none, so it reaches the captain
+  # exactly as the call wrote it. ({TRANSLATE: ...} is the ordinary translation
+  # pass every English-only string takes and is not a composer slot.)
+  jq -e '[.captains_call[0] | .. | strings | select(startswith("{FILL:"))] | length == 0' \
+    "$skeleton" >/dev/null \
+    || fail "a record-seeded card still carried a composer slot: $(cat "$skeleton")"
+  pass "compose builds a captain card from the record the call wrote"
+}
+
+test_compose_keeps_the_packet_card_for_a_call_that_wrote_no_record() {
+  local home skeleton
+  home=$(make_compose_home compose-card-no-record)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a home with no card record"
+  jq -e '.captains_call[0].title.en == "Rollout order"' "$skeleton" >/dev/null \
+    || fail "a call with no record lost its packet-seeded card: $(cat "$skeleton")"
+  pass "a call that wrote no record keeps the packet-seeded card it had"
+}
+
+# A thin call is the ordinary needs-decision PR #33 deliberately left free of
+# any packet obligation. It still reaches the board - that is the point - but
+# it must arrive looking like what it is.
+test_compose_carries_a_thin_call_to_the_board_as_visibly_thin() {
+  local home skeleton
+  home=$(make_compose_home compose-card-thin)
+  write_card_record "$home" '{"schema":"fm-board-card.v1","task":"gated-work","key":"captain-hold-gated-work-1","at":"2026-09-20T04:00:00Z","state":"open","thin":true,"title":"Rename the flag?","repo":"firstmate","decide":"Rename the flag?","if_nothing":"","reversible":"yes","risk":"medium","options":[],"recommend_value":"","recommend_why":"","close":"","figures":[]}'
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a home whose call wrote a thin card"
+  # thin says so on its face; it carries no option of its own, so the captain
+  # is never shown a choice the call did not offer (build adds the board's own
+  # reconcile afterwards); and neither risk nor reversibility is claimed here,
+  # because nobody assessed either.
+  jq -e '.captains_call[0]
+    | .thin == true and .allow_freeform == true
+    and .title.en == "Rename the flag?"
+    and ([.options[].value] == [])
+    and (has("risk") | not) and (has("reversible") | not)
+    and (has("recommend_value") | not) and (has("recommend_why") | not)' "$skeleton" >/dev/null \
+    || fail "a thin call did not reach the board as thin: $(cat "$skeleton")"
+  jq -e '[.captains_call[0] | .. | strings | select(startswith("{FILL:"))] | length == 0' \
+    "$skeleton" >/dev/null \
+    || fail "a thin card carried a composer slot the captain would never see filled"
+  pass "a call that offered no options reaches the board saying so"
+}
+
+# One unreadable file must cost its own card its freshness, never the board.
+# This is the opposite posture to --card-file, which refuses the hold outright:
+# there a bad file stops one call being raised, here it would blank every card
+# the captain has.
+test_compose_survives_a_card_record_it_cannot_read() {
+  local home skeleton
+  home=$(make_compose_home compose-card-unreadable)
+  write_card_record "$home" 'this is not json at all {'
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "an unreadable card record took the whole board down"
+  jq -e '.captains_call[0].title.en == "Rollout order"' "$skeleton" >/dev/null \
+    || fail "an unreadable record did not fall back to the packet card: $(cat "$skeleton")"
+  pass "an unreadable card record costs its own card, never the board"
+}
+
+test_compose_ignores_a_card_record_of_a_schema_it_does_not_know() {
+  local home skeleton
+  home=$(make_compose_home compose-card-foreign-schema)
+  write_card_record "$home" '{"schema":"something-else.v9","title":"Not ours","options":[]}'
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a card record written by something else"
+  jq -e '.captains_call[0].title.en == "Rollout order"' "$skeleton" >/dev/null \
+    || fail "a foreign card record was read as though it were ours: $(cat "$skeleton")"
+  pass "a card record of an unknown schema is ignored rather than guessed at"
+}
+
+# The board plots every open call by how much work is stalled behind it, so
+# that number has to be counted from the fleet rather than invented. The gate
+# rows already name the ids each queued item is blocked by; this is that count
+# and nothing else.
+test_compose_counts_the_work_stalled_behind_each_call() {
+  local home skeleton snap
+  home=$(make_compose_home compose-blocks)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  # Two queued items wait on gated-work, one of them also on pick-route, and
+  # the space after the comma is there on purpose: a blocker list is prose in
+  # a field, so the count must not depend on how it was spaced.
+  jq '.gates[0].blocked_by = "gated-work"
+    | .gates[2].blocked_by = "gated-work, pick-route"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the blocked-by fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose queued work names its blockers"
+  jq -e '.captains_call
+    | ([.[] | select(.key == "gated-work") | .blocks] == [2])
+    and ([.[] | select(.key == "pick-route") | .blocks] == [1])' "$skeleton" >/dev/null \
+    || fail "the stalled-work count was not read from the gate rows: $(cat "$skeleton")"
+  pass "compose counts the work stalled behind each call from the gate rows"
+}
+
+# Zero is an answer, not a gap. A call nothing is waiting on must say so with a
+# number, because the board plots it and an absent count would place it nowhere.
+test_compose_counts_zero_for_a_call_nothing_waits_on() {
+  local home skeleton
+  home=$(make_compose_home compose-blocks-none)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  jq -e '[.captains_call[] | select(has("blocks") | not)] == []
+    and ([.captains_call[] | select(.key == "gated-work") | .blocks] == [0])' "$skeleton" >/dev/null \
+    || fail "a call nothing waits on did not carry a zero count: $(cat "$skeleton")"
+  pass "a call nothing is waiting on carries a zero count rather than none"
+}
+
+# The merge lane lists every open pull request with the reason it is not a
+# merge call. The reason has to come from the SAME conditions that decide
+# whether a merge card exists, or the lane and the cards can disagree - and a
+# lane saying "ready" beside a call that never appeared is worse than no lane.
+test_compose_gives_every_open_pull_request_its_reason() {
+  local home skeleton
+  home=$(make_compose_home compose-merge-lane)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  # The fixture carries one passing pull request whose task this backlog claims
+  # and one failing one whose task it does not.
+  jq -e '.merge_queue
+    | (length == 2)
+    and ([.[] | select(.num == "9") | .ready] == [true])
+    and ([.[] | select(.num == "9") | has("reason")] == [false])
+    and ([.[] | select(.num == "11") | .ready] == [false])
+    and ([.[] | select(.num == "11") | .reason] | length == 1)' "$skeleton" >/dev/null \
+    || fail "the merge lane did not carry a verdict for every open pull request: $(jq -c .merge_queue "$skeleton")"
+  pass "compose gives every open pull request a merge verdict or a reason"
+}
+
+# A failing check and a pull request nothing claims are different reasons, and
+# the captain has to be able to tell them apart - one is work to fix, the other
+# is a record to correct.
+test_compose_tells_a_failed_check_from_an_unclaimed_pull_request() {
+  local home skeleton snap
+  home=$(make_compose_home compose-merge-reasons)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.candidate_prs[1].task = "gated-work"' "$COMPOSE_ASSETS/snapshot.json" > "$snap" \
+    || fail "cannot stage the merge-reason fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose failing pull request has a claimed task"
+  jq -e '[.merge_queue[] | select(.num == "11") | .reason] == ["checks-failed"]' "$skeleton" >/dev/null \
+    || fail "a failing check was not named as the reason: $(jq -c .merge_queue "$skeleton")"
+  pass "compose names a failed check rather than lumping it in with unclaimed work"
+}
+
+# A worker is placed by its pull request rather than by its own state when it
+# has one, because "writing" and "waiting on checks" are the same state to the
+# fleet and completely different to the captain.
+test_compose_places_a_worker_by_its_pull_request_when_it_has_one() {
+  local home skeleton snap
+  home=$(make_compose_home compose-lane-pr)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.in_flight[0].state = "working"
+    | .candidate_prs[0].task = "ship-task"
+    | .candidate_prs[0].checks = "pending"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the lane fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose worker is on a pull request"
+  jq -e '[.underway[] | select(.id == "ship-task") | .lane] == ["pr"]' "$skeleton" >/dev/null \
+    || fail "a worker waiting on checks was not placed on its pull request: $(jq -c .underway "$skeleton")"
+
+  jq '.in_flight[0].state = "working"
+    | .candidate_prs[0].task = "ship-task"
+    | .candidate_prs[0].checks = "failing"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the failing-lane fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose pull request has a failed check"
+  jq -e '[.underway[] | select(.id == "ship-task") | .lane] == ["failed"]' "$skeleton" >/dev/null \
+    || fail "a worker whose check failed was not placed in that lane: $(jq -c .underway "$skeleton")"
+  pass "compose places a worker by its pull request rather than by its own state"
+}
+
+# Every other worker is placed by what the fleet says it is doing, and a state
+# with no lane keeps its own name so the board can show it rather than lose it.
+test_compose_places_every_worker_it_can_and_names_the_rest() {
+  local home skeleton snap
+  home=$(make_compose_home compose-lane-states)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.in_flight[0].state = "blocked" | .candidate_prs = []' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the blocked fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with a blocked worker"
+  jq -e '[.underway[] | select(.id == "ship-task") | .lane] == ["stuck"]' "$skeleton" >/dev/null \
+    || fail "a blocked worker was not placed as stuck: $(jq -c .underway "$skeleton")"
+
+  jq '.in_flight[0].state = "marooned" | .candidate_prs = []' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the unknown-state fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying a state it has no lane for"
+  jq -e '[.underway[] | select(.id == "ship-task") | .lane] == ["marooned"]' "$skeleton" >/dev/null \
+    || fail "a state with no lane did not keep its own name: $(jq -c .underway "$skeleton")"
+  pass "compose places every worker it can and names the state of the rest"
+}
+
+# R12. The snapshot writes a gate's blocker ids joined and cut to 120
+# characters, so a gate blocked by seven or eight of them ends in an ellipsis
+# with the rest gone. Counting what is left and calling it the total is the
+# board claiming to know more than it read - and this number is the vertical
+# axis of the decision map and the radius of the bubble.
+test_compose_says_when_a_stalled_count_is_only_a_floor() {
+  local home skeleton snap long
+  home=$(make_compose_home compose-blocks-cut)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  # Exactly what the snapshot emits past its limit: a joined list, cut mid-id,
+  # ending in the ellipsis trunc() appends.
+  long="other-one,other-two,other-three,other-four,other-five,other-six,other-sev…"
+  jq --arg long "$long" '.gates[0].blocked_by = $long
+    | .gates[2].blocked_by = "gated-work"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the truncated fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose blocker list was cut off"
+  # One gate names it outright, so the floor is 1 - and the cut gate could name
+  # it too, which is exactly what makes this a floor rather than a total.
+  jq -e '[.captains_call[] | select(.key == "gated-work") | {blocks, partial: (.blocks_partial == true)}]
+    == [{blocks: 1, partial: true}]' "$skeleton" >/dev/null \
+    || fail "a cut-off blocker list was reported as an exact count: $(jq -c '[.captains_call[] | {key, blocks, blocks_partial}]' "$skeleton")"
+  pass "compose says when a stalled count is a floor rather than a total"
+}
+
+# And an untruncated list is still reported as exact, or the warning would be
+# on every card and mean nothing.
+test_compose_reports_an_intact_blocker_list_as_exact() {
+  local home skeleton snap
+  home=$(make_compose_home compose-blocks-intact)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.gates[0].blocked_by = "gated-work" | .gates[2].blocked_by = "other"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the intact fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with intact blocker lists"
+  jq -e '[.captains_call[] | select(.key == "gated-work")
+    | {blocks, partial: has("blocks_partial")}] == [{blocks: 1, partial: false}]' "$skeleton" >/dev/null \
+    || fail "an intact blocker list was reported as a floor: $(jq -c '[.captains_call[] | {key, blocks, blocks_partial}]' "$skeleton")"
+  pass "an intact blocker list is still reported as an exact count"
+}
+
+# The compose half of R14. The note under the decision map says nothing on it
+# is weighted by hand; for a card whose risk is a {FILL: ...} slot firstmate
+# types in at compose time, that is false. The board has to carry which it was,
+# and only compose knows.
+test_compose_records_who_weighed_each_card() {
+  local home skeleton
+  home=$(make_compose_home compose-weighed)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  # gated-work has a verified packet stating its own risk and reversibility, so
+  # its position is the fleet's; pick-route has no packet, so both values are
+  # slots firstmate fills and its position is his.
+  jq -e '[.captains_call[] | select(.key == "gated-work") | .weighed_by] == ["fleet"]
+    and [.captains_call[] | select(.key == "pick-route") | .weighed_by] == ["firstmate"]' \
+    "$skeleton" >/dev/null \
+    || fail "compose did not record who weighed each card: $(jq -c '[.captains_call[] | {key, weighed_by, risk}]' "$skeleton")"
+  pass "compose records whether a card position is the fleet's or the first mate's"
+}
+
+# A packet that states reversibility but leaves risk for firstmate is still
+# his position, not the fleet's: the field is about the POSITION, and the
+# position needs both values. This is the same fixture the risk-slot test uses,
+# read for a different property.
+test_compose_marks_a_half_stated_packet_as_the_first_mates() {
+  local home skeleton decision
+  decision=$(printf '%s' "$COMPOSE_DECISION" | jq -c 'del(.risk)')
+  home=$(make_compose_home compose-weighed-half "$decision")
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a packet whose decision block records no risk"
+  jq -e '[.captains_call[] | select(.key == "gated-work")
+    | {w: .weighed_by, slotted: (.risk == "{FILL: low | medium | high}")}]
+    == [{w: "firstmate", slotted: true}]' "$skeleton" >/dev/null \
+    || fail "a card with one value left for firstmate was marked as the fleet's: $(jq -c '[.captains_call[] | {key, weighed_by, risk}]' "$skeleton")"
+  pass "a card with any value left for the first mate is marked as his"
+}
+
+# Every merge card is this case: its risk is a slot and it carries no
+# reversibility at all.
+test_compose_marks_every_merge_card_as_the_first_mates() {
+  local home skeleton snap
+  home=$(make_compose_home compose-weighed-merge)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.candidate_prs[0].task = "gated-work"' "$COMPOSE_ASSETS/snapshot.json" > "$snap" \
+    || fail "cannot stage the merge fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with a mergeable pull request"
+  jq -e '[.captains_call[] | select(.type == "merge") | .weighed_by] | (length > 0) and all(. == "firstmate")' \
+    "$skeleton" >/dev/null \
+    || fail "a merge card was not marked as the first mate's assessment: $(jq -c '[.captains_call[] | {key, type, weighed_by}]' "$skeleton")"
+  pass "every merge card is marked as the first mate's assessment"
+}
+
 test_build_names_the_unfilled_card_slot_it_refuses() {
   local home skeleton filled board out rc
   home=$(make_compose_home compose-unfilled-slot)
@@ -2085,6 +2486,22 @@ test_compose_carries_the_secondmate_integrity_warnings
 test_compose_badges_a_warning_only_for_a_synthesized_gate
 test_compose_leaves_the_omitted_charted_counts_to_the_composer
 test_compose_slots_the_risk_a_packet_leaves_out
+test_compose_builds_the_card_the_call_wrote_rather_than_rebuilding_it
+test_compose_keeps_the_packet_card_for_a_call_that_wrote_no_record
+test_compose_carries_a_thin_call_to_the_board_as_visibly_thin
+test_compose_survives_a_card_record_it_cannot_read
+test_compose_ignores_a_card_record_of_a_schema_it_does_not_know
+test_compose_counts_the_work_stalled_behind_each_call
+test_compose_counts_zero_for_a_call_nothing_waits_on
+test_compose_says_when_a_stalled_count_is_only_a_floor
+test_compose_reports_an_intact_blocker_list_as_exact
+test_compose_records_who_weighed_each_card
+test_compose_marks_a_half_stated_packet_as_the_first_mates
+test_compose_marks_every_merge_card_as_the_first_mates
+test_compose_gives_every_open_pull_request_its_reason
+test_compose_tells_a_failed_check_from_an_unclaimed_pull_request
+test_compose_places_a_worker_by_its_pull_request_when_it_has_one
+test_compose_places_every_worker_it_can_and_names_the_rest
 test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled
@@ -2101,3 +2518,4 @@ test_a_whitespace_only_refusal_reason_is_refused
 test_a_flag_with_no_value_explains_itself
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind
 test_a_captured_board_answer_acknowledges_every_key_it_named
+test_the_built_board_names_no_remote_host_to_fetch_from

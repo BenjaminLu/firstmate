@@ -143,6 +143,1440 @@ five_question_payload() {  # <lang>
 # an optional-hans board from rendering an empty cell to a captain reading 简体,
 # so it is pinned here rather than left as template behavior nobody reading the
 # rule would know about.
+# The captain's report on the live board was "打得開,但按了沒反應": it opens, it
+# updates, and pressing a control does nothing. It was worse than nothing. The
+# send was guarded by a check for the answer channel and the SUCCESS path was
+# not, so with no channel the answer went nowhere while the card marked itself
+# answered, drew an acknowledgement, and dealt the next card. He would have
+# walked away believing he had answered.
+# A card the captain can actually answer: it carries the free-form field, so
+# the harness types into it and submits through the page's own listener. A
+# fixture WITHOUT that field renders no field to type in, the submit path
+# never runs, and every assertion about refusing to send passes without
+# exercising anything - which is how the first version of this test was green
+# while the code under it was untouched.
+no_channel_payload() {
+  jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{
+      key:"unreachable", type:"decision", repo:"sample",
+      title:"Does the answer leave the page?",
+      decide:"Answer it and see.", if_nothing:"Nothing is recorded.",
+      reversible:"yes", risk:"low", recommend_value:"yes",
+      allow_freeform:true,
+      options:[{value:"yes", label:"Yes", consequence:"it was sent"},
+               {value:"no", label:"No", consequence:"it was not"}]}]}'
+}
+
+# The masthead is what the captain reads before anything else, so every tile
+# has to be one number he can check against the region under it.
+test_the_masthead_counts_the_fleet_it_is_showing() {
+  local home out
+  home=$(make_home stats-fleet)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, landed:[], charted:[], captains_call:[],
+    underway:[
+      {id:"a",repo:"r",name:"Alpha",state:"working",kind:"ship",doing:"writing",lane:"working"},
+      {id:"b",repo:"r",name:"Bravo",state:"blocked",kind:"ship",doing:"stuck",lane:"stuck"},
+      {id:"c",repo:"r",name:"Charlie",state:"working",kind:"ship",doing:"red",lane:"failed"},
+      {id:"d",repo:"r",name:"Delta",state:"failed",kind:"ship",doing:"its run failed",lane:"stopped"}],
+    merge_queue:[
+      {repo:"o/r",num:"1",ready:false,reason:"checks-pending"},
+      {repo:"o/r",num:"2",ready:false,reason:"checks-failed"}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "writing now") | .n')" = "1" ] \
+    || fail "the masthead did not count the workers actually writing: $out"
+  # Stuck, red checks and a failed run are one number because all three mean
+  # the same thing to him: work that is not moving without someone looking at
+  # it. A worker whose own run failed is the one the tile used to drop, while
+  # its label named precisely that condition.
+  [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "stuck or failing") | .n')" = "3" ] \
+    || fail "the masthead did not count the work that is not moving: $out"
+  # And the number is checkable against the region: every worker it counts is
+  # in a lane below, and no other lane is counted.
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[] | select(.label | test("Stuck|check failed|Stopped")) | .workers[]] | length')" = "3" ] \
+    || fail "the masthead tile does not match the lanes beneath it: $out"
+  # The open-PR count comes from the same array the merge lane lists, so the
+  # masthead and the lane can never report different totals.
+  [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "open PRs") | .n')" = "2" ] \
+    || fail "the masthead did not count the open pull requests: $out"
+  pass "the masthead counts the fleet it is showing, tile by tile"
+}
+
+# An older board knows none of this, and a row of zeroes claiming nothing is
+# stuck would be worse than no tile at all.
+test_a_board_that_knows_no_lanes_offers_no_fleet_counters() {
+  local home out
+  home=$(make_home stats-older)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, landed:[], charted:[], captains_call:[],
+    underway:[{id:"a",repo:"r",name:"Alpha",state:"working",kind:"ship",doing:"writing"}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '[.stats[] | select(.label == "writing now")] | length')" = "0" ] \
+    || fail "a board that knows no lanes still claimed to count them: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.stats[] | select(.label == "open PRs")] | length')" = "0" ] \
+    || fail "a board that knows no pull requests still counted them: $out"
+  pass "a board that knows no lanes offers no counter it cannot stand behind"
+}
+
+# --- the fleet as lanes ------------------------------------------------------
+# 我想知道每個agent的進度. Fourteen workers as fourteen rows says nothing; the same
+# fourteen grouped by the lane each is in says "four on pull requests, one check
+# failed, two stuck" without reading a word. The shape of the pile is the
+# reading, so these tests are about the grouping and the counts.
+fleet_payload() {  # <rows-json>
+  jq -n --argjson rows "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, landed:[], charted:[], captains_call:[], underway:$rows}'
+}
+
+test_the_fleet_is_grouped_into_the_lanes_it_is_actually_in() {
+  local home out
+  home=$(make_home fleet-lanes)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"a","repo":"r","name":"Alpha","state":"working","kind":"ship","doing":"writing","lane":"working"},
+    {"id":"b","repo":"r","name":"Bravo","state":"working","kind":"ship","doing":"on a pr","lane":"pr"},
+    {"id":"c","repo":"r","name":"Charlie","state":"working","kind":"ship","doing":"on a pr","lane":"pr"},
+    {"id":"d","repo":"r","name":"Delta","state":"blocked","kind":"ship","doing":"stuck","lane":"stuck"}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '.lanes | length')" = "3" ] \
+    || fail "the fleet was not grouped into the lanes its workers are in: $out"
+  # A lane says how many are in it, which is the number the captain reads.
+  [ "$(printf '%s' "$out" | jq -r '.lanes[] | select(.label | test("PR")) | .count')" = "2" ] \
+    || fail "a lane did not carry its own count: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[] | select(.label | test("PR")) | .workers[]] | sort | join(",")')" = "Bravo,Charlie" ] \
+    || fail "the two workers on pull requests were not in the same lane: $out"
+  # An empty lane is not drawn: a column of zeroes is noise, not a dashboard.
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[] | select(.count == "0")] | length')" = "0" ] \
+    || fail "an empty lane was drawn: $out"
+  # Every worker is still on the board exactly once.
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[].workers[]] | length')" = "4" ] \
+    || fail "grouping the fleet lost or duplicated a worker: $out"
+  pass "the fleet is grouped into the lanes its workers are actually in"
+}
+
+# The safety net, and the reason it exists: the first build of this region
+# dropped a worker - 14 in the payload, 13 on screen, no error. A board that
+# quietly loses a worker is worse than one that says it could not place him.
+test_a_worker_in_an_unknown_lane_is_shown_rather_than_dropped() {
+  local home out
+  home=$(make_home fleet-unplaced)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"a","repo":"r","name":"Alpha","state":"working","kind":"ship","doing":"writing","lane":"working"},
+    {"id":"z","repo":"r","name":"Zulu","state":"marooned","kind":"ship","doing":"who knows","lane":"marooned"}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[].workers[]] | length')" = "2" ] \
+    || fail "a worker in a lane the board cannot draw was dropped: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[] | select(.unplaced) | .workers[]] | join(",")')" = "Zulu" ] \
+    || fail "the unplaceable worker was not collected under its own heading: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.lanes[] | select(.unplaced) | .label')" "placed" \
+    "the column did not say why those workers are in it: $out"
+  pass "a worker in a lane the board cannot draw is shown, never dropped"
+}
+
+# A board composed before lanes existed is an older board, not a fleet that
+# could not be placed. Filing every worker under an alarm would be a false one.
+test_a_board_with_no_lanes_renders_as_it_always_did() {
+  local home out
+  home=$(make_home fleet-no-lanes)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"a","repo":"r","name":"Alpha","state":"working","kind":"ship","doing":"writing"}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '.lanes | length')" = "0" ] \
+    || fail "an older board was re-filed into lanes it never carried: $out"
+  [ "$(printf '%s' "$out" | jq -r '.underway | length')" = "1" ] \
+    || fail "an older board lost its worker rows: $out"
+  pass "a board composed before lanes existed renders exactly as it always did"
+}
+
+# --- the merge lane ----------------------------------------------------------
+# 為什麼船長裁決這一塊一直是空的. The answer is his own rule - nothing that is not
+# green becomes a merge call - and the board never said so. The lane lists every
+# open pull request with the exact reason it is not asking him to merge it, so
+# an empty desk is an explained state rather than a mystery.
+merge_payload() {  # <rows-json>
+  jq -n --argjson rows "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[], captains_call:[],
+    merge_queue:$rows}'
+}
+
+test_an_empty_merge_lane_says_why_it_is_empty() {
+  local home out
+  home=$(make_home merge-empty-explained)
+  out=$(render_payload "$home" "$(merge_payload '[
+    {"repo":"o/r","num":"29","url":"https://github.com/o/r/pull/29","ready":false,"reason":"checks-pending"},
+    {"repo":"o/r","num":"31","url":"https://github.com/o/r/pull/31","ready":false,"reason":"checks-failed"}]')")
+
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.head')" "your own rule" \
+    "the empty merge lane did not say why it was empty: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.head')" "2" \
+    "the empty merge lane did not say how many pull requests are open: $out"
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows | length')" = "2" ] \
+    || fail "the merge lane did not list every open pull request: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.rows[1].text')" "a check has failed" \
+    "a held pull request did not say what was holding it: $out"
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows[0].ready')" = "false" ] \
+    || fail "a pull request with checks still running was marked ready: $out"
+  pass "an empty merge lane says how many are open and why none is on the desk"
+}
+
+# R13. A reason code is payload data and t() falls back to the key it was
+# given, so a code with no copy would put a raw machine token in front of the
+# captain. The payload contract and the copy table live in different files, so
+# the next code added to one is not forced through the other.
+test_a_reason_with_no_words_never_shows_the_captain_a_machine_token() {
+  local home out
+  home=$(make_home merge-unworded)
+  out=$(render_payload "$home" "$(merge_payload '[
+    {"repo":"o/r","num":"29","ready":false,"reason":"checks-pending"}]')")
+  # Sanity: a known code reads as words.
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.rows[0].text')" "checks have not gone green" \
+    "a known reason code did not render as words: $out"
+  # The guard itself, driven through the page rather than asserted about the
+  # table: a code the copy table has no entry for must not leak its key.
+  out=$(BOARD_MERGE_REASON=marooned render_payload "$home" "$(merge_payload '[
+    {"repo":"o/r","num":"29","ready":false,"reason":"checks-pending"}]')")
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows[0].text' | grep -c "mq_")" = "0" ] \
+    || fail "a reason with no copy showed the captain a machine token: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.rows[0].text')" "no words for" \
+    "a reason with no copy did not say so in the captain's language: $out"
+  pass "a reason code with no words never reaches the captain as a token"
+}
+
+test_a_green_pull_request_reads_as_ready_in_the_lane() {
+  local home out
+  home=$(make_home merge-ready)
+  out=$(render_payload "$home" "$(merge_payload '[
+    {"repo":"o/r","num":"29","url":"https://github.com/o/r/pull/29","ready":true},
+    {"repo":"o/r","num":"31","url":"https://github.com/o/r/pull/31","ready":false,"reason":"checks-failed"}]')")
+
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.head')" "1" \
+    "the lane did not say how many are ready: $out"
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows[0].ready')" = "true" ] \
+    || fail "a green pull request did not read as ready: $out"
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows[0].url')" = "https://github.com/o/r/pull/29" ] \
+    || fail "the lane did not hand the captain the pull request itself: $out"
+  pass "a green pull request reads as ready and links to the repository"
+}
+
+# A board composed before this lane existed carries no merge_queue at all.
+# Showing an empty lane for it would be a different statement - "there are no
+# pull requests" rather than "this board does not know" - so it shows nothing.
+test_a_board_with_no_merge_data_shows_no_merge_lane() {
+  local home out
+  home=$(make_home merge-absent)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[], captains_call:[]}')")
+  [ "$(printf '%s' "$out" | jq -r '.merge.hidden')" = "true" ] \
+    || fail "a board that knows nothing about pull requests still drew a merge lane: $out"
+  pass "a board carrying no merge data shows no merge lane rather than an empty one"
+}
+
+# --- the decision map --------------------------------------------------------
+# 決策圖像儀表板: the captain asked for the decisions as a PICTURE, not a list of
+# paragraphs. The card below still says what one call is; the map says where
+# every open call sits relative to the others, which a pile of cards cannot.
+#
+# Both coordinates must come from the payload and nothing else. A map with a
+# hand-tuned urgency score in it would be a second black box on the one surface
+# that exists to remove them, so these tests check the PLACEMENT, not just that
+# something was drawn.
+map_payload() {
+  jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"urgent", type:"decision", repo:"sample", title:"Three are stopped for this",
+       decide:"Pick one.", risk:"high", reversible:"no", blocks:3, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"idle", type:"decision", repo:"sample", title:"Nobody is waiting",
+       decide:"Pick one.", risk:"low", reversible:"yes", blocks:0, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}'
+}
+
+test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
+  local home out urgent idle
+  home=$(make_home map-place)
+  out=$(render_payload "$home" "$(map_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.map | length')" = "2" ] \
+    || fail "the map did not plot both open calls: $out"
+  urgent=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "urgent")')
+  idle=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "idle")')
+
+  # Up is stalled work. SVG y grows downward, so "higher" is a SMALLER y.
+  [ "$(printf '%s' "$urgent" | jq -r '.cy')" != "" ] || fail "the stalling call was not plotted: $out"
+  printf '%s %s' "$(printf '%s' "$urgent" | jq -r '.cy')" "$(printf '%s' "$idle" | jq -r '.cy')" \
+    | awk '{ exit !($1 < $2) }' \
+    || fail "the call with three stalled behind it was not plotted above the one with none: $out"
+  # Right is how expensive a wrong answer is.
+  printf '%s %s' "$(printf '%s' "$urgent" | jq -r '.cx')" "$(printf '%s' "$idle" | jq -r '.cx')" \
+    | awk '{ exit !($1 > $2) }' \
+    || fail "the high-risk irreversible call was not plotted right of the cheap one: $out"
+  # Size grows with the stalled count, and the count is IN the bubble.
+  printf '%s %s' "$(printf '%s' "$urgent" | jq -r '.r')" "$(printf '%s' "$idle" | jq -r '.r')" \
+    | awk '{ exit !($1 > $2) }' \
+    || fail "the bubble did not grow with the work stalled behind it: $out"
+  [ "$(printf '%s' "$urgent" | jq -r '.count')" = "3" ] \
+    || fail "the bubble did not carry the number of stalled items: $out"
+  pass "the map plots a stalling, costly call up and to the right of an idle one"
+}
+
+# Colour repeats the risk, so the plot reads without counting pixels.
+# R20. Internal vocabulary on surfaces the captain reads. A worker row wore its
+# raw run state and task kind - `parked`, `unreported`, `ship` - in all three
+# languages, and a merge card read "review CHANGES_REQUESTED", the forge's own
+# enum passed straight through to the card he answers.
+test_no_internal_token_reaches_the_captains_rows() {
+  local home out
+  home=$(make_home tokens-rows)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"a","repo":"r","name":"Alpha","state":"parked","kind":"ship","doing":"round two","lane":"waiting"},
+    {"id":"b","repo":"r","name":"Bravo","state":"unknown","kind":"scout","doing":"silent","lane":"unreported"}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[].workers[]] | length')" = "2" ] \
+    || fail "the fixture lost a worker, so this proves nothing: $out"
+  local rows
+  rows=$(printf '%s' "$out" | jq -r '.raw_rows | join(" ")')
+  for token in parked unknown ship scout; do
+    [ "$(printf '%s' "$rows" | grep -c "$token")" = "0" ] \
+      || fail "the internal token '$token' reached a captain-facing row: $rows"
+  done
+  # "gate" is itself on the forbidden list the translation is obeying, so the
+  # replacement has to be the concrete wait rather than another term from it.
+  assert_contains "$rows" "waiting for a review" \
+    "the run state was not said in the captain's words: $rows"
+  [ "$(printf '%s' "$rows" | grep -c "gate")" = "0" ] \
+    || fail "one internal term was translated into another: $rows"
+  assert_contains "$rows" "investigation" \
+    "the task kind was not said in the captain's words: $rows"
+  pass "no internal run state or task kind reaches the captain's rows"
+}
+
+# A state this page has not learned keeps its own spelling rather than going
+# blank: the captain seeing an odd word is far better than a row that says
+# nothing, and it is how the next new state stays visible.
+test_an_unworded_state_keeps_its_spelling_rather_than_vanishing() {
+  local home out
+  home=$(make_home tokens-unknown-state)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"z","repo":"r","name":"Zulu","state":"marooned","kind":"ship","doing":"who knows","lane":"working"}]')")
+  assert_contains "$(printf '%s' "$out" | jq -r '.raw_rows | join(" ")')" "marooned" \
+    "a state the page has no words for rendered as nothing at all: $out"
+  pass "a state the page has no words for keeps its own spelling"
+}
+
+test_the_merge_card_does_not_show_the_forges_own_enum() {
+  local home out
+  home=$(make_home tokens-merge)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:[{key:"merge.t1", type:"merge", repo:"r", title:"Merge: a PR",
+      risk:"medium", weighed_by:"firstmate", blocks:0, allow_freeform:true,
+      checks_state:"passing", review_state:"CHANGES_REQUESTED",
+      options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}]}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].detail | join(" ")' | grep -c "CHANGES_REQUESTED")" = "0" ] \
+    || fail "the forge's own enum reached the card the captain answers: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].detail | join(" ")')" "changes requested" \
+    "the merge card did not say where the pull request stands: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].detail | join(" ")')" "all green" \
+    "the merge card did not say what the checks did: $out"
+  pass "the merge card says where a pull request stands without the forge's enum"
+}
+
+# R19. The harness could still submit a card through a submit button a browser
+# would never have let the captain press. That is how the dispatch bar's silent
+# disable stayed invisible for a whole round, so the hole is treated as a
+# defect rather than as test housekeeping - the next control it hides is the
+# one nobody is looking for.
+test_the_harness_cannot_answer_through_a_button_a_person_cannot_press() {
+  local home out
+  home=$(make_home harness-fidelity)
+  # The card cannot send, so its foot button is disabled and it carries the
+  # render-time refusal. A scripted "answer" must now be a no-op.
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(no_channel_payload)" answer)
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "true" ] \
+    || fail "the fixture card was pressable, so this proves nothing: $out"
+  # The render-time wording survives. If the harness had pressed, it would have
+  # been rewritten into the send-time wording by the press itself.
+  assert_contains "$(printf '%s' "$out" | jq -r '.at_click[0].limit')" "cannot take an answer" \
+    "the harness answered through a disabled button: $out"
+  [ "$(printf '%s' "$out" | jq -r '.at_click[0].is_queued')" = "false" ] \
+    || fail "a card a person could not submit was marked answered: $out"
+  pass "the harness cannot answer through a button a person cannot press"
+}
+
+# R18. Two of the bar's refusals still went to the counter slot - muted
+# uppercase micro-type where the captain's own count normally sits, with
+# nothing announcing it - three lines below a comment saying refusals never go
+# there. The 512-byte guard is the worse of the two: his tick disappears and
+# the reason for it is in the quietest type on the page.
+over_limit_payload() {
+  jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[range(0;9) as $i | {
+      id: ("queued-work-item-with-a-long-durable-identifier-number-" + ($i|tostring) + "-aaaaaaaaaaaaaaaaaaaa"),
+      repo:"sample", title:"Queued work", reason:"", dispatchable:true}]}'
+}
+
+test_the_bar_puts_its_length_refusal_where_the_captain_looks() {
+  local home out
+  home=$(make_home bar-limit-alert)
+  out=$(render_click "$home" "$(over_limit_payload)" pick-past-limit)
+
+  # The guard actually fired, established WITHOUT reading the message - nine
+  # rows were ticked and fewer than nine are picked. Reading the alert to prove
+  # the alert was written would pass for the wrong reason when the message goes
+  # somewhere else, which is exactly the bug.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.count' | grep -oE '[0-9]+' | head -1)" != "9" ] \
+    || fail "the length guard never fired, so this proves nothing: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "limit" \
+    "the bar did not say why the tick disappeared: $out"
+  # In the element that carries role=alert, not the counter.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit_role')" = "alert" ] \
+    || fail "the refusal would not be announced: $out"
+  # And the counter is still a counter, reading how many are picked.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.count' | grep -c "limit")" = "0" ] \
+    || fail "the refusal was written into the counter slot: $out"
+  pass "the bar puts its length refusal in the alert, not the counter slot"
+}
+
+# R17. R14's class on the card. The row explaining what undoing a change costs
+# was headed "reversible" on a call where nobody said it could be undone - the
+# badge twelve lines above it is correctly guarded, so the same field on the
+# same card was guarded in one place and invented in the other.
+test_the_card_does_not_call_a_change_reversible_when_nobody_said_so() {
+  local home out
+  home=$(make_home rev-unstated)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"unstated", type:"decision", repo:"s", title:"Nobody said either way",
+       decide:"Which way?", reversible_note:"Undoing it means a migration",
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"stated", type:"decision", repo:"s", title:"He said it cannot be undone",
+       decide:"Which way?", reversible:"no", reversible_note:"Undoing it means a migration",
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].ctx[] | select(.k == "reversible")] | length')" = "0" ] \
+    || fail "a call nobody called reversible was headed reversible: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '[.cards[0].ctx[].k] | join(",")')" "undoing it" \
+    "the row explaining what undoing costs lost its heading: $out"
+  # A call that DID state it keeps its own word, or the fix would have thrown
+  # away the answer along with the invention.
+  assert_contains "$(printf '%s' "$out" | jq -r '[.cards[1].ctx[].k] | join(",")')" "cannot be undone" \
+    "a stated reversibility was not used as the row heading: $out"
+  pass "the card does not call a change reversible when nobody said so"
+}
+
+# R16. The card's render-time refusal was attached to ONE control. A packet
+# card carries a "Choose X" button inside every option tab, and those stayed
+# live on a board that cannot send - so pressing one queued nothing and
+# rewrote the honest up-front message into the after-the-fact one. A captain
+# correctly told the board cannot take an answer was told, one press later,
+# that his answer was not recorded.
+test_the_per_option_buttons_go_dead_with_the_rest_of_the_card() {
+  local home out
+  home=$(make_home choose-no-channel)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_payload "$home" "$(packet_payload en "[]")")
+
+  # The card is in the state this is about: foot button dead, reason on screen.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "true" ] \
+    || fail "the fixture card could still send, so this proves nothing: $out"
+  # Read before the harness's own Enter probe touches the card, which would
+  # otherwise replace the render-time wording with the send-time one.
+  assert_contains "$(printf '%s' "$out" | jq -r '.at_click[0].limit')" "cannot take an answer" \
+    "the fixture card did not carry the render-time refusal: $out"
+  # Every sibling control obeys the same rule.
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].choose_buttons[]] | length')" != "0" ] \
+    || fail "the fixture card has no per-option buttons, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].choose_buttons[] | select(.disabled | not)] | length')" = "0" ] \
+    || fail "a per-option button stayed live on a board that cannot send: $out"
+  # R26. And the harness must not press them either. If it does, its own probe
+  # rewrites the render-time refusal into the send-time one, and the card then
+  # reports a message no viewer could ever have reached.
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].panels[].buttons[] | select(.queues != null)] | length')" = "0" ] \
+    || fail "the harness pressed a per-option button a person could not: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "cannot take an answer" \
+    "the harness rewrote the card's refusal into one no viewer can reach: $out"
+  pass "the per-option buttons go dead with the rest of the card"
+}
+
+# And they stay live when the board can send, or the fix would have taken the
+# control away rather than made it honest.
+test_the_per_option_buttons_stay_live_on_a_working_board() {
+  local home out
+  home=$(make_home choose-live)
+  out=$(render_payload "$home" "$(packet_payload en "[]")")
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].choose_buttons[] | select(.disabled)] | length')" = "0" ] \
+    || fail "a per-option button was dead on a board that can send: $out"
+  pass "the per-option buttons stay live on a board that can send"
+}
+
+# R15. The plainest form of the captain's own sentence, and on a HEALTHY board
+# rather than a degraded one: the answer channel is up, the button is live, he
+# presses before choosing, and the page does nothing and says nothing. Worse
+# than the bar's version was, because the bar at least greyed itself out.
+test_pressing_answer_with_nothing_chosen_says_so() {
+  local home out
+  home=$(make_home answer-empty)
+  out=$(render_click "$home" "$(no_channel_payload)" answer-empty)
+
+  # The board is healthy: the button was pressable and nothing is degraded.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "false" ] \
+    || fail "the fixture board was not healthy, so this proves nothing: $out"
+  # Nothing was sent, and the card must NOT look answered.
+  # Read at the press itself, before the harness's own Enter probe touches
+  # the card - otherwise a successful probe clears what the press wrote.
+  [ "$(printf '%s' "$out" | jq -r '.at_click[0].is_queued')" = "false" ] \
+    || fail "an empty press marked the card answered: $out"
+  # And he was told why, in the card's own alert.
+  assert_contains "$(printf '%s' "$out" | jq -r '.at_click[0].limit')" "Pick one of the options" \
+    "pressing with nothing chosen said nothing at all: $out"
+  pass "pressing answer with nothing chosen says what is missing"
+}
+
+# The second half of R15: the silent press also CLEARED any refusal already on
+# screen, so his second press removed the explanation his first press earned.
+test_an_empty_press_does_not_wipe_a_standing_refusal() {
+  local home out
+  home=$(make_home answer-empty-keeps)
+  # No channel, so the card carries the render-time refusal before any press.
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(no_channel_payload)" answer-empty)
+
+  [ "$(printf '%s' "$out" | jq -r '.at_click[0].limit')" != "" ] \
+    || fail "an empty press wiped the refusal that was already on screen: $out"
+  pass "an empty press never wipes the message already telling him something"
+}
+
+# R32. A separation pass used to spread overlapping bubbles along x to keep
+# them readable. On this plot x carries meaning - how expensive a wrong answer
+# is - so moving a mark for legibility trades a true picture for a tidy one,
+# and neither failure announces itself. Past about eight uncosted calls it
+# pushed one across the middle into the costly half, in the quadrant that says
+# "just pick one", while that bubble's own words said nobody costed it.
+#
+# Both axes here carry meaning, so nothing can be separated along a free one.
+# What is actually unreadable is the LABELS, and a label's position means
+# nothing - so the labels move and the marks do not.
+crowded_uncosted_payload() {  # <n>
+  jq -n --argjson n "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[range(0;$n) as $i | {
+      key: ("thin" + ($i|tostring)), type:"decision", repo:"r",
+      title: ("Nobody costed this one " + ($i|tostring)),
+      thin:true, blocks:0, allow_freeform:true, options:[]}]}'
+}
+
+test_a_crowded_plot_never_moves_a_bubble_off_its_own_coordinate() {
+  local home out lefts
+  home=$(make_home map-crowded)
+  out=$(render_payload "$home" "$(crowded_uncosted_payload 12)")
+
+  [ "$(printf '%s' "$out" | jq -r '.map | length')" = "12" ] \
+    || fail "the crowded fixture did not plot every call: $out"
+  # Every one of them is uncosted, so every one belongs at the left edge and
+  # none may be drawn in the costly half.
+  lefts=$(printf '%s' "$out" | jq -r '[.map[].cx] | unique | join(",")')
+  [ "$(printf '%s' "$out" | jq -r '[.map[].cx] | unique | length')" = "1" ] \
+    || fail "a crowded plot moved uncosted bubbles off the left edge: $lefts"
+  # And the caption's claim about them is true of all twelve.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "left edge" \
+    "the caption stopped explaining where uncosted bubbles sit: $out"
+  pass "a crowded plot never moves a bubble off its own coordinate"
+}
+
+# And a bubble sitting on another is left UNNAMED rather than labelled. Moving
+# the label away was the first answer and it was the wrong target: two bubbles
+# on one point are the same mark to look at, so a label per bubble promises a
+# correspondence the picture cannot show at any distance. At twelve coincident
+# calls the furthest label stood 138px from its own bubble with eleven others
+# in between - the picture asserting a one-to-one mapping it does not have.
+test_a_bubble_sitting_on_another_is_left_unnamed() {
+  local home out
+  home=$(make_home map-stacked-unnamed)
+  out=$(render_payload "$home" "$(crowded_uncosted_payload 12)")
+
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.label != "")] | length')" = "0" ] \
+    || fail "a mark a reader cannot tell apart was given a name: $out"
+  # Nothing is lost: the count stays in the mark, every call is still in the
+  # ranked list by name, and each bubble still names itself to a screen reader.
+  [ "$(printf '%s' "$out" | jq -r '.call_list | length')" = "12" ] \
+    || fail "the ranked list stopped naming every call: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.aria == "")] | length')" = "0" ] \
+    || fail "an unlabelled bubble also lost its spoken name: $out"
+  # And the caption says where the names are, rather than leaving him at a
+  # cluster of nameless marks.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "list underneath names every call" \
+    "the caption left him at an unnamed cluster with no route to the names: $out"
+  pass "a bubble sitting on another is left unnamed, and the caption says where to look"
+}
+
+# A name that does not fit centred is anchored at its own mark and runs inward
+# rather than being withheld. The plot is 420 wide with its columns at 88 and
+# 370, so a name centred on an edge column has about ten Latin characters
+# before it leaves the picture - withholding on that basis alone left a single
+# open call carrying an anonymous bubble, which is not the surface that was
+# approved. Anchoring moves no mark and keeps the name touching its own.
+test_a_name_that_does_not_fit_centred_is_anchored_at_its_mark() {
+  local home out
+  home=$(make_home map-name-anchored)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{key:"left", type:"decision", repo:"r",
+      title:"Cut over the loader and the board",
+      risk:"low", reversible:"yes", weighed_by:"fleet", blocks:0,
+      allow_freeform:true, options:[{value:"a",label:"A"},{value:"b",label:"B"}]}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '.map[0].cx')" = "88" ] \
+    || fail "the fixture is not in the leftmost column, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[0].label')" != "" ] \
+    || fail "a single open call was left carrying an anonymous bubble: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[0].label_anchor')" = "start" ] \
+    || fail "the name was not anchored at its mark: $out"
+  assert_every_label_belongs_where_it_is "$out" "an anchored name left the picture or landed on something"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "left unnamed")" = "0" ] \
+    || fail "a plot where every bubble is named still reported one withheld: $out"
+  pass "a name that does not fit centred is anchored at its own mark"
+}
+
+# R34 and R35, held as one property rather than as two guards.
+#
+# R34 was a label drawn across a DIFFERENT call's bubble at three open calls -
+# two merge cards and one uncosted call all land on the left edge. R35 was the
+# label column bounded by a step count rather than by the plot, so at thirteen
+# it crossed the baseline and at fourteen it put two names on one point.
+#
+# Both are the same cause as the coincident case: a label placed by a rule that
+# cannot see what else is on the plot. So what is held here is the statement
+# the placement makes - every name that IS drawn belongs to the mark beside it,
+# sits inside the picture, and shares its place with nothing - across the
+# densities that produced each of the three faults. Asserting one guard fired
+# would be asserting an implementation detail; this fails whichever rule breaks.
+assert_every_label_belongs_where_it_is() {  # <render-json> <what>
+  printf '%s' "$1" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+marks = [(b["cx"], b["cy"], b["r"], b["key"]) for b in d["map"]]
+bad = []
+for b in d["map"]:
+    if not b["label"]:
+        continue
+    # The width of this very name, the same measurement the board places it
+    # by. A fixed box here would check the placement against the false model
+    # that the placement was just taken off.
+    wide = sum(1 for ch in b["label"] if "\u3400" <= ch <= "\u9fff")
+    w = wide * 9.6 + (len(b["label"]) - wide) * 6.3
+    lx, ly = b["cx"], b["label_y"]
+    anch = b.get("label_anchor") or "middle"
+    if anch == "start":
+        l, r = lx, lx + w
+    elif anch == "end":
+        l, r = lx - w, lx
+    else:
+        l, r = lx - w / 2, lx + w / 2
+    t, bo = ly - 10, ly + 3
+    for (ox, oy, orad, okey) in marks:
+        if okey == b["key"]:
+            continue
+        nx = max(l, min(ox, r)); ny = max(t, min(oy, bo))
+        if (ox - nx) ** 2 + (oy - ny) ** 2 < orad ** 2:
+            bad.append(b["key"] + " sits on " + okey)
+    if l < 54 or r > 404 or ly - 10 < 22 or ly + 3 > 274:
+        bad.append(b["key"] + " is outside the plot")
+placed = []
+for b in d["map"]:
+    if not b["label"]:
+        continue
+    # Sharing a PLACE means the boxes overlap. Two names at the same height in
+    # different columns share nothing, and keying on height alone would have
+    # this test claim more than it can see.
+    wide2 = sum(1 for ch in b["label"] if "\u3400" <= ch <= "\u9fff")
+    w2 = wide2 * 9.6 + (len(b["label"]) - wide2) * 6.3
+    a2 = b.get("label_anchor") or "middle"
+    if a2 == "start":
+        box = (b["cx"], b["cx"] + w2, b["label_y"] - 10, b["label_y"] + 3)
+    elif a2 == "end":
+        box = (b["cx"] - w2, b["cx"], b["label_y"] - 10, b["label_y"] + 3)
+    else:
+        box = (b["cx"] - w2 / 2, b["cx"] + w2 / 2, b["label_y"] - 10, b["label_y"] + 3)
+    for (pb, pk) in placed:
+        if box[0] < pb[1] and box[1] > pb[0] and box[2] < pb[3] and box[3] > pb[2]:
+            bad.append(b["key"] + " shares a place with " + pk)
+    placed.append((box, b["key"]))
+if bad:
+    print("; ".join(bad)); sys.exit(1)
+' || fail "$2: $1"
+}
+
+test_every_name_on_the_plot_belongs_to_the_mark_beside_it() {
+  local home out
+  # R34's own board: two merge cards and a call nobody costed, all of which
+  # land on the left edge because a merge card carries no reversibility.
+  home=$(make_home map-label-three)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"merge.pr1", type:"merge", repo:"r", title:"Merge the loader PR",
+       risk:"medium", weighed_by:"firstmate", blocks:1, allow_freeform:true,
+       options:[{value:"merge",label:"Merge now"},{value:"hold",label:"Not yet"}]},
+      {key:"merge.pr2", type:"merge", repo:"r", title:"Merge the board PR",
+       risk:"medium", weighed_by:"firstmate", blocks:1, allow_freeform:true,
+       options:[{value:"merge",label:"Merge now"},{value:"hold",label:"Not yet"}]},
+      {key:"q1", type:"decision", repo:"r", title:"Retire charted next",
+       thin:true, blocks:2, allow_freeform:true, options:[]}]}')")
+  assert_every_label_belongs_where_it_is "$out" "a name was drawn where it does not belong, at three open calls"
+
+  # R35's density, where the column used to run past the baseline and then
+  # double up.
+  home=$(make_home map-label-fourteen)
+  out=$(render_payload "$home" "$(crowded_uncosted_payload 14)")
+  assert_every_label_belongs_where_it_is "$out" "a name was drawn where it does not belong, at fourteen coincident calls"
+
+  # TWO open calls, which is where the reviewer found two names written
+  # through each other. The marks do not overlap - they are in neighbouring
+  # columns of the same row - so the only thing standing between these two
+  # names is whether the placement knows how wide they really are. Under a
+  # fixed 58px box both were drawn and they collided.
+  home=$(make_home map-label-two-wide)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"a", type:"decision", repo:"r", title:"Retire the charted next region",
+       risk:"low", reversible:"yes", weighed_by:"fleet", blocks:1, allow_freeform:true,
+       options:[{value:"x",label:"X"},{value:"y",label:"Y"}]},
+      {key:"b", type:"decision", repo:"r", title:"Rebuild the gatekeeping ledger",
+       risk:"medium", reversible:"yes", weighed_by:"fleet", blocks:1, allow_freeform:true,
+       options:[{value:"x",label:"X"},{value:"y",label:"Y"}]}]}')")
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.dashed)] | length')" = "0" ] \
+    || fail "the two-call fixture has overlapping marks, so this proves nothing: $out"
+  assert_every_label_belongs_where_it_is "$out" "two names were written through each other at two open calls"
+  # Exactly one name is withheld here, and the caption must account for it. A
+  # picture that silently drops a name has told the reader there is nothing
+  # there - and this is the ordinary-density case, not a crowded board.
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.label == "")] | length')" = "1" ] \
+    || fail "the two-call fixture no longer withholds a name, so this proves nothing: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "left unnamed" \
+    "a name was withheld at two open calls and the caption said nothing: $out"
+
+  # And a mixed board, which is what the fleet actually produces.
+  home=$(make_home map-label-mixed)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:[range(0;8) as $i | {
+      key:("k"+($i|tostring)), type:"decision", repo:"r",
+      title:("Call number "+($i|tostring)),
+      risk:(["low","medium","high"][$i%3]), reversible:(["yes","partly","no"][$i%3]),
+      weighed_by:"fleet", blocks:($i%4), allow_freeform:true,
+      options:[{value:"a",label:"A"},{value:"b",label:"B"}]}]}')")
+  assert_every_label_belongs_where_it_is "$out" "a name was drawn where it does not belong, on a mixed board"
+  pass "every name on the plot belongs to the mark beside it"
+}
+
+# A bubble standing on its own keeps its name, right beside its own mark - the
+# fix must not have taken labelling away from the plots that can carry it.
+test_a_bubble_that_stands_alone_keeps_its_name() {
+  local home out
+  home=$(make_home map-sparse-named)
+  # A SHORT name, because the property being held is that nothing withholds a
+  # name for no reason - not that a name of any length fits. A long name in an
+  # edge column genuinely does not fit inside the picture, and the case below
+  # holds what happens then.
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{key:"short", type:"decision", repo:"r", title:"Ship it",
+      risk:"high", reversible:"no", weighed_by:"fleet", blocks:1,
+      allow_freeform:true, options:[{value:"a",label:"A"},{value:"b",label:"B"}]}]}')")
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.label == "")] | length')" = "0" ] \
+    || fail "a bubble with nothing on top of it lost its name: $out"
+  # Beside its own mark, not stepped away from it.
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(((.label_y - .cy) | fabs) > (.r + 14))] | length')" = "0" ] \
+    || fail "a label was drawn away from the mark it belongs to: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "list underneath names every call")" = "0" ] \
+    || fail "a fully labelled plot still sent him to the list for names: $out"
+  pass "a bubble that stands alone keeps its name beside its own mark"
+}
+
+
+# R31. The caption still opened with a flat claim about the number in the
+# bubble and corrected it four sentences later - the exact shape ruled against
+# for the hand-weighting sentence, left standing in the same string. A reader
+# who stops at the number has been told the wrong thing, and a caption exists
+# to be stopped at.
+#
+# And the sentence that was supposed to tell him which bubbles to distrust
+# pointed at a cue the picture does not carry: it said some "say at least",
+# when a bubble's visible label is the bare number and only the ranked list and
+# the aria text use those words.
+test_the_caption_does_not_call_a_floor_count_an_exact_one() {
+  local home out
+  home=$(make_home caption-floor-claim)
+  # TWO soft reasons on the plot, not one: a floor count AND a call nobody
+  # costed. With only the floor on it, any clause equating the broken outline
+  # with the floor would be true of the fixture by luck - the shape ruled
+  # against one round ago, which is what let the last one through.
+  out=$(render_payload "$home" "$(map_note_payload '[{
+    "key":"floor", "type":"decision", "repo":"r", "title":"Its blocker list was cut off",
+    "risk":"high", "reversible":"no", "weighed_by":"fleet", "blocks":2, "blocks_partial":true,
+    "allow_freeform":true, "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]},
+    {"key":"uncosted", "type":"decision", "repo":"r", "title":"Nobody costed this",
+     "thin":true, "blocks":3, "allow_freeform":true, "options":[]}]')")
+
+  # The bubble really does show a bare number, which is why the flat claim and
+  # the "says at least" cue were both wrong about this plot.
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "floor") | .count')" = "2" ] \
+    || fail "the fixture bubble does not carry a bare number, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "is how many pieces of work stop")" = "0" ] \
+    || fail "the caption called a floor count an exact one: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "say \"at least\"")" = "0" ] \
+    || fail "the hedge still sends him looking for words the plot does not draw: $out"
+  # And it must not equate the broken outline with the floor: two bubbles here
+  # are broken-outlined and only one of them is a floor count, so a reader told
+  # the outline means "floor" distrusts an exact number.
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.dashed)] | length')" = "2" ] \
+    || fail "the fixture does not carry two broken outlines, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "broken-outlined ones")" = "0" ] \
+    || fail "the caption equated the broken outline with one of its three causes: $out"
+  pass "the caption does not call a floor count an exact one"
+}
+
+# And with no floor on the plot the flat claim is made, because it is true -
+# otherwise the caption hedges a number that needs no hedge.
+test_the_caption_states_the_count_plainly_when_every_count_is_exact() {
+  local home out
+  home=$(make_home caption-exact-claim)
+  out=$(render_payload "$home" "$(map_note_payload '[]')")
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "is how many pieces of work stop" \
+    "a plot whose counts are all exact did not say so: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "broken outline")" = "0" ] \
+    || fail "a plot with no broken outline explained one: $out"
+  pass "the caption states the count plainly when every count is exact"
+}
+
+# R33, the sweep half: two more clauses in the same paragraph that were true
+# only with a neighbour to qualify them. A caption is read in fragments, so a
+# clause needing its neighbour is not honest.
+test_every_caption_clause_stands_on_its_own() {
+  local home out
+  # A plot with a call nobody costed: the cost rule does not apply to it, and
+  # its bubble is grey, which is deliberately not a risk colour.
+  home=$(make_home caption-clauses-soft)
+  out=$(render_payload "$home" "$(map_note_payload '[{
+    "key":"uncosted", "type":"decision", "repo":"r", "title":"Nobody costed this",
+    "thin":true, "blocks":1, "allow_freeform":true, "options":[]}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "comes from the call")" = "0" ] \
+    || fail "the caption stated where the cost comes from on a plot carrying a call with none: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "grey is not one of them" \
+    "the caption said colour repeats the risk beside a bubble whose grey means no risk was given: $out"
+
+  # And on a plot where every call has both, both clauses are stated plainly -
+  # a caption that always hedges has stopped saying anything.
+  home=$(make_home caption-clauses-plain)
+  out=$(render_payload "$home" "$(map_note_payload '[]')")
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "comes from the call" \
+    "a fully costed plot did not say where the cost comes from: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "grey is not one of them")" = "0" ] \
+    || fail "a plot with no grey bubble still explained grey: $out"
+  pass "every caption clause stands on its own"
+}
+
+# R30. Tying the refusal to the bar rather than to the condition that raised it
+# meant it outlived that condition. The length guard un-ticks the row it
+# refused, so the moment the captain touches the selection again he is over no
+# limit - and the sentence stayed, naming a cause that no longer held while the
+# real reason the button was grey went unnamed. On a board that cannot send
+# nothing could ever clear it, because only a successful dispatch did.
+test_the_bars_refusal_does_not_outlive_what_raised_it() {
+  local home out
+  home=$(make_home bar-stale-refusal)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(over_limit_payload)" pick-past-limit-then-clear)
+
+  # Nothing is picked any more, so nothing is over any limit.
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.count')" "pick queued work" \
+    "the fixture did not end with an empty selection, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit' | grep -c "limit")" = "0" ] \
+    || fail "the bar still claimed he is over the limit with nothing picked: $out"
+  # And the reason the button IS dead is the one he is told.
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
+    "the bar hid the true reason behind a refusal that had expired: $out"
+  pass "the bar's refusal does not outlive what raised it"
+}
+
+# Both statements are true at once while he IS over the limit on a board that
+# cannot send, so he is told both - either one suppressing the other is how
+# this went wrong in each direction.
+test_the_bar_tells_him_both_reasons_when_both_hold() {
+  local home out
+  home=$(make_home bar-both-reasons)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(over_limit_payload)" pick-past-limit)
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "limit" \
+    "the bar dropped the refusal he just earned: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
+    "the bar dropped the reason the button is dead: $out"
+  # R37. The two statements are joined with one space now, so the strings must
+  # not still carry the trailing space the old concatenation needed.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit' | grep -c '  ')" = "0" ] \
+    || fail "the joined refusal reads with a double space: $out"
+  pass "the bar tells him both reasons when both hold"
+}
+
+# R25. Moving the bar's length refusal into its own alert put it in a slot the
+# very next line overwrote: refreshBar re-asserts the no-channel notice over
+# whatever is already there. So on a board with no answer channel the captain
+# ticked nine rows, three vanished, and nothing on the page ever mentioned the
+# limit - a guard that steps aside, on the surface whose whole job is to be the
+# one place he looks. With a channel present the fix was correct and its test
+# passed, which is why nothing caught it.
+test_the_bar_keeps_its_length_refusal_on_a_board_that_cannot_send() {
+  local home out
+  home=$(make_home bar-limit-no-channel)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(over_limit_payload)" pick-past-limit)
+
+  # The guard fired, established without reading the message.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.count' | grep -oE '[0-9]+' | head -1)" != "9" ] \
+    || fail "the length guard never fired, so this proves nothing: $out"
+  # And what he earned by ticking is what he is shown.
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "limit" \
+    "the bar took his ticks away and never mentioned the limit: $out"
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit_role')" = "alert" ] \
+    || fail "the refusal would not be announced: $out"
+  pass "the bar keeps its length refusal on a board that cannot send"
+}
+
+# And with nothing earned, the standing notice is still what he sees - the fix
+# must not have traded one silence for another.
+test_the_bar_still_says_it_cannot_dispatch_when_nothing_else_is_standing() {
+  local home out
+  home=$(make_home bar-standing-notice)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(rebuild_payload 2026-09-20T00:00Z)" dispatch)
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
+    "the bar stopped saying it cannot dispatch: $out"
+  pass "the bar still says it cannot dispatch when nothing else is standing"
+}
+
+# R23 and R24, one defect in one paragraph. The plot stopped overclaiming and
+# the caption under it did not: it opened "Nothing is weighted by hand" on a
+# plot that now has one, and its broken-outline sentence said every such bubble
+# sits at the left edge - false for two of the three reasons a bubble gets that
+# outline, and worst for the bubble furthest right, which is the one the
+# captain's own quadrant rule says to decide first.
+#
+# On a board the caption is not documentation about the surface. It IS the
+# surface: it is the sentence he reads to decide how much to trust the picture.
+map_note_payload() {  # <extra-call-json>
+  jq -n --argjson extra "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:([{key:"recorded", type:"decision", repo:"r", title:"The fleet recorded this",
+      risk:"high", reversible:"no", weighed_by:"fleet", blocks:1, allow_freeform:true,
+      options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}] + $extra)}'
+}
+
+# Every bubble fleet-recorded and fully derived: the claim is true, so it IS
+# made - otherwise the caption would hedge a picture that needs no hedge and
+# the hedge would stop meaning anything.
+test_the_caption_says_nothing_is_hand_weighted_when_nothing_is() {
+  local home out
+  home=$(make_home caption-measured)
+  out=$(render_payload "$home" "$(map_note_payload '[]')")
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "Nothing here is weighted by hand" \
+    "a fully recorded plot did not say so: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "broken outline")" = "0" ] \
+    || fail "a plot with no broken outline explained one: $out"
+  pass "the caption says nothing is hand-weighted when nothing is"
+}
+
+# And with one hand-weighted bubble the claim is not made AT ALL - not made and
+# then corrected four sentences later, which leaves the flat assertion as the
+# sentence he reads first.
+test_the_caption_drops_that_claim_when_one_bubble_breaks_it() {
+  local home out
+  home=$(make_home caption-byhand)
+  out=$(render_payload "$home" "$(map_note_payload '[{
+    "key":"byhand", "type":"decision", "repo":"r", "title":"The first mate weighed this",
+    "risk":"high", "reversible":"no", "weighed_by":"firstmate", "blocks":1, "allow_freeform":true,
+    "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]')")
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "Nothing here is weighted by hand")" = "0" ] \
+    || fail "the caption claimed nothing is hand-weighted on a plot that has one: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "first mate wrote" \
+    "the caption did not say which bubbles are the first mate's: $out"
+  pass "the caption drops that claim when one bubble breaks it"
+}
+
+test_the_caption_does_not_send_every_broken_outline_to_the_left_edge() {
+  local home out
+  home=$(make_home caption-outline)
+  # A bubble whose position is fully fleet-recorded and sits far RIGHT, drawn
+  # with a broken outline only because its stalled count is a floor.
+  out=$(render_payload "$home" "$(map_note_payload '[{
+    "key":"floor", "type":"decision", "repo":"r", "title":"Its blocker list was cut off",
+    "risk":"high", "reversible":"no", "weighed_by":"fleet", "blocks":2, "blocks_partial":true,
+    "allow_freeform":true, "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "floor") | .dashed')" = "true" ] \
+    || fail "the fixture bubble has no broken outline, so this proves nothing: $out"
+  # It is NOT at the left edge - it is at the costly end, which is the whole
+  # point: the old sentence described it as the cheapest thing on the board.
+  printf '%s %s' \
+    "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "floor") | .cx')" \
+    "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "recorded") | .cx')" \
+    | awk '{ exit !($1 >= $2) }' \
+    || fail "the fixture bubble is not at the costly end, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "left edge")" = "0" ] \
+    || fail "the caption sent a right-hand bubble to the left edge: $out"
+  # And the reason it IS broken-outlined is stated.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "cut off" \
+    "the caption did not say why that bubble is drawn as unmeasured: $out"
+  pass "the caption does not send every broken outline to the left edge"
+}
+
+# R7. A thin call carries no risk and no reversibility, because nobody wrote
+# either. Reading those absences as "medium, fairly reversible" puts a claim on
+# the captain's plot that nobody made - under a note promising the opposite.
+# The card already refuses to invent them; the picture drawn from the same
+# payload has to refuse too.
+test_the_map_makes_no_risk_claim_nobody_made() {
+  local home out thin low
+  home=$(make_home map-unassessed)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"thin-call", type:"decision", repo:"s", title:"Nobody assessed this",
+       thin:true, blocks:0, allow_freeform:true, options:[]},
+      {key:"low-call", type:"decision", repo:"s", title:"Somebody did",
+       risk:"low", reversible:"yes", weighed_by:"fleet", blocks:0, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"says-yes", type:"decision", repo:"s", title:"He said it can be undone",
+       risk:"high", reversible:"yes", weighed_by:"fleet", blocks:0, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"says-nothing", type:"decision", repo:"s", title:"Nobody said either way",
+       risk:"high", weighed_by:"fleet", blocks:0, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
+
+  thin=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "thin-call")')
+  low=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "low-call")')
+
+  # Not drawn in any risk colour: amber would read as "somebody called this
+  # medium", which is the exact invention this fixes.
+  [ "$(printf '%s' "$thin" | jq -r '.fill')" != "var(--gold-500)" ] \
+    || fail "an unassessed call was drawn in the medium risk colour: $out"
+  [ "$(printf '%s' "$thin" | jq -r '.fill')" != "$(printf '%s' "$low" | jq -r '.fill')" ] \
+    || fail "an unassessed call was drawn like an assessed one: $out"
+  # And marked as not measured rather than merely coloured differently.
+  [ "$(printf '%s' "$thin" | jq -r '.dashed')" = "true" ] \
+    || fail "an unassessed call was not marked as unmeasured: $out"
+  [ "$(printf '%s' "$low" | jq -r '.dashed')" = "false" ] \
+    || fail "an assessed call was marked as unmeasured: $out"
+  # It must not sit to the right of a call somebody assessed as cheap, because
+  # right means expensive and nobody said that about this one.
+  printf '%s %s' "$(printf '%s' "$thin" | jq -r '.cx')" "$(printf '%s' "$low" | jq -r '.cx')" \
+    | awk '{ exit !($1 <= $2) }' \
+    || fail "an unassessed call was plotted as more costly than an assessed cheap one: $out"
+  # Said in words too, for anyone reading by ear.
+  assert_contains "$(printf '%s' "$thin" | jq -r '.aria')" "nobody assessed" \
+    "the unassessed bubble did not say so in words: $out"
+  # And the note stops claiming both positions come from the record.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not because it is low" \
+    "the note under the plot still claimed a position nobody recorded: $out"
+
+  # The SECOND field feeding the same axis. An absent reversibility used to be
+  # weighted exactly like the captain being told the work is fully reversible,
+  # so the plot could not be read to tell "he said yes" from "nobody said".
+  local yes nothing
+  yes=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "says-yes")')
+  nothing=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "says-nothing")')
+  [ "$(printf '%s' "$yes" | jq -r '.cx')" != "$(printf '%s' "$nothing" | jq -r '.cx')" ] \
+    || fail "a stated reversibility and an absent one landed on the same coordinate: $out"
+  [ "$(printf '%s' "$nothing" | jq -r '.dashed')" = "true" ] \
+    || fail "a position that could not be derived was drawn as a measurement: $out"
+  [ "$(printf '%s' "$yes" | jq -r '.dashed')" = "false" ] \
+    || fail "a fully recorded position was drawn as unmeasured: $out"
+  [ "$(printf '%s' "$yes" | jq -r '.aria')" != "$(printf '%s' "$nothing" | jq -r '.aria')" ] \
+    || fail "the two bubbles said the same thing in words: $out"
+  assert_contains "$(printf '%s' "$nothing" | jq -r '.aria')" "nobody said whether" \
+    "the bubble with no reversibility did not say what was missing: $out"
+  pass "the map makes no risk claim for a call nobody assessed"
+}
+
+# The other half of R14, and the one the note makes a false claim about. A
+# merge card's risk - and any placeholder-seeded card's - is a {FILL} slot
+# firstmate types in at compose time, so those positions ARE weighted by hand,
+# under a note printed on the same page saying nothing is.
+test_the_map_says_which_bubbles_are_the_first_mates_own_assessment() {
+  local home out mine fleet
+  home=$(make_home map-byhand)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"merge.t1", type:"merge", repo:"r", title:"Merge: a green PR",
+       risk:"medium", weighed_by:"firstmate", blocks:1, allow_freeform:true,
+       options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}]},
+      {key:"recorded", type:"decision", repo:"r", title:"The call wrote its own",
+       risk:"medium", reversible:"partly", weighed_by:"fleet", blocks:1,
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"byhand-full", type:"decision", repo:"r", title:"The first mate filled both slots",
+       risk:"medium", reversible:"partly", weighed_by:"firstmate", blocks:1,
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
+
+  mine=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "merge.t1")')
+  fleet=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "recorded")')
+
+  assert_contains "$(printf '%s' "$mine" | jq -r '.aria')" "first mate" \
+    "a position the first mate assessed did not say so: $out"
+  [ "$(printf '%s' "$fleet" | jq -r '.aria' | grep -c "first mate")" = "0" ] \
+    || fail "a position the fleet recorded was blamed on the first mate: $out"
+  [ "$(printf '%s' "$mine" | jq -r '.dashed')" = "true" ] \
+    || fail "a hand-weighted position was drawn as a measurement: $out"
+  # The `byhand-full` call is the case the old single condition suppressed the
+  # caveat for: nothing about it is missing - the first mate filled both slots -
+  # so the only reason its position is not a fleet measurement is that he wrote
+  # it. Checked on that call directly rather than claimed of the plot, because
+  # the merge card beside it IS missing a field and would satisfy a weaker
+  # reading of this on its own.
+  local full
+  full=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "byhand-full")')
+  [ "$(printf '%s' "$full" | jq -r '.dashed')" = "true" ] \
+    || fail "a fully stated call the first mate weighed was drawn as a measurement: $out"
+  assert_contains "$(printf '%s' "$full" | jq -r '.aria')" "first mate" \
+    "a fully stated call the first mate weighed did not say so: $out"
+  [ "$(printf '%s' "$full" | jq -r '.aria' | grep -c "nobody said whether")" = "0" ] \
+    || fail "a call with nothing missing was described as missing something: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "his judgement" \
+    "the note kept claiming nothing on the plot is weighted by hand: $out"
+  pass "the map says which bubbles are the first mate's assessment, not the fleet's"
+}
+
+# The other half of R12: a count the fleet could only establish a floor for
+# must READ as a floor, in the bubble and in the row beside it, or the page
+# turns "at least one" back into "one" on its way to the captain.
+test_a_floor_count_reads_as_a_floor_not_a_total() {
+  local home out
+  home=$(make_home map-floor)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"cut", type:"decision", repo:"s", title:"Blocker list was cut off",
+       risk:"low", reversible:"yes", blocks:1, blocks_partial:true,
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"whole", type:"decision", repo:"s", title:"Blocker list was complete",
+       risk:"low", reversible:"yes", blocks:1,
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
+
+  assert_contains "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "cut") | .aria')" "at least" \
+    "a floor count was spoken as an exact one: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.call_list[] | select(.key == "cut") | .text')" "at least" \
+    "the ranked row read a floor count as an exact one: $out"
+  # And an exact count is still exact, or the hedge is on everything and says
+  # nothing.
+  [ "$(printf '%s' "$out" | jq -r '.call_list[] | select(.key == "whole") | .text' | grep -c "at least")" = "0" ] \
+    || fail "an exact count was hedged as a floor: $out"
+
+  # R21. The count drives the bubble's height and radius too, and the picture
+  # is what he reads first. Geometry drawn from a floor must not read as a
+  # measurement while the words beside it say "at least".
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "cut") | .dashed')" = "true" ] \
+    || fail "a bubble drawn from a floor count was drawn as a measurement: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "whole") | .dashed')" = "false" ] \
+    || fail "a bubble drawn from an exact count was marked as uncertain: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "cut off" \
+    "the note did not say why a bubble is drawn no higher than it is: $out"
+  pass "a count the fleet could only floor reads as a floor, not a total"
+}
+
+test_the_map_colours_each_bubble_by_its_own_risk() {
+  local home out
+  home=$(make_home map-colour)
+  out=$(render_payload "$home" "$(map_payload)")
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "urgent") | .fill')" \
+    != "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "idle") | .fill')" ] \
+    || fail "a high-risk and a low-risk call were drawn the same colour: $out"
+  pass "the map colours each bubble by the call's own risk"
+}
+
+# The picture is not the only route. Anyone reading by ear gets the same two
+# numbers as an ordered list, and the rule behind both is printed under the
+# plot so the captain can check the picture rather than trust it.
+test_the_map_is_also_an_ordered_list_with_its_rule_printed() {
+  local home out
+  home=$(make_home map-list)
+  out=$(render_payload "$home" "$(map_payload)")
+  [ "$(printf '%s' "$out" | jq -r '.call_list[0].key')" = "urgent" ] \
+    || fail "the ranked list did not put the most urgent call first: $out"
+  [ "$(printf '%s' "$out" | jq -r '.call_list[1].key')" = "idle" ] \
+    || fail "the ranked list did not order by the same two numbers: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "stalled" \
+    "the rule behind the plot was not printed under it: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map[0].aria')" "waiting" \
+    "a bubble did not say in words what it shows in a picture: $out"
+  pass "the map is also an ordered list, with the rule behind both printed"
+}
+
+# Pressing a bubble deals that call's card. One click from the picture to the
+# question, which is what makes the map a control rather than a decoration.
+test_pressing_a_bubble_deals_that_call() {
+  local home out
+  home=$(make_home map-pick)
+  out=$(render_click "$home" "$(map_payload)" "map:idle")
+  [ "$(printf '%s' "$out" | jq -r '.cards[1].hidden')" = "false" ] \
+    || fail "pressing the second call's bubble did not deal its card: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "idle") | .selected')" = "true" ] \
+    || fail "the pressed bubble was not marked as the one being read: $out"
+  pass "pressing a bubble deals that call's card and marks it on the map"
+}
+
+# A board with nothing waiting must not draw an empty plot box and call it a
+# dashboard. It says there is nothing to plot.
+test_the_map_says_so_when_there_is_nothing_to_plot() {
+  local home out
+  home=$(make_home map-empty)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[], captains_call:[]}')")
+  [ "$(printf '%s' "$out" | jq -r '.map | length')" = "0" ] \
+    || fail "an empty board still drew bubbles: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note')" = "" ] \
+    || fail "an empty map still printed the rule for a plot it did not draw: $out"
+  pass "a board with no open calls says there is nothing to plot"
+}
+
+# A thin call - the ordinary needs-decision, which PR #33 deliberately left
+# under no packet obligation - reaches the board with no options of its own.
+# It must SAY that. The captain answering a card cannot otherwise tell a call
+# that had nothing to offer him from one whose options went missing between
+# the worker and the page, and the second is the failure this whole surface
+# exists to remove.
+thin_call_payload() {
+  jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{
+      key:"thin-one", type:"decision", repo:"sample", thin:true,
+      title:"Rename the flag?",
+      decide:"Rename the flag?",
+      allow_freeform:true,
+      options:[]}]}'
+}
+
+test_a_call_that_carried_no_options_says_so_on_the_card() {
+  local home out
+  home=$(make_home thin-card)
+  out=$(render_payload "$home" "$(thin_call_payload)")
+
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].thin_note')" "no options" \
+    "a thin call did not say on the card that it carried no options: $out"
+  # And the freeform box is there, because it is the only way to answer it.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "false" ] \
+    || fail "a thin call could not be answered at all: $out"
+  pass "a call that carried no options says so on the card"
+}
+
+# The statement is meaningful only if it is absent from every ordinary card.
+# A note that always shows says nothing.
+test_an_ordinary_card_says_nothing_about_missing_options() {
+  local home out
+  home=$(make_home not-thin-card)
+  out=$(render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].thin_note')" = "" ] \
+    || fail "a card that carried its options still claimed to have none: $out"
+  pass "a card that carried its options says nothing about missing ones"
+}
+
+# R3. The board was written when the surface serving it carried every answer.
+# On the captain's own machine that surface is not installed, so every card
+# refused - honestly, but the whole decisions surface was inert, which is the
+# standing complaint with a better error message. The live transport carries
+# answers now and names its own seam; the page has to call it.
+# R4. The card used to disclose only after the captain had read the options,
+# picked one, typed his own words and pressed. The work is spent before he is
+# told. The channel is now consulted at render, so he can see it cannot take
+# an answer before he composes one.
+test_a_card_that_cannot_send_says_so_before_the_captain_composes_an_answer() {
+  local home out
+  home=$(make_home no-channel-upfront)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "true" ] \
+    || fail "the card's answer button looked live on a board that cannot send: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "cannot take an answer" \
+    "the card did not say up front that it cannot take an answer: $out"
+  pass "a card that cannot send says so before the captain composes an answer"
+}
+
+# The render-time check cannot be the only one. A channel that says it can
+# reach firstmate and then cannot is exactly what the transport's contract
+# describes when it returns false, and the captain must not be left with a
+# card that marked itself answered on a send that never left.
+test_a_send_that_reports_failure_leaves_the_card_unanswered() {
+  local home out
+  home=$(make_home seam-flaky)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 BOARD_LIVE_SEAM=flaky \
+    render_payload "$home" "$(no_channel_payload)")
+
+  # It was pressable - the seam said it could send - and it tried.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "false" ] \
+    || fail "a seam reporting it can answer still disabled the button: $out"
+  [ "$(printf '%s' "$out" | jq -r '.live_answers | length')" = "1" ] \
+    || fail "the answer was never attempted: $out"
+
+  # And the failure was honoured.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "false" ] \
+    || fail "a send that reported failure still marked the card answered: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].ack')" = "null" ] \
+    || fail "a send that reported failure still drew an acknowledgement: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "not recorded" \
+    "a send that reported failure did not say the answer was not recorded: $out"
+
+  pass "a send that reports failure leaves the card unanswered and says so"
+}
+
+test_an_answer_goes_down_the_live_seam_when_the_serving_surface_is_absent() {
+  local home out
+  home=$(make_home live-seam)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 BOARD_LIVE_SEAM=connected \
+    render_payload "$home" "$(no_channel_payload)")
+
+  # It sent, and it sent the captain's pick as data rather than a sentence.
+  printf '%s' "$out" | jq -e '
+    (.live_answers | length) == 1
+    and (.live_answers[0].key == "unreachable")
+    and (.live_answers[0].note == "in my own words")
+  ' >/dev/null || fail "the answer did not reach the live seam as data: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].limit')" = "" ] \
+    || fail "the card refused an answer the live seam accepted: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "true" ] \
+    || fail "the card did not record an answer the live seam accepted: $out"
+
+  pass "an answer goes down the live seam when the serving surface is absent"
+}
+
+# The seam being PRESENT is not the same as it being able to reach firstmate.
+# A live seam that exists and is disconnected must refuse rather than report
+# an answer it could not send - and must not shadow the fallback either.
+test_a_disconnected_live_seam_refuses_instead_of_reporting_success() {
+  local home out
+  home=$(make_home live-seam-down)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 BOARD_LIVE_SEAM=disconnected \
+    render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "false" ] \
+    || fail "a disconnected live seam still marked the card answered: $out"
+  # A seam that cannot reach firstmate is refused at render, like no seam at
+  # all: the captain is told before he composes, not after he presses.
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "cannot take an answer" \
+    "a disconnected live seam did not say the card cannot take an answer: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "true" ] \
+    || fail "a disconnected live seam left the answer button looking live: $out"
+
+  pass "a disconnected live seam refuses instead of reporting success"
+}
+
+# Both seams present: the live one is preferred, because it is the one that
+# reaches firstmate on the machine the captain is actually using.
+test_the_live_seam_is_preferred_over_the_serving_surface() {
+  local home out
+  home=$(make_home live-seam-both)
+  out=$(BOARD_LIVE_SEAM=connected render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.live_answers | length')" = "1" ] \
+    || fail "the live seam was not used when both were present: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].on_enter')" = "null" ] \
+    || fail "the answer also went to the serving surface, sending it twice: $out"
+
+  pass "the live seam is preferred over the serving surface"
+}
+
+test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered() {
+  local home out
+  home=$(make_home no-channel)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].on_enter')" = "null" ] \
+    || fail "an answer was reported sent with no channel to send it on: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "false" ] \
+    || fail "the card marked itself answered without sending anything: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].ack')" = "null" ] \
+    || fail "the card acknowledged an answer it never sent: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "cannot take an answer" \
+    "the card did not say it cannot take an answer: $out"
+
+  pass "a card with no answer channel refuses visibly instead of looking answered"
+}
+
+# Same rule on the dispatch bar, which had the identical shape: it may not
+# report a dispatch it could not send, and no row may be acknowledged for one.
+test_the_dispatch_bar_refuses_visibly_when_it_cannot_send() {
+  local home out
+  home=$(make_home no-channel-dispatch)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(rebuild_payload 2026-09-20T00:00Z)" dispatch)
+
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.is_queued')" = "false" ] \
+    || fail "the bar reported a dispatch it could not send: $out"
+  # A picked row is not enough to make the button live, and the button being
+  # dead is the ONLY state the captain can reach here - so what it says must
+  # be the render-time refusal, not the one written inside the click handler.
+  # The earlier version of this test asserted the click-handler wording and
+  # passed only because the harness pressed a button a browser would not.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.btn_disabled')" = "true" ] \
+    || fail "the dispatch button looked live on a board that cannot send: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
+    "the bar greyed itself out and said nothing about why: $out"
+  # In the bar's OWN alert element, not the counter slot, where it would be
+  # muted uppercase micro-type that nothing announces.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit_role')" = "alert" ] \
+    || fail "the bar's refusal would not be announced: $out"
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.count')" = "1 picked for dispatch" ] \
+    || fail "the refusal was written into the counter slot instead of the alert: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.charted[].ack] | map(select(. != null)) | length')" = "0" ] \
+    || fail "a row was acknowledged for a dispatch that was never sent: $out"
+
+  pass "the dispatch bar that cannot send says so before he can press it"
+}
+
+# The bar must still refuse at SEND time when the channel said it could send
+# and then could not. That path is reachable only with a live seam, which is
+# the difference between this test and the one above.
+test_the_dispatch_bar_refuses_a_send_that_reports_failure() {
+  local home out
+  home=$(make_home dispatch-send-failed)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 BOARD_LIVE_SEAM=flaky \
+    render_click "$home" "$(rebuild_payload 2026-09-20T00:00Z)" dispatch)
+
+  # It was pressable - the seam said it could send.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.btn_disabled')" = "false" ] \
+    || fail "a seam reporting it can send still disabled the dispatch button: $out"
+  [ "$(printf '%s' "$out" | jq -r '.live_answers | length')" = "1" ] \
+    || fail "the dispatch was never attempted: $out"
+  # And the failure was honoured where he is looking.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.is_queued')" = "false" ] \
+    || fail "a dispatch that reported failure still marked itself sent: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "nothing was dispatched" \
+    "a dispatch that reported failure did not say so in the bar's alert: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.charted[].ack] | map(select(. != null)) | length')" = "0" ] \
+    || fail "a row was acknowledged for a dispatch that failed: $out"
+  pass "a dispatch that reports failure refuses in the bar the captain is watching"
+}
+
 test_hans_absent_falls_back_to_hant_not_empty() {
   local home payload out
   home=$(make_home hans-fallback)
@@ -308,7 +1742,10 @@ test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status() {
       and (.underway[0]
         | .title == "Show task names on the board"
           and (.sub | test("no-mistakes: review round 2"))
-          and (.sub | test("ship")) and (.sub | test("firstmate"))
+          # the task kind, worded for the captain rather than the fleet token
+          # `ship` - this row is one of the surfaces that stopped carrying
+          # internal vocabulary, and the kind is still on it
+          and (.sub | test("change")) and (.sub | test("firstmate"))
           and [.badges[] | .text] == ["working"])
   ' >/dev/null || fail "an underway row did not lead with the task name: $out"
   pass "an underway row leads with the task name and still reports its run status"
@@ -1328,3 +2765,55 @@ test_the_deck_does_not_deal_over_a_card_the_captain_paged_to
 test_the_acknowledgement_speaks_the_captains_language
 test_repainting_the_board_never_accumulates_tickers
 test_a_queued_click_survives_a_rebuild_of_the_board
+test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered
+test_the_dispatch_bar_refuses_visibly_when_it_cannot_send
+test_an_answer_goes_down_the_live_seam_when_the_serving_surface_is_absent
+test_a_disconnected_live_seam_refuses_instead_of_reporting_success
+test_the_live_seam_is_preferred_over_the_serving_surface
+test_a_card_that_cannot_send_says_so_before_the_captain_composes_an_answer
+test_a_send_that_reports_failure_leaves_the_card_unanswered
+test_a_call_that_carried_no_options_says_so_on_the_card
+test_an_ordinary_card_says_nothing_about_missing_options
+test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one
+test_the_map_colours_each_bubble_by_its_own_risk
+test_the_map_is_also_an_ordered_list_with_its_rule_printed
+test_pressing_a_bubble_deals_that_call
+test_the_map_says_so_when_there_is_nothing_to_plot
+test_an_empty_merge_lane_says_why_it_is_empty
+test_a_green_pull_request_reads_as_ready_in_the_lane
+test_a_board_with_no_merge_data_shows_no_merge_lane
+test_the_fleet_is_grouped_into_the_lanes_it_is_actually_in
+test_a_worker_in_an_unknown_lane_is_shown_rather_than_dropped
+test_a_board_with_no_lanes_renders_as_it_always_did
+test_the_masthead_counts_the_fleet_it_is_showing
+test_a_board_that_knows_no_lanes_offers_no_fleet_counters
+test_the_dispatch_bar_refuses_a_send_that_reports_failure
+test_the_map_makes_no_risk_claim_nobody_made
+test_a_floor_count_reads_as_a_floor_not_a_total
+test_a_reason_with_no_words_never_shows_the_captain_a_machine_token
+test_the_map_says_which_bubbles_are_the_first_mates_own_assessment
+test_pressing_answer_with_nothing_chosen_says_so
+test_an_empty_press_does_not_wipe_a_standing_refusal
+test_the_per_option_buttons_go_dead_with_the_rest_of_the_card
+test_the_per_option_buttons_stay_live_on_a_working_board
+test_the_card_does_not_call_a_change_reversible_when_nobody_said_so
+test_the_bar_puts_its_length_refusal_where_the_captain_looks
+test_the_harness_cannot_answer_through_a_button_a_person_cannot_press
+test_no_internal_token_reaches_the_captains_rows
+test_an_unworded_state_keeps_its_spelling_rather_than_vanishing
+test_the_merge_card_does_not_show_the_forges_own_enum
+test_the_caption_says_nothing_is_hand_weighted_when_nothing_is
+test_the_caption_drops_that_claim_when_one_bubble_breaks_it
+test_the_caption_does_not_send_every_broken_outline_to_the_left_edge
+test_the_bar_keeps_its_length_refusal_on_a_board_that_cannot_send
+test_the_bar_still_says_it_cannot_dispatch_when_nothing_else_is_standing
+test_the_bars_refusal_does_not_outlive_what_raised_it
+test_the_bar_tells_him_both_reasons_when_both_hold
+test_the_caption_does_not_call_a_floor_count_an_exact_one
+test_the_caption_states_the_count_plainly_when_every_count_is_exact
+test_a_crowded_plot_never_moves_a_bubble_off_its_own_coordinate
+test_a_bubble_sitting_on_another_is_left_unnamed
+test_a_bubble_that_stands_alone_keeps_its_name
+test_every_name_on_the_plot_belongs_to_the_mark_beside_it
+test_every_caption_clause_stands_on_its_own
+test_a_name_that_does_not_fit_centred_is_anchored_at_its_mark

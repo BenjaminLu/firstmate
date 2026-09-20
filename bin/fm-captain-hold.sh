@@ -20,7 +20,7 @@
 # and secondmate-home ownership aligned with the work that discovered the call.
 #
 # Usage:
-#   fm-captain-hold.sh hold <task-id> --reason <reason> \
+#   fm-captain-hold.sh hold <task-id> --reason <reason> [--card-file <path>] \
 #     [--title <title>] [--repo <repo>] [--origin <origin-id>] [--until YYYY-MM-DD]
 #   fm-captain-hold.sh answer <task-id> --decision-file <path> [--release]
 #   fm-captain-hold.sh answers [<legacy-origin> | --any-origin] --source <provenance>   (keyed answers on stdin)
@@ -261,6 +261,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-board-card-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-board-card-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-wake-lib.sh"
@@ -1046,7 +1049,7 @@ refuse_archived_reuse() {  # <task-id>
 }
 
 command_hold() {
-  local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
+  local id=${1:-} title='' reason='' repo='' origin='' until='' card_file='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
@@ -1057,6 +1060,7 @@ command_hold() {
       --repo) shift; repo=${1:-} ;;
       --origin) shift; origin=${1:-} ;;
       --until) shift; until=${1:-} ;;
+      --card-file) shift; card_file=${1:-} ;;
       *) usage >&2; exit 2 ;;
     esac
     shift
@@ -1064,6 +1068,17 @@ command_hold() {
   validate_slug task-id "$id"
   validate_one_line reason "$reason"
   case "$reason" in *'('*|*')'*) fail "reason must not contain parentheses (tasks-axi hold contract)" ;; esac
+  # A card file is OPTIONAL - a call that wants no full option card passes
+  # none, and PR #33's removal of the blanket packet obligation stands for it
+  # untouched. But one that was GIVEN and cannot be used is refused here,
+  # before the task is held, rather than silently recorded as a thin card: a
+  # caller that meant to ship options and shipped a malformed file must hear
+  # about it, because the alternative is a card the captain answers believing
+  # he saw the choices. bin/fm-board-card-lib.sh owns why.
+  if [ -n "$card_file" ]; then
+    fm_board_card_block_ok "$card_file" \
+      || fail "refusing to hold $id: --card-file was given and cannot be used as a full option card"
+  fi
   if [ -n "$origin" ]; then
     validate_slug origin-id "$origin"
   fi
@@ -1140,6 +1155,18 @@ command_hold() {
   occurrence=$(( $(resolution_record_count "$(show_field "$show" body)") + 1 ))
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
+  # The card the captain will answer, written HERE, at the moment the call is
+  # created, because a card composed afterwards is the rebuild he refused.
+  # This refuses rather than warning: a missing card is a call he never sees.
+  fm_board_card_write "$STATE" "$id" "captain-hold-$id-$occurrence" \
+    "$(show_field_value "$show" title)" "$repo" "$reason" "$card_file" \
+    || fail "task $id is held, but its card could not be recorded; the captain would not see this call"
+  # A dated deferral is an answer of sorts - "later" - so its card leaves the
+  # live call list rather than sitting there looking unanswered.
+  if [ -n "$until" ]; then
+    fm_board_card_close "$STATE" "$id" deferred \
+      || printf 'fm-captain-hold: card for %s was written but not marked deferred\n' "$id" >&2
+  fi
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
   record_hold_gate_call "$id" "$occurrence" \
     "$(show_field_value "$show" title)" "$reason" "$origin"
@@ -2591,7 +2618,17 @@ publish_board_event() {  # <status> <kind> <task-id> [args...]
 
 case "${1:-}" in
   hold) shift; command_hold "$@"; rc=$?; publish_board_event "$rc" call "${1-}" ;;
-  answer) shift; command_answer "$@"; rc=$?; publish_board_event "$rc" answered "${1-}" --key "${1-}" ;;
+  answer)
+    shift; command_answer "$@"; rc=$?
+    if [ "$rc" -eq 0 ] && [ -n "${1-}" ]; then
+      # Warn, never fail: the captain's answer is already durable here, and
+      # refusing after recording it would lose the answer to protect a card.
+      # The write at hold time is the opposite posture, and deliberately so -
+      # see bin/fm-board-card-lib.sh.
+      fm_board_card_close "$STATE" "${1-}" answered \
+        || printf 'fm-captain-hold: %s was answered but its card could not be closed\n' "${1-}" >&2
+    fi
+    publish_board_event "$rc" answered "${1-}" --key "${1-}" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;

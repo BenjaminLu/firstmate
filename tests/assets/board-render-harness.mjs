@@ -7,7 +7,7 @@
 //   { stats:[{n,label}], underway:[{title,sub,badges,ack}],
 //     charted:[{title,sub,badges,pickable,ack}], empty, more,
 //     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips,ack,
-//             hidden, tabs:[{label,selected}],
+//             hidden, thin_note, tabs:[{label,selected}],
 //             panels:[{hidden,figures,notes,rows,label,cost,
 //                      buttons:[{text,queues}]}],
 //             on_enter, on_enter_all,
@@ -65,7 +65,42 @@ class Node {
   }
   set textContent(v) { this._text = String(v); this.children = []; }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
-  setAttribute(k, v) { this.attributes[k] = v; }
+  removeChild(n) {
+    const i = this.children.indexOf(n);
+    if (i >= 0) this.children.splice(i, 1);
+    if (n.parentNode === this) n.parentNode = null;
+    return n;
+  }
+  /* The SVG text measurement the board asks for. A real browser returns the
+     rendered advance width; this shim cannot lay out glyphs, so it returns the
+     same per-character approximation the board falls back to, which keeps the
+     suite exercising the MEASURING path rather than a second code path of its
+     own. It is deliberately not exact - what the tests hold is that a name is
+     judged by its own width rather than by a fixed box. */
+  /* Latin at this font and size measures about 6.3px per character and 繁體
+     and 简体 about 9.6px, both taken in a browser against the board's own
+     label class. Modelling every script at the English width is how the suite
+     could not see that the fallback was 1.5x short in the locale the captain
+     reads, so the shim charges CJK its own rate. */
+  getComputedTextLength() {
+    var wide = (this.textContent.match(/[\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
+    return wide * 9.6 + (this.textContent.length - wide) * 6.3;
+  }
+  /* The em box, which is what a browser reports: a constant of the font size
+     rather than of the string, measured at 9.69 above the baseline and 2.02
+     below it. */
+  getBBox() {
+    const y = this.attributes && this.attributes.y !== undefined
+      ? parseFloat(this.attributes.y) : 0;
+    return { width: this.getComputedTextLength(), height: 11.71, x: 0, y: y - 9.69 };
+  }
+  setAttribute(k, v) {
+    this.attributes[k] = v;
+    /* A real SVGElement has no writable className, so the page sets its class
+       through setAttribute - and a real querySelectorAll still matches it.
+       Mirroring it here keeps both true of the shim. */
+    if (k === "class") this.className = String(v);
+  }
   addEventListener(type, fn) { (this._on[type] = this._on[type] || []).push(fn); }
   dispatch(type, ev) {
     (this._on[type] || []).slice()
@@ -91,10 +126,27 @@ const dataNode = new Node("script");
 dataNode.textContent = html
   .split('<script id="bearings-data" type="application/json">')[1]
   .split("</script>")[0];
+/* A reason code the copy table has no words for cannot be put in a BUILT
+   board - the payload contract restricts the field to the eight it knows - so
+   the only way to drive the page's guard is to change the code after the build
+   and before the page reads it. That is also exactly the situation the guard
+   exists for: the contract and the copy table are in different files, and a
+   code added to one is not forced through the other. */
+if (process.env.BOARD_MERGE_REASON) {
+  const patched = JSON.parse(dataNode.textContent);
+  for (const row of patched.merge_queue || []) {
+    if (!row.ready) row.reason = process.env.BOARD_MERGE_REASON;
+  }
+  dataNode.textContent = JSON.stringify(patched);
+}
 byId.set("bearings-data", dataNode);
 
 globalThis.document = {
   createElement: (tag) => new Node(tag),
+  /* The decision map is SVG, which the page must build in the SVG namespace.
+     The shim keeps no namespaces, so the node is the same - what matters is
+     that the call exists, because a page that cannot make one draws no map. */
+  createElementNS: (_ns, tag) => new Node(tag),
   // Lazily mint any element the page asks for: the shim tracks whatever ids
   // the shipped template actually uses instead of pinning a fixed list.
   getElementById: (id) => {
@@ -117,8 +169,25 @@ const queued = [];
 // The page remembers what the captain clicked so a re-render can put the
 // acknowledgement back; that memory is browser storage, so the shim has one.
 const storage = new Map();
+// A board opened WITHOUT the surface that serves it has no answer channel at
+// all - queuePrompt is simply absent. That is a real state the captain can be
+// in, not a hypothetical, so the shim can reproduce it.
+const noChannel = process.env.BOARD_NO_ANSWER_CHANNEL === "1";
+// The seam the live transport exposes, which is the one that exists on the
+// captain's own machine. BOARD_LIVE_SEAM=connected|disconnected selects it;
+// unset leaves only the serving surface's seam, as before.
+const liveSeam = process.env.BOARD_LIVE_SEAM || "";
+const liveAnswers = [];
 globalThis.window = {
-  lavish: { queuePrompt: (text, opts) => queued.push({ text, data: opts && opts.data }) },
+  ...(liveSeam ? {
+    fmBoardLive: {
+      canAnswer: () => liveSeam === "connected" || liveSeam === "flaky",
+      answer: (picks) => { liveAnswers.push(picks); return liveSeam === "connected"; },
+    },
+  } : {}),
+  ...(noChannel ? {} : {
+    lavish: { queuePrompt: (text, opts) => queued.push({ text, data: opts && opts.data }) },
+  }),
   localStorage: {
     getItem: (k) => (storage.has(k) ? storage.get(k) : null),
     setItem: (k, v) => { storage.set(k, String(v)); },
@@ -184,16 +253,58 @@ const nodesWhere = (root, pred) => {
 const answerDealtCard = () => {
   const dealt = nodesWhere(byId.get("bb-call"), (n) => n.tagName === "form")[0];
   if (!dealt) return;
+  /* A browser does not submit a form through a DISABLED submit button, so
+     neither may this. The same rule the Enter path and the dispatch button
+     already follow: a harness that can press what a person cannot will hide
+     the next silent control the way it hid the last one. */
+  const submit = nodesWhere(dealt, (n) => n.tagName === "button" && n.type === "submit")[0];
+  if (submit && submit.disabled === true) return;
   const radio = nodesWhere(dealt, (n) => n.tagName === "input" && n.type === "radio")[0];
   if (radio) radio.checked = true;
   dealt.dispatch("submit", { preventDefault() {} });
 };
+/* Pressing the card's own button with NOTHING chosen and nothing typed, which
+   is what a captain does who presses before he has decided. The button is live
+   and the board is healthy, so this is a press that must be answered. */
+const answerDealtCardEmpty = () => {
+  const dealt = nodesWhere(byId.get("bb-call"), (n) => n.tagName === "form")[0];
+  if (!dealt) return;
+  const submit = nodesWhere(dealt, (n) => n.tagName === "button" && n.type === "submit")[0];
+  if (submit && submit.disabled === true) return;
+  dealt.dispatch("submit", { preventDefault() {} });
+};
+/* Ticking rows past the 512-byte limit. The tick the captain just made
+   disappears, so the bar owes him a reason - and that reason must land in the
+   alert, not in the counter slot where his own count normally sits. */
+const pickPastLimit = () => {
+  const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
+  for (const p of picks) { p.checked = true; p.dispatch("change"); }
+};
+/* Tick past the limit, then take every tick back - what a captain does when he
+   is told he picked too much. The refusal he earned describes an action he has
+   since undone, so it must not survive the undo. */
+const pickPastLimitThenClear = () => {
+  pickPastLimit();
+  const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
+  for (const p of picks) { if (p.checked) { p.checked = false; p.dispatch("change"); } }
+};
 const click = process.argv[3] || "";
-if (click === "dispatch") {
+if (click === "pick-past-limit-then-clear") {
+  pickPastLimitThenClear();
+} else if (click === "pick-past-limit") {
+  pickPastLimit();
+} else if (click === "answer-empty") {
+  answerDealtCardEmpty();
+} else if (click === "dispatch") {
   const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
   for (const p of picks) { p.checked = true; p.dispatch("change"); }
   const btn = byId.get("bb-dispatch-btn");
-  if (typeof btn.onclick === "function") btn.onclick();
+  /* A browser does not fire a click on a DISABLED button, and neither may
+     this. Pressing what a person cannot press is how a control that greys
+     itself out and explains nothing passed its own test: the assertion for
+     the refusal and the assertion for the disable described two states that
+     cannot both exist on screen, and the captain got the silent one. */
+  if (btn.disabled !== true && typeof btn.onclick === "function") btn.onclick();
 } else if (click === "answer") {
   answerDealtCard();
 } else if (click === "answer-then-paging") {
@@ -201,9 +312,30 @@ if (click === "dispatch") {
   const next = byId.get("bb-stack-next");
   next.onclick(); next.onclick();
   runTimers();
+} else if (click.startsWith("map:")) {
+  /* Pressing a bubble on the decision map. It is the picture's whole claim to
+     be a control rather than a decoration, so it is driven through the page's
+     own listener like every other click here. */
+  const key = click.slice(4);
+  const bub = byId.get("bb-map").querySelectorAll(".bb-bub")
+    .find((g) => g.attributes["data-key"] === key);
+  if (!bub) throw new Error("no bubble for key: " + key);
+  bub.dispatch("click");
 } else if (click) {
   throw new Error("unknown click: " + click);
 }
+
+/* What the cards looked like AT THE PRESS, before anything else touched them.
+   The `on_enter` probe below submits each card's form to report what Enter
+   would send, and a probe that succeeds clears the alert the scripted click
+   had just written - so a test reading `.limit` afterwards sees the probe's
+   result rather than the captain's press. This snapshot is the press itself. */
+const atClick = (byId.get("bb-call") || new Node("div")).children.map((c) => ({
+  limit: c.querySelectorAll(".bb-limit")
+    .filter((n) => n.className.includes("is-visible"))
+    .map((n) => n.textContent)[0] ?? "",
+  is_queued: c.className.split(/\s+/).includes("is-queued"),
+}));
 
 /* Then, optionally, a REBUILD of the board: a different build of the same
    board, loaded into the same page with the same browser storage, exactly as
@@ -302,7 +434,12 @@ const answerCard = (card) => {
     return queued.map((q) => q.data);
   };
   const note = nodes.find((n) => n.name === "note");
-  if (note) {
+  // A browser does not submit a form through a DISABLED submit button, and
+  // implicit submission from a text field is blocked with it too. The shim
+  // pressed anyway, which would hide a card that correctly refuses up front
+  // by letting the send-time path overwrite what it said.
+  const defaultBtn = nodes.find((n) => n.tagName === "button" && n.type === "submit");
+  if (note && !(defaultBtn && defaultBtn.disabled === true)) {
     note.value = "in my own words";
     const dflt = nodes.find((n) => n.tagName === "button" && n.type === "submit");
     card._onEnterAll = recordAll(() => {
@@ -314,10 +451,18 @@ const answerCard = (card) => {
       : null;
     note.value = "";
   }
+  /* The per-option buttons inside a packet card. Third press site in this
+     file, and the same rule as the other two: a browser does not click a
+     DISABLED button, so probing one produces a message no viewer can reach -
+     here, the send-time refusal written over the render-time one the card had
+     correctly shown. A disabled button reports no queued answer, which is what
+     a person pressing it would get. */
   nodes
     .filter((n) => n.tagName === "button" && n.parentNode
       && n.parentNode.className.split(/\s+/).includes("bb-panel"))
-    .forEach((b) => { b._queued = record(() => b.dispatch("click")); });
+    .forEach((b) => {
+      b._queued = b.disabled === true ? null : record(() => b.dispatch("click"));
+    });
 };
 deck.children.forEach(answerCard);
 
@@ -326,6 +471,7 @@ const cards = deck.children
   .map((card) => ({
     badges: findAll(card, "fm-badge").map((b) => b.textContent),
     title: findAll(card, "bb-decision__title")[0]?.textContent ?? "",
+    detail: findAll(card, "bb-decision__detail").map((n) => n.textContent),
     ctx: findAll(card, "bb-ctx__row").map((r) => ({
       k: findAll(r, "bb-ctx__k")[0]?.textContent ?? "",
       v: findAll(r, "bb-ctx__v")[0]?.textContent ?? "",
@@ -378,8 +524,68 @@ const cards = deck.children
       };
     })(),
     ack: ackOf(card.children.find((c) => c.className.includes("bb-decision__pad"))),
+    /* What the card says when it refused to send, and whether it marked
+       itself answered. A card that could not reach firstmate must show the
+       first and must NOT do the second. */
+    limit: findAll(card, "bb-limit")
+      .filter((n) => n.className.includes("is-visible"))
+      .map((n) => n.textContent)[0] ?? "",
+    is_queued: card.className.split(/\s+/).includes("is-queued"),
+    /* The per-option buttons inside a packet card. They are controls like any
+       other and must become unavailable with the rest of the card, so both
+       their labels and whether a person could press them are reported. */
+    choose_buttons: findAll(card, "fm-btn")
+      .filter((b) => b.type === "button" && b.textContent.length)
+      .map((b) => ({ text: b.textContent, disabled: b.disabled === true })),
+    /* What a call that carried no options says in place of them. Empty on
+       every ordinary card, which is what makes its presence meaningful. */
+    thin_note: findAll(card, "bb-thin").map((n) => n.textContent)[0] ?? "",
+    /* Whether the captain could press at all. A card that cannot send must
+       say so before he composes an answer, not after he presses. */
+    send_disabled: findAll(card, "fm-btn").some((b) => b.type === "submit" && b.disabled === true),
     hidden: card.hidden === true,
   }));
+/* The decision map: one entry per bubble, in document order, plus the ranked
+   list beneath it. Read off the built SVG rather than recomputed here, so a
+   test cannot agree with a formula this file got wrong too. */
+const mapHost = byId.get("bb-map") || new Node("div");
+const listHost = byId.get("bb-calllist") || new Node("div");
+const bubbles = findAll(mapHost, "bb-bub").map((g) => {
+  const circle = g.children.find((c) => c.tagName === "circle") ?? {};
+  /* Two kinds of text can sit in a bubble and either may be absent, so they are
+     told apart by what they are rather than by their order: the stalled count
+     is drawn inside the mark and carries its own fill, the name is drawn beside
+     it and does not. A bubble sitting on another has no name at all. */
+  const texts = g.children.filter((c) => c.tagName === "text");
+  const countNode = texts.find((n) => n.attributes?.fill);
+  const labelNode = texts.find((n) => !n.attributes?.fill);
+  return {
+    key: g.attributes?.["data-key"] ?? "",
+    label: labelNode?.textContent ?? "",
+    count: countNode?.textContent ?? "",
+    cx: Number(circle.attributes?.cx ?? 0),
+    cy: Number(circle.attributes?.cy ?? 0),
+    r: Number(circle.attributes?.r ?? 0),
+    fill: circle.attributes?.fill ?? "",
+    selected: (g.attributes?.class ?? "").includes("is-sel"),
+    /* Where the bubble's own label was drawn. A label may be moved to keep a
+       crowded plot readable; the bubble may not, because its position is the
+       information. Both are reported so a test can hold that line. */
+    label_y: Number(labelNode?.attributes?.y ?? 0),
+    /* Where the name is anchored. A name that does not fit centred may be
+       anchored at its own mark and run inward, so a test checking where a name
+       actually lies has to know which end of it sits on the mark. */
+    label_anchor: labelNode?.attributes?.["text-anchor"] ?? "",
+    /* A broken outline is how the plot says nobody assessed this call. */
+    dashed: (circle.attributes?.["stroke-dasharray"] ?? "") !== "",
+    aria: g.attributes?.["aria-label"] ?? "",
+  };
+});
+const callList = findAll(listHost, "bb-clrow").map((b) => ({
+  key: b.attributes?.["data-key"] ?? "",
+  text: b.textContent,
+  selected: (b.attributes?.class ?? "").includes("is-sel"),
+}));
 const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
   .map((id) => byId.get(id)?.textContent ?? "");
 
@@ -394,9 +600,49 @@ const errorText = [...byId.entries()]
   .filter(([k]) => k.startsWith("sel:"))
   .flatMap(([, n]) => n.children.map((c) => c.textContent))
   .join(" ");
+const dispatchBar = byId.get("bb-dispatch") || new Node("div");
+const dispatchLimit = byId.get("bb-dispatch-limit");
+const dispatch = {
+  is_queued: dispatchBar.className.split(/\s+/).includes("is-queued"),
+  count: byId.get("bb-dispatch-count")?.textContent ?? "",
+  /* The bar's own refusal: its text, whether it is actually shown, and
+     whether anything would announce it. A refusal routed into the counter
+     slot would show up here as an empty limit with a wordy count. */
+  limit: dispatchLimit?.className?.includes("is-visible") ? dispatchLimit.textContent : "",
+  btn_disabled: byId.get("bb-dispatch-btn")?.disabled === true,
+  limit_role: dispatchLimit?.attributes?.role ?? "",
+};
 const empty = ch.children.filter((c) => c.className.includes("bb-empty")).map((c) => c.textContent);
 const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map((c) => c.textContent);
 
 process.stdout.write(
   JSON.stringify({ stats, underway, charted, empty, more, cards, headings, error: errorText,
-    intervals: intervals.size }) + "\n");
+    dispatch, live_answers: liveAnswers, intervals: intervals.size,
+    at_click: atClick,
+    map: bubbles, call_list: callList, map_note: byId.get("bb-map-note")?.textContent ?? "",
+    /* The fleet as lanes: the label, the count it shows, and which workers it
+       holds. The "could not be placed" column is read the same way as any
+       other, because the whole point of it is that it is visible. */
+    /* Every worker row in full. The lane view reports only names, so until now
+       nothing in the suite could see the row's state badge or its kind - which
+       is where the internal vocabulary was showing. An unobservable surface is
+       an unasserted one in both directions. */
+    raw_rows: (byId.get("bb-underway") || new Node("div")).querySelectorAll(".bb-row")
+      .map((r) => r.textContent),
+    lanes: (byId.get("bb-underway") || new Node("div")).querySelectorAll(".bb-lane")
+      .map((l) => ({
+        label: l.querySelectorAll(".bb-lane__label")[0]?.textContent ?? "",
+        count: l.querySelectorAll(".bb-lane__n")[0]?.textContent ?? "",
+        workers: l.querySelectorAll(".bb-row__title").map((n) => n.textContent),
+        unplaced: l.className.includes("bb-lane--unplaced"),
+      })),
+    merge: {
+      hidden: byId.get("bb-merge-section")?.hidden === true,
+      head: byId.get("bb-merge-head")?.textContent ?? "",
+      rows: (byId.get("bb-merge-queue") || new Node("div")).querySelectorAll(".bb-mqrow")
+        .map((r) => ({
+          text: r.textContent,
+          ready: r.className.includes("bb-mqrow--ready"),
+          url: r.children.find((c) => c.tagName === "a")?.href ?? "",
+        })),
+    } }) + "\n");

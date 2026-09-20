@@ -110,7 +110,23 @@
 #            board either. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
-#            than captain) gets `close: release`, a question omits close. When
+#            than captain) gets `close: release`, a question omits close. A held
+#            task whose call wrote a card record - `<state>/board-cards/<id>.json`,
+#            owned by `bin/fm-board-card-lib.sh` - is seeded from THAT record and
+#            from nothing else, because the record is the call itself rather than
+#            an artifact written before it. A record-seeded card carries no
+#            {FILL: ...} placeholder of any kind: a full one arrived with its
+#            options, and a thin one carries `thin: true`, no options of its own,
+#            no risk and no reversibility, so the page can say plainly that the
+#            call offered the captain nothing to choose between. An unreadable
+#            record is skipped rather than fatal, so one bad file cannot take the
+#            whole board down with it. EVERY decision and merge card also carries
+#            `blocks`, how much queued work names it as a blocker, counted from
+#            the snapshot gate rows; the board plots calls by that number, so a
+#            card reaching the board WITHOUT it is placed as though nothing were
+#            waiting on it. It carries `blocks_partial: true` when the snapshot
+#            cut the blocker list off and the count is therefore a floor rather
+#            than a total. Failing that, when
 #            `bin/fm-packet.sh verify` accepts the held task's packet, the card
 #            is seeded from `bin/fm-packet.sh card <id>` instead of
 #            placeholders. A card that gets placeholders carries the task's
@@ -768,6 +784,18 @@ validate_payload() {  # <data.json>
       and (optional_copy("freeform_hint"))
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
+      and ((has("thin") | not) or (.thin | type == "boolean"))
+      and ((has("blocks") | not)
+        or ((.blocks | type == "number") and .blocks >= 0 and (.blocks | floor) == .blocks))
+      and ((has("blocks_partial") | not) or (.blocks_partial | type == "boolean"))
+      # Who supplied the numbers the decision map places this bubble by. The
+      # plot prints a note saying nothing on it is weighted by hand, and for a
+      # card whose risk is a {FILL: ...} slot firstmate types in at compose
+      # time that is false - so the board has to carry which it was.
+      and ((has("weighed_by") | not)
+        or (.weighed_by == "fleet" or .weighed_by == "firstmate"))
+      and ((has("checks_state") | not) or (.checks_state | nonempty_string))
+      and ((has("review_state") | not) or (.review_state | nonempty_string))
       and ((has("recommend_value") | not)
         or (.recommend_value | placeholder)
         or ((.recommend_value | slug(128))
@@ -778,12 +806,34 @@ validate_payload() {  # <data.json>
       and optional_ack;
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
-      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string);
+      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string)
+      # `lane` is deliberately NOT an enum. The page knows the lanes it can
+      # draw and collects everything else under a heading that says so, which
+      # is what stops a worker vanishing when the fleet grows a state neither
+      # side knows yet. Refusing an unknown lane here would drop the whole
+      # board instead, which is the worse failure.
+      and ((has("lane") | not) or (.lane | nonempty_string));
     def landed_item:
       type == "object" and repo_marker and (.id | nonempty_string)
       and (.what | copy) and (.owner | nonempty_string)
       and optional_https_url("pr_url")
       and optional_subject;
+    # One open pull request in the merge lane. `ready` is the board saying it
+    # would offer this as a merge call; `reason` is the code for why it will
+    # not, and the two must never both be absent - a row that neither offers
+    # nor explains is the empty lane the captain complained about.
+    def merge_row:
+      type == "object"
+      and (.repo | nonempty_string)
+      and (.num | nonempty_string)
+      and (.ready | type == "boolean")
+      and optional_https_url("url")
+      and ((has("reason") | not)
+        or (.reason as $code
+          | ["backlog-unreadable", "unroutable", "not-claimed", "checks-failed",
+             "checks-pending", "not-mergeable", "changes-requested", "duplicate"]
+          | index($code) != null))
+      and (if .ready then (has("reason") | not) else has("reason") end);
     def charted_item:
       type == "object" and repo_marker and (.id | slug(128))
       and (.title | copy) and (.reason | copy_or_empty)
@@ -813,6 +863,8 @@ validate_payload() {  # <data.json>
     and ([.underway[] | underway_item] | all)
     and ([.landed[] | landed_item] | all)
     and ([.charted[] | charted_item] | all)
+    and ((has("merge_queue") | not)
+      or ((.merge_queue | type == "array") and ([.merge_queue[] | merge_row] | all)))
   ' "$1" >/dev/null || return 1
   validate_packet_drawings "$1"
 }
@@ -1039,6 +1091,53 @@ packet_card() {  # <task-id>
   printf '%s\n' "$card" | jq -c . 2>/dev/null || printf 'null\n'
 }
 
+# The card record the call wrote when it was raised, or null when this home has
+# none for the task.
+#
+# THIS is the realtime card the captain asked for: 看板的卡片我要一個realtime方
+# 案，不要你每次重建，沒意義. Its content was written at the instant the call was
+# raised, by the one site every captain call goes through, so composing a board
+# from it is a read rather than a rebuild. `bin/fm-board-card-lib.sh` owns the
+# record's format; this reads it and nothing else.
+#
+# A record WINS over the packet, because the packet is the worker's artifact
+# written before the call and the record is the call itself. A call raised
+# before this home had records simply has none, and the packet and placeholder
+# paths behind it are untouched.
+#
+# A record that cannot be read or is not the schema this knows becomes null
+# here rather than an error. That is deliberate and it is the opposite of
+# `--card-file`'s posture: refusing there stops a bad card being RAISED, while
+# refusing here would take down the whole board - every other card with it -
+# over one unreadable file. The call still shows, seeded the way it was before.
+record_card() {  # <task-id>
+  local path=$STATE/board-cards/$1.json
+  [ -r "$path" ] || { printf 'null\n'; return 0; }
+  jq -c '
+    # Empty is how the record spells "the call did not say", and the board
+    # spells that as absent, so the two are reconciled here and nowhere else.
+    def present: . != null and . != "";
+    if type != "object" or .schema != "fm-board-card.v1" then null
+    else . as $r
+      | {key: $r.key, options: ($r.options // []), thin: ($r.thin == true)}
+      + (if ($r.title | present) then {title: $r.title} else {} end)
+      + (if ($r.repo | present) then {repo: $r.repo} else {} end)
+      + (if ($r.decide | present) then {decide: $r.decide} else {} end)
+      + (if ($r.if_nothing | present) then {if_nothing: $r.if_nothing} else {} end)
+      + (if ($r.recommend_value | present) then {recommend_value: $r.recommend_value} else {} end)
+      + (if ($r.recommend_why | present) then {recommend_why: $r.recommend_why} else {} end)
+      + (if ($r.close | present) then {close: $r.close} else {} end)
+      + (if (($r.figures // []) | length) > 0 then {figures: $r.figures} else {} end)
+      # A thin card carries no risk and no reversibility, because nobody
+      # assessed either. Carrying the defaults this record writes would put a
+      # claim on the card the captain answers that nobody actually made.
+      + (if $r.thin == true then {}
+         else (if ($r.risk | present) then {risk: $r.risk} else {} end)
+            + (if ($r.reversible | present) then {reversible: $r.reversible} else {} end)
+         end)
+    end' "$path" 2>/dev/null || printf 'null\n'
+}
+
 # The task's pull request as board `evidence` links, or [] when no PR is
 # recorded. A decision card with no packet behind it still owes the captain
 # something to decide against, and the ground truth is the pull request itself:
@@ -1093,7 +1192,7 @@ command_compose_check() {  # <data.json>
 }
 
 command_compose() {
-  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' links='{}' id record card link ids tmp readable=true
+  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' written='{}' links='{}' id record card call link ids tmp readable=true
   local acks='{}'
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1134,6 +1233,8 @@ EOF
     [ -n "$id" ] || continue
     card=$(packet_card "$id")
     cards=$(jq -n --argjson acc "$cards" --arg id "$id" --argjson card "$card" '$acc + {($id): $card}')
+    call=$(record_card "$id")
+    written=$(jq -n --argjson acc "$written" --arg id "$id" --argjson call "$call" '$acc + {($id): $call}')
     link=$(pr_evidence "$id")
     links=$(jq -n --argjson acc "$links" --arg id "$id" --argjson link "$link" '$acc + {($id): $link}')
   done <<EOF
@@ -1145,7 +1246,8 @@ EOF
   acks=$(board_acks_map)
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
-    --argjson records "$records" --argjson cards "$cards" --argjson links "$links" \
+    --argjson records "$records" --argjson cards "$cards" --argjson written "$written" \
+    --argjson links "$links" \
     --argjson acks "$acks" \
     --argjson readable "$readable" "$BOARD_JQ_DEFS"'
     . as $snap |
@@ -1175,6 +1277,40 @@ EOF
     # row it came from.
     def with_ack($key): if $acks[$key] == null then . else . + {ack: $acks[$key]} end;
     def repo_of($id): record($id) | if . == null then null else .repo end;
+    # How much work stops until the captain answers this call, and whether
+    # that number is exact.
+    #
+    # Read from the snapshot gate rows, which already name the ids each queued
+    # item is blocked by, so this is counted from what the fleet holds rather
+    # than weighted by hand. That matters more than it looks: the board plots
+    # calls by this number, and a hand-tuned urgency score would be a second
+    # black box on the one surface that exists to remove them.
+    #
+    # Zero is an ordinary answer and means exactly what it says - nothing is
+    # waiting on this call - not that the number is unknown.
+    #
+    # THE LIST CAN BE CUT OFF, AND THAT IS WHY THIS RETURNS TWO VALUES.
+    # `bin/fm-bearings-snapshot.sh` writes blocked_by as the joined ids passed
+    # through trunc(120), so a gate blocked by seven or eight of them ends in
+    # an ellipsis with the rest gone. The id at the cut is a fragment that can
+    # never match, and matching it by prefix would be a guess in the other
+    # direction, so it is dropped - and the count that remains is a FLOOR, not
+    # a total. A floor reported as a total is the surface saying more than it
+    # knows, so `partial` says which it is and the page says "at least".
+    #
+    # Truncation only matters for a gate that does not already name this id:
+    # once it names it, what was cut off cannot change the answer.
+    def blocked_stat($id):
+      [$snap.gates[]?
+       | (.blocked_by // "-")
+       | select(. != "-" and . != "")
+       | . as $raw
+       | ($raw | endswith("…")) as $cut
+       | ($raw | split(",") | map(sub("^ +"; "") | sub(" +$"; ""))) as $all
+       | (if $cut then $all[0:-1] else $all end) as $ids
+       | {named: (($ids | index($id)) != null), cut: $cut}]
+      | {n: ([.[] | select(.named)] | length),
+         partial: (([.[] | select(.cut and (.named | not))] | length) > 0)};
     def owned: .owner == "(main)";
     # The Charted Next id IS the dispatch.charted routing channel, so a row
     # keeps its real backlog id whenever that id is already a routable key; a
@@ -1200,7 +1336,8 @@ EOF
          {value: "option-b", label: fill("option B label"), consequence: fill("option B consequence")}],
        recommend_why: fill("recommend_why"),
        recommend_value: recommend_slot(["option-a", "option-b"]),
-       reversible: reversible_slot, risk: risk_slot, allow_freeform: true}
+       reversible: reversible_slot, risk: risk_slot, allow_freeform: true,
+       weighed_by: "firstmate"}
       + (($links[.id] // []) | if length == 0 then {} else {evidence: .} end)
       + hold_close;
     def packet_seeded($card): . as $row
@@ -1219,9 +1356,61 @@ EOF
       + ({recommend_value: recommend_slot([$card.options[].value]),
           reversible: reversible_slot, risk: risk_slot}
          | with_entries(select($card[.key] == null)))
+      + {weighed_by: (if ($card.risk == null or $card.reversible == null)
+                      then "firstmate" else "fleet" end)}
       + (if $card.close != null then {close: $card.close} else hold_close end);
-    def decision_card: . as $row | ($cards[$row.id] // null) as $card
-      | if $card == null then placeholder_card else packet_seeded($card) end;
+    # A card composed from the record the call wrote, which is the only card
+    # shape on this board that needs no composer at all.
+    #
+    # It carries NO fill slot, and that is the point rather than an omission. A
+    # packet-seeded card leaves risk, reversibility and the recommendation for
+    # a model to fill in afterwards, which is the rebuild the captain refused. A
+    # record is complete at the instant it is written: a full card carries its
+    # options because --card-file demanded them, and a thin card carries none
+    # and says so on its face. Either way the board can be built straight from
+    # it, and build refuses a fill slot, so a slot injected here would be a bug
+    # that stops the board rather than one that ships a lie.
+    def record_seeded($card): . as $row
+      | {key: $row.key, type: "decision",
+         repo: (($card.repo // "") | if . == "" then repo_of($row.id) else . end),
+         title: (if $card.title == null then ($row | t(hold_title; $row.key))
+                 else ($card.title | i18n($row.key)) end),
+         options: [$card.options[]? | . as $o
+           | .label |= i18n($o.value)
+           | if has("hint") then .hint |= i18n($o.value) else . end
+           | if has("consequence") then .consequence |= i18n($o.value) else . end
+           | if has("buys") then .buys |= i18n($o.value) else . end
+           | if has("changes")
+             then .changes |= with_entries(.value |= [.[] | i18n($o.value)])
+             else . end],
+         allow_freeform: true}
+      # `thin` is what the page says out loud. A call that offered the captain
+      # no options must look like one, or he cannot tell an empty card from a
+      # card whose options went missing on the way to him.
+      + (if $card.thin then {thin: true} else {} end)
+      + (if $card.decide != null then {decide: ($card.decide | i18n($row.key))} else {} end)
+      + (if $card.if_nothing != null then {if_nothing: ($card.if_nothing | i18n($row.key))} else {} end)
+      + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n($row.key))} else {} end)
+      + (if $card.recommend_value != null then {recommend_value: $card.recommend_value} else {} end)
+      + (if $card.risk != null then {risk: $card.risk} else {} end)
+      + (if $card.reversible != null then {reversible: $card.reversible} else {} end)
+      + {weighed_by: "fleet"}
+      # No figures. The drawings on a card live under `packet.figures` and are
+      # read from the figure sections of a verified packet, not from the
+      # decision block a --card-file carries, so a record-seeded card has none
+      # to give and says nothing rather than hanging an empty slot on it.
+      + (($links[$row.id] // []) | if length == 0 then {} else {evidence: .} end)
+      + (if $card.close != null then {close: $card.close} else hold_close end);
+    # Precedence, most authoritative first: the record the call wrote, then the
+    # verified packet the worker wrote, then placeholders for a composer.
+    def decision_card: . as $row | ($written[$row.id] // null) as $call
+      | ($cards[$row.id] // null) as $card
+      | blocked_stat($row.id) as $b
+      | (if $call != null then record_seeded($call)
+         elif $card == null then placeholder_card
+         else packet_seeded($card) end)
+      + {blocks: $b.n}
+      + (if $b.partial then {blocks_partial: true} else {} end);
     def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
     def merge_card: .task as $task
       | ((record($task) | if . == null then null else .title end)
@@ -1229,13 +1418,45 @@ EOF
       | {key: ("merge." + $task), type: "merge",
          repo: (.repo | split("/") | last),
          title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo)); $task),
-         detail: t("checks " + .checks + ", review " + .review; $task),
+         # Codes, not prose, and for the same reason the merge lane uses them:
+         # `.review` is the forge value passed straight through, so this line
+         # read "checks passing, review CHANGES_REQUESTED" on the card the
+         # captain answers. The words belong with the rest of the board copy.
+         checks_state: .checks,
+         review_state: .review,
          risk: risk_slot,
          options: [
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
            {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
-         allow_freeform: true}
+         blocks: (blocked_stat($task) | .n),
+         allow_freeform: true,
+         weighed_by: "firstmate"}
+      + (if (blocked_stat($task) | .partial) then {blocks_partial: true} else {} end)
       + (if (.url | https_url) then {pr_url: .url} else {} end);
+    # Why this pull request is NOT on the desk of the captain as a merge
+    # call, or null when it is.
+    #
+    # Computed from the same conditions that decide whether a merge card
+    # exists, so the lane and the cards cannot disagree. A lane that said a
+    # pull request was ready beside a call that never appeared would be worse
+    # than no lane at all - it is the same "the surface says more than is true"
+    # failure this board exists to remove, wearing the friendliest possible
+    # face.
+    #
+    # A CODE, never prose. The words belong with the rest of the board copy so
+    # they arrive translated, and so the lane needs no composer to fill a
+    # translation slot before the board can be built.
+    def merge_block_code($dupes):
+      .task as $task
+      | if ($readable | not) then "backlog-unreadable"
+      elif ((.task | slug(128 - ("merge." | length))) | not) then "unroutable"
+      elif (record(.task) == null) then "not-claimed"
+      elif (.checks == "failing") then "checks-failed"
+      elif (.checks != "passing") then "checks-pending"
+      elif (.mergeable != "MERGEABLE") then "not-mergeable"
+      elif (.review == "CHANGES_REQUESTED") then "changes-requested"
+      elif (($dupes | index($task)) != null) then "duplicate"
+      else null end;
     def merge_ready_prs:
       [ .candidate_prs[]?
         | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready) ];
@@ -1271,8 +1492,51 @@ EOF
           | select([$prs[] | select(.task == $pr.task)] | length == 1)
           | merge_card ]
         | first_per_key | map(with_ack(.key))),
-      underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
-        doing: t(.doing; .state)} ],
+      # Every open pull request this home knows about, and for each the exact
+      # reason it is not asking him to merge it. The standing answer to
+      # 為什麼船長裁決這一塊一直是空的: his own green-only rule empties the lane,
+      # and until now the board never said so.
+      merge_queue: (
+        ([ merge_ready_prs | group_by(.task)[] | select(length > 1) | .[0].task ]) as $dupes
+        | [ .candidate_prs[]? | . as $pr
+          | merge_block_code($dupes) as $code
+          | {repo: .repo, num: .num, task: .task, checks: .checks, review: .review,
+             ready: ($code == null)}
+          # A snapshot url is "-" when the forge gave none, and the lane is
+          # worth more than a link, so a url the payload contract would refuse
+          # is dropped and the row still says what is holding the work.
+          + (if (.url | https_url) then {url: .url} else {} end)
+          + (if $code == null then {} else {reason: $code} end) ]),
+      underway: (
+        # Which lane of the pipeline each worker is actually in.
+        #
+        # Fourteen workers as fourteen rows says nothing; the same fourteen as
+        # counts per lane says "four on pull requests, one check failed, two
+        # stuck" at a glance. The shape of the pile IS the reading, which is
+        # why this is computed here rather than left to the page to guess.
+        #
+        # A worker on a pull request is placed by that pull request rather than
+        # by its own state, because "writing" and "waiting on checks" are the
+        # same state to the fleet and completely different to the captain.
+        #
+        # Anything this cannot place keeps whatever the fleet called it and is
+        # collected visibly by the page. A board that quietly loses a worker is
+        # worse than one that says it could not place him.
+        ([ .candidate_prs[]? | {key: .task, value: .checks} ] | from_entries) as $prchecks
+        | [ .in_flight[]? | . as $w
+          | ($prchecks[$w.id] // null) as $checks
+          | {id, repo, name: t(.name; .id), state, kind,
+             doing: t(.doing; .state),
+             lane: (
+               if $checks == "failing" then "failed"
+               elif $checks != null and $checks != "passing" then "pr"
+               elif .state == "working" then "working"
+               elif .state == "blocked" then "stuck"
+               elif .state == "failed" then "stopped"
+               elif .state == "unknown" then "unreported"
+               elif .state == "done" then "done"
+               elif .state == "paused" or .state == "parked" then "waiting"
+               else .state end)} ]),
       landed: [ .landed[]?
         | {id: (if owned then .id else (.owner + "/" + .id) end),
            repo: (if owned then repo_of(.id) else null end),
