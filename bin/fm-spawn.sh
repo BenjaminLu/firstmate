@@ -15,6 +15,11 @@
 #   ship or scout spawn also refuses leftover `{TASK}` / `{FIRSTMATE_SPEC}`
 #   placeholders, an empty Task, an incomplete pair of Task subsections, or a
 #   `## Captain's intent` line opening with a Captain label or address.
+#   It likewise refuses a ship or scout task whose design record at
+#   data/<task-id>/design.md still carries its `{DESIGN}` placeholder, because the
+#   brief points the worker at that file by absolute path; a task briefed before
+#   design records existed has none at all and warns once rather than being
+#   refused, so a relaunch of in-flight work is never wedged by the new gate.
 #   Every ship or scout spawn renders `launch-brief.md`; for a no-mistakes ship
 #   it also carries the current `--intent` contract and the extracted captain
 #   intent. A legacy mixed Task is accepted there only under bin/fm-dod-lib.sh's
@@ -2634,6 +2639,20 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   if ADDRESS_LINE=$(fm_brief_intent_address_line "$BRIEF"); then
     echo "error: $BRIEF ## Captain's intent has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address before spawn, since the heading already records provenance" >&2
     exit 1
+  fi
+  # The brief points the worker at this task's design record by absolute path, so
+  # a record still carrying its placeholder would hand the worker a file that says
+  # nothing. An absent record is the older shape rather than an unfilled one, and
+  # refusing it would wedge the relaunch of every task briefed before design
+  # records existed, so that case warns and launches (bin/fm-dod-lib.sh owns the
+  # path and the placeholder this reads).
+  DESIGN_RECORD=$(fm_design_record_path "$DATA" "$ID")
+  if fm_design_placeholder_intact "$DESIGN_RECORD"; then
+    echo "error: $DESIGN_RECORD still contains $FM_DESIGN_PLACEHOLDER; write firstmate's plan for this task there, or record why it has none, before handing a worker a brief that points at it" >&2
+    exit 1
+  fi
+  if [ ! -e "$DESIGN_RECORD" ]; then
+    echo "warning: task $ID has no design record at $DESIGN_RECORD (briefed before ship and scout tasks carried one); firstmate's plan for this task is written down nowhere a worker or a later session can read it" >&2
   fi
   if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
     if fm_brief_task_heading_present "$BRIEF" "## Captain's intent"; then

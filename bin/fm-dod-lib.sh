@@ -42,6 +42,14 @@
 # conflicting role is superseded rather than duplicated.
 # fm_ship_rule_one owns the mode-specific first ship safety rule shared by an
 # ordinary ship brief and the durable contract written during scout promotion.
+# fm_design_record_path, fm_design_record_scaffold, and fm_design_placeholder_intact
+# own the task's design record - firstmate's plan for one task, written beside the
+# brief at data/<task-id>/design.md so a decision made in a steer does not live
+# only in a steer. bin/fm-brief.sh scaffolds it and points the worker at the file
+# itself rather than at any skill the worker may not have, bin/fm-dispatch.sh fills
+# it from --design or --no-design, and bin/fm-spawn.sh refuses to hand a worker a
+# brief pointing at a record that still carries the placeholder. Those three
+# callers share this owner so the path and the placeholder cannot drift apart.
 
 fm_brief_worker_role() {  # <state-dir> <task-id>
   local state=$1 task_id=$2
@@ -76,6 +84,37 @@ fm_ship_rule_one() {  # <no-mistakes|direct-PR|local-only> <task-id>
       return 1
       ;;
   esac
+}
+
+FM_DESIGN_PLACEHOLDER='{DESIGN}'
+
+fm_design_record_path() {  # <data-dir> <task-id>
+  printf '%s/%s/design.md\n' "$1" "$2"
+}
+
+# Print the scaffolded design record for one task. The body states what the record
+# is for, that entries are dated and appended rather than rewritten, and where it
+# ranks against the brief's two Task subsections, so the file is self-describing to
+# whoever opens it next.
+fm_design_record_scaffold() {  # <task-id>
+  cat <<EOF
+# Design - $1
+
+Firstmate's design record for this task: what firstmate decided and why, so a decision made in a steer does not live only in a steer.
+Entries are dated and appended, never rewritten. A plan that changes mid-task is a new dated entry, which is what keeps a decision missing from this record visibly missing rather than silently wrong.
+This is firstmate's plan, not the captain's ask. It ranks with the brief's \`## Firstmate spec\` and supersedes it where the two disagree; it never displaces \`## Captain's intent\`, and it is never part of a no-mistakes \`--intent\`.
+
+## Decisions
+$FM_DESIGN_PLACEHOLDER
+EOF
+}
+
+# Return 0 when the record exists and still carries its scaffold placeholder on a
+# line of its own, which is where fm_design_record_scaffold puts it and the only
+# line bin/fm-dispatch.sh replaces.
+fm_design_placeholder_intact() {  # <file>
+  [ -f "$1" ] || return 1
+  grep -qxF -- "$FM_DESIGN_PLACEHOLDER" "$1"
 }
 
 # Return 0 when one named Task subsection still consists only of its scaffold

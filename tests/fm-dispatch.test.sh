@@ -53,6 +53,7 @@ EOF
   git -C "$case_dir/project" worktree add --quiet -b "pooled-$name" "$case_dir/wt"
   printf 'add a summary toggle to the report view\nkeep the existing layout\n' > "$case_dir/ask.md"
   printf 'Implement the toggle in the report renderer; out of scope: the settings page.\n' > "$case_dir/spec.md"
+  printf 'Render the toggle from the existing view state; no new store.\n' > "$case_dir/design.md"
   printf '%s\n' "$case_dir"
 }
 
@@ -62,9 +63,19 @@ RESOLVER_KEY=''
 PANE_PATH=''
 
 # run_dispatch <case-dir> [fm-dispatch args...]
+#
+# fm-dispatch requires the task's design record on every call, so this supplies
+# the case's own --design unless the caller states its own choice. A case that
+# exercises the design flags themselves passes --design or --no-design and keeps it.
 run_dispatch() {
-  local case_dir=$1 home fakebin launchlog
+  local case_dir=$1 home fakebin launchlog arg design_given=0
   shift
+  for arg in "$@"; do
+    case "$arg" in
+      --design|--no-design) design_given=1 ;;
+    esac
+  done
+  [ "$design_given" -eq 1 ] || set -- "$@" --design "$case_dir/design.md"
   home="$case_dir/home"
   fakebin="$case_dir/fakebin"
   launchlog="$case_dir/launch.log"
@@ -662,6 +673,127 @@ test_resolver_off_with_rules_stops_before_filing() {
   pass "a rules file with the resolver off stops before filing instead of resolving statically"
 }
 
+# Firstmate's plan for a task is not optional machinery it can forget at the end
+# of an intake: exactly one of --design or --no-design is required, and the refusal
+# lands before anything is written, so a call that omitted it leaves no half-made
+# task behind.
+test_design_record_choice_is_required_and_exclusive() {
+  local case_dir id out status
+  case_dir=$(make_case design-required)
+  : > "$case_dir/empty-design.md"
+
+  id=dispatch-design-missing
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --no-design '')
+  status=$?
+  [ "$status" -ne 0 ] || fail "a blank --no-design reason should refuse: $out"
+  assert_contains "$out" "--no-design requires a reason carrying text" \
+    "blank reason refusal did not say what a reason is for"
+  assert_absent "$case_dir/home/data/$id/brief.md" "a refused call still scaffolded a brief"
+  assert_absent "$case_dir/home/data/$id/design.md" "a refused call still wrote a design record"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" "a refused call still filed an item"
+
+  id=dispatch-design-both
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md" --no-design 'nothing to decide')
+  status=$?
+  [ "$status" -ne 0 ] || fail "--design with --no-design should refuse: $out"
+  assert_contains "$out" "--design and --no-design are exclusive" "both-flags refusal missing"
+  assert_absent "$case_dir/home/data/$id/brief.md" "a refused call still scaffolded a brief"
+
+  id=dispatch-design-empty
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/empty-design.md")
+  status=$?
+  [ "$status" -ne 0 ] || fail "an empty --design file should refuse: $out"
+  assert_contains "$out" "must carry firstmate's decisions and why" "empty-plan refusal missing"
+  assert_absent "$case_dir/home/data/$id/brief.md" "a refused call still scaffolded a brief"
+  pass "fm-dispatch: the design record is required, exclusive, and refused before any record is made"
+}
+
+# The two accepted answers write two different records, and both leave a file the
+# worker can open. A re-run reuses what is already there, exactly as it reuses an
+# already-filled brief, so a retry after a refused spawn is safe.
+test_design_record_is_filled_from_the_plan_or_the_declaration() {
+  local case_dir id out status record before
+  case_dir=$(make_case design-filled)
+
+  id=dispatch-design-plan
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a dispatch carrying a plan should succeed: $out"
+  record="$case_dir/home/data/$id/design.md"
+  assert_contains "$out" "design: filled $record" "the filled record was not reported"
+  assert_grep "Render the toggle from the existing view state; no new store." "$record" \
+    "the plan's bytes did not reach the design record"
+  assert_no_grep "{DESIGN}" "$record" "the design placeholder survived the fill"
+  grep -qF -- "$record" "$case_dir/home/data/$id/brief.md" \
+    || fail "the brief does not point the worker at the filled record"
+
+  id=dispatch-design-none
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --no-design 'a one-line typo fix with nothing to decide')
+  status=$?
+  expect_code 0 "$status" "a dispatch declaring no design should succeed: $out"
+  record="$case_dir/home/data/$id/design.md"
+  assert_grep "a one-line typo fix with nothing to decide" "$record" \
+    "the declaration's reason did not reach the record"
+  # Dated, so a record that later goes quiet is visibly a record that stopped
+  # rather than one that was never written.
+  grep -qE 'None recorded at dispatch \([0-9]{4}-[0-9]{2}-[0-9]{2}\):' "$record" \
+    || fail "the no-design declaration is undated: $(cat "$record")"
+  assert_no_grep "{DESIGN}" "$record" "the design placeholder survived the declaration"
+
+  before=$(cat "$record")
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  assert_contains "$out" "design: reused $record" "a re-run did not report the record as reused"
+  [ "$(cat "$record")" = "$before" ] || fail "a re-run overwrote a design record that was already written"
+  pass "fm-dispatch: --design writes the plan, --no-design writes a dated declaration, and a re-run reuses both"
+}
+
+# A task briefed before design records existed has none. Re-dispatching it must
+# give it one rather than leaving the call with nothing to fill.
+test_dispatch_scaffolds_a_design_record_an_older_brief_never_had() {
+  local case_dir id out status brief record
+  case_dir=$(make_case design-legacy)
+  id=dispatch-design-legacy
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  cat > "$brief" <<'EOF'
+You are a crewmate.
+
+# Task
+## Captain's intent
+Ship the legacy toggle.
+
+## Firstmate spec
+Leave the settings page alone.
+
+# Definition of done
+Delivery contract: mode=direct-PR
+EOF
+  record="$case_dir/home/data/$id/design.md"
+  assert_absent "$record" "the legacy fixture already had a design record"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "re-dispatching a legacy brief should succeed: $out"
+  assert_contains "$out" "brief: reused $brief" "the legacy brief was not reused"
+  assert_present "$record" "re-dispatching a legacy brief left it without a design record"
+  assert_grep "Render the toggle from the existing view state; no new store." "$record" \
+    "the plan did not reach the newly scaffolded record"
+  pass "fm-dispatch: a brief predating design records is given one on the next dispatch"
+}
+
 test_full_call_files_briefs_and_spawns
 test_second_call_reuses_item_and_brief
 test_empty_ask_refuses_before_any_record
@@ -679,3 +811,6 @@ test_resolver_escalate_stops_before_filing
 test_resolver_off_with_rules_stops_before_filing
 test_review_call_files_a_review_item_and_spawns_a_scout
 test_review_flag_conflicts_and_brief_mismatch_refuse
+test_design_record_choice_is_required_and_exclusive
+test_design_record_is_filled_from_the_plan_or_the_declaration
+test_dispatch_scaffolds_a_design_record_an_older_brief_never_had

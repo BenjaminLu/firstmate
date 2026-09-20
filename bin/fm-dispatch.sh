@@ -3,10 +3,21 @@
 # single call, so intake costs firstmate one tool turn instead of several.
 #
 # Usage:
-#   fm-dispatch.sh <task-id> --project <dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --ask <file> --spec <file> [options]
-#   fm-dispatch.sh <task-id> --project <dir> --scout --ask <file> --spec <file> [options]
-#   fm-dispatch.sh <task-id> --project <dir> --review <github-pr-url> --ask <file> --spec <file> [options]
+#   fm-dispatch.sh <task-id> --project <dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --ask <file> --spec <file> <--design <file>|--no-design <reason>> [options]
+#   fm-dispatch.sh <task-id> --project <dir> --scout --ask <file> --spec <file> <--design <file>|--no-design <reason>> [options]
+#   fm-dispatch.sh <task-id> --project <dir> --review <github-pr-url> --ask <file> --spec <file> <--design <file>|--no-design <reason>> [options]
 #   options: [--title <text>] [--reason <text>] [--herdr-lab] [--harness <name>] [--model <name>] [--effort <level>] [--backend <name>]
+#
+# --design and --no-design are the task's design record: firstmate's plan for this
+# task, written to data/<id>/design.md beside the brief so a decision made in a
+# steer does not live only in a steer. Exactly one is REQUIRED, the way --secondmate
+# requires a project list or --no-projects: --design <file> writes the plan, and
+# --no-design <reason> records, dated, that firstmate judged this task to carry no
+# design decisions worth writing down. Omitting both fails here, before anything is
+# written, because a design record that firstmate has to remember at the end of an
+# intake is exactly the one that does not get written. The gate cannot tell a real
+# plan from a thin one; what it converts is silence into a dated statement the
+# captain can read.
 #
 # --project accepts the same forms as fm-spawn: a directory path, or
 # `projects/<name>` resolved against FM_PROJECTS_OVERRIDE, else $FM_HOME/projects.
@@ -52,6 +63,9 @@
 #      NOT ENABLED` without) disagrees with this call's --herdr-lab, or exactly
 #      one of its two Task placeholders is still intact, because filling such a
 #      half-filled brief would splice one file and silently drop the other.
+#      --design must name a readable file carrying text, and --no-design a reason
+#      carrying text; the design record itself is not parsed by section, so no
+#      heading check applies to it.
 #   2. Brief: scaffold data/<id>/brief.md through bin/fm-brief.sh with the same
 #      --mode or --scout, and --herdr-lab when given (mandatory for a task that
 #      drives Herdr lifecycle commands; fm-brief.sh owns that contract), when
@@ -61,7 +75,14 @@
 #      bytes of --spec; a file whose last byte is not a newline gets one so the
 #      next heading stays on its own line. A brief that is already filled is
 #      reused untouched; one still carrying a placeholder is filled in place.
-#   3. Profile. An explicit --harness/--model/--effort is the caller's stated
+#   3. Design record: fill data/<id>/design.md's `{DESIGN}` placeholder with the
+#      bytes of --design, or with the dated --no-design declaration. A record that
+#      an older brief left absent is scaffolded here from the same owner
+#      bin/fm-brief.sh uses (bin/fm-dod-lib.sh), so a re-dispatch of a legacy task
+#      still gets one. A record already filled is reused untouched and reported as
+#      reused, exactly as an already-filled brief is, which is what makes a retry
+#      after a resolver stop or a spawn refusal safe.
+#   4. Profile. An explicit --harness/--model/--effort is the caller's stated
 #      override and skips the resolver. Otherwise, when config/crew-dispatch.json
 #      exists, run bin/fm-dispatch-resolve.sh on the filled brief: on
 #      `status: clear` its `profile:` line, rendered by the resolver as
@@ -74,7 +95,7 @@
 #      records it. The resolver's own usage or configuration error (exit 2)
 #      refuses this call the same way. With no rules file there is nothing to
 #      resolve and the spawn's static harness resolution applies.
-#   4. Backlog item: when this home's automatic backlog transition gate applies
+#   5. Backlog item: when this home's automatic backlog transition gate applies
 #      (bin/fm-backlog-transition-lib.sh's fm_backlog_transition_applies, the
 #      same gate fm-spawn consults) and no item exists for the id, add one
 #      through bin/fm-tasks-axi.sh with the title validated in step 1,
@@ -87,7 +108,7 @@
 #      fm-spawn still decides whether it is dispatchable. When the gate does not apply
 #      (manual backend or no backlog in this home) the step is skipped and
 #      says so.
-#   5. Spawn through bin/fm-spawn.sh with the explicit --mode/--yolo or --scout,
+#   6. Spawn through bin/fm-spawn.sh with the explicit --mode/--yolo or --scout,
 #      the profile flags, and --backend when given; its output passes through.
 #      A successful call ends with `elapsed: <seconds>` for the whole run.
 #
@@ -141,8 +162,8 @@ RULES_PATH="$CONFIG/crew-dispatch.json"
 die() { printf 'error: %s\n' "$1" >&2; exit "${2:-1}"; }
 
 ID='' PROJECT='' MODE='' YOLO='' SCOUT=0 REVIEW='' HERDR_LAB=0 ASK='' SPEC='' TITLE='' REASON=''
-HARNESS='' MODEL='' EFFORT='' BACKEND=''
-MODE_SET=0 YOLO_SET=0
+HARNESS='' MODEL='' EFFORT='' BACKEND='' DESIGN='' NO_DESIGN=''
+MODE_SET=0 YOLO_SET=0 DESIGN_SET=0 NO_DESIGN_SET=0
 need() { [ $# -ge 2 ] || die "$1 requires a value"; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -154,6 +175,8 @@ while [ $# -gt 0 ]; do
     --herdr-lab) HERDR_LAB=1; shift ;;
     --ask) need "$@"; ASK=$2; shift 2 ;;
     --spec) need "$@"; SPEC=$2; shift 2 ;;
+    --design) need "$@"; DESIGN=$2; DESIGN_SET=1; shift 2 ;;
+    --no-design) need "$@"; NO_DESIGN=$2; NO_DESIGN_SET=1; shift 2 ;;
     --title) need "$@"; TITLE=$2; shift 2 ;;
     --reason) need "$@"; REASON=$2; shift 2 ;;
     --harness) need "$@"; HARNESS=$2; shift 2 ;;
@@ -206,6 +229,23 @@ for f in "$ASK" "$SPEC"; do
   [ -f "$f" ] && [ -r "$f" ] || die "not a readable file: $f"
   [ -n "$(tr -d '[:space:]' < "$f")" ] || die "$f is empty; both --ask and --spec must carry text, since the reviewer treats the ask as acceptance criteria"
 done
+# The design record is firstmate's plan for this task. Requiring the choice here,
+# before anything is written, is what makes recording the plan the default; a
+# deliberate "this task has none" is a decision that lands in the record dated,
+# rather than a step that was skipped and left no trace.
+if [ "$DESIGN_SET" -eq 1 ] && [ "$NO_DESIGN_SET" -eq 1 ]; then
+  die "--design and --no-design are exclusive; pass the plan, or the reason there is none, not both"
+fi
+if [ "$DESIGN_SET" -eq 0 ] && [ "$NO_DESIGN_SET" -eq 0 ]; then
+  die "--design <file> or --no-design <reason> required: firstmate's plan for this task lands in its design record at $DATA/$ID/design.md, and judging that it has none is a decision that gets recorded rather than a step that gets skipped"
+fi
+if [ "$DESIGN_SET" -eq 1 ]; then
+  [ -f "$DESIGN" ] && [ -r "$DESIGN" ] || die "not a readable file: $DESIGN"
+  [ -n "$(tr -d '[:space:]' < "$DESIGN")" ] || die "$DESIGN is empty; --design must carry firstmate's decisions and why, or pass --no-design <reason>"
+else
+  [ -n "$(printf '%s' "$NO_DESIGN" | tr -d '[:space:]')" ] || die "--no-design requires a reason carrying text; it is written into the design record as firstmate's dated statement that this task has no design decisions worth recording"
+fi
+
 if ADDRESS_LINE=$(fm_brief_intent_address_line_of_text < "$ASK"); then
   die "--ask $ASK has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address, since the brief heading already records provenance"
 fi
@@ -310,7 +350,44 @@ else
   echo "brief: reused $BRIEF"
 fi
 
-# ---- 3. profile ----------------------------------------------------------------------
+# ---- 3. design record ----------------------------------------------------------------
+# A brief scaffolded before design records existed has none, so scaffold it from
+# the same owner fm-brief.sh uses rather than leaving a re-dispatch with nothing
+# to fill.
+DESIGN_RECORD=$(fm_design_record_path "$DATA" "$ID")
+if [ -e "$DESIGN_RECORD" ]; then
+  [ -f "$DESIGN_RECORD" ] && [ -r "$DESIGN_RECORD" ] || die "$DESIGN_RECORD exists but is not a readable regular file"
+else
+  fm_design_record_scaffold "$ID" > "$DESIGN_RECORD" || die "could not scaffold the design record at $DESIGN_RECORD"
+fi
+if fm_design_placeholder_intact "$DESIGN_RECORD"; then
+  DESIGN_TMP="$DATA/$ID/.design.md.dispatch.$$"
+  {
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        "$FM_DESIGN_PLACEHOLDER")
+          if [ "$DESIGN_SET" -eq 1 ]; then
+            emit_file_bytes "$DESIGN"
+          else
+            printf '%s\n' \
+              "None recorded at dispatch ($(date -u +%Y-%m-%d)): $NO_DESIGN" \
+              "Firstmate judged this task to carry no design decisions worth recording. A decision made later is appended below as its own dated entry."
+          fi
+          ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done < "$DESIGN_RECORD"
+  } > "$DESIGN_TMP" || { rm -f -- "$DESIGN_TMP"; die "could not fill $DESIGN_RECORD"; }
+  mv -f -- "$DESIGN_TMP" "$DESIGN_RECORD" || { rm -f -- "$DESIGN_TMP"; die "could not replace $DESIGN_RECORD"; }
+  if fm_design_placeholder_intact "$DESIGN_RECORD"; then
+    die "$DESIGN_RECORD still contains $FM_DESIGN_PLACEHOLDER after filling; the scaffold's placeholder line was not where bin/fm-dod-lib.sh puts it"
+  fi
+  echo "design: filled $DESIGN_RECORD"
+else
+  echo "design: reused $DESIGN_RECORD"
+fi
+
+# ---- 4. profile ----------------------------------------------------------------------
 PROFILE_ARGS=()
 if [ -n "$HARNESS" ] || [ -n "$MODEL" ] || [ -n "$EFFORT" ]; then
   [ -z "$HARNESS" ] || PROFILE_ARGS+=(--harness "$HARNESS")
@@ -335,7 +412,7 @@ else
   echo "profile: no rules at $RULES_PATH; spawn resolves the harness statically"
 fi
 
-# ---- 4. backlog item ----------------------------------------------------------------
+# ---- 5. backlog item ----------------------------------------------------------------
 if fm_backlog_transition_applies "$CONFIG" "$DATA" "$KIND"; then
   if fm_backlog_row_probe "$DATA" "$ID"; then
     echo "backlog: reused $ID (${FM_BACKLOG_ROW_STATE%% *})"
@@ -352,7 +429,7 @@ else
   esac
 fi
 
-# ---- 5. spawn ------------------------------------------------------------------------
+# ---- 6. spawn ------------------------------------------------------------------------
 SPAWN_ARGS=("$ID" "$PROJECT")
 if [ "$SCOUT" -eq 1 ]; then
   SPAWN_ARGS+=(--scout)

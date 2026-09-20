@@ -1284,6 +1284,65 @@ test_ship_and_scout_carry_the_machine_boundary_rules() {
   pass "fm-brief.sh: ship and scout briefs bound what a worker may change outside its worktree"
 }
 
+# The design record is the default, not something firstmate remembers: every task
+# scaffold writes data/<id>/design.md when there is none and points the worker at
+# that FILE by absolute path. A brief naming a skill instead would degrade
+# silently on any machine without it, which is the shape this deliberately avoids.
+# A secondmate charter gets neither: a persistent domain is not a task.
+test_design_record_is_scaffolded_beside_every_task_brief() {
+  local home brief record kind id
+  local -a flags
+  home="$TMP_ROOT/design-scaffold-home"
+  mkdir -p "$home/data"
+  for kind in ship scout review; do
+    id="brief-design-$kind"
+    case "$kind" in
+      ship) flags=(--mode direct-PR) ;;
+      scout) flags=(--scout) ;;
+      review) flags=(--review https://github.com/acme/widget/pull/5) ;;
+    esac
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" alpha "${flags[@]}" >/dev/null 2>&1 \
+      || fail "$kind: scaffold exited non-zero"
+    brief="$home/data/$id/brief.md"
+    record="$home/data/$id/design.md"
+    assert_present "$record" "$kind: no design record was scaffolded beside the brief"
+    assert_grep "{DESIGN}" "$record" "$kind: design record carries no placeholder to fill"
+    assert_grep "# Design record" "$brief" "$kind: brief carries no design-record section"
+    grep -qF -- "$record" "$brief" \
+      || fail "$kind: brief does not name the design record by its absolute path"
+    # What reaches a worker must be a file it can open, never the name of a skill
+    # that lives only in one person's home directory.
+    assert_no_grep "planning skill" "$brief" "$kind: brief sends the worker to a skill instead of the record"
+    assert_no_grep "grilling" "$brief" "$kind: brief sends the worker to a skill instead of the record"
+  done
+  FM_SECONDMATE_CHARTER='Own the widget domain.' FM_HOME="$home" \
+    "$ROOT/bin/fm-brief.sh" brief-design-secondmate --secondmate alpha >/dev/null 2>&1 \
+    || fail "secondmate charter should scaffold"
+  assert_absent "$home/data/brief-design-secondmate/design.md" \
+    "a secondmate charter was given a task design record"
+  assert_no_grep "# Design record" "$home/data/brief-design-secondmate/brief.md" \
+    "a secondmate charter carries a task design-record section"
+  pass "fm-brief.sh: every task scaffold carries a design record and names that file, not a skill"
+}
+
+# An existing record is the same record: a hand-written plan, or one a previous
+# scaffold already holds, must survive untouched rather than be reset to a
+# placeholder that the spawn would then refuse.
+test_design_record_is_never_rewritten() {
+  local home record before out
+  home="$TMP_ROOT/design-reuse-home"
+  mkdir -p "$home/data/brief-design-existing"
+  record="$home/data/brief-design-existing/design.md"
+  printf '# Design - written by hand\n\nKeep the second mechanism and delete the first.\n' > "$record"
+  before=$(cat "$record")
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-design-existing alpha --mode direct-PR 2>&1) \
+    || fail "scaffold beside an existing design record should succeed"
+  [ "$(cat "$record")" = "$before" ] || fail "an existing design record was rewritten by the scaffold"
+  assert_contains "$out" "design record: reused" "the scaffold did not report the record as reused"
+  pass "fm-brief.sh: an existing design record is reused byte-for-byte, never reset"
+}
+
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1316,3 +1375,5 @@ test_review_brief_names_the_repository_on_every_gh_axi_call
 test_review_brief_writes_nothing_and_rules_on_nothing
 test_review_refuses_what_it_cannot_post_to
 test_ship_and_scout_carry_the_machine_boundary_rules
+test_design_record_is_scaffolded_beside_every_task_brief
+test_design_record_is_never_rewritten

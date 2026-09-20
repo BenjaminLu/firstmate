@@ -345,7 +345,8 @@ Treat file or subsystem overlap as a risk signal rather than an automatic reason
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
 Write the task-specific brief under section 11 before spawning.
 Fill the task subsections according to section 11.
-Once intake has resolved the project, mode, `yolo` posture, ask, spec, and any deviation reason, `bin/fm-dispatch.sh` scaffolds and fills the brief, resolves the profile, files the item with its repo and mode note, and spawns in one call; with a `config/crew-dispatch.json` present, any resolution that is not `clear` stops before filing and hands the profile back to you to re-run with explicit `--harness/--model/--effort`; the intake above still owns every judgment and that script owns only the mechanics.
+Write your plan for the task into its design record rather than only into a steer; `bin/fm-dispatch.sh` requires either that plan or your dated statement that the task has none, and `bin/fm-brief.sh` owns the record and points the worker at the file.
+Once intake has resolved the project, mode, `yolo` posture, ask, spec, design record, and any deviation reason, `bin/fm-dispatch.sh` scaffolds and fills the brief, resolves the profile, files the item with its repo and mode note, and spawns in one call; with a `config/crew-dispatch.json` present, any resolution that is not `clear` stops before filing and hands the profile back to you to re-run with explicit `--harness/--model/--effort`; the intake above still owns every judgment and that script owns only the mechanics.
 
 ### Dispatch and supervision handoff
 
@@ -355,6 +356,7 @@ When the configured tasks-axi backlog gate applies, the spawn itself moves the w
 After spawning, confirm the worker is processing the brief and handle any trust dialog through `harness-adapters`.
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 
+When a steer carries a design decision, append it to that task's design record as a dated entry in the same turn; the record is append-only, so a decision left out of it is visibly missing rather than silently contradicted.
 Steer a worker with ordinary text through fail-closed `fm-send`: the message becomes a durable record in the task's steering inbox (multi-line text is legal, local and remote alike) and the worker's terminal receives only a constant doorbell line, with the watcher re-ringing an unacknowledged local message and escalating a stuck one (`bin/fm-task-inbox-lib.sh`; `bin/fm-send.sh` owns the typed-plane carve-outs).
 A remote secondmate steer rides the same durable-inbox model through the remote transport; after an unconfirmed delivery, only the exact `FM_PENDING_REPLY_EXISTING_CORR=<id>` resend command printed by `fm-send` is safe because it preserves the request body for remote enqueue deduplication (`bin/fm-send.sh` header).
 When a steer answers an open keyed decision or blocker, pass `fm-send`'s `--resolve-key` so the answer itself closes that decision record at answer time, identically for local and remote workers (contract: `bin/fm-send.sh` header).
@@ -581,6 +583,7 @@ Preserve durable structured identifiers, dependencies, and completion artifact l
 ## 11. Crewmate briefs
 
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
+That scaffold also writes the task's design record beside the brief and points the worker at that file, never at a skill the worker may not have; the planning and requirement-grilling skills are yours, and what reaches a worker is the record they produced.
 Use its scaffold as the contract, then fill `## Captain's intent` (`{TASK}`) with the captain's own ask and any boundary the captain stated, plus the context needed to read it, including the substance of any report, decision, or PR the ask refers to; never widen the ask there into a general goal or an enumerated coverage list, because the reviewer treats that subsection as acceptance criteria.
 Fill `## Firstmate spec` (`{FIRSTMATE_SPEC}`) with only the build instructions that ask requires, naming what stays out of scope when the ask is narrow; a generalization, consistency sweep, or extra hardening the captain did not ask for is follow-up work to note, not scope to add.
 `bin/fm-dod-lib.sh` owns intent authoring without added speaker labels or direct address, its provenance markers, what a no-mistakes worker may pass as `--intent`, the string's self-sufficiency rule, and the fix-round technique a no-mistakes worker applies.

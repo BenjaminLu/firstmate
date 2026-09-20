@@ -983,6 +983,12 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
     sed 's/{TASK}/Fix the promotion relaunch contract./; s/{FIRSTMATE_SPEC}/Preserve the current delivery mode./' \
       "$brief" > "$brief.filled"
     mv "$brief.filled" "$brief"
+    # The scaffold writes the task's design record beside the brief, and a spawn
+    # refuses a record still carrying its placeholder, so fill it the way a
+    # dispatch would before relaunching through this fixture.
+    sed 's/{DESIGN}/Keep the scout worktree and only change the delivery contract./' \
+      "$home/data/$id/design.md" > "$home/data/$id/design.md.filled"
+    mv "$home/data/$id/design.md.filled" "$home/data/$id/design.md"
     {
       echo "window=fmses:fm-$id"
       echo "endpoint_task_id=$id"
