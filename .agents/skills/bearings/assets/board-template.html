@@ -638,6 +638,7 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel: "Not sent. This board has no way to reach firstmate from here, so your answer was not recorded.",
       no_channel_dispatch: "Not sent. This board has no way to reach firstmate from here, so nothing was dispatched.",
       no_channel_yet: "This board cannot reach firstmate from here, so it cannot take an answer right now.",
+      no_channel_dispatch_yet: "This board cannot reach firstmate from here, so it cannot dispatch anything right now.",
       thin_call: "This call came with no options to choose between. Answer it in your own words.",
       map_title: "Where each open call sits",
       map_alt: "Open calls plotted by how much work is stalled behind each and how costly a wrong answer is",
@@ -700,6 +701,7 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel: "沒有送出。這個看板從這裡連不到 firstmate，所以你的回答沒有被記錄。",
       no_channel_dispatch: "沒有送出。這個看板從這裡連不到 firstmate，所以沒有派工。",
       no_channel_yet: "這個看板從這裡連不到 firstmate，現在沒辦法接收回答。",
+      no_channel_dispatch_yet: "這個看板從這裡連不到 firstmate，現在沒辦法派工。",
       thin_call: "這個問題沒有附選項，請直接用你自己的話回答。",
       map_title: "每個待決事項的位置",
       map_alt: "把待決事項依照「後面卡住多少工作」和「答錯多貴」畫出來",
@@ -762,6 +764,7 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel: "没有送出。这个看板从这里连不到 firstmate，所以你的回答没有被记录。",
       no_channel_dispatch: "没有送出。这个看板从这里连不到 firstmate，所以没有派工。",
       no_channel_yet: "这个看板从这里连不到 firstmate，现在没办法接收回答。",
+      no_channel_dispatch_yet: "这个看板从这里连不到 firstmate，现在没办法派工。",
       thin_call: "这个问题没有附选项，请直接用你自己的话回答。",
       map_title: "每个待决事项的位置",
       map_alt: "把待决事项按照「后面卡住多少工作」和「答错多贵」画出来",
@@ -2017,7 +2020,15 @@ __FM_BEARINGS_BOARD_DATA__
       /* A picked row is not enough to make this button live: it also has to
          be able to send. Same reason as the card - do not let him pick rows
          for a dispatch that cannot leave the page. */
-      barBtn.disabled = !n || !answerChannel();
+      var canSend = !!answerChannel();
+      barBtn.disabled = !n || !canSend;
+      /* And a button that greys itself out MUST say why, in its own alert,
+         exactly as the card does. Disabling it silently is the captain's
+         original complaint with the press made impossible instead of ignored:
+         he ticks rows, the button never lights, and nothing anywhere explains
+         it. Every other refusal here is written from inside the click handler,
+         which he can no longer reach. */
+      if (!canSend) barRefuse(t("no_channel_dispatch_yet"));
     }
     function barRefuse(message) {
       if (!barLimit) return;

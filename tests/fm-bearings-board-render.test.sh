@@ -627,23 +627,49 @@ test_the_dispatch_bar_refuses_visibly_when_it_cannot_send() {
 
   [ "$(printf '%s' "$out" | jq -r '.dispatch.is_queued')" = "false" ] \
     || fail "the bar reported a dispatch it could not send: $out"
-  # The refusal must be in the bar's OWN alert element, not written into the
-  # counter slot where it renders as muted uppercase micro-type and nothing
-  # announces it. Asserting the counter's text was green either way, which is
-  # why the first version of this test could not see the finding.
-  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "nothing was dispatched" \
-    "the bar's refusal is not in its own visible alert element: $out"
+  # A picked row is not enough to make the button live, and the button being
+  # dead is the ONLY state the captain can reach here - so what it says must
+  # be the render-time refusal, not the one written inside the click handler.
+  # The earlier version of this test asserted the click-handler wording and
+  # passed only because the harness pressed a button a browser would not.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.btn_disabled')" = "true" ] \
+    || fail "the dispatch button looked live on a board that cannot send: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
+    "the bar greyed itself out and said nothing about why: $out"
+  # In the bar's OWN alert element, not the counter slot, where it would be
+  # muted uppercase micro-type that nothing announces.
   [ "$(printf '%s' "$out" | jq -r '.dispatch.limit_role')" = "alert" ] \
     || fail "the bar's refusal would not be announced: $out"
   [ "$(printf '%s' "$out" | jq -r '.dispatch.count')" = "1 picked for dispatch" ] \
     || fail "the refusal was written into the counter slot instead of the alert: $out"
-  # R4 on the bar: a picked row is not enough to make the button live.
-  [ "$(printf '%s' "$out" | jq -r '.dispatch.btn_disabled')" = "true" ] \
-    || fail "the dispatch button looked live on a board that cannot send: $out"
   [ "$(printf '%s' "$out" | jq -r '[.charted[].ack] | map(select(. != null)) | length')" = "0" ] \
     || fail "a row was acknowledged for a dispatch that was never sent: $out"
 
-  pass "the dispatch bar with no answer channel refuses visibly"
+  pass "the dispatch bar that cannot send says so before he can press it"
+}
+
+# The bar must still refuse at SEND time when the channel said it could send
+# and then could not. That path is reachable only with a live seam, which is
+# the difference between this test and the one above.
+test_the_dispatch_bar_refuses_a_send_that_reports_failure() {
+  local home out
+  home=$(make_home dispatch-send-failed)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 BOARD_LIVE_SEAM=flaky \
+    render_click "$home" "$(rebuild_payload 2026-09-20T00:00Z)" dispatch)
+
+  # It was pressable - the seam said it could send.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.btn_disabled')" = "false" ] \
+    || fail "a seam reporting it can send still disabled the dispatch button: $out"
+  [ "$(printf '%s' "$out" | jq -r '.live_answers | length')" = "1" ] \
+    || fail "the dispatch was never attempted: $out"
+  # And the failure was honoured where he is looking.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.is_queued')" = "false" ] \
+    || fail "a dispatch that reported failure still marked itself sent: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "nothing was dispatched" \
+    "a dispatch that reported failure did not say so in the bar's alert: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.charted[].ack] | map(select(. != null)) | length')" = "0" ] \
+    || fail "a row was acknowledged for a dispatch that failed: $out"
+  pass "a dispatch that reports failure refuses in the bar the captain is watching"
 }
 
 test_hans_absent_falls_back_to_hant_not_empty() {
@@ -1853,3 +1879,4 @@ test_a_worker_in_an_unknown_lane_is_shown_rather_than_dropped
 test_a_board_with_no_lanes_renders_as_it_always_did
 test_the_masthead_counts_the_fleet_it_is_showing
 test_a_board_that_knows_no_lanes_offers_no_fleet_counters
+test_the_dispatch_bar_refuses_a_send_that_reports_failure

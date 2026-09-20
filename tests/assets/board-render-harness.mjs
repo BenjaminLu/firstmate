@@ -220,7 +220,12 @@ if (click === "dispatch") {
   const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
   for (const p of picks) { p.checked = true; p.dispatch("change"); }
   const btn = byId.get("bb-dispatch-btn");
-  if (typeof btn.onclick === "function") btn.onclick();
+  /* A browser does not fire a click on a DISABLED button, and neither may
+     this. Pressing what a person cannot press is how a control that greys
+     itself out and explains nothing passed its own test: the assertion for
+     the refusal and the assertion for the disable described two states that
+     cannot both exist on screen, and the captain got the silent one. */
+  if (btn.disabled !== true && typeof btn.onclick === "function") btn.onclick();
 } else if (click === "answer") {
   answerDealtCard();
 } else if (click === "answer-then-paging") {
