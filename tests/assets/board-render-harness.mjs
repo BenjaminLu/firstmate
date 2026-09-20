@@ -572,6 +572,10 @@ const bubbles = findAll(mapHost, "bb-bub").map((g) => {
        crowded plot readable; the bubble may not, because its position is the
        information. Both are reported so a test can hold that line. */
     label_y: Number(labelNode?.attributes?.y ?? 0),
+    /* Where the name is anchored. A name that does not fit centred may be
+       anchored at its own mark and run inward, so a test checking where a name
+       actually lies has to know which end of it sits on the mark. */
+    label_anchor: labelNode?.attributes?.["text-anchor"] ?? "",
     /* A broken outline is how the plot says nobody assessed this call. */
     dashed: (circle.attributes?.["stroke-dasharray"] ?? "") !== "",
     aria: g.attributes?.["aria-label"] ?? "",

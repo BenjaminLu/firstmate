@@ -723,6 +723,35 @@ test_a_bubble_sitting_on_another_is_left_unnamed() {
   pass "a bubble sitting on another is left unnamed, and the caption says where to look"
 }
 
+# A name that does not fit centred is anchored at its own mark and runs inward
+# rather than being withheld. The plot is 420 wide with its columns at 88 and
+# 370, so a name centred on an edge column has about ten Latin characters
+# before it leaves the picture - withholding on that basis alone left a single
+# open call carrying an anonymous bubble, which is not the surface that was
+# approved. Anchoring moves no mark and keeps the name touching its own.
+test_a_name_that_does_not_fit_centred_is_anchored_at_its_mark() {
+  local home out
+  home=$(make_home map-name-anchored)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{key:"left", type:"decision", repo:"r",
+      title:"Cut over the loader and the board",
+      risk:"low", reversible:"yes", weighed_by:"fleet", blocks:0,
+      allow_freeform:true, options:[{value:"a",label:"A"},{value:"b",label:"B"}]}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '.map[0].cx')" = "88" ] \
+    || fail "the fixture is not in the leftmost column, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[0].label')" != "" ] \
+    || fail "a single open call was left carrying an anonymous bubble: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[0].label_anchor')" = "start" ] \
+    || fail "the name was not anchored at its mark: $out"
+  assert_every_label_belongs_where_it_is "$out" "an anchored name left the picture or landed on something"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "left unnamed")" = "0" ] \
+    || fail "a plot where every bubble is named still reported one withheld: $out"
+  pass "a name that does not fit centred is anchored at its own mark"
+}
+
 # R34 and R35, held as one property rather than as two guards.
 #
 # R34 was a label drawn across a DIFFERENT call's bubble at three open calls -
@@ -749,9 +778,16 @@ for b in d["map"]:
     # by. A fixed box here would check the placement against the false model
     # that the placement was just taken off.
     wide = sum(1 for ch in b["label"] if "\u3400" <= ch <= "\u9fff")
-    half = (wide * 9.6 + (len(b["label"]) - wide) * 6.3) / 2
+    w = wide * 9.6 + (len(b["label"]) - wide) * 6.3
     lx, ly = b["cx"], b["label_y"]
-    l, r, t, bo = lx - half, lx + half, ly - 8, ly + 3
+    anch = b.get("label_anchor") or "middle"
+    if anch == "start":
+        l, r = lx, lx + w
+    elif anch == "end":
+        l, r = lx - w, lx
+    else:
+        l, r = lx - w / 2, lx + w / 2
+    t, bo = ly - 10, ly + 3
     for (ox, oy, orad, okey) in marks:
         if okey == b["key"]:
             continue
@@ -768,8 +804,14 @@ for b in d["map"]:
     # different columns share nothing, and keying on height alone would have
     # this test claim more than it can see.
     wide2 = sum(1 for ch in b["label"] if "\u3400" <= ch <= "\u9fff")
-    half2 = (wide2 * 9.6 + (len(b["label"]) - wide2) * 6.3) / 2
-    box = (b["cx"] - half2, b["cx"] + half2, b["label_y"] - 8, b["label_y"] + 3)
+    w2 = wide2 * 9.6 + (len(b["label"]) - wide2) * 6.3
+    a2 = b.get("label_anchor") or "middle"
+    if a2 == "start":
+        box = (b["cx"], b["cx"] + w2, b["label_y"] - 10, b["label_y"] + 3)
+    elif a2 == "end":
+        box = (b["cx"] - w2, b["cx"], b["label_y"] - 10, b["label_y"] + 3)
+    else:
+        box = (b["cx"] - w2 / 2, b["cx"] + w2 / 2, b["label_y"] - 10, b["label_y"] + 3)
     for (pb, pk) in placed:
         if box[0] < pb[1] and box[1] > pb[0] and box[2] < pb[3] and box[3] > pb[2]:
             bad.append(b["key"] + " shares a place with " + pk)
@@ -871,32 +913,6 @@ test_a_bubble_that_stands_alone_keeps_its_name() {
   pass "a bubble that stands alone keeps its name beside its own mark"
 }
 
-# And a name that cannot fit inside the picture is withheld rather than drawn
-# through the axis caption or off the edge. This is the case that used to
-# escape every rule: the containment check had no horizontal half, so once
-# names were measured at their true width they were simply drawn outside.
-test_a_name_that_does_not_fit_inside_the_picture_is_withheld() {
-  local home out
-  home=$(make_home map-name-overflows)
-  out=$(render_payload "$home" "$(jq -n '{
-    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
-    prs_live:false, underway:[], landed:[], charted:[],
-    captains_call:[{key:"wide", type:"decision", repo:"r",
-      title:"Withdraw the mandatory packet obligation",
-      risk:"high", reversible:"no", weighed_by:"fleet", blocks:3,
-      allow_freeform:true, options:[{value:"a",label:"A"},{value:"b",label:"B"}]}]}')")
-
-  # One call, nothing to overlap, nothing to collide with - the only reason to
-  # withhold is that the name does not fit.
-  [ "$(printf '%s' "$out" | jq -r '.map | length')" = "1" ] \
-    || fail "the fixture is not a single call, so this proves nothing: $out"
-  [ "$(printf '%s' "$out" | jq -r '.map[0].label')" = "" ] \
-    || fail "a name too wide for the picture was drawn anyway: $out"
-  # And it is accounted for, or the reader is told there is nothing there.
-  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not fit inside the picture" \
-    "a name was withheld for not fitting and the caption did not say so: $out"
-  pass "a name that does not fit inside the picture is withheld"
-}
 
 # R31. The caption still opened with a flat claim about the number in the
 # bubble and corrected it four sentences later - the exact shape ruled against
@@ -2800,4 +2816,4 @@ test_a_bubble_sitting_on_another_is_left_unnamed
 test_a_bubble_that_stands_alone_keeps_its_name
 test_every_name_on_the_plot_belongs_to_the_mark_beside_it
 test_every_caption_clause_stands_on_its_own
-test_a_name_that_does_not_fit_inside_the_picture_is_withheld
+test_a_name_that_does_not_fit_centred_is_anchored_at_its_mark
