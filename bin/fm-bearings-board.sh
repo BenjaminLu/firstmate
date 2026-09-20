@@ -120,7 +120,13 @@
 #            no risk and no reversibility, so the page can say plainly that the
 #            call offered the captain nothing to choose between. An unreadable
 #            record is skipped rather than fatal, so one bad file cannot take the
-#            whole board down with it. Failing that, when
+#            whole board down with it. EVERY decision and merge card also carries
+#            `blocks`, how much queued work names it as a blocker, counted from
+#            the snapshot gate rows; the board plots calls by that number, so a
+#            card reaching the board WITHOUT it is placed as though nothing were
+#            waiting on it. It carries `blocks_partial: true` when the snapshot
+#            cut the blocker list off and the count is therefore a floor rather
+#            than a total. Failing that, when
 #            `bin/fm-packet.sh verify` accepts the held task's packet, the card
 #            is seeded from `bin/fm-packet.sh card <id>` instead of
 #            placeholders. A card that gets placeholders carries the task's
