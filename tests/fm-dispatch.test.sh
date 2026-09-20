@@ -859,6 +859,50 @@ test_design_fill_matches_what_the_detector_accepted() {
   pass "fm-dispatch: the fill matches what the detector accepted and leaves no temp file"
 }
 
+# The same refusal, at the dispatch's own copy of it. Reaching that copy takes an
+# EXISTING brief: with no brief the call runs bin/fm-brief.sh at step 2, whose own
+# refusal - same wording, deliberately - fires first and files nothing, so a case
+# built without a brief would pass with this check deleted and prove nothing.
+# bin/fm-spawn.sh says the same sentence later for the same reason, and what
+# separates it is WHEN: the design step is step 3 and the backlog item is step 5,
+# so a dispatch refusing its own check files nothing while one running through to
+# the spawn has already filed.
+test_dispatch_refuses_a_design_record_that_is_not_a_file() {
+  local case_dir id record brief out status
+  case_dir=$(make_case design-notfile)
+  id=dispatch-design-notfile
+  # A brief already filled, so step 2 reuses it and never calls fm-brief.sh.
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  expect_code 0 "$?" "the setup dispatch should succeed: $out"
+  brief="$case_dir/home/data/$id/brief.md"
+  assert_present "$brief" "the setup dispatch left no brief to reuse"
+  record="$case_dir/home/data/$id/design.md"
+  rm -f "$record"
+  mkdir -p "$record"
+
+  id=dispatch-design-notfile-second
+  mkdir -p "$case_dir/home/data/$id"
+  cp "$brief" "$case_dir/home/data/$id/brief.md"
+  record="$case_dir/home/data/$id/design.md"
+  mkdir -p "$record"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  [ "$status" -ne 0 ] || fail "a directory at the design record's path should refuse: $out"
+  assert_contains "$out" "exists but is not a readable regular file" \
+    "the refusal did not use the wording every script on this path shares"
+  assert_contains "$out" "brief: reused" \
+    "the brief was rebuilt, so fm-brief.sh refused first and this case proves nothing"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" \
+    "the dispatch ran past its own design check and was refused later by the spawn instead"
+  assert_absent "$case_dir/home/state/$id.meta" "a refused dispatch still spawned"
+  rmdir "$record"
+  pass "fm-dispatch: a design record that is not a file the worker can open is refused"
+}
+
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had() {
   local case_dir id out status brief record
   case_dir=$(make_case design-legacy)
@@ -914,3 +958,4 @@ test_design_record_is_filled_from_the_plan_or_the_declaration
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had
 test_design_fill_is_bounded_to_the_decisions_section
 test_design_fill_matches_what_the_detector_accepted
+test_dispatch_refuses_a_design_record_that_is_not_a_file

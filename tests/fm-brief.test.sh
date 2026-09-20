@@ -1377,6 +1377,44 @@ test_direct_pr_opens_the_pull_request_early() {
   pass "fm-brief.sh: direct-PR opens its pull request at the first commit and no other mode does"
 }
 
+# All three scripts on this path hand the worker the record's absolute path, so
+# all three must refuse a path that is not a file the worker can open. The
+# scaffold's own refusal was asserted nowhere: deleting it left the suite green.
+test_design_record_must_be_a_file_the_worker_can_open() {
+  local home record out status
+  home="$TMP_ROOT/design-notfile-home"
+  mkdir -p "$home/data/brief-design-notfile"
+  record="$home/data/brief-design-notfile/design.md"
+  mkdir -p "$record"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-design-notfile alpha --mode direct-PR 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a directory at the design record's path should refuse"
+  assert_contains "$out" "exists but is not a readable regular file" \
+    "the refusal did not use the wording every script on this path shares"
+  assert_absent "$home/data/brief-design-notfile/brief.md" \
+    "a refused scaffold still wrote a brief pointing at a path the worker cannot open"
+  rmdir "$record"
+
+  # Unreadable is the same hole: the path exists and is a regular file, and the
+  # worker still cannot open it. Skipped when running as a user that ignores the
+  # mode bits, because a check that cannot verify something must say so.
+  mkdir -p "$home/data/brief-design-unreadable"
+  record="$home/data/brief-design-unreadable/design.md"
+  printf '# Design\n' > "$record"
+  chmod 000 "$record"
+  if [ -r "$record" ]; then
+    printf 'ok - skipped (this user reads a mode-000 file; the unreadable case cannot be exercised here)\n'
+  else
+    out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-design-unreadable alpha --mode direct-PR 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "an unreadable design record should refuse"
+    assert_contains "$out" "exists but is not a readable regular file" \
+      "the unreadable case did not use the shared refusal wording"
+  fi
+  chmod 644 "$record"
+  pass "fm-brief.sh: a design record that is not a file the worker can open is refused"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1412,3 +1450,4 @@ test_ship_and_scout_carry_the_machine_boundary_rules
 test_design_record_is_scaffolded_beside_every_task_brief
 test_design_record_is_never_rewritten
 test_direct_pr_opens_the_pull_request_early
+test_design_record_must_be_a_file_the_worker_can_open
