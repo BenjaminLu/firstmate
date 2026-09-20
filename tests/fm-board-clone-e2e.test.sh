@@ -43,6 +43,20 @@
 #      can quietly make the test match the code; this one deliberately does
 #      not.
 #
+# WHAT THIS DOES NOT COVER. PR 51 deleted the file that used to carry `e2e` in
+# its name, so this is the board's only end-to-end suite and its edges are not
+# obvious from the outside. It drives ONE browser - whichever of Chrome,
+# Chromium or Edge the machine has - so an engine difference is invisible to
+# it. It asserts no appearance: it reads rendered text and hit-tests real
+# elements, but nothing compares pixels or checks layout, so a board with every
+# correct word in the wrong place passes. Its payloads use plain options, so
+# only the radio-and-send card is pressed - the tabbed choose-a-panel card, the
+# packet, the dispatch bar, the language switch and the decision map are never
+# touched. No case opens two boards at once or two homes contending for a port.
+# The server is replaced with no board open, so the page reconnecting after a
+# restart is asserted nowhere. Reading the board still needs no token and
+# nothing here tests that either way. Nothing measures time or load.
+#
 # HOW THE FIXTURES ARE MADE, because two of the three defects above hid behind
 # fixtures that could not happen. Every state here is produced by running the
 # shipped code: the boards are built by `fm-bearings-board.sh`, the events are

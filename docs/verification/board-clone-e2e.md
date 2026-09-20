@@ -13,6 +13,10 @@ It copies the tracked tree into a directory with no git history and nothing inst
 Nothing in it models a browser.
 The board's freshness, its live socket, and what sits under the captain's pointer are all the browser's decisions, and the DOM shim in `tests/assets/board-render-harness.mjs` was measured wrong by up to 21 percent against Chrome on 2026-09-20, which is why a second model was not built here.
 
+This is the board's only end-to-end suite: the file that previously carried that name guarded another tool and reported a capability skip, and was deleted.
+Its header is the single owner of what it covers and, more usefully, what it does not - one browser, no appearance, one card shape, one viewer, no reconnection under a live page, and the read boundary untested.
+Read that list before concluding the board is covered for something.
+
 ## Refreshing this record
 
 ```sh
