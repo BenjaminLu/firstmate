@@ -135,6 +135,22 @@ Never configure a deterministic suite-walk `commands.test` in any repository's n
 Targeted validation belongs to the no-mistakes evidence path, while CI owns broad deterministic regression coverage.
 Firstmate PR #3644 demonstrated the cost: pinning a 75-162-script walk took 32.7 minutes per validation, while removing it restored the 3.6-minute targeted-validation posture.
 
+## What a test may assert
+
+The agent-facing surface of this system evolves through conversation with the captain.
+The wording of a generated brief, the phrasing of a skill or its description, the sentence a refusal uses, and which section a contract line sits in are all supposed to change every time the captain and firstmate work something out.
+A test that pins that wording has no value by construction: it fights the next improvement instead of catching a defect, and it fails on a rewrite rather than on a breakage.
+
+So a test asserts what a script REFUSES, MUTATES, or PRODUCES, never the text an agent reads.
+
+- Assert that the script refused; do not assert the sentence the refusal used.
+- Assert that a generated file carries the structure a later parser depends on; do not assert its prose, its paragraph order, or that a passage "names" or "mentions" something.
+- Assert a machine-read field by its key and value; the surrounding report wording is presentation and evolves with it.
+- Never assert a contract line in `AGENTS.md`, a skill, or a document, in any form.
+
+When a guarantee genuinely lives in generated instructions - a brief that must carry its safety contract - assert it structurally, by the presence of the required section, not by the sentences inside it.
+The measured inventory behind this rule, including what deleting the pinned-text tests costs, is [`docs/test-suite-inventory.md`](../../../docs/test-suite-inventory.md).
+
 ## Defect classes
 
 Check a change against these four before calling it done, and check a review against the same list.

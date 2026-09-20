@@ -433,6 +433,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "docs/test-suite-inventory.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/tmux-backend.md",
       "audience": "operator-current"
     },
