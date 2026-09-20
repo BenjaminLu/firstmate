@@ -659,6 +659,42 @@ test_an_empty_press_does_not_wipe_a_standing_refusal() {
   pass "an empty press never wipes the message already telling him something"
 }
 
+# R30. Tying the refusal to the bar rather than to the condition that raised it
+# meant it outlived that condition. The length guard un-ticks the row it
+# refused, so the moment the captain touches the selection again he is over no
+# limit - and the sentence stayed, naming a cause that no longer held while the
+# real reason the button was grey went unnamed. On a board that cannot send
+# nothing could ever clear it, because only a successful dispatch did.
+test_the_bars_refusal_does_not_outlive_what_raised_it() {
+  local home out
+  home=$(make_home bar-stale-refusal)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(over_limit_payload)" pick-past-limit-then-clear)
+
+  # Nothing is picked any more, so nothing is over any limit.
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.count')" "pick queued work" \
+    "the fixture did not end with an empty selection, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit' | grep -c "limit")" = "0" ] \
+    || fail "the bar still claimed he is over the limit with nothing picked: $out"
+  # And the reason the button IS dead is the one he is told.
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
+    "the bar hid the true reason behind a refusal that had expired: $out"
+  pass "the bar's refusal does not outlive what raised it"
+}
+
+# Both statements are true at once while he IS over the limit on a board that
+# cannot send, so he is told both - either one suppressing the other is how
+# this went wrong in each direction.
+test_the_bar_tells_him_both_reasons_when_both_hold() {
+  local home out
+  home=$(make_home bar-both-reasons)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(over_limit_payload)" pick-past-limit)
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "limit" \
+    "the bar dropped the refusal he just earned: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
+    "the bar dropped the reason the button is dead: $out"
+  pass "the bar tells him both reasons when both hold"
+}
+
 # R25. Moving the bar's length refusal into its own alert put it in a slot the
 # very next line overwrote: refreshBar re-asserts the no-channel notice over
 # whatever is already there. So on a board with no answer channel the captain
@@ -2429,3 +2465,5 @@ test_the_caption_drops_that_claim_when_one_bubble_breaks_it
 test_the_caption_does_not_send_every_broken_outline_to_the_left_edge
 test_the_bar_keeps_its_length_refusal_on_a_board_that_cannot_send
 test_the_bar_still_says_it_cannot_dispatch_when_nothing_else_is_standing
+test_the_bars_refusal_does_not_outlive_what_raised_it
+test_the_bar_tells_him_both_reasons_when_both_hold

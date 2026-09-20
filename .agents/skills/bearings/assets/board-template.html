@@ -2245,15 +2245,27 @@ __FM_BEARINGS_BOARD_DATA__
        there is a limit. A guard that steps aside is the worse direction of
        failure, and this is the surface whose whole job is to be the one place
        he looks. */
-    var barStanding = "";
-    function barRefuse(message) { barStanding = message; paintBarRefusal(); }
+    /* What the captain's LAST ACTION ran into. Tied to the action rather than
+       stored as standing state: the length guard un-ticks the row it refused,
+       so the moment he touches the selection again he is no longer over any
+       limit and that sentence has stopped being true. Kept beyond that, it
+       became confidently wrong - naming a cause that no longer held while the
+       real reason the button was grey went unnamed, and on a board that cannot
+       send nothing could ever clear it, because only a successful dispatch did
+       and no dispatch can happen. A stale refusal is worse than a missing one. */
+    var barEarned = "";
+    function barRefuse(message) { barEarned = message; paintBarRefusal(); }
     function paintBarRefusal() {
       if (!barLimit) return;
-      /* The channel notice is the standing background state; anything he just
-         earned outranks it and holds until something resolves it. */
-      var message = barStanding || (answerChannel() ? "" : t("no_channel_dispatch_yet"));
-      barLimit.textContent = message;
-      barLimit.className = "bb-limit" + (message ? " is-visible" : "");
+      /* Two independent statements, and when both hold he is told both. Either
+         one suppressing the other is how this went wrong in each direction: he
+         used to get only the channel reason, then only the limit reason, and
+         both were true at once. */
+      var said = [];
+      if (barEarned) said.push(barEarned);
+      if (!answerChannel()) said.push(t("no_channel_dispatch_yet"));
+      barLimit.textContent = said.join(" ");
+      barLimit.className = "bb-limit" + (said.length ? " is-visible" : "");
     }
 
     if (!chartedQueued(data.charted).length && !chartedMoreQueued) {
@@ -2267,6 +2279,9 @@ __FM_BEARINGS_BOARD_DATA__
         pk.type = "checkbox"; pk.className = "bb-pick"; pk.value = x.id;
         pk.setAttribute("aria-label", t("pick_aria", { id: x.id }));
         pk.addEventListener("change", function () {
+          /* Every touch of the selection supersedes what the last one ran
+             into, which is what keeps a refusal from outliving its cause. */
+          barRefuse("");
           if (pk.checked && utf8ByteLength(pickedIds().join(",")) > 512) {
             pk.checked = false;
             /* His tick just disappeared, so this is a refusal and goes to the

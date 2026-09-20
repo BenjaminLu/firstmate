@@ -251,8 +251,18 @@ const pickPastLimit = () => {
   const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
   for (const p of picks) { p.checked = true; p.dispatch("change"); }
 };
+/* Tick past the limit, then take every tick back - what a captain does when he
+   is told he picked too much. The refusal he earned describes an action he has
+   since undone, so it must not survive the undo. */
+const pickPastLimitThenClear = () => {
+  pickPastLimit();
+  const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
+  for (const p of picks) { if (p.checked) { p.checked = false; p.dispatch("change"); } }
+};
 const click = process.argv[3] || "";
-if (click === "pick-past-limit") {
+if (click === "pick-past-limit-then-clear") {
+  pickPastLimitThenClear();
+} else if (click === "pick-past-limit") {
   pickPastLimit();
 } else if (click === "answer-empty") {
   answerDealtCardEmpty();
