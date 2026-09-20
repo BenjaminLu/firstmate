@@ -648,6 +648,82 @@ test_an_empty_press_does_not_wipe_a_standing_refusal() {
   pass "an empty press never wipes the message already telling him something"
 }
 
+# R23 and R24, one defect in one paragraph. The plot stopped overclaiming and
+# the caption under it did not: it opened "Nothing is weighted by hand" on a
+# plot that now has one, and its broken-outline sentence said every such bubble
+# sits at the left edge - false for two of the three reasons a bubble gets that
+# outline, and worst for the bubble furthest right, which is the one the
+# captain's own quadrant rule says to decide first.
+#
+# On a board the caption is not documentation about the surface. It IS the
+# surface: it is the sentence he reads to decide how much to trust the picture.
+map_note_payload() {  # <extra-call-json>
+  jq -n --argjson extra "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:([{key:"recorded", type:"decision", repo:"r", title:"The fleet recorded this",
+      risk:"high", reversible:"no", weighed_by:"fleet", blocks:1, allow_freeform:true,
+      options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}] + $extra)}'
+}
+
+# Every bubble fleet-recorded and fully derived: the claim is true, so it IS
+# made - otherwise the caption would hedge a picture that needs no hedge and
+# the hedge would stop meaning anything.
+test_the_caption_says_nothing_is_hand_weighted_when_nothing_is() {
+  local home out
+  home=$(make_home caption-measured)
+  out=$(render_payload "$home" "$(map_note_payload '[]')")
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "Nothing here is weighted by hand" \
+    "a fully recorded plot did not say so: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "broken outline")" = "0" ] \
+    || fail "a plot with no broken outline explained one: $out"
+  pass "the caption says nothing is hand-weighted when nothing is"
+}
+
+# And with one hand-weighted bubble the claim is not made AT ALL - not made and
+# then corrected four sentences later, which leaves the flat assertion as the
+# sentence he reads first.
+test_the_caption_drops_that_claim_when_one_bubble_breaks_it() {
+  local home out
+  home=$(make_home caption-byhand)
+  out=$(render_payload "$home" "$(map_note_payload '[{
+    "key":"byhand", "type":"decision", "repo":"r", "title":"The first mate weighed this",
+    "risk":"high", "reversible":"no", "weighed_by":"firstmate", "blocks":1, "allow_freeform":true,
+    "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]')")
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "Nothing here is weighted by hand")" = "0" ] \
+    || fail "the caption claimed nothing is hand-weighted on a plot that has one: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "first mate wrote" \
+    "the caption did not say which bubbles are the first mate's: $out"
+  pass "the caption drops that claim when one bubble breaks it"
+}
+
+test_the_caption_does_not_send_every_broken_outline_to_the_left_edge() {
+  local home out
+  home=$(make_home caption-outline)
+  # A bubble whose position is fully fleet-recorded and sits far RIGHT, drawn
+  # with a broken outline only because its stalled count is a floor.
+  out=$(render_payload "$home" "$(map_note_payload '[{
+    "key":"floor", "type":"decision", "repo":"r", "title":"Its blocker list was cut off",
+    "risk":"high", "reversible":"no", "weighed_by":"fleet", "blocks":2, "blocks_partial":true,
+    "allow_freeform":true, "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "floor") | .dashed')" = "true" ] \
+    || fail "the fixture bubble has no broken outline, so this proves nothing: $out"
+  # It is NOT at the left edge - it is at the costly end, which is the whole
+  # point: the old sentence described it as the cheapest thing on the board.
+  printf '%s %s' \
+    "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "floor") | .cx')" \
+    "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "recorded") | .cx')" \
+    | awk '{ exit !($1 >= $2) }' \
+    || fail "the fixture bubble is not at the costly end, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "left edge")" = "0" ] \
+    || fail "the caption sent a right-hand bubble to the left edge: $out"
+  # And the reason it IS broken-outlined is stated.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "cut off" \
+    "the caption did not say why that bubble is drawn as unmeasured: $out"
+  pass "the caption does not send every broken outline to the left edge"
+}
+
 # R7. A thin call carries no risk and no reversibility, because nobody wrote
 # either. Reading those absences as "medium, fairly reversible" puts a claim on
 # the captain's plot that nobody made - under a note promising the opposite.
@@ -695,7 +771,7 @@ test_the_map_makes_no_risk_claim_nobody_made() {
   assert_contains "$(printf '%s' "$thin" | jq -r '.aria')" "nobody assessed" \
     "the unassessed bubble did not say so in words: $out"
   # And the note stops claiming both positions come from the record.
-  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not because it is cheap" \
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not because it is low" \
     "the note under the plot still claimed a position nobody recorded: $out"
 
   # The SECOND field feeding the same axis. An absent reversibility used to be
@@ -746,7 +822,7 @@ test_the_map_says_which_bubbles_are_the_first_mates_own_assessment() {
     || fail "a hand-weighted position was drawn as a measurement: $out"
   # And the note says it, on a plot where no field is missing at all - which is
   # exactly the case the old single condition suppressed the caveat for.
-  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not a measurement" \
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "his judgement" \
     "the note kept claiming nothing on the plot is weighted by hand: $out"
   pass "the map says which bubbles are the first mate's assessment, not the fleet's"
 }
@@ -2288,3 +2364,6 @@ test_the_harness_cannot_answer_through_a_button_a_person_cannot_press
 test_no_internal_token_reaches_the_captains_rows
 test_an_unworded_state_keeps_its_spelling_rather_than_vanishing
 test_the_merge_card_does_not_show_the_forges_own_enum
+test_the_caption_says_nothing_is_hand_weighted_when_nothing_is
+test_the_caption_drops_that_claim_when_one_bubble_breaks_it
+test_the_caption_does_not_send_every_broken_outline_to_the_left_edge

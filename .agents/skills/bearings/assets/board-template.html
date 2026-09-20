@@ -649,7 +649,9 @@ __FM_BEARINGS_BOARD_DATA__
       thin_call: "This call came with no options to choose between. Answer it in your own words.",
       map_title: "Where each open call sits",
       map_alt: "Open calls plotted by how much work is stalled behind each and how costly a wrong answer is",
-      map_note: "Up is how much work is stalled behind the call - the number in the bubble is how many pieces of work stop until you answer. Right is how expensive a wrong answer is, from the call's own risk and how far it can be undone. Colour repeats the risk. Nothing is weighted by hand: both positions come from what the fleet already records.",
+      map_note: "Up is how much work is stalled behind the call - the number in the bubble is how many pieces of work stop until you answer. Right is how expensive a wrong answer is, from the call's own risk and how far it can be undone. Colour repeats the risk.",
+      map_note_measured: "Nothing here is weighted by hand: every position comes from what the fleet already records.",
+      map_note_soft: "A broken outline means that bubble's position is not something the fleet measured, for one of these reasons.",
       ax_undo_cheap: "cheap to undo", ax_undo_hard: "hard to undo",
       ax_waits_none: "nothing waits", ax_waits: "work is stalled",
       quad_first: "decide first", quad_think: "think it through",
@@ -658,9 +660,9 @@ __FM_BEARINGS_BOARD_DATA__
       map_blocks_atleast: "at least {n} waiting",
       map_empty: "No open calls to plot.",
       map_unassessed: "nobody assessed what a wrong answer costs",
-      map_note_unassessed: "A bubble with a broken outline has no position the fleet recorded: something it needs is missing, so it sits at the left edge because the cost is unknown, not because it is cheap.",
-      map_note_byhand: "Where a bubble is marked as your first mate's assessment, that is his judgement written when the card was composed, not a measurement the fleet made.",
-      map_note_floor: "Where a bubble says \"at least\", the list of what is waiting on it was cut off, so it is drawn no higher and no larger than the part that could be read.",
+      map_note_unassessed: "Some are missing a value the position needs, and those sit at the left edge because the cost is unknown, not because it is low.",
+      map_note_byhand: "Some carry a risk your first mate wrote when the card was composed, which is his judgement rather than a measurement the fleet made.",
+      map_note_floor: "Some say \"at least\" because the list of what is waiting on them was cut off, and those are drawn no higher and no larger than the part that could be read.",
       map_norev: "risk {r}, but nobody said whether it can be undone, so how costly it is was never worked out",
       map_byhand: "That risk is your first mate's assessment, not something the fleet recorded",
       t_merge: "Merges",
@@ -731,7 +733,9 @@ __FM_BEARINGS_BOARD_DATA__
       thin_call: "這個問題沒有附選項，請直接用你自己的話回答。",
       map_title: "每個待決事項的位置",
       map_alt: "把待決事項依照「後面卡住多少工作」和「答錯多貴」畫出來",
-      map_note: "往上是後面卡住多少工作 —— 泡泡裡的數字是你不回答就停住的工作數。往右是答錯有多貴，來自這個問題本身的風險和可不可以回頭。顏色重複風險。沒有任何一項是人手調的：兩個座標都來自艦隊本來就記錄的東西。",
+      map_note: "往上是後面卡住多少工作 —— 泡泡裡的數字是你不回答就停住的工作數。往右是答錯有多貴，來自這個問題本身的風險和可不可以回頭。顏色重複風險。",
+      map_note_measured: "這張圖沒有任何一項是人手調的：每個位置都來自艦隊本來就記錄的東西。",
+      map_note_soft: "虛線外框表示那個泡泡的位置不是艦隊量出來的，原因是下面其中之一。",
       ax_undo_cheap: "容易回頭", ax_undo_hard: "難以回頭",
       ax_waits_none: "沒有人在等", ax_waits: "工作卡住了",
       quad_first: "先決定這個", quad_think: "要想清楚",
@@ -740,9 +744,9 @@ __FM_BEARINGS_BOARD_DATA__
       map_blocks_atleast: "至少 {n} 件在等",
       map_empty: "沒有待決事項可畫。",
       map_unassessed: "沒有人評估過答錯的代價",
-      map_note_unassessed: "虛線外框的泡泡沒有艦隊記錄下來的位置：它需要的東西少了一項，所以它靠在最左邊是因為代價不明，不是因為代價低。",
-      map_note_byhand: "標示為大副評估的泡泡，是組卡片的時候大副自己的判斷，不是艦隊量出來的。",
-      map_note_floor: "寫「至少」的泡泡，是因為在等它的清單被截斷了，所以它畫得不會比讀得到的那一部分更高、更大。",
+      map_note_unassessed: "有些缺了位置需要的一項資料，那些靠在最左邊是因為代價不明，不是因為代價低。",
+      map_note_byhand: "有些帶的風險是組卡片的時候大副自己寫的，那是他的判斷，不是艦隊量出來的。",
+      map_note_floor: "有些寫「至少」，是因為在等它們的清單被截斷了，那些畫得不會比讀得到的那一部分更高、更大。",
       map_norev: "風險 {r}，但沒有人說過能不能回頭，所以代價有多高從來沒有算出來",
       map_byhand: "這個風險是大副評估的，不是艦隊記錄的",
       t_merge: "合併",
@@ -813,7 +817,9 @@ __FM_BEARINGS_BOARD_DATA__
       thin_call: "这个问题没有附选项，请直接用你自己的话回答。",
       map_title: "每个待决事项的位置",
       map_alt: "把待决事项按照「后面卡住多少工作」和「答错多贵」画出来",
-      map_note: "往上是后面卡住多少工作 —— 泡泡里的数字是你不回答就停住的工作数。往右是答错有多贵，来自这个问题本身的风险和可不可以回头。颜色重复风险。没有任何一项是人手调的：两个坐标都来自舰队本来就记录的东西。",
+      map_note: "往上是后面卡住多少工作 —— 泡泡里的数字是你不回答就停住的工作数。往右是答错有多贵，来自这个问题本身的风险和可不可以回头。颜色重复风险。",
+      map_note_measured: "这张图没有任何一项是人手调的：每个位置都来自舰队本来就记录的东西。",
+      map_note_soft: "虚线外框表示那个泡泡的位置不是舰队量出来的，原因是下面其中之一。",
       ax_undo_cheap: "容易回头", ax_undo_hard: "难以回头",
       ax_waits_none: "没有人在等", ax_waits: "工作卡住了",
       quad_first: "先决定这个", quad_think: "要想清楚",
@@ -822,9 +828,9 @@ __FM_BEARINGS_BOARD_DATA__
       map_blocks_atleast: "至少 {n} 件在等",
       map_empty: "没有待决事项可画。",
       map_unassessed: "没有人评估过答错的代价",
-      map_note_unassessed: "虚线外框的泡泡没有舰队记录下来的位置：它需要的东西少了一项，所以它靠在最左边是因为代价不明，不是因为代价低。",
-      map_note_byhand: "标示为大副评估的泡泡，是组卡片的时候大副自己的判断，不是舰队量出来的。",
-      map_note_floor: "写「至少」的泡泡，是因为在等它的清单被截断了，所以它画得不会比读得到的那一部分更高、更大。",
+      map_note_unassessed: "有些缺了位置需要的一项资料，那些靠在最左边是因为代价不明，不是因为代价低。",
+      map_note_byhand: "有些带的风险是组卡片的时候大副自己写的，那是他的判断，不是舰队量出来的。",
+      map_note_floor: "有些写「至少」，是因为在等它们的清单被截断了，那些画得不会比读得到的那一部分更高、更大。",
       map_norev: "风险 {r}，但没有人说过能不能回头，所以代价有多高从来没有算出来",
       map_byhand: "这个风险是大副评估的，不是舰队记录的",
       t_merge: "合并",
@@ -1865,19 +1871,26 @@ __FM_BEARINGS_BOARD_DATA__
       markMapSelection = function () {};
       if (!host || !note || !list) return;
       clear(host); clear(list);
-      /* The note claims both positions come from what the fleet records. That
-         claim is false for a call nobody assessed, so when one is on the plot
-         the note says which part of it does not apply to that bubble. */
-      /* The note claims both positions come from what the fleet records. It
-         is built from what is actually on the plot, so a caveat can never be
-         suppressed exactly when the bubble it describes is on screen - which
-         is what happened when one condition stood in for two. */
-      var caveats = [];
-      if (items.some(function (c) { return !costDerived(c); })) caveats.push(t("map_note_unassessed"));
-      if (items.some(weighedByHand)) caveats.push(t("map_note_byhand"));
-      if (items.some(countSoft)) caveats.push(t("map_note_floor"));
+      /* The caption IS the surface, so it is assembled from what is actually on
+         the plot rather than printed and then corrected.
+         The claim that nothing here is weighted by hand is made ONLY when it is
+         true of every bubble; appending its own exception after it left the
+         flat assertion as the sentence the captain reads first, in the sentence
+         he reads to decide how much to trust the picture.
+         And the broken outline has three separate reasons now. Keying one
+         sentence to the mark made it say every broken-outlined bubble sits at
+         the left edge - false for two of the three, and worst for the bubble
+         furthest right, which is the one his own quadrant rule says to decide
+         first. So the mark is described once and each reason speaks only for
+         the bubbles it actually applies to. */
+      var soft = [];
+      if (items.some(function (c) { return !costDerived(c); })) soft.push(t("map_note_unassessed"));
+      if (items.some(weighedByHand)) soft.push(t("map_note_byhand"));
+      if (items.some(countSoft)) soft.push(t("map_note_floor"));
       note.textContent = !items.length ? ""
-        : [t("map_note")].concat(caveats).join(" ");
+        : [t("map_note")]
+            .concat(soft.length ? [t("map_note_soft")].concat(soft) : [t("map_note_measured")])
+            .join(" ");
       if (!items.length) {
         host.appendChild(el("p", "bb-map__note", t("map_empty")));
         return;
