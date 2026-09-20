@@ -23,23 +23,30 @@ The reviewed-PR path is what a `direct-PR` ship task looks like end to end.
 2. **The pull request opens as soon as there is something to review**, not after everything is green.
    The worker's `done: PR <url>` line is the signal; record it with `bin/fm-pr-check.sh <id> <PR url>` as section 7 requires.
 3. **A reviewer reviews it on the pull request.**
-   Dispatch it as soon as the pull request exists.
+   Dispatch the first review on the worker's `done:` line, not on the pull request merely existing: a pull request opened before the work is finished is there to be watched and to arm the merge poll, and a reviewer dispatched against it reviews the first commit of a change still being written.
    Do not wait for the checks: a reviewer reading the diff and a CI run watching the same commit are independent, and serializing them buys nothing.
 4. **Firstmate reads the findings, rules, and posts the ruling on the pull request.**
 5. **Fixes land as commits on the same pull request**, by the same worker, one finding per commit.
-6. **The merge gate is: checks green, and every finding has a posted ruling.**
+6. **A reviewer reviews again, reading only what is new**, and steps 4 and 5 repeat until a review approves.
+7. **The merge gate is: checks green, every finding ruled, and a reviewer's approval of the exact commit that would merge.**
    Merge authority itself is unchanged and stays with section 7 - `yolo` on means firstmate merges through `bin/fm-pr-merge.sh`, `yolo` off means the captain's word.
 
 Red checks are the worker's to fix, not the reviewer's and not a finding class of their own.
 The reviewer reports a red check as a finding so it is visible with everything else; firstmate steers the worker to fix it.
 Nothing merges red - section 7 owns that rule and the single named waiver.
 
-## This is one pass, not a pipeline
+## Rounds, and why they are not a pipeline
 
-One dispatch produces one review.
-There is no round counter, no re-review requirement, no escalating sequence of passes, and nothing in this path counts or compares attempts.
-If a change is large enough that firstmate genuinely wants a second pair of eyes after the fixes land, that is a new reviewer dispatch firstmate decides on and states a reason for - never an automatic next round.
-If a path you are about to take starts needing gates, rounds, or a state machine to describe, stop and take it to the captain instead: that is the machinery this path exists to replace.
+A round is not a stage and not a phase: it is what happens when a review does not approve and a fix lands.
+The next reviewer reads the next range, and that is the whole mechanism.
+There is no round record, no per-round gate, and no transition table, because a path that needs those to describe it is the pipeline this one exists to replace.
+Firstmate knows which round it is because it dispatched them and the pull request shows them, not because anything keeps a count.
+
+The only two numbers in this path are the commit an approval binds to, and five.
+Five is not a gate.
+A pull request still unapproved in its fifth round is no longer a review converging: it is evidence that something about the change or the brief is wrong, so it stops there and goes to the captain rather than to a sixth reviewer.
+
+If a future change to this path needs a third number to describe it, that change is the one to take to the captain rather than to build.
 
 ## Dispatch a reviewer
 
@@ -56,6 +63,19 @@ The reviewer needs it to judge scope: a finding "widens scope" only against what
 
 Give the review its own task id, distinct from the shipping task's.
 It is filed and spawned as a scout, so it is supervised, torn down, and reported like any scout.
+
+## Dispatch a re-review
+
+A re-review is the same call with a new task id, because the previous reviewer was torn down when it reported.
+What changes is the `--spec`, and four things belong in it:
+
+- **The range.** Name the last reviewed commit; a re-review reads only what is new since that head, never the pull request from the beginning.
+- **What is closed.** Ground already ruled on is not reopened, and a finding firstmate declined stays declined - re-raising it is not a new finding.
+- **The numbering.** New findings continue the earlier sequence rather than restarting at `R1`, so no two findings on one pull request share an id and no ruling is ambiguous about which one it answered.
+- **What the fixes were.** The finding ids that were fixed and the commits that fixed them, so the reviewer checks each fix against the finding it answers.
+
+The `--ask` does not change: the captain's intent behind the pull request did not move because a fix landed.
+None of this is inferable from the pull request, so a re-review dispatched without it reads the whole diff again and re-raises what you already declined.
 
 ## Read the findings
 
@@ -75,6 +95,19 @@ The reviewer's local record at `data/<review-task-id>/report.md` is a pointer to
 A reviewer that reported `done:` without a review actually posted has failed its contract.
 Verify the review is on the pull request before relaying anything to the captain, and steer the reviewer to post it rather than relaying findings that exist only in a session.
 
+## The verdict that ends the rounds
+
+A review ends with an explicit verdict that either approves the pull request at the exact commit it reviewed, in those words, or does not approve it.
+Nothing else is that statement: blocking, non-blocking, clean, a severity table, or a summary of what is left all describe the findings rather than approve a commit.
+Require the verdict in the `--spec` and read it back off the posted review, because a review that names no commit has approved nothing whatever else it says.
+
+An approval binds to that commit and to no later one.
+A fix pushed after it leaves the pull request unapproved again, which is what makes the next pass a round rather than a formality.
+
+The worker who wrote the change never approves it, on any round.
+Nothing on the forge will show you that it did not: one fleet account opens and reviews these pull requests, so the author field names that account whoever did the work - which is also why the verdict is text in the review body rather than GitHub's own approve button, since GitHub refuses a self-approval outright.
+The rule holds because you dispatched a reviewer that is not the worker, which makes it your obligation rather than a fact a reader can check off the pull request.
+
 ## Rule on each finding
 
 Every finding gets a ruling.
@@ -90,6 +123,14 @@ The rulings available to you are:
 - **Won't fix** - the finding is correct but out of scope, or a preference you are declining. Say why; a declined finding with no reason is not a ruling.
 - **Not a defect** - the reviewer is wrong. Say what it missed, with the evidence.
 - **Captain's call** - escalate under `ask-user-authority`, then post the captain's answer as the ruling once it lands.
+
+## From the third round, challenge the reviewer
+
+Through the first two rounds firstmate relays: it reads the findings, rules on them, and steers the fixes.
+From the third round it also challenges - it puts back to the reviewer the findings it believes are wrong, the ones the reviewer keeps missing, and the question of why a change that has been round the loop twice is still not approved.
+
+Post the challenge on the pull request in full, never only in a steer or a pane.
+Firstmate ruled on the earlier findings, so a firstmate challenge is firstmate marking its own homework, and publication rather than a different author is what keeps it honest: the captain reads the challenge and the reviewer's answer side by side instead of a summary written by the interested party.
 
 ## Post the ruling on the pull request
 

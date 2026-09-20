@@ -368,9 +368,10 @@ When no-mistakes is selected, no-mistakes alone owns review, fixes, tests, docum
 The path's worker, automated gates, and captain approval remain authoritative:
 
 - **no-mistakes** runs the full pipeline through a PR, then waits for the configured merge authority.
-- **direct-PR** has the worker push and open a PR without the no-mistakes pipeline; a reviewer crewmate then reviews that PR and posts its findings on it, firstmate rules on every finding and posts the ruling there, fixes land as commits on the same PR one finding per commit, and the merge gate is checks green plus every finding ruled, after which the configured merge authority applies.
+- **direct-PR** has the worker push and open a PR without the no-mistakes pipeline; a reviewer crewmate then reviews that PR and posts its findings on it, firstmate rules on every finding and posts the ruling there, fixes land as commits on the same PR one finding per commit, and the merge gate is checks green, every finding ruled, and a reviewer's approval of the commit that would merge, after which the configured merge authority applies.
 - **local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority before firstmate uses the guarded fast-forward merge path.
 
+That reviewed chain applies to every `direct-PR` task whatever its size, and scaling it down for a small change requires the reason written into the task's note.
 Load `pr-review` before dispatching that reviewer, on a wake reporting a review posted, and before ruling on, relaying, or fixing a finding; it owns that path's detail and this section does not restate it.
 Never stack a manual review of your own on top of the path's own review, hold work for a personal clean verdict, or infer review authority from security, architecture, or risk alone.
 A separate review or audit beyond the path's own is allowed only when the captain explicitly requests that deliverable or the authorized task is a knowledge-only review; one named question remains scoped to that question.
