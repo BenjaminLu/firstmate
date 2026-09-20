@@ -1049,20 +1049,26 @@ apply_pending_retained_artifact() {  # <task-id>
 # worker is then unreachable by the ordinary lifecycle: it cannot be cleaned up,
 # it holds its isolated copy, and it re-alarms as stale indefinitely.
 #
-# What is refused is the CLOSE, never the captain's word. `--release` records
-# the same answer, lifts the hold, and leaves the work item for cleanup to
-# complete when the worker stands down, so the remedy the refusal names really
-# does resolve the case it is printed for. Every channel inherits this, because
-# the keyed intake resolves through this same command.
+# What is refused is the CLOSE, never what the captain or the evidence said.
+# Each caller supplies its OWN remedy, because the two have different ways out
+# and a shared sentence would send one of them to do something that command
+# rejects: `answer` has a second close mode and names `--release`, while
+# `reconcile close` has only one outcome and names standing the worker down
+# first - cleanup keeps a captain-held row open and still held, so the
+# reconciliation lands unchanged afterwards. Every channel inherits the rule,
+# because the keyed intake resolves through `answer`.
 worker_record_live() {  # <task-id>
   [ -f "$STATE/$1.meta" ] || return 1
   [ ! -f "$STATE/$1.backlog-close" ]
 }
 
-refuse_close_over_live_worker() {  # <task-id>
+refuse_close_over_live_worker() {  # <task-id> <remedy>
   worker_record_live "$1" || return 0
-  fail "task $1 still has a live worker record at $STATE/$1.meta, and cleanup owns that row's completion; record the captain's answer with --release, which keeps the answer and lifts the hold while leaving the row for cleanup to close"
+  fail "task $1 still has a live worker record at $STATE/$1.meta, and cleanup owns that row's completion; $2"
 }
+
+ANSWER_LIVE_WORKER_REMEDY="record the captain's answer with --release, which keeps the answer and lifts the hold while leaving the row for cleanup to close"
+RECONCILE_LIVE_WORKER_REMEDY="stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"
 
 close_answered() {  # <task-id> <release-0-or-1>
   if [ "$2" = 1 ]; then
@@ -1189,7 +1195,7 @@ command_answer() {
   fi
 
   if [ "$hold_kind" = captain ]; then
-    [ "$release" = 1 ] || refuse_close_over_live_worker "$id"
+    [ "$release" = 1 ] || refuse_close_over_live_worker "$id" "$ANSWER_LIVE_WORKER_REMEDY"
     # Actively the captain's item (a date-expired hold keeps its annotations
     # and stays answerable). A matching record means an interrupted close to
     # finish; a different digest is a NEW answer on a re-held task and gets
@@ -1671,7 +1677,7 @@ reconcile_close() {
   fi
   [ "$hold_kind" = captain ] \
     || fail "task $id is not held for the captain; there is no captain call to reconcile"
-  refuse_close_over_live_worker "$id"
+  refuse_close_over_live_worker "$id" "$RECONCILE_LIVE_WORKER_REMEDY"
   if body_has_resolution_record "$body" \
     && [ "$(recorded_decision_digest "$body" || true)" = "$DECISION_DIGEST" ]; then
     recorded_mode=$(recorded_resolution_mode "$body" || true)
