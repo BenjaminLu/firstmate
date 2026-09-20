@@ -236,8 +236,17 @@ const answerDealtCardEmpty = () => {
   if (!dealt) return;
   dealt.dispatch("submit", { preventDefault() {} });
 };
+/* Ticking rows past the 512-byte limit. The tick the captain just made
+   disappears, so the bar owes him a reason - and that reason must land in the
+   alert, not in the counter slot where his own count normally sits. */
+const pickPastLimit = () => {
+  const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));
+  for (const p of picks) { p.checked = true; p.dispatch("change"); }
+};
 const click = process.argv[3] || "";
-if (click === "answer-empty") {
+if (click === "pick-past-limit") {
+  pickPastLimit();
+} else if (click === "answer-empty") {
   answerDealtCardEmpty();
 } else if (click === "dispatch") {
   const picks = nodesWhere(byId.get("bb-charted"), (n) => n.className.split(/\s+/).includes("bb-pick"));

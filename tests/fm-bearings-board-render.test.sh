@@ -428,6 +428,42 @@ test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
 }
 
 # Colour repeats the risk, so the plot reads without counting pixels.
+# R18. Two of the bar's refusals still went to the counter slot - muted
+# uppercase micro-type where the captain's own count normally sits, with
+# nothing announcing it - three lines below a comment saying refusals never go
+# there. The 512-byte guard is the worse of the two: his tick disappears and
+# the reason for it is in the quietest type on the page.
+over_limit_payload() {
+  jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, captains_call:[], underway:[], landed:[],
+    charted:[range(0;9) as $i | {
+      id: ("queued-work-item-with-a-long-durable-identifier-number-" + ($i|tostring) + "-aaaaaaaaaaaaaaaaaaaa"),
+      repo:"sample", title:"Queued work", reason:"", dispatchable:true}]}'
+}
+
+test_the_bar_puts_its_length_refusal_where_the_captain_looks() {
+  local home out
+  home=$(make_home bar-limit-alert)
+  out=$(render_click "$home" "$(over_limit_payload)" pick-past-limit)
+
+  # The guard actually fired, established WITHOUT reading the message - nine
+  # rows were ticked and fewer than nine are picked. Reading the alert to prove
+  # the alert was written would pass for the wrong reason when the message goes
+  # somewhere else, which is exactly the bug.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.count' | grep -oE '[0-9]+' | head -1)" != "9" ] \
+    || fail "the length guard never fired, so this proves nothing: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "limit" \
+    "the bar did not say why the tick disappeared: $out"
+  # In the element that carries role=alert, not the counter.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit_role')" = "alert" ] \
+    || fail "the refusal would not be announced: $out"
+  # And the counter is still a counter, reading how many are picked.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.count' | grep -c "limit")" = "0" ] \
+    || fail "the refusal was written into the counter slot: $out"
+  pass "the bar puts its length refusal in the alert, not the counter slot"
+}
+
 # R17. R14's class on the card. The row explaining what undoing a change costs
 # was headed "reversible" on a call where nobody said it could be undone - the
 # badge twelve lines above it is correctly guarded, so the same field on the
@@ -2152,3 +2188,4 @@ test_an_empty_press_does_not_wipe_a_standing_refusal
 test_the_per_option_buttons_go_dead_with_the_rest_of_the_card
 test_the_per_option_buttons_stay_live_on_a_working_board
 test_the_card_does_not_call_a_change_reversible_when_nobody_said_so
+test_the_bar_puts_its_length_refusal_where_the_captain_looks

@@ -2177,7 +2177,11 @@ __FM_BEARINGS_BOARD_DATA__
         pk.addEventListener("change", function () {
           if (pk.checked && utf8ByteLength(pickedIds().join(",")) > 512) {
             pk.checked = false;
-            refreshBar(t("pick_limit"));
+            /* His tick just disappeared, so this is a refusal and goes to the
+               bar's own alert - not the counter slot, where it rendered as
+               muted uppercase micro-type with nothing announcing it. */
+            barRefuse(t("pick_limit"));
+            refreshBar();
             return;
           }
           refreshBar();
@@ -2217,7 +2221,7 @@ __FM_BEARINGS_BOARD_DATA__
         var dispatchAnswer = ids.join(",");
         if (!ids.length) return;
         if (utf8ByteLength(dispatchAnswer) > 512) {
-          refreshBar(t("pick_too_long"));
+          barRefuse(t("pick_too_long"));
           return;
         }
         /* Same rule as the card: the bar may not report a dispatch it could
