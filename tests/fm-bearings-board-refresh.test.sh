@@ -1078,6 +1078,43 @@ SH
   pass "a watcher-observed status change republishes the board without touching its session"
 }
 
+# A build derives the page BEFORE the payload goes into it: a home with a live
+# board server gets the transport, its endpoint, and the answer token the
+# captain's click is proved by written into the page itself. A refresh
+# republishes that page, so everything outside the payload has to survive it -
+# painting the bare template instead would strip a live board's transport off,
+# and re-deriving would hand it an endpoint and a token nobody asked for.
+test_a_refresh_keeps_what_the_build_put_on_the_page_outside_the_payload() {
+  local home page slots
+  home=$(make_home live-page)
+  seed_board "$home"
+  page="$home/.lavish/bearings-board.html"
+  # The page as a build with a live server leaves it: the transport carrying a
+  # resolved endpoint and answer token, ahead of the data slot.
+  perl -0pi -e '
+    s{(<script id="bearings-data" type="application/json">)}
+     {<script id="fm-board-live">\nvar FM_LIVE = {endpoint: "ws://127.0.0.1:41999/live", token: "seed-token"};\n</script>\n$1}s
+  ' "$page"
+  grep -qxF '<script id="fm-board-live">' "$page" \
+    || fail "the fixture did not put a live transport on the page"
+  refresh "$home" >/dev/null || fail "refresh refused a live board"
+  grep -qxF '<script id="fm-board-live">' "$page" \
+    || fail "the refresh stripped the live transport off the board"
+  grep -qF 'ws://127.0.0.1:41999/live' "$page" \
+    || fail "the refresh dropped the endpoint the build resolved"
+  grep -qF 'seed-token' "$page" \
+    || fail "the refresh dropped the answer token the build issued"
+  injected_payload "$home" | jq -e '.schema == "fm-bearings-board.v1"' >/dev/null \
+    || fail "the refresh did not publish a payload into the live page"
+  # And it republished exactly once: a second data slot would leave the page
+  # carrying two payloads, of which the browser reads whichever it meets first.
+  slots=$(grep -cxF '<script id="bearings-data" type="application/json">' "$page" || true)
+  [ "$slots" -eq 1 ] || fail "the refreshed page carries $slots data slots"
+  ! grep -qxF '__FM_BEARINGS_BOARD_DATA__' "$page" \
+    || fail "the refreshed page still carries an empty data slot"
+  pass "a refresh republishes the page the captain has, transport and all"
+}
+
 test_refresh_publishes_the_board_in_place
 test_refresh_is_idempotent
 test_a_stored_card_carrying_the_injected_reconcile_choice_still_builds
@@ -1111,3 +1148,4 @@ test_progress_never_reads_a_workers_terminal
 test_the_board_carries_each_underway_rows_progress
 test_a_refresh_that_runs_out_of_time_leaves_the_board_it_could_not_replace
 test_a_watcher_observed_status_change_republishes_the_board
+test_a_refresh_keeps_what_the_build_put_on_the_page_outside_the_payload
