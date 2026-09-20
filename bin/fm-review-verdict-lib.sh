@@ -21,5 +21,7 @@
 # The prefix and the two verdicts, kept apart so a caller can render either the
 # literal lines or the "<prefix> <one of these>" placeholder a brief shows.
 FM_REVIEW_VERDICT_PREFIX='Review verdict:'
+# shellcheck disable=SC2034 # Output global, read by the sourcing caller.
 FM_REVIEW_VERDICT_APPROVED="$FM_REVIEW_VERDICT_PREFIX APPROVED"
+# shellcheck disable=SC2034 # Output global, read by the sourcing caller.
 FM_REVIEW_VERDICT_DECLINED="$FM_REVIEW_VERDICT_PREFIX NOT APPROVED"
