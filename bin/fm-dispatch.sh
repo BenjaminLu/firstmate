@@ -380,7 +380,7 @@ if fm_design_placeholder_intact "$DESIGN_RECORD"; then
   } > "$DESIGN_TMP" || { rm -f -- "$DESIGN_TMP"; die "could not fill $DESIGN_RECORD"; }
   mv -f -- "$DESIGN_TMP" "$DESIGN_RECORD" || { rm -f -- "$DESIGN_TMP"; die "could not replace $DESIGN_RECORD"; }
   if fm_design_placeholder_intact "$DESIGN_RECORD"; then
-    die "$DESIGN_RECORD still contains $FM_DESIGN_PLACEHOLDER after filling; the scaffold's placeholder line was not where bin/fm-dod-lib.sh puts it"
+    die "$DESIGN_RECORD's ## Decisions section still holds nothing but $FM_DESIGN_PLACEHOLDER after filling; the scaffold's placeholder line was not where bin/fm-dod-lib.sh puts it"
   fi
   echo "design: filled $DESIGN_RECORD"
 else

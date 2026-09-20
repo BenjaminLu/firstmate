@@ -2648,7 +2648,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   # path and the placeholder this reads).
   DESIGN_RECORD=$(fm_design_record_path "$DATA" "$ID")
   if fm_design_placeholder_intact "$DESIGN_RECORD"; then
-    echo "error: $DESIGN_RECORD still contains $FM_DESIGN_PLACEHOLDER; write firstmate's plan for this task there, or record why it has none, before handing a worker a brief that points at it" >&2
+    echo "error: $DESIGN_RECORD holds nothing but $FM_DESIGN_PLACEHOLDER under ## Decisions; write firstmate's plan for this task there, or record why it has none, before handing a worker a brief that points at it" >&2
     exit 1
   fi
   if [ ! -e "$DESIGN_RECORD" ]; then

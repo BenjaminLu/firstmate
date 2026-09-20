@@ -918,7 +918,7 @@ EOF
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "spawn with an unwritten design record should exit non-zero"
-  assert_contains "$out" "$record still contains {DESIGN}" \
+  assert_contains "$out" "$record holds nothing but {DESIGN} under ## Decisions" \
     "the refusal did not name the record the brief points at"
   assert_contains "$out" "or record why it has none" \
     "the refusal did not offer the declaration that also clears it"
@@ -929,8 +929,22 @@ EOF
   content=${content//'{DESIGN}'/Reuse the existing view state; no new store.}
   printf '%s\n' "$content" > "$record"
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
-  assert_not_contains "$out" "still contains {DESIGN}" \
+  assert_not_contains "$out" "nothing but {DESIGN}" \
     "a written design record was still refused as unwritten"
+
+  # A written plan about this machinery can itself show the placeholder on a line of
+  # its own. The check is bounded to the ## Decisions body for that reason, the same
+  # way the brief's Task placeholder check is bounded to its subsection: a bare
+  # whole-file match would refuse that plan as unwritten.
+  {
+    printf '%s\n' '# Design - a plan about the scaffold itself' '' '## Decisions' \
+      'Keep the placeholder line the scaffold writes:' '' '{DESIGN}' '' \
+      'and replace it at dispatch rather than at spawn.'
+  } > "$record"
+  grep -qx '{DESIGN}' "$record" || fail "the quoting case never put a bare placeholder line in the record, so it proves nothing"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  assert_not_contains "$out" "nothing but {DESIGN}" \
+    "a written plan that shows the placeholder on its own line was refused as unwritten"
 
   # Absent: the older shape. It warns, and it launches.
   id=delivery-design-legacy
@@ -939,7 +953,7 @@ EOF
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
   assert_contains "$out" "has no design record at" \
     "a brief predating design records launched with no word that its plan is unwritten"
-  assert_not_contains "$out" "still contains {DESIGN}" \
+  assert_not_contains "$out" "nothing but {DESIGN}" \
     "an absent design record was reported as an unfilled one"
   pass "fm-spawn: an unwritten design record is refused, and one that predates them warns instead"
 }

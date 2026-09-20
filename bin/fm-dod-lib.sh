@@ -113,12 +113,16 @@ $FM_DESIGN_PLACEHOLDER
 EOF
 }
 
-# Return 0 when the record exists and still carries its scaffold placeholder on a
-# line of its own, which is where fm_design_record_scaffold puts it and the only
-# line bin/fm-dispatch.sh replaces.
+# Return 0 when the record exists and its `## Decisions` body is still nothing but
+# the scaffold placeholder. Bounded to that section for the same reason
+# fm_brief_task_placeholder_intact is bounded to its subsection: a written plan may
+# legitimately quote the token while discussing this machinery, and a bare
+# whole-file match would refuse that plan as unwritten.
 fm_design_placeholder_intact() {  # <file>
-  [ -f "$1" ] || return 1
-  grep -qxF -- "$FM_DESIGN_PLACEHOLDER" "$1"
+  local file=$1 body
+  [ -f "$file" ] || return 1
+  body=$(fm_brief_heading_body "$file" "## Decisions")
+  [ "$(printf '%s' "$body" | tr -d '[:space:]')" = "$FM_DESIGN_PLACEHOLDER" ]
 }
 
 # Return 0 when one named Task subsection still consists only of its scaffold
