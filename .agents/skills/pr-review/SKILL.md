@@ -67,7 +67,7 @@ bin/fm-dispatch.sh <review-task-id> --project projects/<name> \
 
 `--ask` is the captain's own words behind the pull request, copied from the shipping task's brief `## Captain's intent`.
 The reviewer needs it to judge scope: a finding "widens scope" only against what the captain actually asked for, so a reviewer given no intent cannot apply that rule and will guess.
-`--spec` is what to focus this review on - the risky surface, a subsystem, a class of defect the captain has been bitten by - and naming nothing in particular is a legitimate spec, written as such.
+`--spec` is what to focus this review on - the risky surface, a subsystem, a class of defect the captain has been bitten by - and naming nothing in particular is a legitimate spec, written as such, until a round has found a class and the sweep below is owed.
 
 Give the review its own task id, distinct from the shipping task's.
 It is filed and spawned as a scout, so it is supervised, torn down, and reported like any scout.
@@ -85,6 +85,30 @@ What changes is the `--spec`, and four things belong in it:
 
 The `--ask` does not change: the captain's intent behind the pull request did not move because a fix landed.
 None of this is inferable from the pull request, so a re-review dispatched without it reads the whole diff again and re-raises what you already declined.
+
+## Name the class, and ask for the whole sweep
+
+`bin/fm-brief.sh`'s `--review` contract already tells every reviewer that a finding is one instance of a class and to look for the rest.
+What belongs to firstmate is naming which class, and asking for it to be closed rather than sampled.
+
+Once a round has found a class, the next dispatch names it in the `--spec`; the reviewer is not asked to invent one.
+A reviewer that thinks the named class is wrong or too narrow says so, and that is a finding rather than a refusal.
+Ask for every remaining instance across the relevant files, enumerated at once, whether or not the range touched them, and reported separately from the range findings.
+
+The enumeration must list what was checked and found sound, not only what was found broken.
+That half is what closes the class: without it a sweep is only more findings, and with it the next reviewer is pointed at the list instead of repeating the work.
+An empty enumeration is a real result and is stated plainly rather than padded.
+
+Four sweeps in one afternoon are the argument for asking:
+
+- Pull request 44 returned twelve entries together with the sites that are *not* instances, each named with the guard that saves it, so that sweep never has to be run again.
+- Pull request 45 returned a finding no range-scoped round could have reached: quoted words in a code fence inside an ask file can set the brief's machine-readable delivery contract.
+- Pull request 47 returned one class empty after three separate rounds had each found it once, and another down to a single instance, from fourteen refusal sites each actually run.
+- Pull request 42 returned eight silence paths, every one driven against a control.
+
+The cost is real and is not a failure: a sweep makes the finding count go up before it goes down, and most of what it returns is filed as separate work rather than fixed on that branch.
+That is the intended shape.
+The alternative is finding one instance of the same class per round for five rounds, which is the pattern this replaces.
 
 ## Read the findings
 
