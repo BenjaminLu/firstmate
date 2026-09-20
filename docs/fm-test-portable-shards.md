@@ -6,69 +6,98 @@
 ## Verification inputs
 
 Balance hints come from runs of the real lanes on `ubuntu-latest`, each script measured in the lane configuration CI actually gives it.
-That is a change of meaning worth naming, because shard 1 now runs with `--jobs 2`: a hint for one of its members is usually a sample taken under that contention, which is both the right weight for the lane being modelled and a conservative one if that script were ever moved to a serial lane.
-Read a hint as "what this script costs where it runs", not as a context-free serial duration.
+Read a hint as "what this script costs where it runs", not as a context-free serial duration: shard 1 runs with `--jobs 2`, so a hint for one of its members is usually a sample taken under that contention.
+That cuts both ways and the direction matters when a script changes lanes.
+Carrying a contended sample to a serial lane is conservative, because the serial run will be no slower.
+Carrying a **serial** sample into the contended lane is optimistic, and that is the direction the 2026-09-20 repack moved twelve scripts.
+Measured on run [35517549623](https://github.com/BenjaminLu/firstmate/actions/runs/35517549623), those twelve ran 5% to 8% above their serial samples once contended - `fm-crew-state` 36046 -> 38764, `fm-arm-pretool-check` 32627 -> 35164, `fm-backend-herdr` 30404 -> 32970, `fm-x-mode` 31357 -> 33525, `fm-herdr-lab` 17323 -> 18154.
+The table below retains those contended values, so the bias is measured out rather than argued about; re-measure after any future move between lanes for the same reason.
 
-The parallel hints were refreshed on 2026-09-20 from the `fm-test-timing-portable-parallel-*` artifacts of nine green runs on this repository - [35500675106](https://github.com/BenjaminLu/firstmate/actions/runs/35500675106), [35501233728](https://github.com/BenjaminLu/firstmate/actions/runs/35501233728), [35502182107](https://github.com/BenjaminLu/firstmate/actions/runs/35502182107), [35502455291](https://github.com/BenjaminLu/firstmate/actions/runs/35502455291), [35503091467](https://github.com/BenjaminLu/firstmate/actions/runs/35503091467), [35503181619](https://github.com/BenjaminLu/firstmate/actions/runs/35503181619), [35503920748](https://github.com/BenjaminLu/firstmate/actions/runs/35503920748), [35505054553](https://github.com/BenjaminLu/firstmate/actions/runs/35505054553) and [35511447348](https://github.com/BenjaminLu/firstmate/actions/runs/35511447348) - plus one named supplement, the `cancelled` main run [35513827276](https://github.com/BenjaminLu/firstmate/actions/runs/35513827276).
-That supplement is taken under the rule below and is where the shard 2 values come from: its lane 2 job was cancelled at its cap with three scripts left to run, so it uploaded no timing artifact, but every script that did finish printed a completed `FM_TEST_END ... exit=0 duration_ms=` line in the job log, including the one that sets the lane.
-Its shard 1 job completed green and is an ordinary sample.
+The parallel hints were refreshed on 2026-09-20 from two runs of this repository, retaining the slower of the two per script: the `cancelled` main run [35513827276](https://github.com/BenjaminLu/firstmate/actions/runs/35513827276) and the `cancelled` branch run [35517549623](https://github.com/BenjaminLu/firstmate/actions/runs/35517549623).
+Both are named supplements rather than a green baseline, which the rule below permits only when said out loud, so here it is said: in each run the cancelled job was a parallel lane killed at its cap, and in each the job log still carries a completed `FM_TEST_END ... exit=0 duration_ms=` line for every script that finished before the kill.
+Between the two, all 23 unchanged members carry two completed samples and the slower is retained.
+Every other job in both runs completed.
 
 A hint is only retained from a run whose own copy of that file was byte-identical to this tree's, compared through the GitHub trees API rather than assumed from a date.
-Every one of the 24 members is measured under that rule, but the sample counts are uneven and that is the point of stating it: 11 or 12 samples for most, 11 for `tests/fm-pr-merge.test.sh`, 5 for `tests/fm-lint.test.sh`, 4 for `tests/fm-test-run.test.sh` after PR 46 rewrote both, and 2 for `tests/fm-captain-hold-lifecycle.test.sh` after PR 37 changed it.
-Two samples is thin, and for the script that is a whole lane it is the thinnest place in this table; it is also all the evidence that exists for the content on main, and a sample from a version of the file that no longer exists would be worse than thin.
-
-One sample is excluded: `tests/fm-pr-merge.test.sh` recorded 419753 ms on run [35512648071](https://github.com/BenjaminLu/firstmate/actions/runs/35512648071) against 179049-266554 ms across the other ten.
-Its co-resident scripts on that same run ran about 1.3x their usual, a slow runner, while that one script ran 2.05x - so the excess is the script's own and not the machine's, and a hint 1.6x above the script's real cost unbalances the packing it exists to balance.
-That is the same evidence shape the serial table requires for an exclusion: the same script measured against itself and against its own run.
+Two members are the exception and are marked in the table's comment, because this branch edits them: `tests/fm-test-run.test.sh` and `tests/fm-ci-workflow.test.sh` have no CI sample at their current content by construction.
+`tests/fm-ci-workflow.test.sh` measured 16734 ms on run 35517549623 at a heavier version of itself - the `--check-coverage` call responsible was removed later on the same branch - and its retained 3849 ms is that measurement scaled by the two versions' measured local ratio (8.16 s / 35.76 s), the same technique and the same caveat as the `fm-watch-triage` split recorded below.
+`tests/fm-test-run.test.sh`'s 172000 ms is the one number here that is an estimate rather than a measurement, and it is flagged as such in the table: replace it with that script's own `duration_ms` from the first run at this head.
 
 Observed maxima provide conservative packing weights, not an upper bound on future durations.
-How far from an upper bound is worth knowing concretely: `tests/fm-captain-hold-lifecycle.test.sh` measured 373081 ms and 447694 ms on two runs of the same content hours apart on 2026-09-20, a 1.20x spread on a script that is six and a half minutes long.
+How far from an upper bound is worth knowing concretely: `tests/fm-captain-hold-lifecycle.test.sh` measured 373081 ms and 447694 ms on two runs of the same content hours apart on 2026-09-20, a 1.20x spread on a script that is six and a half minutes long, while the same script's lane-level wall moved only 0.4% between two later runs.
 A single sample is therefore not a measurement, and a laptop's seconds are not a runner's: local timings and CI timings are not interchangeable, because platform and machine load affect each script differently and change their relative weights.
-The concurrent isolation proof in [fm-test-isolation-proof.md](fm-test-isolation-proof.md) establishes concurrency safety, not serial CI duration.
+The concurrent isolation proof in [fm-test-isolation-proof.md](fm-test-isolation-proof.md) establishes concurrency safety, not CI duration.
 
 ## Parallel lanes
 
-The two lanes are balanced on each lane's projected **wall**, never on equal hint sums.
+The two lanes are balanced on each lane's projected **wall**, never on equal hint sums, and the projection walks **the order the runner really dispatches in**.
 
-That distinction is the whole of the 2026-09-20 failure.
-CI runs shard 1 with `--jobs 2` and shard 2 serially, so the same hint sum buys two different walls: shard 1's wall is the longest-processing-time makespan of its members over two workers, and shard 2's wall is its plain sum.
+Both halves of that sentence were learned the hard way on 2026-09-20, in that order.
+
+CI runs shard 1 with `--jobs 2` and shard 2 serially, so the same hint sum buys two different walls.
 At the stale hints the two lanes' sums were 414269 ms and 417163 ms - 0.7% apart, comfortably inside the 5% band the retired assertion enforced - while shard 2's real wall on main was 10m03s against a 10-minute cap.
 Every guard was green.
 The lane was cancelled 1.4 seconds of work short of finishing, on main and then on every branch that rebased onto it, including [PR 45](https://github.com/BenjaminLu/firstmate/pull/45), which adds no test at all.
 
-A cancelled job also reads as a failed check, which is the second half of the trap: nothing in that lane failed, and the summary says it did.
+The repack that fixed that then failed the same way on the other lane, and the reason is the second half.
+The first projection computed a longest-processing-time makespan.
+The runner does not schedule these lanes that way: it orders a concurrent phase by `concurrent_dispatch_weight_for`, which is the **serial** weight, and no member of either parallel lane has a serial hint - so all 23 keys tie at `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` and the sort falls through to its path tie-break, which is alphabetical.
+On run 35517549623 that dispatched `tests/fm-test-run.test.sh` 20th of 23, 370 s into the lane; the last other script finished at 14:54:17 and from there to the cancellation the lane ran one script on two workers.
+Over the same members the two orders cost 462617 ms and 529083 ms.
+The model was correct arithmetic over the wrong schedule, and modelling the better order is what let a doomed pack past a guard that would otherwise have refused it.
+
+A cancelled job also renders as a failed check, which is the trap underneath both rounds: nothing in either lane failed, and the summary said it did.
+
+Whether the scheduler should order longest-first instead is a real and separate question - it would remove the lone tail rather than predict it, and it is worth about 60 s on this lane.
+It is not decided here, because [`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh)'s `test_list_scheduled_proven_isolated_uses_serial_weights` pins the current order deliberately.
+What that test protects, stated so the question can be decided on its own evidence: that `--list-scheduled` reports one selection's order from one weight table, so a selection that is not a parallel lane - `--proven-isolated`, `--family`, `--all`, `--changed`, a bare script list - never silently reorders itself against parallel hints that describe a different lane's configuration.
+Its sibling `test_list_scheduled_non_lane_selections_use_serial_weights` pins the same property for the other four selections.
+Neither says a parallel lane must run alphabetically; they say a non-lane selection must not be reordered by lane hints.
+A scheduler change scoped to `--lane portable-parallel-*` would leave both intact, and the thing it would need instead is what this branch adds: `test_the_modeled_dispatch_order_is_the_order_the_runner_uses`, which runs each lane for real over stubs and requires the projected order to equal the order the runner begins scripts in.
+
+### The model and its gate
 
 `bin/fm-test-run.sh` owns the model.
-`PORTABLE_PARALLEL_LANE_1_JOBS` and `PORTABLE_PARALLEL_LANE_2_JOBS` record the worker count CI gives each lane, `portable_parallel_lane_wall` projects a lane's wall as the longest-processing-time makespan over that count, and `PORTABLE_PARALLEL_LANE_BUDGET_MS` is the largest wall a pack may project.
+`PORTABLE_PARALLEL_LANE_1_JOBS` and `PORTABLE_PARALLEL_LANE_2_JOBS` record the worker count CI gives each lane, `concurrent_dispatch_order` reproduces the scheduler's own dispatch order from the scheduler's own weight function, `portable_parallel_lane_wall` walks that order handing each script to whichever worker frees first, and `PORTABLE_PARALLEL_LANE_BUDGET_MS` is the largest wall a pack may project.
 [`tests/fm-ci-workflow.test.sh`](../tests/fm-ci-workflow.test.sh) holds [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) to those same worker counts and to the same job cap, so the model can never describe a lane the workflow does not run.
-Read the current projection with `bin/fm-test-run.sh --check-coverage`, which reports `parallel_lane1_wall_ms`, `parallel_lane2_wall_ms`, `parallel_max_wall_ms`, `parallel_wall_budget_ms`, `parallel_wall_cap_ms` and the per-lane worker counts.
-A projection past the budget **fails** that guard, which is a five-minute job, so a bad pack goes red there instead of surviving to a ten-minute cancellation in a lane.
+Read the current projection with `bin/fm-test-run.sh --check-lane-walls`, which reports each lane's wall, worker count and unhinted count, then the budget, the cap, the worse wall and which lane it belongs to, and exits non-zero when that wall is past the budget.
+`--check-coverage` reports the same numbers as `parallel_lane1_wall_ms`, `parallel_lane2_wall_ms`, `parallel_max_wall_ms`, `parallel_wall_budget_ms` and `parallel_wall_cap_ms`, and refuses on the same condition - it is a five-minute job, so a bad pack goes red there instead of surviving to a ten-minute cancellation in a lane.
 
-The budget is 510000 ms against the workflow's 600000 ms cap, 85% of it.
-The 15% held back is not slack to spend: it covers the job setup the model cannot see - checkout and the pinned tool installs, measured at 10-20 s on 2026-09-20 - and the runner spread that survives retaining each script's slowest observed sample.
+**The budget, not the cap, is the gate a contributor meets.**
+It is 522000 ms, derived from the 600000 ms cap and from measurement, independently of any particular pack: minus 20000 ms for the job setup the projection cannot see - checkout and the pinned tool installs, measured at 10 s and 14 s on the two parallel lanes of run 35517549623, rounded up - and minus 58000 ms, 10% of what remains, for runner drift beyond what each hint already absorbs by retaining its slowest sample.
+The accuracy that allowance is sized against is measured, not assumed: where a lane's wall equals its sum, the projection matched a real test step to within 0.5% (447694 ms projected, 450 s measured), and over the real order with the run's own durations it matched to within 0.2% (596748 ms against a 598 s step).
 
 ### Where this packing came from
 
-At the refreshed hints the set totals 1372158 ms across 24 scripts, and `tests/fm-captain-hold-lifecycle.test.sh` alone is 447694 ms of it.
-Three execution slots exist - shard 2's one worker and shard 1's two - so no split can finish sooner than 1372158/3 = 457386 ms, and no split can put shard 2 below that one script if it holds it.
-Those two numbers are within 2% of each other, which decides the layout: shard 2 holds that script and nothing else, shard 1 holds the other 23, and the lanes project 447694 ms and 462617 ms.
-Moving anything into shard 2 costs its full duration there while saving only half of it on shard 1, so every other split makes the worse lane worse.
+At the refreshed hints the set totals 1398143 ms across 24 scripts, and `tests/fm-captain-hold-lifecycle.test.sh` alone is 449669 ms of it.
+Three execution slots exist - shard 2's one worker and shard 1's two - so no split can finish sooner than 1398143/3 = 466048 ms, and no split can put shard 2 below that one script.
+Alphabetical dispatch costs shard 1 roughly another 60 s on top of that floor, and the two together are why this lane pair has no comfortable pack: searched exhaustively over every assignment, the best achievable worse-lane wall is about 507000 ms.
+The retained layout is the one that reaches it - shard 2 holds `fm-captain-hold-lifecycle` plus `fm-herdr-lab`, `fm-backend-herdr` and `fm-send-popup-settle`, all three of which were shard 2 members before the repack, so no moved script can lose a prerequisite its new job does not install.
+`tests/fm-pi-primary-types.test.sh` stays on shard 1 because that is the job installing the Pi package, and it is the only member that needs it.
 
-That leaves **137383 ms - 2m17s, 22.9% of the cap - below the 600000 ms cap on the slower lane**, and 152306 ms (2m32s, 25.4%) on shard 2, the lane that was cancelled.
-Stated the way the next change will meet it: this set runs at a measured 44.6 ms per line of test file on average, and the two heaviest scripts run at 83-90 ms per line.
+That leaves **15166 ms - about 15 s - below the 522000 ms budget on the slower lane**, and 15392 ms on the other.
+Against the 600000 ms cap, which is the physical limit rather than the gate, the same walls leave 93166 ms and 93392 ms.
+Quote the first pair to a contributor: the budget is what turns a check red, and at the coverage job rather than ten minutes later.
+
+Stated the way the next change will meet it: this set runs at a measured 45.1 ms per line of test file on average, and its worst rate is `tests/fm-lint.test.sh` at 161.1 ms per line.
 PR 37's largest single test-file addition was 1491 lines.
-One more addition of that size costs 66 s at the set average and 125 s at the rate the heavy scripts actually run, so it takes between 44% and 82% of the remaining room, and a second one is over the cap.
+**No addition of that size fits at all** - at the set average it is 67 s against 15 s of room, and at the worst rate 240 s.
+What fits today is roughly 340 lines at the set average and 94 at the worst rate.
 
-The room on shard 2 in particular cannot be recovered by repacking again, because that lane is already one script.
-When it runs out, the lever is splitting that script the way `tests/fm-watch-triage.test.sh` was split below - not raising the cap, which removes the only thing that noticed, and not adding a shard, which a run already demanding 18 of this account's measured 20 concurrent slots cannot afford.
+That is the honest state of these two lanes and it should be read as a result, not a defect in the guard: the suite has grown into its runners.
+Three levers remain and none is taken here.
+Splitting `tests/fm-captain-hold-lifecycle.test.sh` the way `tests/fm-watch-triage.test.sh` was split below would lower shard 2's floor.
+Ordering the lanes longest-first would return about 60 s to shard 1.
+Deleting tests the fleet does not need would return the most of all.
+Raising the cap is not among them: it removes the only thing that noticed.
 
 `bin/fm-test-run.sh` holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1` and `list_portable_parallel_2`.
-`tests/fm-pi-primary-types.test.sh` stays on shard 1 because that is the job installing the Pi package; moving it needs that workflow step moved with it.
-[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh) requires every member to carry a hint, requires both projected walls to sit inside the budget, and drives the guard end to end over fixture hint tables placed either side of the budget - on each lane in turn, and on a pair of lanes with identical sums and one wall over - so the assertion is demonstrably able to both fail and pass rather than asserted to be.
+[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh) requires every member to carry a hint, requires both projected walls to sit inside the budget, requires the coverage guard to agree with `--check-lane-walls` on both, and drives the projection end to end over fixture hint tables placed either side of the budget - on each lane in turn, and on a pair of lanes with identical sums and one wall over - so the assertion is demonstrably able to both fail and pass rather than asserted to be.
 It also withholds one member's hint and requires the projection to rise, because a model that drops the work it cannot measure would report headroom exactly where the packing is least trustworthy.
+Those cases run against a bare copy of the runner rather than a rebuilt fixture repository, because this script is itself a member of the lane being measured and an expensive test of the packing distorts the packing.
 The largest individual hint sets a lower bound on any split's projection, regardless of how evenly the rest is assigned.
 
-Refresh `portable_parallel_weight_hints` whenever the parallel set gains scripts or a member grows materially, using the same evidence rules as the serial table below: green runs for the baseline, a cancelled run only as a named supplement, the slowest completed `duration_ms` per script, and only from a run whose copy of that file matches the tree being packed.
+Refresh `portable_parallel_weight_hints` whenever the parallel set gains scripts, a member grows materially, or a member changes lanes, using the same evidence rules as the serial table below: green runs for the baseline, a cancelled run only as a named supplement, the slowest completed `duration_ms` per script, and only from a run whose copy of that file matches the tree being packed.
 
 ## Portable serial remainder
 

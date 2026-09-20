@@ -1055,7 +1055,7 @@ test_list_scheduled_non_lane_selections_use_serial_weights() {
 }
 
 test_portable_shard_union_and_coverage_guard() {
-  local s1 s2 proven serial herdr all_count union_count overlap out lane
+  local s1 s2 proven serial herdr all_count union_count overlap out lane walls wall
   s1=$("$RUNNER" --list --lane portable-parallel-1)
   s2=$("$RUNNER" --list --lane portable-parallel-2)
   proven=$("$RUNNER" --list --proven-isolated)
@@ -1076,6 +1076,18 @@ test_portable_shard_union_and_coverage_guard() {
     || fail "herdr family must include smoke"
   out=$("$RUNNER" --check-coverage)
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
+  # The gate CI runs and the cheap projection entry point must describe the same
+  # pack. One --check-coverage is expensive enough that this reuses the one
+  # above rather than paying for a second: this script is itself a member of the
+  # lane the projection measures, so an expensive test of the packing distorts
+  # the packing it is testing.
+  walls=$("$RUNNER" --check-lane-walls) || true
+  for lane in 1 2; do
+    wall=$(printf '%s\n' "$walls" | sed -n "s/^lane=$lane .*wall_ms=\\([0-9]*\\).*/\\1/p")
+    [ -n "$wall" ] || fail "--check-lane-walls did not report lane $lane: $walls"
+    assert_contains "$out" "parallel_lane${lane}_wall_ms=$wall" \
+      "coverage guard agrees with --check-lane-walls on lane $lane"
+  done
   all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
@@ -1103,27 +1115,27 @@ test_portable_shard_union_and_coverage_guard() {
 # sum buys two different walls, and balance says nothing about either one
 # clearing the cap.
 test_portable_parallel_lane_walls_stay_under_budget() {
-  local out l1 l2 max budget cap j1 j2 unhinted
-  out=$("$RUNNER" --check-coverage)
-  unhinted=$(printf '%s\n' "$out" | sed -n 's/.*parallel_unhinted=\([0-9]*\).*/\1/p')
-  l1=$(printf '%s\n' "$out" | sed -n 's/.*parallel_lane1_wall_ms=\([0-9]*\).*/\1/p')
-  l2=$(printf '%s\n' "$out" | sed -n 's/.*parallel_lane2_wall_ms=\([0-9]*\).*/\1/p')
-  max=$(printf '%s\n' "$out" | sed -n 's/.*parallel_max_wall_ms=\([0-9]*\).*/\1/p')
-  budget=$(printf '%s\n' "$out" | sed -n 's/.*parallel_wall_budget_ms=\([0-9]*\).*/\1/p')
-  cap=$(printf '%s\n' "$out" | sed -n 's/.*parallel_wall_cap_ms=\([0-9]*\).*/\1/p')
-  j1=$(printf '%s\n' "$out" | sed -n 's/.*parallel_lane1_jobs=\([0-9]*\).*/\1/p')
-  j2=$(printf '%s\n' "$out" | sed -n 's/.*parallel_lane2_jobs=\([0-9]*\).*/\1/p')
-  [ -n "$unhinted" ] && [ -n "$l1" ] && [ -n "$l2" ] && [ -n "$max" ] \
-    && [ -n "$budget" ] && [ -n "$cap" ] && [ -n "$j1" ] && [ -n "$j2" ] \
-    || fail "coverage guard must report per-lane walls, worker counts, budget and cap: $out"
+  local walls l1 l2 max budget cap j1 j2 unhinted
+  walls=$("$RUNNER" --check-lane-walls) \
+    || fail "a portable parallel lane is projected past its budget:"$'\n'"$walls"
+  j1=$(printf '%s\n' "$walls" | sed -n 's/^lane=1 jobs=\([0-9]*\).*/\1/p')
+  j2=$(printf '%s\n' "$walls" | sed -n 's/^lane=2 jobs=\([0-9]*\).*/\1/p')
+  l1=$(printf '%s\n' "$walls" | sed -n 's/^lane=1 .*wall_ms=\([0-9]*\).*/\1/p')
+  l2=$(printf '%s\n' "$walls" | sed -n 's/^lane=2 .*wall_ms=\([0-9]*\).*/\1/p')
+  unhinted=$(printf '%s\n' "$walls" | sed -n 's/^lane=1 .*unhinted=\([0-9]*\).*/\1/p')
+  unhinted=$((unhinted + $(printf '%s\n' "$walls" | sed -n 's/^lane=2 .*unhinted=\([0-9]*\).*/\1/p')))
+  max=$(printf '%s\n' "$walls" | sed -n 's/.*max_wall_ms=\([0-9]*\).*/\1/p')
+  budget=$(printf '%s\n' "$walls" | sed -n 's/.*budget_ms=\([0-9]*\).*/\1/p')
+  cap=$(printf '%s\n' "$walls" | sed -n 's/.*cap_ms=\([0-9]*\).*/\1/p')
+  [ -n "$j1" ] && [ -n "$j2" ] && [ -n "$l1" ] && [ -n "$l2" ] \
+    && [ -n "$max" ] && [ -n "$budget" ] && [ -n "$cap" ] \
+    || fail "--check-lane-walls must report per-lane walls, worker counts, budget and cap: $walls"
   [ "$unhinted" = "0" ] \
     || fail "$unhinted proven-isolated scripts have no measured parallel hint, so the lanes are packed on a guess"
   [ "$l1" -gt 0 ] && [ "$l2" -gt 0 ] \
     || fail "both parallel lanes must project a positive wall, got $l1 and $l2"
-  [ "$max" = "$l1" ] || [ "$max" = "$l2" ] \
-    || fail "parallel_max_wall_ms=$max is neither lane's wall ($l1, $l2)"
   [ "$l1" -le "$max" ] && [ "$l2" -le "$max" ] \
-    || fail "parallel_max_wall_ms=$max is not the worse of $l1 and $l2"
+    || fail "max_wall_ms=$max is not the worse of $l1 and $l2"
   [ "$budget" -lt "$cap" ] \
     || fail "the modeled budget ${budget}ms must stay below the ${cap}ms CI job cap"
   [ "$max" -le "$budget" ] \
@@ -1131,19 +1143,108 @@ test_portable_parallel_lane_walls_stay_under_budget() {
   pass "portable parallel lanes are fully hinted and both project a wall inside the budget"
 }
 
-# Build a throwaway repository root holding the runner, the isolation-proof
-# owner it cross-checks itself against, and a stub for every tests/*.test.sh
-# this repository has, so the coverage guard can be run end to end against a
-# hint table this test controls instead of the real one.
-make_coverage_root() {
-  local root=$1 f
-  mkdir -p "$root/bin" "$root/tests"
-  cp "$RUNNER" "$ROOT/bin/fm-test-isolation-proof.sh" "$root/bin/"
+# A projection is worth exactly the schedule it assumes. This is the assertion
+# whose absence let 2026-09-20 happen twice: the model computed a
+# longest-processing-time makespan while the runner dispatched the lane in path
+# order, nothing compared the two, and lane 1 was pushed 66 s under its real
+# wall and cancelled at its cap. Run the lane for real over stubs and require
+# the order the runner BEGINS scripts in to be the order the model walks.
+test_the_modeled_dispatch_order_is_the_order_the_runner_uses() {
+  local tmp repo lane script modeled observed walls jobs
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-dispatch-order.XXXXXX")
+  repo="$tmp/repo"
+  mkdir -p "$repo/bin" "$repo/tests"
+  cp "$RUNNER" "$repo/bin/fm-test-run.sh"
+  for lane in portable-parallel-1 portable-parallel-2; do
+    while IFS= read -r script; do
+      [ -n "$script" ] || continue
+      printf '#!/usr/bin/env bash\nexit 0\n' >"$repo/$script"
+      chmod +x "$repo/$script"
+    done < <("$RUNNER" --list --lane "$lane")
+  done
+  walls=$("$RUNNER" --check-lane-walls) || true
+  for lane in portable-parallel-1 portable-parallel-2; do
+    jobs=$(printf '%s\n' "$walls" | sed -n "s/^lane=${lane##*-} jobs=\([0-9]*\).*/\1/p")
+    [ -n "$jobs" ] || fail "could not read $lane's worker count"
+    modeled=$("$repo/bin/fm-test-run.sh" --list-dispatch-order --lane "$lane") \
+      || fail "--list-dispatch-order failed for $lane"
+    observed=$("$repo/bin/fm-test-run.sh" --lane "$lane" --jobs "$jobs" 2>/dev/null \
+      | awk '$1 == "FM_TEST_BEGIN" { print $3 }')
+    [ -n "$observed" ] || fail "$lane produced no FM_TEST_BEGIN markers"
+    if [ "$jobs" -gt 1 ]; then
+      [ "$modeled" = "$observed" ] \
+        || fail "$lane is dispatched in an order the wall projection does not model:"$'\n'"modeled:"$'\n'"$modeled"$'\n'"observed:"$'\n'"$observed"
+    else
+      # A one-worker lane's wall is its sum, which no order changes, so only the
+      # membership has to match; the runner keeps stored order there.
+      [ "$(printf '%s\n' "$modeled" | LC_ALL=C sort)" = "$(printf '%s\n' "$observed" | LC_ALL=C sort)" ] \
+        || fail "$lane ran a different set than the projection walks"
+    fi
+  done
+  rm -rf "$tmp"
+  pass "each parallel lane is dispatched in exactly the order its wall projection walks"
+}
+
+# The other half of the same contract, and the half a copy of this defect would
+# reappear in: the projection must WALK that order, not merely be able to print
+# it. Give every lane 1 member the same small hint except the one that sorts
+# last, which gets a hint larger than all the others put together, and the two
+# candidate orders separate cleanly.
+#
+# Dispatch order is alphabetical and no hint changes it, so the heavy script
+# starts last: the small ones fill both workers first, and the heavy one begins
+# on whichever worker frees earlier. With n members that is
+# ((n-1)/2 rounded down) small hints, then the heavy one end to end. Had the
+# projection ordered by hint instead, the heavy script would start first and the
+# wall would be its own duration - which is what this branch's first round
+# reported, 66 s under what the runner then took.
+test_the_wall_projection_walks_the_dispatch_order() {
+  local tmp runner last n small heavy expected_dispatch expected_hintfirst out wall f
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-wall-order.XXXXXX")
+  make_wall_fixture "$tmp"
+  runner="$tmp/bin/fm-test-run.sh"
+  last=$("$runner" --list-dispatch-order --lane portable-parallel-1 | tail -1)
+  n=$("$runner" --list --lane portable-parallel-1 | wc -l | tr -d ' ')
+  [ -n "$last" ] && [ "$n" -ge 4 ] || fail "lane 1 is too small to separate the two orders"
+  small=10000
+  heavy=$((n * small))
+  : >"$tmp/hints"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    printf '#!/usr/bin/env bash\nexit 0\n' >"$root/$f"
-    chmod +x "$root/$f"
-  done < <("$RUNNER" --list --all)
+    if [ "$f" = "$last" ]; then
+      printf '%s %s\n' "$f" "$heavy" >>"$tmp/hints"
+    else
+      printf '%s %s\n' "$f" "$small" >>"$tmp/hints"
+    fi
+  done < <("$runner" --list --lane portable-parallel-1)
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s %s\n' "$f" 1000 >>"$tmp/hints"
+  done < <("$runner" --list --lane portable-parallel-2)
+  set_parallel_hints "$runner" "$tmp/hints"
+
+  expected_dispatch=$(( ((n - 1) / 2) * small + heavy ))
+  expected_hintfirst=$heavy
+  [ "$expected_dispatch" != "$expected_hintfirst" ] \
+    || fail "fixture does not separate the two orders"
+  out=$("$runner" --check-lane-walls) || fail "fixture must stay inside the budget:"$'\n'"$out"
+  wall=$(wall_of 1 "$out")
+  [ "$wall" = "$expected_dispatch" ] \
+    || fail "lane 1 projects ${wall}ms; the order the runner dispatches in gives ${expected_dispatch}ms and ordering by hint would give ${expected_hintfirst}ms"
+  rm -rf "$tmp"
+  pass "the wall projection walks the runner's dispatch order, not the better one"
+}
+
+# Build a throwaway root holding only the runner, so a hint table this test
+# controls can be driven through the real projection. The projection reads no
+# test file, so nothing else needs to exist and the case costs milliseconds -
+# which matters here, because this script is itself a member of the lane being
+# measured and an expensive test of the packing distorts the packing.
+make_wall_fixture() {
+  local root=$1
+  rm -rf "$root"
+  mkdir -p "$root/bin"
+  cp "$RUNNER" "$root/bin/fm-test-run.sh"
 }
 
 # Swap the copied runner's parallel hint table for the "<path> <ms>" lines in
@@ -1167,116 +1268,115 @@ set_parallel_hints() {
   chmod +x "$runner"
 }
 
-# Write a hint table giving every member of lane 1 the same weight and the sole
-# member of lane 2 its own, so a case can place each lane's projected wall
-# exactly where it wants it.
+# Write a hint table giving every member of lane 1 the same weight, and
+# splitting lane2_ms across lane 2's members so that lane - which runs serial,
+# so its wall is exactly its sum - projects lane2_ms however many members it
+# happens to hold. That keeps each case's intended wall independent of the
+# packing the case is not about.
 write_flat_hints() {
-  local runner=$1 out=$2 lane1_each=$3 lane2_ms=$4 f
+  local runner=$1 out=$2 lane1_each=$3 lane2_ms=$4 f n each first
   : >"$out"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     printf '%s %s\n' "$f" "$lane1_each" >>"$out"
   done < <("$runner" --list --lane portable-parallel-1)
+  n=$("$runner" --list --lane portable-parallel-2 | wc -l | tr -d ' ')
+  [ "$n" -ge 1 ] || fail "lane 2 has no members"
+  each=$((lane2_ms / n))
+  first=$((lane2_ms - each * (n - 1)))
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    printf '%s %s\n' "$f" "$lane2_ms" >>"$out"
+    printf '%s %s\n' "$f" "$first" >>"$out"
+    first=$each
   done < <("$runner" --list --lane portable-parallel-2)
 }
 
-# The guard is only worth having if it moves. Drive the same end-to-end
-# --check-coverage over hint tables placed either side of the budget, one lane
-# at a time, and require it to change its answer each time. A guard that cannot
-# be made to fail is not evidence that the packing is sound, and a guard that
-# cannot be made to pass would just be noise the next person deletes.
+wall_of() {
+  printf '%s\n' "$2" | sed -n "s/^lane=$1 .*wall_ms=\([0-9]*\).*/\1/p"
+}
+
+# The guard is only worth having if it moves. Drive the projection over hint
+# tables placed either side of the budget, one lane at a time, and require it to
+# change its answer each time. A guard that cannot be made to fail is not
+# evidence that the packing is sound, and a guard that cannot be made to pass
+# would just be noise the next person deletes.
 test_parallel_wall_guard_fails_and_passes_either_side_of_the_budget() {
-  local tmp runner budget each out status
+  local tmp runner budget each out status count
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-wall-budget.XXXXXX")
-  make_coverage_root "$tmp"
+  make_wall_fixture "$tmp"
   runner="$tmp/bin/fm-test-run.sh"
-  budget=$("$RUNNER" --check-coverage | sed -n 's/.*parallel_wall_budget_ms=\([0-9]*\).*/\1/p')
+  budget=$("$RUNNER" --check-lane-walls | sed -n 's/.*budget_ms=\([0-9]*\).*/\1/p')
   [ -n "$budget" ] || fail "could not read the modeled wall budget"
+  count=$("$runner" --list --lane portable-parallel-1 | wc -l | tr -d ' ')
 
   # Lane 2 runs serial, so its wall is exactly its one script's hint: set that
   # hint to the budget, then one millisecond past it.
   write_flat_hints "$runner" "$tmp/at" 1000 "$budget"
   set_parallel_hints "$runner" "$tmp/at"
-  out=$("$runner" --check-coverage 2>&1) || fail "a lane exactly at the budget must pass: $out"
-  assert_contains "$out" "parallel_lane2_wall_ms=$budget" "lane 2 wall at the budget"
+  out=$("$runner" --check-lane-walls) || fail "a lane exactly at the budget must pass:"$'\n'"$out"
+  [ "$(wall_of 2 "$out")" = "$budget" ] || fail "lane 2 must project the budget exactly: $out"
 
-  make_coverage_root "$tmp"
-  runner="$tmp/bin/fm-test-run.sh"
   write_flat_hints "$runner" "$tmp/over" 1000 "$((budget + 1))"
   set_parallel_hints "$runner" "$tmp/over"
   status=0
-  out=$("$runner" --check-coverage 2>&1) || status=$?
-  [ "$status" -ne 0 ] || fail "a serial lane one millisecond past the budget must fail: $out"
-  assert_contains "$out" "portable parallel shard 2" "the failure names the lane that is over"
+  out=$("$runner" --check-lane-walls) || status=$?
+  [ "$status" -ne 0 ] || fail "a serial lane one millisecond past the budget must fail:"$'\n'"$out"
+  assert_contains "$out" "worst_lane=2" "the refusal names the lane that is over"
 
-  # Lane 1 runs with more than one worker, so its wall is its makespan, not its
-  # sum: it takes twice the budget of work to put it over, and the guard has to
+  # Lane 1 runs with more than one worker, so its wall is not its sum: it takes
+  # about twice the budget of work to put it over, and the projection has to
   # name shard 1 rather than the lane carrying the larger sum.
-  make_coverage_root "$tmp"
-  runner="$tmp/bin/fm-test-run.sh"
-  each=$(( (budget * 2) / $("$runner" --list --lane portable-parallel-1 | wc -l | tr -d ' ') + 1000 ))
+  each=$(( (budget * 2) / count + 1000 ))
   write_flat_hints "$runner" "$tmp/lane1" "$each" 1000
   set_parallel_hints "$runner" "$tmp/lane1"
   status=0
-  out=$("$runner" --check-coverage 2>&1) || status=$?
-  [ "$status" -ne 0 ] || fail "a concurrent lane past the budget must fail: $out"
-  assert_contains "$out" "portable parallel shard 1" "the failure names the concurrent lane"
+  out=$("$runner" --check-lane-walls) || status=$?
+  [ "$status" -ne 0 ] || fail "a concurrent lane past the budget must fail:"$'\n'"$out"
+  assert_contains "$out" "worst_lane=1" "the refusal names the concurrent lane"
 
   rm -rf "$tmp"
   pass "the parallel wall guard fails past the budget on either lane and passes at it"
 }
 
-# A projection that silently drops the work it cannot measure would read as
-# headroom precisely when the packing is least trustworthy. Withhold one
-# member's hint and require the guard to keep weighing that script on the
-# conservative fallback, and to say it is now packing on a guess.
-test_an_unmeasured_member_is_still_weighed_and_reported() {
-  local tmp runner dropped full partial unhinted
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-unhinted.XXXXXX")
-  make_coverage_root "$tmp"
+# The cheap projection refusing is not the same thing as CI going red. The gate
+# CI actually runs is --check-coverage, and what turns a bad pack into a failed
+# check is that guard returning non-zero on the same condition. That needs the
+# whole test inventory present, so it is the one case here that pays for a
+# fixture repository, and it is deliberately the only one: this script is a
+# member of the lane being measured.
+test_the_coverage_guard_refuses_an_over_budget_pack() {
+  local tmp runner budget out status f
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-coverage-refusal.XXXXXX")
+  mkdir -p "$tmp/bin" "$tmp/tests"
+  cp "$RUNNER" "$ROOT/bin/fm-test-isolation-proof.sh" "$tmp/bin/"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$tmp/$f"
+    chmod +x "$tmp/$f"
+  done < <("$RUNNER" --list --all)
   runner="$tmp/bin/fm-test-run.sh"
-  dropped=$("$runner" --list --lane portable-parallel-1 | tail -1)
-  [ -n "$dropped" ] || fail "could not choose a member to leave unmeasured"
-
-  # Every member hinted well below the conservative fallback, so withholding one
-  # hint has to move the projection up and cannot be absorbed by rebalancing.
-  write_flat_hints "$runner" "$tmp/all" 1000 1000
-  set_parallel_hints "$runner" "$tmp/all"
-  full=$("$runner" --check-coverage) || fail "the fully hinted fixture must pass: $full"
-  assert_contains "$full" "parallel_unhinted=0" "every member measured"
-
-  make_coverage_root "$tmp"
-  runner="$tmp/bin/fm-test-run.sh"
-  write_flat_hints "$runner" "$tmp/all" 1000 1000
-  grep -v "^$dropped " "$tmp/all" >"$tmp/partial"
-  set_parallel_hints "$runner" "$tmp/partial"
-  partial=$("$runner" --check-coverage) \
-    || fail "one missing hint must be reported, not refused on its own: $partial"
-  unhinted=$(printf '%s\n' "$partial" | sed -n 's/.*parallel_unhinted=\([0-9]*\).*/\1/p')
-  [ "$unhinted" = "1" ] \
-    || fail "the unmeasured member must be counted, got parallel_unhinted=$unhinted"
-  # A lane that still weighs the unmeasured script must project MORE than one
-  # that drops it, never the same and never less.
-  [ "$(printf '%s\n' "$partial" | sed -n 's/.*parallel_lane1_wall_ms=\([0-9]*\).*/\1/p')" \
-    -gt "$(printf '%s\n' "$full" | sed -n 's/.*parallel_lane1_wall_ms=\([0-9]*\).*/\1/p')" ] \
-    || fail "an unmeasured member must still be weighed into its lane's projection"
+  budget=$("$RUNNER" --check-lane-walls | sed -n 's/.*budget_ms=\([0-9]*\).*/\1/p')
+  [ -n "$budget" ] || fail "could not read the modeled wall budget"
+  write_flat_hints "$runner" "$tmp/over" 1000 "$((budget + 1))"
+  set_parallel_hints "$runner" "$tmp/over"
+  status=0
+  out=$("$runner" --check-coverage 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "the coverage guard must refuse an over-budget pack:"$'\n'"$out"
+  assert_contains "$out" "portable parallel shard 2" "the coverage guard names the lane that is over"
   rm -rf "$tmp"
-  pass "an unmeasured parallel member is still weighed and is reported as a guess"
+  pass "the coverage guard CI runs refuses a pack the projection rejects"
 }
 
-# The exact shape the retired sum assertion could not see, run end to end: two
-# lanes whose hint sums are identical - 0% apart, inside the old 5% band - while
-# the serial lane's wall is over the budget and the concurrent lane's is not.
-# This is not a hypothetical; it is the 2026-09-20 cancellation in miniature.
+# The exact shape the retired sum assertion could not see: two lanes whose hint
+# sums are identical - 0% apart, inside the old 5% band - while the serial
+# lane's wall is over the budget and the concurrent lane's is not. This is not a
+# hypothetical; it is the 2026-09-20 cancellation in miniature.
 test_equal_lane_sums_do_not_hide_a_lane_over_its_wall() {
   local tmp runner budget count each lane2 sum1 out status
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-equal-sums.XXXXXX")
-  make_coverage_root "$tmp"
+  make_wall_fixture "$tmp"
   runner="$tmp/bin/fm-test-run.sh"
-  budget=$("$RUNNER" --check-coverage | sed -n 's/.*parallel_wall_budget_ms=\([0-9]*\).*/\1/p')
+  budget=$("$RUNNER" --check-lane-walls | sed -n 's/.*budget_ms=\([0-9]*\).*/\1/p')
   [ -n "$budget" ] || fail "could not read the modeled wall budget"
   count=$("$runner" --list --lane portable-parallel-1 | wc -l | tr -d ' ')
   lane2=$((budget + 100000))
@@ -1289,12 +1389,48 @@ test_equal_lane_sums_do_not_hide_a_lane_over_its_wall() {
   [ "$sum1" -gt "$budget" ] \
     || fail "fixture must put the serial lane past the budget, got $sum1 against $budget"
   status=0
-  out=$("$runner" --check-coverage 2>&1) || status=$?
+  out=$("$runner" --check-lane-walls) || status=$?
   [ "$status" -ne 0 ] \
-    || fail "equal sums must not excuse a serial lane past its wall budget: $out"
-  assert_contains "$out" "portable parallel shard 2" "the over-budget lane is the serial one"
+    || fail "equal sums must not excuse a serial lane past its wall budget:"$'\n'"$out"
+  assert_contains "$out" "worst_lane=2" "the over-budget lane is the serial one"
+  [ "$(wall_of 1 "$out")" -lt "$(wall_of 2 "$out")" ] \
+    || fail "the concurrent lane must project the shorter wall from the identical sum: $out"
   rm -rf "$tmp"
   pass "identical lane sums no longer hide a serial lane projected past its cap"
+}
+
+# A projection that silently drops the work it cannot measure would read as
+# headroom precisely when the packing is least trustworthy. Withhold one
+# member's hint and require the projection to rise, and the guard to say it is
+# now packing on a guess.
+test_an_unmeasured_member_is_still_weighed_and_reported() {
+  local tmp runner dropped full partial unhinted
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-unhinted.XXXXXX")
+  make_wall_fixture "$tmp"
+  runner="$tmp/bin/fm-test-run.sh"
+  dropped=$("$runner" --list --lane portable-parallel-1 | tail -1)
+  [ -n "$dropped" ] || fail "could not choose a member to leave unmeasured"
+
+  # Every member hinted well below the conservative fallback, so withholding one
+  # hint has to move the projection up and cannot be absorbed by rebalancing.
+  write_flat_hints "$runner" "$tmp/all" 1000 1000
+  set_parallel_hints "$runner" "$tmp/all"
+  full=$("$runner" --check-lane-walls) || fail "the fully hinted fixture must pass: $full"
+  assert_contains "$full" "lane=1 jobs=2 wall_ms=" "lane 1 projects a wall"
+  [ "$(printf '%s\n' "$full" | sed -n 's/^lane=1 .*unhinted=\([0-9]*\).*/\1/p')" = "0" ] \
+    || fail "every member is hinted in this fixture: $full"
+
+  grep -v "^$dropped " "$tmp/all" >"$tmp/partial"
+  set_parallel_hints "$runner" "$tmp/partial"
+  partial=$("$runner" --check-lane-walls) \
+    || fail "one missing hint must be reported, not refused on its own:"$'\n'"$partial"
+  unhinted=$(printf '%s\n' "$partial" | sed -n 's/^lane=1 .*unhinted=\([0-9]*\).*/\1/p')
+  [ "$unhinted" = "1" ] \
+    || fail "the unmeasured member must be counted, got unhinted=$unhinted"
+  [ "$(wall_of 1 "$partial")" -gt "$(wall_of 1 "$full")" ] \
+    || fail "an unmeasured member must still be weighed into its lane's projection"
+  rm -rf "$tmp"
+  pass "an unmeasured parallel member is still weighed and is reported as a guess"
 }
 
 test_portable_serial_shards_partition_the_serial_lane() {
@@ -2043,7 +2179,10 @@ test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights
 test_portable_shard_union_and_coverage_guard
 test_portable_parallel_lane_walls_stay_under_budget
+test_the_modeled_dispatch_order_is_the_order_the_runner_uses
+test_the_wall_projection_walks_the_dispatch_order
 test_parallel_wall_guard_fails_and_passes_either_side_of_the_budget
+test_the_coverage_guard_refuses_an_over_budget_pack
 test_equal_lane_sums_do_not_hide_a_lane_over_its_wall
 test_an_unmeasured_member_is_still_weighed_and_reported
 test_portable_serial_shards_partition_the_serial_lane

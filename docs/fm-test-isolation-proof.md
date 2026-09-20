@@ -107,7 +107,11 @@ That is the margin this family has: four workers is proven, and the failures rea
 Keep `--jobs` for this family at or below the proven bound rather than raising it to fill a larger machine.
 
 The archived harness runs showed why ordering matters: the candidate sum was 818s and the balanced four-worker target 205s, but alphabetical order finished in 395s because the 193s `fm-watch-triage` started last and ran alone at the tail.
-Both `bin/fm-test-run.sh` and the current proof harness therefore order concurrent runs longest-hint-first.
+Both `bin/fm-test-run.sh` and the current proof harness order concurrent runs by the hint the runner schedules on, which is the serial weight (`concurrent_dispatch_weight_for` in that script).
+That is longest-first only where the scripts in hand carry serial hints, as this family's do.
+It is NOT longest-first for a portable parallel lane: no member of either lane has a serial hint, so every key ties at `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` and the sort falls through to its path tie-break, which is alphabetical.
+The same tail effect recorded above then happens there, and on 2026-09-20 it did: `tests/fm-test-run.test.sh` was dispatched 20th of 23, started 370 s into the lane, and was still running alone when the job cap cancelled it.
+`bin/fm-test-run.sh` models that real order rather than the better one, so a pack cannot be approved on a schedule the runner does not use; [fm-test-portable-shards.md](fm-test-portable-shards.md) owns the projection and what it costs those lanes.
 
 ### pure-contract-unit: admitted
 

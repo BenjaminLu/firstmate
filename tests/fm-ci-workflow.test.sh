@@ -166,17 +166,27 @@ CAPS
 # packing it approves means nothing. Assert against the runner's own reported
 # numbers rather than literals, so the two can only be changed together.
 test_parallel_lane_concurrency_matches_the_measured_shape() {
-  local coverage
-  coverage=$("$ROOT/bin/fm-test-run.sh" --check-coverage) \
-    || fail "could not read the runner's coverage report"
-  ruby -ryaml - "$CI_WORKFLOW" "$coverage" <<'RUBY' || fail "parallel lane concurrency contract"
+  local walls
+  # --check-lane-walls rather than --check-coverage: it reports the same worker
+  # counts, budget and cap in milliseconds rather than seconds, because it does
+  # not re-prove the whole test inventory to do it. This file is itself a member
+  # of a CI shard, so what it costs to assert the packing is part of the packing.
+  walls=$("$ROOT/bin/fm-test-run.sh" --check-lane-walls) || true
+  [ -n "$walls" ] || fail "could not read the runner's lane-wall projection"
+  ruby -ryaml - "$CI_WORKFLOW" "$walls" <<'RUBY' || fail "parallel lane concurrency contract"
 jobs = YAML.load_file(ARGV[0]).fetch("jobs")
-coverage = ARGV[1]
+walls = ARGV[1]
 
-def reported(coverage, key)
-  match = coverage[/#{key}=(\d+)/, 1]
-  raise "bin/fm-test-run.sh --check-coverage did not report #{key}" if match.nil?
+def reported(walls, key)
+  match = walls[/#{key}=(\d+)/, 1]
+  raise "bin/fm-test-run.sh --check-lane-walls did not report #{key}" if match.nil?
   match.to_i
+end
+
+def lane_jobs(walls, lane)
+  row = walls.lines.find { |l| l.start_with?("lane=#{lane} ") }
+  raise "--check-lane-walls did not report lane #{lane}" if row.nil?
+  reported(row, "jobs")
 end
 
 # Comments in these steps quote the measured --jobs 2 numbers, so match the
@@ -200,7 +210,7 @@ lanes = {
 
 lanes.each do |n, job|
   asked = workflow_jobs(run_step(job))
-  modeled = reported(coverage, "parallel_lane#{n}_jobs")
+  modeled = lane_jobs(walls, n)
   raise "shard #{n} runs with #{asked} worker(s) here but bin/fm-test-run.sh models #{modeled}; the wall projection that packs these lanes is describing a lane that does not exist" \
     unless asked == modeled
 end
@@ -213,14 +223,14 @@ raise "lane 2 must stay serial: it is one script that is the whole lane, so a se
 
 # The cap the model is held against is this file's, and the model only mirrors
 # it. Mirrors drift; this is what stops one drifting unnoticed.
-modeled_cap = reported(coverage, "parallel_wall_cap_ms")
+modeled_cap = reported(walls, "cap_ms")
 lanes.each do |n, job|
   cap = job.fetch("timeout-minutes") * 60_000
   raise "shard #{n} caps at #{cap}ms but bin/fm-test-run.sh models its lanes against #{modeled_cap}ms" \
     unless cap == modeled_cap
 end
 
-budget = reported(coverage, "parallel_wall_budget_ms")
+budget = reported(walls, "budget_ms")
 raise "the modeled packing budget #{budget}ms must stay below the #{modeled_cap}ms job cap it protects" \
   unless budget < modeled_cap
 RUBY
