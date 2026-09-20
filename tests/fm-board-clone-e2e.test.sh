@@ -43,9 +43,10 @@
 #      can quietly make the test match the code; this one deliberately does
 #      not.
 #
-# WHAT THIS DOES NOT COVER. PR 51 deleted the file that used to carry `e2e` in
-# its name, so this is the board's only end-to-end suite and its edges are not
-# obvious from the outside. It drives ONE browser - whichever of Chrome,
+# WHAT THIS DOES NOT COVER. The file that used to carry `e2e` in its name was
+# deleted when the board stopped needing an external tool to host it, so this
+# is the board's only end-to-end suite and its edges are not obvious from the
+# outside. It drives ONE browser - whichever of Chrome,
 # Chromium or Edge the machine has - so an engine difference is invisible to
 # it. It asserts no appearance: it reads rendered text and hit-tests real
 # elements, but nothing compares pixels or checks layout, so a board with every
