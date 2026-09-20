@@ -4051,6 +4051,55 @@ test_completion_gate_reads_an_answered_call_out_of_the_archive() {
   pass "the completion gate reads an answered call out of the backlog's archive"
 }
 
+# The archive is wherever the backlog's own configuration puts it. A home that
+# keeps no Done entries retires a row in the same breath as the close, so every
+# read after a close has to look there too or a landed answer reports failure.
+# And a store
+# this reader cannot open is reported by name rather than spent as proof that
+# the row does not exist - the one way an archive-aware gate could quietly
+# start passing everything it can no longer check.
+test_archive_follows_its_configuration_and_reports_an_unreadable_store() {
+  local home id call archive out
+  home=$(make_home archive-configuration)
+  id=sample-archive-config-origin
+  call=sample-archive-config-call
+  archive="$home/data/attic/retired.md"
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/attic/retired.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate the configured archive" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the configured-archive origin"
+  write_origin_meta "$home" "$id"
+  printf '# Configured archive\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose the configured option" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not hold the configured-archive call"
+  printf 'Fund the clock seam.\n' > "$home/configured-decision.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/configured-decision.txt" \
+    > "$home/configured-answer.out" 2> "$home/configured-answer.err" \
+    || fail "a close that retention retired in the same breath reported failure: $(cat "$home/configured-answer.err")"
+  assert_contains "$(cat "$home/configured-answer.out")" "answered: $call" \
+    "the zero-retention close did not report the answer it recorded"
+  assert_present "$archive" "zero retention did not write the configured archive path"
+  assert_grep "Fund the clock seam." "$archive" \
+    "the zero-retention close lost the captain's recorded words"
+  run_captain "$home" complete "$id" "$call" >/dev/null 2> "$home/configured.err" \
+    || fail "the gate did not follow the configured archive path: $(cat "$home/configured.err")"
+
+  chmod 0000 "$archive"
+  if [ -r "$archive" ]; then
+    chmod 0644 "$archive"
+    echo "skip: this filesystem ignores mode 0000, so an unreadable archive cannot be staged"
+  else
+    out=$(run_captain "$home" complete "$id" sample-unreadable-probe 2>&1) \
+      && fail "an unreadable archive resolved a task as simply absent: $out"
+    assert_contains "$out" "$archive" "the refusal did not name the archive it could not read: $out"
+    chmod 0644 "$archive"
+  fi
+  pass "the archive follows its configuration, survives zero retention, and reports an unreadable store"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4129,6 +4178,7 @@ test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
 test_completion_gate_reads_an_answered_call_out_of_the_archive
+test_archive_follows_its_configuration_and_reports_an_unreadable_store
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_keyed_intake_reports_a_live_workers_row_as_skipped
 test_answer_records_and_closes

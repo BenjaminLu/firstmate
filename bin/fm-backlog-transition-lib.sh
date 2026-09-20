@@ -232,10 +232,22 @@ fm_backlog_markdown_archive_from_toml() {  # <toml-path>
 # title mentioning another task cannot answer for it.
 fm_backlog_archived_row() {  # <data-dir> <task-id>
   local data=$1 id=$2 archive status=0
-  archive=$(fm_backlog_archive_file "$data") || return $?
+  archive=$(fm_backlog_archive_file "$data") || {
+    status=$?
+    if [ "$status" -eq 2 ]; then
+      FM_BACKLOG_TRANSITION_ERROR=${FM_BACKLOG_TRANSITION_ERROR:-"backlog archive path cannot be resolved for $data"}
+      printf '%s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2
+    fi
+    return "$status"
+  }
   [ -e "$archive" ] || [ -L "$archive" ] || return 1
   if [ ! -f "$archive" ] || [ ! -r "$archive" ]; then
     FM_BACKLOG_TRANSITION_ERROR="backlog archive cannot be read at $archive"
+    # Printed as well as stored, because every caller reaches this through a
+    # command substitution, where an assignment to the error global dies with
+    # the subshell and absence would otherwise be indistinguishable from a
+    # missing row.
+    printf '%s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2
     return 2
   fi
   LC_ALL=C awk -v id="$id" '

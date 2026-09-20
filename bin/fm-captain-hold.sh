@@ -543,14 +543,17 @@ resolution_block() {  # <mode>
 # The archived half of this home's backlog, for a row done_keep has retired out
 # of the active file. Absence here is still absence: it resolves NOTHING on its
 # own and only ever supplies the closed row's own recorded body.
+# 0 prints the body, 1 means the id is not archived here, and 2 means the
+# archive could not be read at all - kept distinct from 1 all the way up,
+# because a store this reader cannot open must never be spent as proof that
+# the row it was asked about does not exist. The unreadable path names itself
+# on stderr, which is the only channel that survives the command substitutions
+# every caller reaches it through.
 archived_row_body() {  # <task-id>; prints the archived row's body
   local data status=0 body
   data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
   body=$(fm_backlog_archived_row "$data" "$1") || status=$?
-  if [ "$status" -eq 2 ]; then
-    fail "${FM_BACKLOG_TRANSITION_ERROR:-the backlog archive cannot be read}"
-  fi
-  [ "$status" -eq 0 ] || return 1
+  [ "$status" -eq 0 ] || return "$status"
   printf '%s' "$body"
 }
 
@@ -558,13 +561,16 @@ archived_row_body() {  # <task-id>; prints the archived row's body
 # surviving even when a date gate has expired) or a recorded captain answer,
 # wherever this home's backlog keeps the row - the active file or its archive.
 verify_hold_durable() {  # <task-id>
-  local id=$1 show state hold_kind body archived
+  local id=$1 show state hold_kind body archived archived_status=0
   if ! task_show "$id"; then
     # Retention is not a resolution. An archived row proves durability only
     # through the captain answer recorded in it; an archived row without one,
     # and an id in neither file, both stay refusals, so nothing is cleaned away
     # on the strength of having disappeared.
-    archived=$(archived_row_body "$id") \
+    archived=$(archived_row_body "$id") || archived_status=$?
+    [ "$archived_status" -ne 2 ] \
+      || fail "the backlog archive could not be read while resolving captain-held task $id"
+    [ "$archived_status" -eq 0 ] \
       || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
     body_has_resolution_record "$archived" \
       || fail "archived task $id closed with no recorded captain answer; it is not a durable captain call"
@@ -802,17 +808,22 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
   esac
   # Every live lookup has been tried, so a row retention retired can now answer
   # without ever shadowing one still listed. verify_hold_durable still decides
-  # whether what it found is durable.
-  if archived_row_body "$entry" >/dev/null; then
-    printf '%s archived' "$entry"
-    return 0
-  fi
+  # whether what it found is durable, and an archive that cannot be read stops
+  # the resolution rather than reading as an unknown id.
+  rc=0
+  archived_row_body "$entry" >/dev/null || rc=$?
+  case "$rc" in
+    0) printf '%s archived' "$entry"; return 0 ;;
+    2) return 2 ;;
+  esac
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
     legacy=$(legacy_hold_id "$origin" "$entry")
-    if archived_row_body "$legacy" >/dev/null; then
-      printf '%s archived' "$legacy"
-      return 0
-    fi
+    rc=0
+    archived_row_body "$legacy" >/dev/null || rc=$?
+    case "$rc" in
+      0) printf '%s archived' "$legacy"; return 0 ;;
+      2) return 2 ;;
+    esac
     fail "no captain-held task $entry in this home's configured backlog or its archive, and no migrated hold for it (data directory $DATA); the nearest legacy identity $legacy also resolves to nothing"
   fi
   fail "no captain-held task $entry in this home's configured backlog or its archive, and no migrated hold for it (data directory $DATA)"
@@ -1062,9 +1073,39 @@ close_answered() {  # <task-id> <release-0-or-1>
   fi
 }
 
+# Where the backlog keeps a row this command just closed. done_keep can retire
+# it in the same breath as the close - a home that keeps no Done entries
+# retires it immediately - so reading only the active file turns a completed
+# answer into a false failure. A row in NEITHER file is real corruption and
+# still stops the command.
+closed_row_present() {  # <task-id>; 0 active (sets TASK_SHOW_OUTPUT), 1 archived
+  local id=$1 status=0
+  task_show "$id" && return 0
+  archived_row_body "$id" >/dev/null || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "the backlog archive could not be read while confirming the close of $id"
+  [ "$status" -eq 0 ] \
+    || fail "task $id disappeared after closing: it is in neither this home's configured backlog nor its archive (data directory $DATA)"
+  return 1
+}
+
+# The decoded body of that row, from whichever half of the backlog holds it.
+closed_row_body() {  # <task-id>
+  local id=$1
+  if closed_row_present "$id"; then
+    decode_shown_value "$(show_field "$TASK_SHOW_OUTPUT" body)" \
+      || fail "could not decode the closed body for $id"
+    return 0
+  fi
+  archived_row_body "$id"
+}
+
 remove_interrupted_answer_stamp() {  # <task-id>
   local id=$1 show body existing tmp
-  task_show_or_fail "$id" "task $id disappeared after closing"
+  # An archived row keeps its recorded body and tasks-axi cannot update it, so
+  # there is no ordering left to normalize once retention has retired it.
+  closed_row_present "$id" || return 0
+  show=$TASK_SHOW_OUTPUT
   body=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the closed body for $id"
   existing=$(body_hold_set_timestamp "$body")
@@ -1176,9 +1217,7 @@ command_answer() {
       fail "could not close answered captain-held task $id"
     fi
     remove_interrupted_answer_stamp "$id"
-    task_show "$id" || fail "task $id disappeared after closing"
-    show=$TASK_SHOW_OUTPUT
-    body_has_resolution_record "$(show_field "$show" body)" \
+    body_has_resolution_record "$(closed_row_body "$id")" \
       || fail "captain-held task $id did not retain its durable resolution record"
     publish_parent_resolution_then_retire "$id" "$occurrence" "$outcome"
     printf '%s: %s\n' "$outcome" "$id"
@@ -1354,7 +1393,7 @@ command_answers() {
     id=${id%% *}
     if [ "$resolve_rc" = 2 ]; then
       reason=$(tr -d '\n' < "$err")
-      printf 'skipped: %s (migrated-hold scan refused%s)\n' "$key" "${reason:+: $reason}"
+      printf 'skipped: %s (resolution refused%s)\n' "$key" "${reason:+: $reason}"
       skipped=$((skipped + 1))
       continue
     fi
@@ -1644,8 +1683,7 @@ reconcile_close() {
   fi
   close_answered "$id" 0 || fail "could not close reconciled captain-held task $id"
   remove_interrupted_answer_stamp "$id"
-  task_show_or_fail "$id" "task $id disappeared after closing"
-  body_has_resolution_record "$(show_field "$show" body)" \
+  body_has_resolution_record "$(closed_row_body "$id")" \
     || fail "captain-held task $id did not retain its durable resolution record"
   publish_parent_hold "$id" "$occurrence" resolved reconciled
   [ "$PARENT_HOLD_PUBLISHED" = 1 ] \
