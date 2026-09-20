@@ -946,15 +946,56 @@ EOF
   assert_not_contains "$out" "nothing but {DESIGN}" \
     "a written plan that shows the placeholder on its own line was refused as unwritten"
 
-  # Absent: the older shape. It warns, and it launches.
+  # Absent, and the brief names none: the older shape. It warns, and it launches.
   id=delivery-design-legacy
   write_brief "$home" "$id" direct-PR
   assert_absent "$home/data/$id/design.md" "the legacy fixture already had a design record"
+  assert_no_grep "# Design record" "$home/data/$id/brief.md" \
+    "the legacy fixture names a design record, so it is not the legacy shape"
   out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
   assert_contains "$out" "has no design record at" \
     "a brief predating design records launched with no word that its plan is unwritten"
   assert_not_contains "$out" "nothing but {DESIGN}" \
     "an absent design record was reported as an unfilled one"
+  assert_not_contains "$out" "and there is no such file" \
+    "a brief naming no record was refused as one whose record went missing"
+
+  # Absent while the brief DOES name the path: the worker would be sent to a file
+  # that is not there, which is an instruction it cannot follow. Refused, not warned.
+  id=delivery-design-removed
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "removed-record brief should scaffold"
+  content=$(cat "$home/data/$id/brief.md")
+  content=${content//'{TASK}'/Ship the toggle.}
+  content=${content//'{FIRSTMATE_SPEC}'/Leave the settings page alone.}
+  printf '%s\n' "$content" > "$home/data/$id/brief.md"
+  rm -f "$home/data/$id/design.md"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a brief pointing at a missing record should exit non-zero"
+  assert_contains "$out" "and there is no such file" \
+    "the refusal did not say the path the brief hands the worker is not there"
+  assert_not_contains "$out" "briefed before ship and scout tasks carried one" \
+    "a removed record was excused as a brief that predates design records"
+  assert_absent "$home/state/$id.meta" "a refused spawn wrote task metadata"
+
+  # A path that is not a readable regular file is refused in the same words every
+  # other script on this path uses.
+  id=delivery-design-notfile
+  FM_HOME="$home" "$BRIEF" "$id" proj --mode direct-PR >/dev/null 2>&1 \
+    || fail "not-a-file brief should scaffold"
+  content=$(cat "$home/data/$id/brief.md")
+  content=${content//'{TASK}'/Ship the toggle.}
+  content=${content//'{FIRSTMATE_SPEC}'/Leave the settings page alone.}
+  printf '%s\n' "$content" > "$home/data/$id/brief.md"
+  rm -f "$home/data/$id/design.md"
+  mkdir -p "$home/data/$id/design.md"
+  out=$(run_spawn "$home" "$fakebin" "$id" "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a directory at the record's path should exit non-zero"
+  assert_contains "$out" "exists but is not a readable regular file" \
+    "the refusal did not use the shared wording for a path that is not a file"
+  rmdir "$home/data/$id/design.md"
   pass "fm-spawn: an unwritten design record is refused, and one that predates them warns instead"
 }
 

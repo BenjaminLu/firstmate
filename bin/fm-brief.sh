@@ -378,6 +378,12 @@ REPO=${POS[1]}
 # rather than something firstmate has to remember at the end of an intake.
 DESIGN_RECORD=$(fm_design_record_path "$DATA" "$ID")
 if [ -e "$DESIGN_RECORD" ]; then
+  # The brief below hands the worker this path, so it must be a file the worker
+  # can open. Refused in the same words bin/fm-dispatch.sh and bin/fm-spawn.sh use.
+  if [ ! -f "$DESIGN_RECORD" ] || [ ! -r "$DESIGN_RECORD" ]; then
+    echo "error: $DESIGN_RECORD exists but is not a readable regular file" >&2
+    exit 1
+  fi
   DESIGN_STATE=reused
 else
   fm_design_record_scaffold "$ID" > "$DESIGN_RECORD" || {
