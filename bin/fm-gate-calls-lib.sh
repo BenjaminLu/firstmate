@@ -95,9 +95,25 @@
 #      JSON object plus "dropped":"<reason>", so one parser reads both files
 #      and a reader can count what is missing and see what it was.
 #
-#   The residual limit, stated rather than hidden: when <state> itself cannot
-#   be written neither file can be, and the stderr line is the only report.
-#   That is the one case where the log's incompleteness is not itself durable.
+#   TWO RESIDUAL LIMITS, STATED RATHER THAN HIDDEN. Both bound what the two
+#   places above can prove, and the second is the larger one.
+#
+#   1. When <state> itself cannot be written neither file can be, and the
+#      stderr line is the only report. That is the one case where the log's
+#      incompleteness is not itself durable.
+#
+#   2. This covers only calls that reach fm_gate_call_record. Two of the four
+#      sites - the ask-user decision and the review-finding ruling - are
+#      agent prose in .agents/skills/ask-user-authority and
+#      .agents/skills/pr-review, with no code path that notices a skipped
+#      call. A ruling that is simply never recorded produces no log line, no
+#      drops line, and nothing on stderr.
+#
+#   So read the guarantee precisely: a call that ENTERS here and cannot be
+#   written is always visible as missing. The log cannot prove a ruling
+#   happened without a record, and nothing here should be read as saying it
+#   can. Closing that would mean a second mechanism watching the two prose
+#   sites, which is its own piece of work and not this one.
 #
 # BOUNDS
 #
