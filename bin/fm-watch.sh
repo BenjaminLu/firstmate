@@ -2327,6 +2327,11 @@ while :; do
           # again. Nothing on the merged path is exempt at all, contention
           # included: the outcome publishes and the poll retires in this same
           # cycle, so whatever the record holds then it holds forever.
+          if [ "$rebind_rc" -eq 0 ] && [ "${unconfirmed_head:-0}" = 0 ]; then
+            # Recorded. Anything reported before is answered, so the next
+            # failure - even an identical one - is news again.
+            rm -f "$STATE/.pr-head-reported-$id"
+          fi
           if [ "$rebind_rc" -ne 0 ] || [ "${unconfirmed_head:-0}" = 1 ]; then
             if [ "$out" = merged ]; then
               if [ "${unconfirmed_head:-0}" = 1 ]; then
@@ -2343,10 +2348,24 @@ while :; do
             elif [ "$rebind_rc" -eq 2 ]; then
               triage_log "deferred re-binding the recorded head of $id to $poll_head; the task record was locked"
             else
+              # The one path here that repeats: the poll stays armed, so this
+              # cycle's failure recurs on every sweep until someone acts. The
+              # rc=1 causes are largely persistent - a record rebound to another
+              # pull request, a link count, a device mismatch - so an ungated row
+              # per sweep would crowd the queue that is meant to be the first
+              # work list. Report each distinct condition once, keyed on the
+              # task and the head it could not reach, exactly as this repo
+              # already does for pending tool updates and dead endpoints.
               triage_log "could not re-bind the recorded head of $id to $poll_head (rc=$rebind_rc)"
-              fm_wake_append check "pr-head-$id" \
-                "check: $id's record could not be updated to the head its pull request is on ($poll_head), so the head it names is stale: $url" \
-                || exit 1
+              rebind_marker="$STATE/.pr-head-reported-$id"
+              if [ "$(cat "$rebind_marker" 2>/dev/null || true)" = "$poll_head $rebind_rc" ]; then
+                triage_log "absorbed a repeat re-bind failure for $id (already reported once)"
+              else
+                fm_wake_append check "pr-head-$id" \
+                  "check: $id's record could not be updated to the head its pull request is on ($poll_head), so the head it names is stale: $url" \
+                  || exit 1
+                printf '%s %s\n' "$poll_head" "$rebind_rc" > "$rebind_marker" || exit 1
+              fi
             fi
           fi
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then

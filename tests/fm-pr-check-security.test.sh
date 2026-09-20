@@ -1048,6 +1048,67 @@ test_a_failed_rebind_is_never_silent() {
   pass "a merged poll that cannot record its head reaches the durable queue, and one that can stays quiet"
 }
 
+# The non-terminal failure path repeats: the poll stays armed, so a persistent
+# cause is met again on every sweep. The durable queue is the supervisor's first
+# work list and each row needs acknowledging, so one row per sweep would crowd
+# it out. Report each distinct condition once - and, just as important, report
+# again once something changes, or the marker becomes its own silence.
+test_a_repeating_rebind_failure_is_reported_once_per_condition() {
+  local dir state rc rows
+  dir=$(make_case rebind-failure-dedupe)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  strand_record_lock "$dir" "$state" task-a
+
+  # Run one sweep and report how many re-bind rows it queued. Every sweep is
+  # acknowledged, because an unacknowledged row makes the NEXT sweep resurface
+  # it instead of reaching the poll at all - which would make a silent absorb
+  # and a sweep that never ran look identical.
+  dedupe_sweep() {  # <label> [head]
+    local label=$1 head=${2:-0123456789abcdef0123456789abcdef01234567}
+    rm -f "$state/.last-check"
+    set +e
+    FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD="$head" \
+      FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_PR_META_LOCK_TIMEOUT=1 \
+      FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+      run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/$label.out" 2> "$dir/$label.err"
+    rc=$?
+    set -e
+    case "$rc" in 0|124) ;; *) fail "$label sweep failed (rc=$rc): $(cat "$dir/$label.err")" ;; esac
+    rows=$(grep -c 'pr-head-task-a' "$state/.wake-queue" 2>/dev/null || true)
+    rows=${rows:-0}
+    ack_watcher_cycle "$state" || fail "$label sweep acknowledgement failed"
+  }
+  reached_poll() {  # <label>: the sweep actually ran the poll, rather than
+    # resurfacing a queued row before ever getting to the check loop.
+    grep -qF 'check: rearm-resurface' "$dir/$1.out" && return 1
+    return 0
+  }
+
+  # First sighting: it reaches the queue.
+  dedupe_sweep first
+  reached_poll first || fail "the first sweep never reached the poll"
+  [ "$rows" -eq 1 ] || fail "the first re-bind failure did not reach the queue (rows=$rows)"
+
+  # The same condition again. Handled already, so nothing new is owed.
+  dedupe_sweep second
+  reached_poll second || fail "the second sweep never reached the poll"
+  [ "$rows" -eq 0 ] || fail "an unchanged repeating failure queued another row (rows=$rows)"
+  grep -F 'absorbed a repeat re-bind failure for task-a' "$state/.watch-triage.log" >/dev/null \
+    || fail "the repeat was not absorbed: $(cat "$state/.watch-triage.log")"
+  [ -f "$state/.pr-head-reported-task-a" ] || fail "no report-once record was kept"
+
+  # Something changed - same task, different head - so it is news again, and the
+  # marker has not become its own silence.
+  dedupe_sweep changed cafebabecafebabecafebabecafebabecafebabe
+  release_lock_holder
+  reached_poll changed || fail "the changed-head sweep never reached the poll"
+  [ "$rows" -eq 1 ] || fail "a failure against a new head was absorbed as a repeat (rows=$rows)"
+  pass "a repeating re-bind failure is queued once per condition and again when it changes"
+}
+
 # The poll's third output line: merged, with no head the forge would give up.
 # Nothing re-binds then, and the poll retires in the same cycle, so what the
 # record keeps is the arming-time head - the superseded value this whole branch
@@ -3252,6 +3313,7 @@ test_rebind_never_waits_on_a_held_task_record
 test_a_permanent_lock_failure_is_not_reported_as_contention
 test_a_failed_rebind_is_never_silent
 test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so
+test_a_repeating_rebind_failure_is_reported_once_per_condition
 test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication

@@ -3573,7 +3573,7 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.control-relaunch" "$STATE/$ID.control-relaunch.meta-prior" \
   "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
   "$STATE/$ID.reconcile-nudged" "$STATE/$ID.gemini-settings.json" \
-  "$STATE/.$ID.branch-outcome-index"
+  "$STATE/.$ID.branch-outcome-index" "$STATE/.pr-head-reported-$ID"
 # A board acknowledgement is settled by the handler, and one left behind is a
 # defect rather than untidiness (.agents/skills/bearings/SKILL.md). This is the
 # backstop for the case that contract already calls a defect: without it an
