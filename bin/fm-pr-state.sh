@@ -191,8 +191,16 @@ if ! APPROVAL_ROWS=$(gh pr view "$URL" --json reviews --jq '
     elif (standing | not) then $oid + " X" + tail_line
     else $oid + " T" + tail_line
     end
-  ' 2>/dev/null); then
+  ' 2>"$GH_STDERR"); then
+  # This file already captures gh's stderr for the checks read seventy lines
+  # above and prints what it does not recognise; the approval read threw the
+  # same channel away, so one script gave two different answers about whether
+  # the forge's own account of a failure is worth keeping.
   printf 'APPROVAL UNREADABLE: could not read the reviews on this pull request\n'
+  if [ -s "$GH_STDERR" ]; then
+    printf 'the forge said:\n'
+    sed 's/^/  /' "$GH_STDERR"
+  fi
 else
   # Every review is classified rather than filtered, because the four ways a
   # pull request can be unapproved send the operator somewhere different and

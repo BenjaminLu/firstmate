@@ -426,11 +426,22 @@ fi
 # Whether the approver is also the account that opened the merge request IS
 # knowable, and gitlab_verify_mergeable says which of those two cases it saw.
 gitlab_read_approvals() {
-  local encoded body
+  local encoded body err
   encoded=$(printf '%s' "$PR_PATH" | sed 's|/|%2F|g')
-  body=$(GITLAB_HOST="$FM_PR_HOST" glab api "projects/$encoded/merge_requests/$PR_NUMBER/approvals" 2>/dev/null) \
-    || return 1
-  [ -n "$body" ] || return 1
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || return 1
+  if ! body=$(GITLAB_HOST="$FM_PR_HOST" glab api "projects/$encoded/merge_requests/$PR_NUMBER/approvals" 2>"$err") \
+    || [ -z "$body" ]; then
+    # The forge's own account of why, for the same reason the GitHub read keeps
+    # it: rate limit, expired token and a wrong project are one refusal
+    # otherwise, and they want different things done next.
+    if [ -s "$err" ]; then
+      echo "the forge said:" >&2
+      sed 's/^/  /' "$err" >&2
+    fi
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
   printf '%s' "$body" | jq -r '
     if type == "object" and (.approved_by | type) == "array" then
       "count=" + ((.approved_by | length) | tostring),
@@ -446,7 +457,7 @@ gitlab_read_approvals() {
 FM_PR_MERGE_HEAD=
 FM_PR_GITLAB_ASYNC_CONFIGURED=false
 gitlab_verify_mergeable() {
-  local json fields line approvals
+  local json fields line approvals glab_err
   local total=0 named=0 refusals=''
   local state='' detail='' conflicts='' discussions=''
   local live_head='' pipeline_sha='' pipeline_status='' async_configured=''
@@ -455,11 +466,24 @@ gitlab_verify_mergeable() {
   # GITLAB_HOST is set to the same host the project URL already carries, so the
   # instance is taken from the parsed URL by both signals and never from the
   # operator's configured default.
-  if ! json=$(GITLAB_HOST="$FM_PR_HOST" glab mr view "$PR_NUMBER" -R "$PROJECT_URL" -F json 2>/dev/null) \
+  glab_err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || {
+    echo "error: could not create a temporary file to capture the forge's error" >&2
+    return 1
+  }
+  if ! json=$(GITLAB_HOST="$FM_PR_HOST" glab mr view "$PR_NUMBER" -R "$PROJECT_URL" -F json 2>"$glab_err") \
     || [ -z "$json" ]; then
-    echo "error: could not read the GitLab merge request state before merging" >&2
+    echo "error: the forge did not answer the read of $URL before merging; nothing was merged" >&2
+    if [ -s "$glab_err" ]; then
+      echo "the forge said:" >&2
+      sed 's/^/  /' "$glab_err" >&2
+      echo "whether retrying clears it depends on which of those it was" >&2
+    else
+      echo "the forge said nothing, so what stopped the read is unknown and retrying may or may not clear it" >&2
+    fi
+    rm -f "$glab_err"
     return 1
   fi
+  rm -f "$glab_err"
   # One named field per line. The names keep a trailing empty value readable
   # after command substitution strips blank lines, and an absent or null field
   # becomes an empty string or the literal "null", neither of which satisfies any
@@ -478,7 +502,7 @@ gitlab_verify_mergeable() {
       else
         error("merge request payload is not an object")
       end' 2>/dev/null); then
-    echo "error: could not read the GitLab merge request state before merging" >&2
+    echo "error: the forge answered with a merge request payload this could not parse; retrying will not clear it" >&2
     return 1
   fi
   while IFS= read -r line; do
@@ -503,7 +527,7 @@ FIELDS
   # newline would split into a line no name matches, so it is refused here
   # rather than silently truncated into a value a check could accept.
   if [ "$named" -ne 9 ] || [ "$total" -ne 9 ]; then
-    echo "error: could not read the GitLab merge request state before merging" >&2
+    echo "error: the merge request's own fields did not read back cleanly, so its state is unknown; retrying will not clear it" >&2
     return 1
   fi
 
@@ -1482,13 +1506,22 @@ github_report_unmerged_outcome() {
 }
 
 gitlab_confirm_merged() {
-  local json state
+  local json state err
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || err=
   if ! json=$(GITLAB_HOST="$FM_PR_HOST" glab mr view "$PR_NUMBER" \
-    -R "$PROJECT_URL" -F json 2>/dev/null) || [ -z "$json" ]; then
+    -R "$PROJECT_URL" -F json 2>"${err:-/dev/null}") || [ -z "$json" ]; then
     printf 'actionable: GitLab accepted the merge request for %s but its landed state could not be confirmed; the merge poll remains armed\n' \
       "$URL" >&2
+    # This one happens after the forge accepted the merge, so what it says is
+    # the only evidence of whether the merge landed.
+    if [ -n "$err" ] && [ -s "$err" ]; then
+      echo "the forge said:" >&2
+      sed 's/^/  /' "$err" >&2
+    fi
+    rm -f "$err"
     return 2
   fi
+  rm -f "$err"
   if ! state=$(printf '%s' "$json" | jq -r \
     'if type == "object" and (.state | type == "string") then .state else error("invalid state") end' \
     2>/dev/null); then

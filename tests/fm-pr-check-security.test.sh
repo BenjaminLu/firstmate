@@ -2026,8 +2026,10 @@ EOF
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "merge wrapper merged a GitLab merge request it could not read"
-  grep -qF 'could not read the GitLab merge request state before merging' "$dir/merge-c.err" \
-    || fail "merge wrapper refused for some reason other than the state it could not read"
+  # The payload is the poll's field output, so the merge's JSON read cannot
+  # parse it - which is its own refusal, distinct from the forge not answering.
+  grep -qF 'could not parse' "$dir/merge-c.err" \
+    || fail "merge wrapper refused for some reason other than the payload it could not parse: $(cat "$dir/merge-c.err")"
   [ ! -s "$dir/gh-axi.log" ] || fail "merge wrapper reached the GitHub CLI for a GitLab URL"
   grep -qF "mr view 7 -R https://gitlab.example/group/subgroup/project" "$dir/glab.log" \
     || fail "merge wrapper did not read the merge request through glab at its own instance"

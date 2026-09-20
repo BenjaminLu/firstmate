@@ -301,7 +301,10 @@ printf 'GITLAB_HOST=%s %s\n' "${GITLAB_HOST-<unset>}" "$*" >> "$FM_TEST_GLAB_LOG
 case_dir=$(dirname "$FM_TEST_GLAB_JSON")
 case "${1:-} ${2:-}" in
   "mr view")
-    [ ! -e "$case_dir/glab-view-fails" ] || exit 1
+    if [ -e "$case_dir/glab-view-fails" ]; then
+      echo 'error: GET https://gitlab.example/api/v4: 429 Too Many Requests' >&2
+      exit 1
+    fi
     if [ -e "$case_dir/glab-merge-called" ] && [ ! -e "$case_dir/glab-stays-open" ]; then
       cat "$case_dir/mr-post.json"
     else
@@ -1775,7 +1778,7 @@ test_gitlab_stale_recorded_head_is_reported() {
 }
 
 test_gitlab_unreadable_state_refuses() {
-  local case_dir rc name
+  local case_dir rc name expected
   for name in view-fails not-an-object split-value; do
     case_dir=$(make_gitlab_case "gitlab-unreadable-$name")
     case "$name" in
@@ -1793,8 +1796,15 @@ test_gitlab_unreadable_state_refuses() {
     set -e
 
     expect_code 1 "$rc" "gitlab-unreadable-$name: fm-pr-merge should refuse"
-    assert_grep 'could not read the GitLab merge request state before merging' \
-      "$case_dir/stderr" "gitlab-unreadable-$name: refusal did not name the unreadable state"
+    # Each of the three is a different payload problem and says which, the way
+    # the GitHub read does; one sentence for all three was R21.
+    case "$name" in
+      view-fails) expected='the forge did not answer the read' ;;
+      not-an-object) expected='could not parse' ;;
+      split-value) expected='did not read back cleanly' ;;
+    esac
+    assert_grep "$expected" \
+      "$case_dir/stderr" "gitlab-unreadable-$name: refusal did not name this condition"
     [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
       || fail "gitlab-unreadable-$name: a merge was attempted on an unreadable state"
   done
@@ -4325,3 +4335,52 @@ test_a_refusal_never_calls_several_reviews_the_only_one() {
 }
 
 test_a_refusal_never_calls_several_reviews_the_only_one
+
+# The GitLab path gets what the GitHub path got: three distinct read failures
+# named apart, and the forge's own account of why kept rather than discarded.
+test_the_gitlab_read_names_its_failure_and_quotes_the_forge() {
+  local case_dir rc
+
+  case_dir=$(make_gitlab_case gitlab-read-unanswered)
+  : > "$case_dir/glab-view-fails"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-read-unanswered: an unanswered read must not merge"
+  assert_grep 'the forge did not answer the read' "$case_dir/stderr" \
+    "gitlab-read-unanswered: the refusal did not say the forge failed to answer"
+  assert_grep '429 Too Many Requests' "$case_dir/stderr" \
+    "gitlab-read-unanswered: the forge's own account of the failure was discarded"
+  assert_grep 'the forge said:' "$case_dir/stderr" \
+    "gitlab-read-unanswered: the forge's text was not marked as the forge's"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-read-unanswered: glab mr merge ran on a read that never answered"
+
+  # A payload the read cannot parse is a different condition and says so.
+  case_dir=$(make_gitlab_case gitlab-unparseable)
+  printf '%s\n' '{"iid":7, this is not json' > "$case_dir/mr.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-unparseable: an unparseable payload must not merge"
+  assert_grep 'could not parse' "$case_dir/stderr" \
+    "gitlab-unparseable: the refusal did not say the payload would not parse"
+  assert_no_grep 'did not answer' "$case_dir/stderr" \
+    "gitlab-unparseable: an answered forge was reported as unanswered"
+
+  # A field that does not read back cleanly is a third condition.
+  case_dir=$(make_gitlab_case gitlab-fields-short)
+  write_mr_json "$case_dir/mr.json" 'author=two\nlines'
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-fields-short: a short field read must not merge"
+  assert_grep 'did not read back cleanly' "$case_dir/stderr" \
+    "gitlab-fields-short: a short field read was not named as one"
+  pass "the GitLab read names which of its three failures happened and keeps the forge's own account of it"
+}
+
+test_the_gitlab_read_names_its_failure_and_quotes_the_forge
