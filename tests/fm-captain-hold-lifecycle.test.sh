@@ -4416,6 +4416,22 @@ test_the_remaining_reads_see_the_archive_too() {
   rc=0
   run_captain "$home" open sample-genuinely-absent --distinguish-absent >/dev/null 2>&1 || rc=$?
   assert_equals 3 "$rc" "a genuinely absent id stopped being reported as absent"
+
+  # 2 is this predicate's "cannot tell", and an archive it cannot read is
+  # exactly that. Collapsing it into "not an open call" would answer a
+  # question the read did not settle, for the callers that must never close a
+  # live call on a guess.
+  chmod 0000 "$home/data/done-archive.md"
+  if [ -r "$home/data/done-archive.md" ]; then
+    chmod 0644 "$home/data/done-archive.md"
+    echo "skip: this filesystem ignores mode 0000, so an unreadable archive cannot be staged"
+  else
+    rc=0
+    out=$(run_captain "$home" open sample-genuinely-absent --distinguish-absent 2>&1) || rc=$?
+    chmod 0644 "$home/data/done-archive.md"
+    assert_equals 2 "$rc" "an unreadable archive answered a question the read could not settle"
+    assert_contains "$out" "done-archive.md" "the unreadable archive was not named: $out"
+  fi
   pass "the board intake and the open predicate see the archive too"
 }
 

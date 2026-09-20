@@ -2310,7 +2310,7 @@ EOF
 # printed to stderr, because a mechanical closer must never read "cannot tell"
 # as permission to close.
 command_open() {  # <task-id> [--identity] [--distinguish-absent]
-  local id='' identity=0 distinguish_absent=0 data state root file backend show shown_body
+  local id='' identity=0 distinguish_absent=0 data state root file backend show shown_body archived_status
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --identity) identity=1 ;;
@@ -2374,9 +2374,20 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
     # card on a 3 precisely because absent might still hide a live call, so an
     # archived row answered as absent leaves the captain a card he can never
     # dismiss.
-    if archived_row_body "$id" >/dev/null 2>&1; then
-      return 1
+    archived_status=0
+    archived_row_body "$id" >/dev/null || archived_status=$?
+    if [ "$archived_status" -eq 2 ]; then
+      # This predicate's own contract, twelve lines up: 2 means the answer
+      # could not be established, so a caller that must never close a live
+      # call can treat "cannot tell" as its own case. An archive that cannot
+      # be read is exactly that, and collapsing it into "not an open call"
+      # would answer a question this read did not settle. archived_row_body
+      # has already named the archive on stderr, which is the only channel
+      # that survives its command substitutions.
+      printf 'fm-captain-hold: the backlog archive could not be read while resolving %s\n' "$id" >&2
+      exit 2
     fi
+    [ "$archived_status" -ne 0 ] || return 1
     [ "$distinguish_absent" = 0 ] || return 3
     return 1
   fi
