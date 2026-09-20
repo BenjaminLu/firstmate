@@ -2214,13 +2214,16 @@ __FM_BEARINGS_BOARD_DATA__
     function pickedIds() {
       return Array.prototype.map.call(ch.querySelectorAll(".bb-pick:checked"), function (c) { return c.value; });
     }
-    /* The counter says how many rows are picked. A refusal is a different
-       statement and goes to the bar's own alert element, never into the
-       counter slot: muted uppercase micro-type in a counter is not a refusal
-       the captain will see. */
-    function refreshBar(limitMessage) {
+    /* The counter says how many rows are picked, and only that. A refusal is a
+       different statement and goes to the bar's own alert element, never into
+       the counter slot: muted uppercase micro-type in a counter is not a
+       refusal the captain will see. This used to take a message to write there
+       instead of the count, which is the shape the rule forbids - no caller
+       passes one now, so the door is closed rather than left open beneath the
+       comment saying it is shut. */
+    function refreshBar() {
       var n = pickedIds().length;
-      barCount.textContent = limitMessage || (n ? t("pick_n", { n: n }) : t("pick_none"));
+      barCount.textContent = n ? t("pick_n", { n: n }) : t("pick_none");
       /* A picked row is not enough to make this button live: it also has to
          be able to send. Same reason as the card - do not let him pick rows
          for a dispatch that cannot leave the page. */
