@@ -2314,9 +2314,14 @@ fm_wake_latest_event() {  # <validated-status-path> <tail-byte-cap>
 #              never verified. `unknown` is fm-crew-state.sh's own way of saying it
 #              could not determine a state, so it lands here rather than being
 #              printed as a state that disagrees.
-#   2          no task behind this status key (no meta), so there is no crew to
-#              contradict and nothing to say. This is also what keeps a retired or
-#              synthetic status key from paying for a subprocess at all.
+#   2          the task record is gone, so there is no crew to ask - a torn-down
+#              task (bin/fm-teardown.sh removes the record and leaves the status
+#              log), or a key that never had one. The caller still says so: a
+#              stale `working:` line beside no answer at all is the 2026-09-20
+#              shape exactly, and a missing clause would imply agreement by
+#              omission. It is a DIFFERENT fact from 1 - nobody to ask, rather
+#              than asked and no answer - because a reader acts differently on
+#              it, and it costs no subprocess to report.
 #
 # Bounded through fm-timeout-lib.sh, and with the forge fallback off: the forge
 # read only enriches a terminal run's DETAIL, never the verb this reads, so the
@@ -2480,7 +2485,7 @@ EOF
           0) [ "$cur_state_verb" = "$event_state" ] \
                || line="$line (current state disagrees: $cur_state_verb)" ;;
           1) line="$line (current state could not be read)" ;;
-          *) : ;;
+          *) line="$line (current state could not be read: no task record)" ;;
         esac
       fi
       printf '%s\n' "$line" || return 1

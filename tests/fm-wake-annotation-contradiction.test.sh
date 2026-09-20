@@ -168,25 +168,30 @@ test_a_verb_the_current_state_spells_differently_is_not_a_contradiction() {
   pass "a verb the current state spells differently is not reported as a contradiction"
 }
 
-test_a_status_key_with_no_task_gains_no_clause() {
+test_a_missing_task_record_says_so_rather_than_staying_silent() {
   local dir out
   dir=$(make_case no-task)
+  # bin/fm-teardown.sh removes a task's record and leaves its status log, so a
+  # task torn down between a wake being queued and this drain leaves exactly this
+  # shape: unread lines, no record. Staying silent here would print a stale
+  # `working:` line beside no answer at all - the 2026-09-20 shape, and this
+  # change's own rule broken by this change's own implementation.
   : > "$dir/state/orphan.status"
   printf 'working: still implementing the parser\n' >> "$dir/state/orphan.status"
   append_wake "$dir/state" signal orphan.status 'signal: orphan' \
     || fail "could not queue the orphan signal wake"
-  fixture_crew_state "$dir" 'state: unknown · source: none · no meta'
+  fixture_crew_state "$dir" 'state: done · source: run-step · checks passed'
 
-  out=$(drain "$dir") || fail "drain failed on the orphan case: $out"
+  out=$(drain "$dir") || fail "drain failed on the torn-down case: $out"
   assert_contains "$out" 'still implementing the parser' \
-    "the drain dropped the orphan status line"
+    "the drain dropped the stale line of a torn-down task"
+  assert_contains "$out" 'current state could not be read: no task record' \
+    "a torn-down task's stale line implied agreement by saying nothing"
   assert_not_contains "$out" 'current state disagrees' \
-    "a status key with no task firstmate owns claimed a contradiction"
-  assert_not_contains "$out" 'current state could not be read' \
-    "a status key with no task firstmate owns reported an unreadable crew"
+    "a missing task record was reported as a contradiction"
   [ ! -s "$dir/calls" ] \
-    || fail "a status key with no task still paid for a current-state read"
-  pass "a status key with no task behind it gains no current-state clause"
+    || fail "a status key with no task record still paid for a current-state read"
+  pass "a missing task record says so rather than implying agreement by silence"
 }
 
 test_current_state_is_read_once_per_status_key_not_once_per_line() {
@@ -270,7 +275,7 @@ test_annotation_is_unchanged_when_current_state_agrees
 test_unreadable_current_state_says_so_rather_than_claiming_agreement
 test_unknown_current_state_is_reported_as_unreadable_not_as_a_contradiction
 test_a_verb_the_current_state_spells_differently_is_not_a_contradiction
-test_a_status_key_with_no_task_gains_no_clause
+test_a_missing_task_record_says_so_rather_than_staying_silent
 test_current_state_is_read_once_per_status_key_not_once_per_line
 test_hung_current_state_reads_stay_inside_the_presentation_lock_budget
 test_the_whole_phase_budget_is_shared_by_every_status_key
