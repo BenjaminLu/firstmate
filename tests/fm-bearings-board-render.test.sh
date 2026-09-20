@@ -169,6 +169,68 @@ no_channel_payload() {
                {value:"no", label:"No", consequence:"it was not"}]}]}'
 }
 
+# --- the merge lane ----------------------------------------------------------
+# 為什麼船長裁決這一塊一直是空的. The answer is his own rule - nothing that is not
+# green becomes a merge call - and the board never said so. The lane lists every
+# open pull request with the exact reason it is not asking him to merge it, so
+# an empty desk is an explained state rather than a mystery.
+merge_payload() {  # <rows-json>
+  jq -n --argjson rows "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[], captains_call:[],
+    merge_queue:$rows}'
+}
+
+test_an_empty_merge_lane_says_why_it_is_empty() {
+  local home out
+  home=$(make_home merge-empty-explained)
+  out=$(render_payload "$home" "$(merge_payload '[
+    {"repo":"o/r","num":"29","url":"https://github.com/o/r/pull/29","ready":false,"reason":"checks-pending"},
+    {"repo":"o/r","num":"31","url":"https://github.com/o/r/pull/31","ready":false,"reason":"checks-failed"}]')")
+
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.head')" "your own rule" \
+    "the empty merge lane did not say why it was empty: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.head')" "2" \
+    "the empty merge lane did not say how many pull requests are open: $out"
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows | length')" = "2" ] \
+    || fail "the merge lane did not list every open pull request: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.rows[1].text')" "a check has failed" \
+    "a held pull request did not say what was holding it: $out"
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows[0].ready')" = "false" ] \
+    || fail "a pull request with checks still running was marked ready: $out"
+  pass "an empty merge lane says how many are open and why none is on the desk"
+}
+
+test_a_green_pull_request_reads_as_ready_in_the_lane() {
+  local home out
+  home=$(make_home merge-ready)
+  out=$(render_payload "$home" "$(merge_payload '[
+    {"repo":"o/r","num":"29","url":"https://github.com/o/r/pull/29","ready":true},
+    {"repo":"o/r","num":"31","url":"https://github.com/o/r/pull/31","ready":false,"reason":"checks-failed"}]')")
+
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.head')" "1" \
+    "the lane did not say how many are ready: $out"
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows[0].ready')" = "true" ] \
+    || fail "a green pull request did not read as ready: $out"
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows[0].url')" = "https://github.com/o/r/pull/29" ] \
+    || fail "the lane did not hand the captain the pull request itself: $out"
+  pass "a green pull request reads as ready and links to the repository"
+}
+
+# A board composed before this lane existed carries no merge_queue at all.
+# Showing an empty lane for it would be a different statement - "there are no
+# pull requests" rather than "this board does not know" - so it shows nothing.
+test_a_board_with_no_merge_data_shows_no_merge_lane() {
+  local home out
+  home=$(make_home merge-absent)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[], captains_call:[]}')")
+  [ "$(printf '%s' "$out" | jq -r '.merge.hidden')" = "true" ] \
+    || fail "a board that knows nothing about pull requests still drew a merge lane: $out"
+  pass "a board carrying no merge data shows no merge lane rather than an empty one"
+}
+
 # --- the decision map --------------------------------------------------------
 # 決策圖像儀表板: the captain asked for the decisions as a PICTURE, not a list of
 # paragraphs. The card below still says what one call is; the map says where
@@ -1667,3 +1729,6 @@ test_the_map_colours_each_bubble_by_its_own_risk
 test_the_map_is_also_an_ordered_list_with_its_rule_printed
 test_pressing_a_bubble_deals_that_call
 test_the_map_says_so_when_there_is_nothing_to_plot
+test_an_empty_merge_lane_says_why_it_is_empty
+test_a_green_pull_request_reads_as_ready_in_the_lane
+test_a_board_with_no_merge_data_shows_no_merge_lane

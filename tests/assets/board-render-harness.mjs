@@ -491,4 +491,14 @@ const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map(
 process.stdout.write(
   JSON.stringify({ stats, underway, charted, empty, more, cards, headings, error: errorText,
     dispatch, live_answers: liveAnswers, intervals: intervals.size,
-    map: bubbles, call_list: callList, map_note: byId.get("bb-map-note")?.textContent ?? "" }) + "\n");
+    map: bubbles, call_list: callList, map_note: byId.get("bb-map-note")?.textContent ?? "",
+    merge: {
+      hidden: byId.get("bb-merge-section")?.hidden === true,
+      head: byId.get("bb-merge-head")?.textContent ?? "",
+      rows: (byId.get("bb-merge-queue") || new Node("div")).querySelectorAll(".bb-mqrow")
+        .map((r) => ({
+          text: r.textContent,
+          ready: r.className.includes("bb-mqrow--ready"),
+          url: r.children.find((c) => c.tagName === "a")?.href ?? "",
+        })),
+    } }) + "\n");

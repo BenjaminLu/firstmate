@@ -284,6 +284,18 @@ body {
 .bb-clrow__n { font-weight: 800; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .bb-clrow__t { font-weight: 700; color: var(--text-strong); }
 .bb-clrow__meta { margin-left: auto; font-size: var(--fs-2xs); color: var(--text-muted); white-space: nowrap; }
+/* ---- the merge lane ---- */
+.bb-mqhead { margin: 0 0 10px; font-size: var(--fs-xs); color: var(--text-body); line-height: 1.6; }
+.bb-mqhead b { color: var(--text-strong); }
+.bb-mq { display: flex; flex-direction: column; gap: 5px; }
+.bb-mqrow { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  padding: 7px 10px; border: 1.5px solid var(--border-default); border-radius: var(--radius-xs);
+  background: var(--surface-card); font-size: var(--fs-xs); }
+.bb-mqrow--ready { border-color: var(--sea-400); }
+.bb-mqrow__pr { font-weight: 800; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.bb-mqrow__repo { color: var(--text-muted); }
+.bb-mqrow__why { margin-left: auto; color: var(--text-body); }
+.bb-mqrow--ready .bb-mqrow__why { color: var(--sea-700); font-weight: 700; }
 .bb-freeform { width: 100%; font-family: var(--font-sans); font-size: var(--fs-sm); color: var(--text-strong);
   background: var(--surface-card); border: 1.5px solid var(--border-default); border-radius: var(--radius-sm); padding: 8px 11px; }
 .bb-freeform:focus { outline: none; border-color: var(--rust-400); box-shadow: var(--focus-ring); }
@@ -508,6 +520,22 @@ body {
     </div>
   </section>
 
+  <!-- The merge lane. Its whole job is the standing complaint that the
+       captain's merge section is always empty: his own green-only rule empties
+       it, and the board never said so. Every open pull request is listed with
+       the exact reason it is not asking him to merge it. -->
+  <section class="bb-section" id="bb-merge-section" hidden>
+    <div class="bb-section__head">
+      <span class="fm-sign fm-sign--eyebrow">
+        <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+        <span id="bb-t-merge">Merges</span>
+      </span>
+      <span class="fm-sign fm-sign--muted" id="bb-merge-sub"></span>
+    </div>
+    <p class="bb-mqhead" id="bb-merge-head"></p>
+    <div class="bb-mq" id="bb-merge-queue"></div>
+  </section>
+
   <section class="bb-section">
     <div class="bb-section__head">
       <span class="fm-sign fm-sign--eyebrow">
@@ -610,6 +638,20 @@ __FM_BEARINGS_BOARD_DATA__
       quad_pick: "just pick one", quad_when: "whenever",
       map_blocks: "{n} waiting", map_blocks_none: "nothing waiting",
       map_empty: "No open calls to plot.",
+      t_merge: "Merges",
+      mq_sub: "Your rule: a pull request that has not gone fully green never becomes a merge call.",
+      mq_none_head: "Nothing is on your desk, and this is why. {n} open, none of them green and clear, so by your own rule none is asking you to merge it. The lane is empty because the rule is working, not because nothing is happening.",
+      mq_some_head: "{r} of {n} open are ready for you. The rest are listed with what is holding each one.",
+      mq_empty_head: "No open pull requests are known here.",
+      mq_ready: "ready for you",
+      mq_checks_failed: "a check has failed",
+      mq_checks_pending: "checks have not gone green yet",
+      mq_not_mergeable: "the forge does not report it as mergeable",
+      mq_changes_requested: "changes were requested on it",
+      mq_not_claimed: "no work item here claims it",
+      mq_unroutable: "its work item cannot take an answer from this board",
+      mq_duplicate: "two open pull requests claim the same work item",
+      mq_backlog_unreadable: "the work list could not be read here",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -652,6 +694,20 @@ __FM_BEARINGS_BOARD_DATA__
       quad_pick: "隨便挑一個", quad_when: "有空再說",
       map_blocks: "{n} 件在等", map_blocks_none: "沒有人在等",
       map_empty: "沒有待決事項可畫。",
+      t_merge: "合併",
+      mq_sub: "你的規則：沒有全綠的 PR 永遠不會變成合併決策。",
+      mq_none_head: "現在沒有東西等你決定，原因在這裡。開著的有 {n} 個，沒有一個是全綠又沒擋住的，所以按你自己的規則，沒有一個在問你要不要合併。這一區是空的代表規則有在運作，不是沒事發生。",
+      mq_some_head: "開著的 {n} 個裡面有 {r} 個等你決定。其餘的下面列出各自卡在哪裡。",
+      mq_empty_head: "這裡沒有已知的開啟中 PR。",
+      mq_ready: "等你決定",
+      mq_checks_failed: "有檢查失敗",
+      mq_checks_pending: "檢查還沒全綠",
+      mq_not_mergeable: "forge 沒有回報它可以合併",
+      mq_changes_requested: "review 要求修改",
+      mq_not_claimed: "這裡沒有工作項目認領它",
+      mq_unroutable: "它的工作項目沒辦法從這個看板接收回答",
+      mq_duplicate: "兩個開啟中的 PR 認領同一個工作項目",
+      mq_backlog_unreadable: "這裡讀不到工作清單",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -694,6 +750,20 @@ __FM_BEARINGS_BOARD_DATA__
       quad_pick: "随便挑一个", quad_when: "有空再说",
       map_blocks: "{n} 件在等", map_blocks_none: "没有人在等",
       map_empty: "没有待决事项可画。",
+      t_merge: "合并",
+      mq_sub: "你的规则：没有全绿的 PR 永远不会变成合并决策。",
+      mq_none_head: "现在没有东西等你决定，原因在这里。开着的有 {n} 个，没有一个是全绿又没挡住的，所以按你自己的规则，没有一个在问你要不要合并。这一区是空的代表规则有在运作，不是没事发生。",
+      mq_some_head: "开着的 {n} 个里面有 {r} 个等你决定。其余的下面列出各自卡在哪里。",
+      mq_empty_head: "这里没有已知的开启中 PR。",
+      mq_ready: "等你决定",
+      mq_checks_failed: "有检查失败",
+      mq_checks_pending: "检查还没全绿",
+      mq_not_mergeable: "forge 没有回报它可以合并",
+      mq_changes_requested: "review 要求修改",
+      mq_not_claimed: "这里没有工作项目认领它",
+      mq_unroutable: "它的工作项目没办法从这个看板接收回答",
+      mq_duplicate: "两个开启中的 PR 认领同一个工作项目",
+      mq_backlog_unreadable: "这里读不到工作清单",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -1010,6 +1080,7 @@ __FM_BEARINGS_BOARD_DATA__
       b.setAttribute("aria-pressed", l === lang ? "true" : "false");
     });
     setText("bb-t-call", t("call")); setText("bb-t-charted", t("charted"));
+    setText("bb-t-merge", t("t_merge"));
     setText("bb-t-underway", t("underway")); setText("bb-t-landed", t("landed"));
     document.getElementById("bb-stack-prev").setAttribute("aria-label", t("prev"));
     document.getElementById("bb-stack-next").setAttribute("aria-label", t("next"));
@@ -1760,6 +1831,39 @@ __FM_BEARINGS_BOARD_DATA__
       deck.className = "bb-call bb-call--empty";
       deck.appendChild(el("div", "bb-empty", t("empty_call")));
       if (stackNav) stackNav.hidden = true;
+    }
+
+    /* The merge lane. The headline is computed from the rows themselves rather
+       than from a second count in the payload, because two numbers that can
+       disagree is how a surface starts lying. */
+    var mergeSection = document.getElementById("bb-merge-section");
+    var mergeHead = document.getElementById("bb-merge-head");
+    var mergeQueue = document.getElementById("bb-merge-queue");
+    var mergeSub = document.getElementById("bb-merge-sub");
+    if (mergeSection && mergeHead && mergeQueue) {
+      var mq = data.merge_queue || [];
+      clear(mergeQueue);
+      if (mergeSub) mergeSub.textContent = t("mq_sub");
+      /* A board composed before this lane existed carries no merge_queue at
+         all. It renders the board it has rather than an empty lane claiming
+         there are no pull requests, which would be a different statement. */
+      mergeSection.hidden = !data.merge_queue;
+      var readyCount = mq.filter(function (r) { return r.ready; }).length;
+      mergeHead.textContent = !mq.length ? t("mq_empty_head")
+        : (readyCount ? t("mq_some_head", { r: readyCount, n: mq.length })
+                      : t("mq_none_head", { n: mq.length }));
+      mq.forEach(function (r) {
+        var row = el("div", "bb-mqrow" + (r.ready ? " bb-mqrow--ready" : ""));
+        var pr = el("span", "bb-mqrow__pr", "#" + r.num);
+        /* The pull request itself, when the payload recorded its address. The
+           captain reads the repository rather than a summary of it. */
+        if (r.url) { row.appendChild(link("bb-mqrow__pr", "#" + r.num, r.url)); }
+        else { row.appendChild(pr); }
+        row.appendChild(el("span", "bb-mqrow__repo", r.repo));
+        row.appendChild(el("span", "bb-mqrow__why",
+          r.ready ? t("mq_ready") : t("mq_" + String(r.reason).replace(/-/g, "_"))));
+        mergeQueue.appendChild(row);
+      });
     }
 
     /* Underway */
