@@ -841,10 +841,16 @@ test_a_bubble_that_stands_alone_keeps_its_name() {
 test_the_caption_does_not_call_a_floor_count_an_exact_one() {
   local home out
   home=$(make_home caption-floor-claim)
+  # TWO soft reasons on the plot, not one: a floor count AND a call nobody
+  # costed. With only the floor on it, any clause equating the broken outline
+  # with the floor would be true of the fixture by luck - the shape ruled
+  # against one round ago, which is what let the last one through.
   out=$(render_payload "$home" "$(map_note_payload '[{
     "key":"floor", "type":"decision", "repo":"r", "title":"Its blocker list was cut off",
     "risk":"high", "reversible":"no", "weighed_by":"fleet", "blocks":2, "blocks_partial":true,
-    "allow_freeform":true, "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]')")
+    "allow_freeform":true, "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]},
+    {"key":"uncosted", "type":"decision", "repo":"r", "title":"Nobody costed this",
+     "thin":true, "blocks":3, "allow_freeform":true, "options":[]}]')")
 
   # The bubble really does show a bare number, which is why the flat claim and
   # the "says at least" cue were both wrong about this plot.
@@ -852,11 +858,15 @@ test_the_caption_does_not_call_a_floor_count_an_exact_one() {
     || fail "the fixture bubble does not carry a bare number, so this proves nothing: $out"
   [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "is how many pieces of work stop")" = "0" ] \
     || fail "the caption called a floor count an exact one: $out"
-  # The hedge names the mark the plot actually carries.
-  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "broken-outlined" \
-    "the hedge pointed at a cue the picture does not carry: $out"
   [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "say \"at least\"")" = "0" ] \
     || fail "the hedge still sends him looking for words the plot does not draw: $out"
+  # And it must not equate the broken outline with the floor: two bubbles here
+  # are broken-outlined and only one of them is a floor count, so a reader told
+  # the outline means "floor" distrusts an exact number.
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.dashed)] | length')" = "2" ] \
+    || fail "the fixture does not carry two broken outlines, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "broken-outlined ones")" = "0" ] \
+    || fail "the caption equated the broken outline with one of its three causes: $out"
   pass "the caption does not call a floor count an exact one"
 }
 
@@ -871,6 +881,34 @@ test_the_caption_states_the_count_plainly_when_every_count_is_exact() {
   [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "broken outline")" = "0" ] \
     || fail "a plot with no broken outline explained one: $out"
   pass "the caption states the count plainly when every count is exact"
+}
+
+# R33, the sweep half: two more clauses in the same paragraph that were true
+# only with a neighbour to qualify them. A caption is read in fragments, so a
+# clause needing its neighbour is not honest.
+test_every_caption_clause_stands_on_its_own() {
+  local home out
+  # A plot with a call nobody costed: the cost rule does not apply to it, and
+  # its bubble is grey, which is deliberately not a risk colour.
+  home=$(make_home caption-clauses-soft)
+  out=$(render_payload "$home" "$(map_note_payload '[{
+    "key":"uncosted", "type":"decision", "repo":"r", "title":"Nobody costed this",
+    "thin":true, "blocks":1, "allow_freeform":true, "options":[]}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "comes from the call")" = "0" ] \
+    || fail "the caption stated where the cost comes from on a plot carrying a call with none: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "grey is not one of them" \
+    "the caption said colour repeats the risk beside a bubble whose grey means no risk was given: $out"
+
+  # And on a plot where every call has both, both clauses are stated plainly -
+  # a caption that always hedges has stopped saying anything.
+  home=$(make_home caption-clauses-plain)
+  out=$(render_payload "$home" "$(map_note_payload '[]')")
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "comes from the call" \
+    "a fully costed plot did not say where the cost comes from: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "grey is not one of them")" = "0" ] \
+    || fail "a plot with no grey bubble still explained grey: $out"
+  pass "every caption clause stands on its own"
 }
 
 # R30. Tying the refusal to the bar rather than to the condition that raised it
@@ -2687,3 +2725,4 @@ test_a_crowded_plot_never_moves_a_bubble_off_its_own_coordinate
 test_a_bubble_sitting_on_another_is_left_unnamed
 test_a_bubble_that_stands_alone_keeps_its_name
 test_every_name_on_the_plot_belongs_to_the_mark_beside_it
+test_every_caption_clause_stands_on_its_own

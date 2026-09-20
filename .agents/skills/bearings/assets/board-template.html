@@ -649,7 +649,10 @@ __FM_BEARINGS_BOARD_DATA__
       thin_call: "This call came with no options to choose between. Answer it in your own words.",
       map_title: "Where each open call sits",
       map_alt: "Open calls plotted by how much work is stalled behind each and how costly a wrong answer is",
-      map_note: "Up is how much work is stalled behind the call. Right is how expensive a wrong answer is, from the call's own risk and how far it can be undone. Colour repeats the risk.",
+      map_note: "Up is how much work is stalled behind the call. Right is how expensive a wrong answer is.",
+      map_note_cost: "That cost comes from the call's own risk and how far it can be undone.",
+      map_note_colour: "Colour repeats the risk.",
+      map_note_colour_grey: "Colour repeats the risk, and grey is not one of them - it marks a call nobody gave a risk.",
       map_note_exact: "The number in a bubble is how many pieces of work stop until you answer.",
       map_note_stacked: "Where calls land on the same spot their bubbles sit on top of one another, and those are left unnamed rather than labelled with names you could not tell apart - the list underneath names every call, in this order.",
       map_note_measured: "Nothing here is weighted by hand: every position comes from what the fleet already records.",
@@ -664,7 +667,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_unassessed: "nobody assessed what a wrong answer costs",
       map_note_unassessed: "Some are missing a value the position needs, and those sit at the left edge because the cost is unknown, not because it is low.",
       map_note_byhand: "Some carry a risk your first mate wrote when the card was composed, which is his judgement rather than a measurement the fleet made.",
-      map_note_floor: "For some, the list of what is waiting was cut off, so the number in the bubble is a floor and more may be waiting than it shows; those are drawn no higher and no larger than the part that could be read, and are the broken-outlined ones.",
+      map_note_floor: "For some, the list of what is waiting was cut off, so the number in the bubble is a floor and more may be waiting than it shows; those are drawn no higher and no larger than the part that could be read.",
       map_norev: "risk {r}, but nobody said whether it can be undone, so how costly it is was never worked out",
       map_byhand: "That risk is your first mate's assessment, not something the fleet recorded",
       t_merge: "Merges",
@@ -735,7 +738,10 @@ __FM_BEARINGS_BOARD_DATA__
       thin_call: "這個問題沒有附選項，請直接用你自己的話回答。",
       map_title: "每個待決事項的位置",
       map_alt: "把待決事項依照「後面卡住多少工作」和「答錯多貴」畫出來",
-      map_note: "往上是後面卡住多少工作。往右是答錯有多貴，來自這個問題本身的風險和可不可以回頭。顏色重複風險。",
+      map_note: "往上是後面卡住多少工作。往右是答錯有多貴。",
+      map_note_cost: "這個代價來自這個問題本身的風險和可不可以回頭。",
+      map_note_colour: "顏色重複風險。",
+      map_note_colour_grey: "顏色重複風險，灰色不算 —— 灰色表示沒有人給過這個問題風險。",
       map_note_exact: "泡泡裡的數字就是你不回答就停住的工作數。",
       map_note_stacked: "落在同一個位置的問題，泡泡會疊在一起，那些就不標名字了 —— 標了你也分不出哪個是哪個。下面的清單會照同樣的順序列出每一個。",
       map_note_measured: "這張圖沒有任何一項是人手調的：每個位置都來自艦隊本來就記錄的東西。",
@@ -750,7 +756,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_unassessed: "沒有人評估過答錯的代價",
       map_note_unassessed: "有些缺了位置需要的一項資料，那些靠在最左邊是因為代價不明，不是因為代價低。",
       map_note_byhand: "有些帶的風險是組卡片的時候大副自己寫的，那是他的判斷，不是艦隊量出來的。",
-      map_note_floor: "有些在等它們的清單被截斷了，所以泡泡裡的數字只是下限，實際可能更多；那些畫得不會比讀得到的那一部分更高、更大，就是虛線外框的那幾個。",
+      map_note_floor: "有些在等它們的清單被截斷了，所以泡泡裡的數字只是下限，實際可能更多；那些畫得不會比讀得到的那一部分更高、更大。",
       map_norev: "風險 {r}，但沒有人說過能不能回頭，所以代價有多高從來沒有算出來",
       map_byhand: "這個風險是大副評估的，不是艦隊記錄的",
       t_merge: "合併",
@@ -821,7 +827,10 @@ __FM_BEARINGS_BOARD_DATA__
       thin_call: "这个问题没有附选项，请直接用你自己的话回答。",
       map_title: "每个待决事项的位置",
       map_alt: "把待决事项按照「后面卡住多少工作」和「答错多贵」画出来",
-      map_note: "往上是后面卡住多少工作。往右是答错有多贵，来自这个问题本身的风险和可不可以回头。颜色重复风险。",
+      map_note: "往上是后面卡住多少工作。往右是答错有多贵。",
+      map_note_cost: "这个代价来自这个问题本身的风险和可不可以回头。",
+      map_note_colour: "颜色重复风险。",
+      map_note_colour_grey: "颜色重复风险，灰色不算 —— 灰色表示没有人给过这个问题风险。",
       map_note_exact: "泡泡里的数字就是你不回答就停住的工作数。",
       map_note_stacked: "落在同一个位置的问题，泡泡会叠在一起，那些就不标名字了 —— 标了你也分不出哪个是哪个。下面的清单会照同样的顺序列出每一个。",
       map_note_measured: "这张图没有任何一项是人手调的：每个位置都来自舰队本来就记录的东西。",
@@ -1967,7 +1976,21 @@ __FM_BEARINGS_BOARD_DATA__
          bubble reading 2 has two behind it, when the fleet established only
          that it has at least two. Said here rather than among the reasons for a
          broken outline, because it is a statement about every bubble. */
+      /* EVERY CLAUSE TRUE OF THE PLOT AS DRAWN, ON ITS OWN. A caption is read in
+         fragments, so a clause that needs its neighbour to be honest is not
+         honest: three rounds of this paragraph went wrong by stating something
+         flatly and qualifying it further down. Each sentence below is either
+         unconditionally true of every bubble or is not printed. */
       var says = [t("map_note")];
+      /* Where the cost comes from is true only of bubbles that HAVE one; a
+         plot carrying a call nobody costed is told the rule and the exception
+         by two sentences rather than one that walks itself back. */
+      if (!items.some(function (c) { return !costDerived(c); })) says.push(t("map_note_cost"));
+      /* Grey is deliberately not a risk colour, and saying "colour repeats the
+         risk" beside a grey bubble is the quieter half of the same defect -
+         this one was never walked back at all. */
+      says.push(items.some(function (c) { return !riskKnown(c); })
+        ? t("map_note_colour_grey") : t("map_note_colour"));
       if (!items.some(countSoft)) says.push(t("map_note_exact"));
       /* Said only when a mark really is left unnamed, so the sentence sending
          him to the list never appears on a plot where every bubble is labelled. */
