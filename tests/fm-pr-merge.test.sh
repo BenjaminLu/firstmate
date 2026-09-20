@@ -3876,6 +3876,13 @@ test_a_failed_forge_read_is_never_reported_as_a_missing_approval() {
   expect_code 1 "$rc" "github-read-fails: an unanswered forge read must not merge"
   assert_grep 'the forge did not answer the read' "$case_dir/stderr" \
     "github-read-fails: the refusal did not say the forge failed to answer"
+  # Which of rate limit, expired token, DNS failure or a wrong URL it was
+  # decides what firstmate does next, and this refusal is the only place that
+  # text can reach it.
+  assert_grep 'API rate limit exceeded' "$case_dir/stderr" \
+    "github-read-fails: the forge's own account of the failure was discarded"
+  assert_grep 'the forge said:' "$case_dir/stderr" \
+    "github-read-fails: the forge's text was not marked as the forge's"
   assert_no_grep 'no review has been posted' "$case_dir/stderr" \
     "github-read-fails: an unanswered read was reported as a missing approval"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \

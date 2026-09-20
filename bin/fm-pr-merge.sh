@@ -19,7 +19,8 @@
 # just the first, and the same list is recorded as this task's `refused` gate
 # call through bin/fm-gate-calls-lib.sh, which owns that record and never lets
 # it change the merge.
-# A read that does not produce a verdict says which read failed and whether
+# A read that does not produce a verdict says which read failed, quotes the
+# forge's own error text where the forge produced any, and says whether
 # retrying can clear it: the forge not answering is one message, a payload that
 # will not parse another, fields that do not read back a third, and the checks
 # and reviews reads their own. They send an operator to different places - a
@@ -773,7 +774,7 @@ github_approval_state() {
 # Pre-merge conditions for a GitHub pull request, read from one live view.
 # Sets FM_PR_MERGE_HEAD to the verified head on success.
 github_verify_mergeable() {
-  local json fields line red red_row why reason name covered approval
+  local json fields line red red_row why reason name covered approval gh_err
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
   local approval_total=0 approval_named=0
@@ -782,11 +783,28 @@ github_verify_mergeable() {
   local approver='' approver_assoc='' outside_approver='' outside_assoc=''
   local refuser='' newest_reviewed=''
 
-  if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup,reviews,author 2>/dev/null) \
+  # gh's own stderr is kept and printed, because which of rate limit, expired
+  # token, DNS failure or a wrong URL it was entirely determines what firstmate
+  # does next, and this refusal is the only place that text can reach it.
+  # It is quoted and marked as the forge's, kept apart from this script's own
+  # verdict, the way every other forge output here is.
+  gh_err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || {
+    echo "error: could not create a temporary file to capture the forge's error" >&2
+    return 1
+  }
+  if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup,reviews,author 2>"$gh_err") \
     || [ -z "$json" ]; then
     echo "error: the forge did not answer the read of $URL before merging; nothing was merged" >&2
+    if [ -s "$gh_err" ]; then
+      echo "the forge said:" >&2
+      sed 's/^/  /' "$gh_err" >&2
+    else
+      echo "the forge said nothing, so what stopped the read is unknown" >&2
+    fi
+    rm -f "$gh_err"
     return 1
   fi
+  rm -f "$gh_err"
   if ! fields=$(printf '%s' "$json" | jq -r '
       if type == "object" then
         "state=" + ((.state // "") | tostring),
