@@ -3573,6 +3573,11 @@ test_gitlab_merge_refuses_when_approvals_cannot_be_read() {
     "gitlab-approvals-unreadable: the refusal did not name the failed approvals read"
   assert_grep '401 Unauthorized' "$case_dir/stderr" \
     "gitlab-approvals-unreadable: the forge's own account of the failure was discarded"
+  # The quote must follow the sentence it explains. Printed from inside the
+  # read it landed above the word "refusing", detached from the condition.
+  awk '/refusing to merge/ { seen = 1 } /401 Unauthorized/ { if (!seen) exit 1 }' \
+    "$case_dir/stderr" \
+    || fail "gitlab-approvals-unreadable: the forge text was printed before the refusal it explains"$'\n'"$(cat "$case_dir/stderr")"
   [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
     || fail "gitlab-approvals-unreadable: glab mr merge ran on an unreadable approval"
   pass "fm-pr-merge refuses a GitLab merge whose approvals it could not read"

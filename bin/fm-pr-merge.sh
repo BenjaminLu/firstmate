@@ -434,9 +434,15 @@ gitlab_read_approvals() {
     # The forge's own account of why, for the same reason the GitHub read keeps
     # it: rate limit, expired token and a wrong project are one refusal
     # otherwise, and they want different things done next.
-    if [ -s "$err" ]; then
-      echo "the forge said:" >&2
-      sed 's/^/  /' "$err" >&2
+    # The forge text is handed back rather than printed here, because this
+    # function returns a refusal LINE the caller is still accumulating:
+    # printing now flushes the quote to stderr above the word "refusing",
+    # detached from the sentence it explains. Every other read on this path
+    # quotes the forge under its own sentence.
+    # It goes through a file because this runs inside a command substitution,
+    # so a variable set here cannot reach the caller.
+    if [ -s "$err" ] && [ -n "$FM_PR_GITLAB_APPROVALS_ERR_FILE" ]; then
+      sed 's/^/    /' "$err" > "$FM_PR_GITLAB_APPROVALS_ERR_FILE"
     fi
     rm -f "$err"
     return 1
@@ -455,6 +461,7 @@ gitlab_read_approvals() {
 # the merge request. Sets FM_PR_MERGE_HEAD to the verified head on success and
 # returns non-zero after reporting every condition that failed.
 FM_PR_MERGE_HEAD=
+FM_PR_GITLAB_APPROVALS_ERR_FILE=
 FM_PR_GITLAB_ASYNC_CONFIGURED=false
 gitlab_verify_mergeable() {
   local json fields line approvals glab_err
@@ -561,9 +568,16 @@ FIELDS
     || refusals="$refusals  - the head pipeline ran at \"${pipeline_sha:-none}\", not at the current head $live_head
 "
 
+  FM_PR_GITLAB_APPROVALS_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || \
+    FM_PR_GITLAB_APPROVALS_ERR_FILE=
   if ! approvals=$(gitlab_read_approvals); then
     refusals="$refusals  - the merge request's approvals could not be read, so no approval is proven
 "
+    if [ -n "$FM_PR_GITLAB_APPROVALS_ERR_FILE" ] && [ -s "$FM_PR_GITLAB_APPROVALS_ERR_FILE" ]; then
+      refusals="$refusals    the forge said:
+$(cat "$FM_PR_GITLAB_APPROVALS_ERR_FILE")
+"
+    fi
   else
     while IFS= read -r line; do
       approval_total=$((approval_total + 1))
@@ -584,6 +598,7 @@ APPROVALS
 "
     fi
   fi
+  rm -f "$FM_PR_GITLAB_APPROVALS_ERR_FILE"
 
   if [ -n "$refusals" ]; then
     printf 'error: refusing to merge %s\n' "$URL" >&2
