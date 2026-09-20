@@ -371,14 +371,16 @@ When no-mistakes is selected, no-mistakes alone owns review, fixes, tests, docum
 The path's worker, automated gates, and captain approval remain authoritative:
 
 - **no-mistakes** runs the full pipeline through a PR, then waits for the configured merge authority.
-- **direct-PR** has the worker push and open a PR without the no-mistakes pipeline; a reviewer crewmate then reviews that PR and posts its findings on it, firstmate rules on every finding and posts the ruling there, fixes land as commits on the same PR one finding per commit, and the merge gate is checks green plus every finding ruled, after which the configured merge authority applies.
+- **direct-PR** has the worker push and open a PR without the no-mistakes pipeline; a reviewer crewmate then reviews that PR and posts its findings on it, firstmate rules on every finding and posts the ruling there, fixes land as commits on the same PR one finding per commit, and the merge gate is checks green plus every finding ruled, on top of the approval every merge needs below, after which the configured merge authority applies.
 - **local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority before firstmate uses the guarded fast-forward merge path.
 
-Load `pr-review` before dispatching that reviewer, on a wake reporting a review posted, and before ruling on, relaying, or fixing a finding; it owns that path's detail and this section does not restate it.
+Load `pr-review` before dispatching a reviewer in any delivery mode, on a wake reporting a review posted, and before ruling on, relaying, or fixing a finding; it owns that path's detail and this section does not restate it.
 Never stack a manual review of your own on top of the path's own review, hold work for a personal clean verdict, or infer review authority from security, architecture, or risk alone.
 A separate review or audit beyond the path's own is allowed only when the captain explicitly requests that deliverable or the authorized task is a knowledge-only review; one named question remains scoped to that question.
 If fast-path risk needs more rigor, escalate whether to use no-mistakes instead of inventing a gate.
 
+Every PR merge, whatever the delivery mode, also requires a reviewer's approval of the exact commit that would merge; `bin/fm-pr-merge.sh` enforces it, no flag waives it, and a worker never approves its own work.
+An approval is one more gate before a pull request reaches the captain, never a substitute for his word.
 Delivery mode and `yolo` are orthogonal.
 `yolo` governs merge authority only: with it off, the captain approves every PR merge and every local-only landing; with it on, firstmate merges green, in-scope work itself.
 Never merge a red PR under either setting unless a current explicit captain instruction names the single GitHub check waived through `fm-pr-merge.sh --allow-red`; that attended-only waiver still requires every other check green.
@@ -612,7 +614,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array from current quota-axi default TOON.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog or a worker permission prompt, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.
-- `pr-review` - load before dispatching a reviewer against an open pull request, on a wake reporting that a review was posted, and before ruling on, relaying, or fixing a reviewer finding.
+- `pr-review` - load before dispatching a reviewer against an open pull request in any delivery mode, on a wake reporting that a review was posted, before ruling on, relaying, or fixing a reviewer finding, and before merging a pull request with no approving review at its current head.
 - `project-management` - load before adding, creating, removing, or initializing a project.
   Cloning or registering a project is add intake and uses the same trigger.
 - `stuck-crewmate-recovery` - load when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, after a stale wake, looping pane, repeated confusion, an answered-by-brief question, an unresponsive crewmate, or a failed steer, and whenever a live worker reports its no-mistakes pipeline dead, unreachable, or timed out.

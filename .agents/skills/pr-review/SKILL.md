@@ -2,7 +2,7 @@
 name: pr-review
 description: >-
   Agent-only procedure for the reviewed-PR delivery path: the end-to-end shape of a direct-PR ship without the no-mistakes pipeline, dispatching a reviewer against an open pull request, and what firstmate does with the findings.
-  Use before dispatching a reviewer, on a wake reporting a review posted, and before ruling on, relaying, or fixing a reviewer finding.
+  Use before dispatching a reviewer in any delivery mode, on a wake reporting a review posted, before ruling on, relaying, or fixing a reviewer finding, and before merging a pull request with no approving review at its current head.
   This skill is the single owner of the reviewed-PR path's detail; AGENTS.md section 7 states it in one paragraph and points here.
 user-invocable: false
 metadata:
@@ -12,6 +12,7 @@ metadata:
 # pr-review
 
 The reviewed-PR path is what a `direct-PR` ship task looks like end to end.
+Dispatching a reviewer and reading its approval belong to every PR merge, in any delivery mode; the findings, rulings, and fix loop below belong to `direct-PR`.
 `AGENTS.md` section 7 owns delivery-mode selection and merge authority and does not restate this procedure.
 `bin/fm-brief.sh`'s `--review` contract is the single owner of what the reviewer itself owes; read the generated brief rather than restating its disciplines here or in a steer.
 
@@ -27,19 +28,34 @@ The reviewed-PR path is what a `direct-PR` ship task looks like end to end.
    Do not wait for the checks: a reviewer reading the diff and a CI run watching the same commit are independent, and serializing them buys nothing.
 4. **Firstmate reads the findings, rules, and posts the ruling on the pull request.**
 5. **Fixes land as commits on the same pull request**, by the same worker, one finding per commit.
-6. **The merge gate is: checks green, and every finding has a posted ruling.**
+6. **Dispatch a reviewer again once the fixes are pushed**, against the new head.
+   Step 5 moved the head, and an approval is bound to a commit, so the pull request is unapproved again the moment a fix lands.
+7. **The merge gate is: checks green, every finding ruled, and an approving review of the exact commit that would merge.**
    Merge authority itself is unchanged and stays with section 7 - `yolo` on means firstmate merges through `bin/fm-pr-merge.sh`, `yolo` off means the captain's word.
 
 Red checks are the worker's to fix, not the reviewer's and not a finding class of their own.
 The reviewer reports a red check as a finding so it is visible with everything else; firstmate steers the worker to fix it.
 Nothing merges red - section 7 owns that rule and the single named waiver.
 
-## This is one pass, not a pipeline
+## The approval
 
-One dispatch produces one review.
-There is no round counter, no re-review requirement, no escalating sequence of passes, and nothing in this path counts or compares attempts.
-If a change is large enough that firstmate genuinely wants a second pair of eyes after the fixes land, that is a new reviewer dispatch firstmate decides on and states a reason for - never an automatic next round.
-If a path you are about to take starts needing gates, rounds, or a state machine to describe, stop and take it to the captain instead: that is the machinery this path exists to replace.
+The captain ruled on 2026-09-20 that only a reviewer approves, that a worker only fixes, and that only an approved pull request merges.
+
+The approval is the reviewer's own posted review, read back off the forge by `bin/fm-pr-merge.sh`, which refuses a merge without one.
+The reviewer's generated brief is the single owner of the exact verdict line it must end with; do not restate that string in a steer, and never write it yourself.
+Three consequences are yours:
+
+- **You dispatch every reviewer, and you dispatch one again after fixes land.**
+  The approval is bound to the commit that was reviewed, so pushing a fix leaves the pull request unapproved by construction.
+  This is not a round counter - nothing here counts attempts - it is the same single question asked of the head that would actually merge.
+- **The worker never approves, and never reviews its own pull request.**
+  A worker that reports its own work approved has not been reviewed.
+- **A reviewer that declines is an answer, not a failure.**
+  Rule on its findings as below, steer the fixes, and dispatch the next review against the new head.
+
+One dispatch still produces one review, and there is no escalating sequence of passes.
+The loop ends the moment a reviewer approves the current head, not after a fixed number of rounds.
+If a path you are about to take starts needing gates beyond that one, or a state machine to describe, stop and take it to the captain instead: that is the machinery this path exists to replace.
 
 ## Dispatch a reviewer
 
@@ -56,6 +72,14 @@ The reviewer needs it to judge scope: a finding "widens scope" only against what
 
 Give the review its own task id, distinct from the shipping task's.
 It is filed and spawned as a scout, so it is supervised, torn down, and reported like any scout.
+
+A second review after fixes is the same call with a new task id, because that scout was torn down when it reported.
+Give its `--spec` what changed - the finding ids that were fixed and the commits that fixed them - so it re-reads that surface first rather than starting the whole diff over from nothing.
+Its `--ask` does not change: the captain's intent behind the pull request did not move because a fix landed.
+
+A `no-mistakes` pull request needs the same dispatch and the same approval before it merges.
+Its pipeline's own review is not a review on the forge, so `bin/fm-pr-merge.sh` cannot see it and will refuse the merge without one.
+Everything above applies unchanged there; only the rest of this skill - the findings, the rulings, the fixes - belongs to the `direct-PR` path, because that pipeline owns its own.
 
 ## Read the findings
 

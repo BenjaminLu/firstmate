@@ -2,16 +2,16 @@
 
 Audience: maintainer verification.
 
-Active empirical facts behind the reviewer contract in `bin/fm-brief.sh` (`--review`) and the firstmate procedure in [`.agents/skills/pr-review/SKILL.md`](../../.agents/skills/pr-review/SKILL.md).
-Both state vendor behavior that a release note could change, so this record owns how it was established.
+Active empirical facts behind the reviewer contract in `bin/fm-brief.sh` (`--review`), the approval gate in `bin/fm-pr-merge.sh`, and the firstmate procedure in [`.agents/skills/pr-review/SKILL.md`](../../.agents/skills/pr-review/SKILL.md).
+All three state vendor behavior that a release note could change, so this record owns how it was established.
 
 ## Subject
 
 | Field | Value |
 |---|---|
-| Verified | 2026-09-19 |
-| Client | `gh-axi 0.1.35` |
-| Forge | github.com, repository `BenjaminLu/firstmate`, pull request 29 |
+| Verified | 2026-09-19 (posting a review), 2026-09-20 (what the merge gate reads) |
+| Client | `gh-axi 0.1.35` for the posting sections, `gh version 2.101.0 (2026-09-15)` for the read sections |
+| Forge | github.com, repository `BenjaminLu/firstmate`, pull requests 29, 39, and the survey below |
 | Account | one account, the same one that opened the pull request |
 
 ## A self-opened pull request refuses approve and request-changes
@@ -27,6 +27,42 @@ code: UNKNOWN
 
 `--request-changes` is refused by the same server-side rule and was not additionally exercised, because a successful one would have left the pull request blocked.
 That is the single unproven half of this section.
+
+This is why the approval `bin/fm-pr-merge.sh` requires is not GitHub's `APPROVED` review state alone.
+That state is unreachable from one account, so the gate also accepts the verdict written as the last line of a `COMMENTED` review body, and reads both out of the same `reviews` array.
+The day a second account makes the native state reachable, it is already accepted and nothing has to move.
+
+## A review reports the commit it reviewed
+
+Verified 2026-09-20, `gh version 2.101.0 (2026-09-15)`, against `BenjaminLu/firstmate#39`:
+
+```
+$ gh pr view 39 --repo BenjaminLu/firstmate --json headRefOid,reviews \
+    | jq -c '{head: .headRefOid, reviews: [.reviews[] | {state, oid: .commit.oid, login: .author.login}]}'
+{"head":"dec07ce702b533ac93f167fb58a190a67f42470f","reviews":[{"state":"COMMENTED","oid":"dec07ce702b533ac93f167fb58a190a67f42470f","login":"BenjaminLu"},{"state":"COMMENTED","oid":"dec07ce702b533ac93f167fb58a190a67f42470f","login":"BenjaminLu"}]}
+```
+
+`reviews[].commit.oid` is what binds an approval to a commit, and it is read from the same single `gh pr view` the merge's other pre-merge conditions already use, so the gate costs no extra forge call.
+A review of any other commit is an approval of something other than what would merge, which is the whole reason the gate reads this field.
+
+## Nothing in this repository had ever been approved
+
+Verified 2026-09-20, same client, across the open and recently merged pull requests of `BenjaminLu/firstmate`, in the order 30 34 22 21 38 39 36:
+
+```
+$ for n in 30 34 22 21 38 39 36; do gh pr view $n --repo BenjaminLu/firstmate --json reviews \
+    | jq -c '[.reviews[] | .state]'; done
+["COMMENTED"]
+[]
+["COMMENTED"]
+["COMMENTED"]
+["COMMENTED"]
+["COMMENTED","COMMENTED"]
+[]
+```
+
+Every review is `COMMENTED`, and two merged pull requests carry no review at all.
+The approval gate therefore refuses from a standing start rather than tightening an existing habit, which is the expected behavior on the first pull request after it lands and not a defect.
 
 ## A comment review is accepted and reads back
 

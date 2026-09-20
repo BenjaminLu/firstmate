@@ -58,23 +58,54 @@ make_case() {
   printf '%s\n' "$case_dir"
 }
 
+# One review the way GitHub reports it in the pull request's reviews array, so
+# a case drives the approval gate with the forge's own shape rather than a
+# field invented here. The body is JSON-escaped by jq, so a case may pass a
+# multi-line review body verbatim.
+# Args: state commit_oid author_login [body] [submittedAt]
+review_entry() {
+  local state=$1 oid=$2 login=$3 body=${4:-} submitted=${5:-2026-09-20T09:00:00Z}
+  # shellcheck disable=SC2016  # jq, not the shell, expands these --arg names.
+  "$JQ_BIN" -nc \
+    --arg state "$state" --arg oid "$oid" --arg login "$login" \
+    --arg body "$body" --arg at "$submitted" \
+    '{state: $state, commit: {oid: $oid}, author: {login: $login}, submittedAt: $at, body: $body}'
+}
+
+# The review the fleet actually posts today: GitHub refuses --approve from the
+# one account that opened the pull request, so the verdict is the last line of
+# a COMMENTED review body. Args: oid [login]
+approving_review() {
+  review_entry COMMENTED "$1" "${2:-reviewer}" \
+    'R1 naming, preference, low.
+
+Review verdict: APPROVED'
+}
+
 # Live GitHub JSON for the pre-merge verify, plus gh-axi for the
 # post-merge fallback view. Merge itself is `gh pr merge --match-head-commit`.
-# Args: case_dir head_sha
-write_github_live_json() {
+# Args: case_dir head_sha [rollup_json] [reviews_json] [pr_author_login]
+write_github_view_json() {
   local case_dir=$1 head=$2
+  local rollup=${3:-'{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}'}
+  local author=${5:-worker} reviews
+  # An explicitly empty fourth argument means a pull request with no reviews,
+  # while omitting it means the ordinary approved shape every other case wants.
+  if [ "$#" -ge 4 ]; then reviews=$4; else reviews=$(approving_review "$head"); fi
   printf '%s\n' "$head" > "$case_dir/github-head"
   cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","author":{"login":"$author"},"reviews":[$reviews],"statusCheckRollup":[$rollup]}
 JSON
+}
+
+write_github_live_json() {
+  write_github_view_json "$1" "$2"
 }
 
 write_github_red_json() {
   local case_dir=$1 head=$2 name=$3
-  printf '%s\n' "$head" > "$case_dir/github-head"
-  cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"$name","status":"COMPLETED","conclusion":"FAILURE"}]}
-JSON
+  write_github_view_json "$case_dir" "$head" \
+    "{\"__typename\":\"CheckRun\",\"name\":\"$name\",\"status\":\"COMPLETED\",\"conclusion\":\"FAILURE\"}"
 }
 
 # One CheckRun rollup entry the way GitHub reports it. A conclusion or timestamp
@@ -106,10 +137,7 @@ write_github_rollup_json() {
   for entry in "$@"; do
     rollup="${rollup:+$rollup,}$entry"
   done
-  printf '%s\n' "$head" > "$case_dir/github-head"
-  cat > "$case_dir/github-view.json" <<JSON
-{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","statusCheckRollup":[$rollup]}
-JSON
+  write_github_view_json "$case_dir" "$head" "$rollup"
 }
 
 assert_logged_gh_merge() {
@@ -276,6 +304,15 @@ case "${1:-} ${2:-}" in
   "mr merge")
     [ ! -e "$case_dir/glab-merge-fails" ] || { echo "error: mr merge failed" >&2 ; exit 1 ; }
     : > "$case_dir/glab-merge-called"
+    exit 0
+    ;;
+  api\ *)
+    [ ! -e "$case_dir/glab-approvals-fail" ] || exit 1
+    if [ -e "$case_dir/glab-approvals.json" ]; then
+      cat "$case_dir/glab-approvals.json"
+    else
+      printf '{"approved_by":[{"user":{"username":"reviewer"}}]}\n'
+    fi
     exit 0
     ;;
 esac
@@ -3219,3 +3256,312 @@ test_a_red_github_check_records_a_refused_gate_call
 test_a_green_merge_records_no_gate_call
 test_a_refusal_still_refuses_when_its_gate_call_cannot_be_recorded
 test_a_refused_gitlab_merge_records_a_refused_gate_call
+
+# --- The approval gate -------------------------------------------------------
+# The captain's rule of 2026-09-20: only a reviewer approves, and only an
+# approved pull request merges. These cases drive the gate through the script's
+# own entrypoint with the forge's real reviews shape, never through its source.
+
+# A view payload with the reviews array replaced wholesale, so one case drives
+# exactly one review shape. Args: case_dir head reviews_json [pr_author]
+write_github_reviews() {
+  local case_dir=$1 head=$2 reviews=$3 author=${4:-worker}
+  write_github_view_json "$case_dir" "$head" \
+    '{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}' \
+    "$reviews" "$author"
+}
+
+test_merge_refuses_a_pull_request_with_no_review() {
+  local case_dir rc head=1111111111111111111111111111111111111111
+  case_dir=$(make_case github-no-review)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" ''
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-no-review: an unreviewed pull request must not merge"
+  assert_grep 'no review has been posted' "$case_dir/stderr" \
+    "github-no-review: the refusal did not name the missing review"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-no-review: gh pr merge ran without a review"
+  pass "fm-pr-merge refuses a pull request no one has reviewed"
+}
+
+test_merge_refuses_a_review_that_states_no_verdict() {
+  local case_dir rc head=2222222222222222222222222222222222222222
+  case_dir=$(make_case github-no-verdict)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  # The shape every review in this repository had before this gate existed:
+  # posted, at the head, and carrying no statement that approves or does not.
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" reviewer 'R1 - preference - low - naming.
+
+Verdict: non-blocking')"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-no-verdict: a review without a verdict must not merge"
+  assert_grep 'states no verdict' "$case_dir/stderr" \
+    "github-no-verdict: the refusal did not name the missing verdict"
+  assert_grep 'Review verdict: APPROVED' "$case_dir/stderr" \
+    "github-no-verdict: the refusal did not name the line that would fix it"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-no-verdict: gh pr merge ran on a review that stated no verdict"
+  pass "fm-pr-merge refuses a posted review that states no verdict, and names the line that fixes it"
+}
+
+test_merge_refuses_an_approval_of_a_superseded_commit() {
+  local case_dir rc head=3333333333333333333333333333333333333333
+  local reviewed=4444444444444444444444444444444444444444
+  case_dir=$(make_case github-approval-superseded)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" "$(approving_review "$reviewed")"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-approval-superseded: an approval of an older commit must not merge"
+  assert_grep "$reviewed" "$case_dir/stderr" \
+    "github-approval-superseded: the refusal did not name the commit that was reviewed"
+  assert_grep "$head" "$case_dir/stderr" \
+    "github-approval-superseded: the refusal did not name the head that would merge"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-approval-superseded: gh pr merge ran on an approval of a superseded commit"
+  pass "fm-pr-merge refuses an approval of a commit that is no longer what would merge"
+}
+
+test_merge_refuses_a_review_that_declines() {
+  local case_dir rc head=5555555555555555555555555555555555555555
+  case_dir=$(make_case github-not-approved)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" reviewer 'R1 - defect - high - drops the error.
+
+Review verdict: NOT APPROVED')"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-not-approved: a declined review must not merge"
+  assert_grep 'does not approve' "$case_dir/stderr" \
+    "github-not-approved: the refusal did not say the review declined"
+  assert_grep 'reviewer' "$case_dir/stderr" \
+    "github-not-approved: the refusal did not name the reviewer who declined"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-not-approved: gh pr merge ran on a declined review"
+  pass "fm-pr-merge refuses a review whose verdict declines"
+}
+
+test_a_declining_review_beats_an_approval_at_the_same_head() {
+  local case_dir rc head=6666666666666666666666666666666666666666
+  case_dir=$(make_case github-split-verdict)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(approving_review "$head" first),$(review_entry COMMENTED "$head" second 'Review verdict: NOT APPROVED' 2026-09-20T10:00:00Z)"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-split-verdict: an outstanding refusal must not be merged over"
+  assert_grep 'does not approve' "$case_dir/stderr" \
+    "github-split-verdict: the refusal did not name the declining review"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-split-verdict: gh pr merge ran with a declining review at the head"
+  pass "fm-pr-merge refuses while any review at the head declines, even beside an approval"
+}
+
+test_a_quoted_verdict_is_not_the_reviews_own_verdict() {
+  local case_dir rc head=7777777777777777777777777777777777777777
+  case_dir=$(make_case github-quoted-verdict)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  # The earlier round's approval quoted verbatim inside a fenced block, with
+  # this review reaching no verdict of its own.
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" reviewer 'The previous round said:
+
+```
+Review verdict: APPROVED
+```
+
+That was before the force-push. I have not finished reading this one.')"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-quoted-verdict: a quoted verdict must not approve"
+  assert_grep 'states no verdict' "$case_dir/stderr" \
+    "github-quoted-verdict: the refusal did not treat the quote as no verdict"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-quoted-verdict: gh pr merge ran on a quoted verdict"
+  pass "fm-pr-merge reads only the last line as the review's own verdict"
+}
+
+test_github_native_approved_state_is_accepted() {
+  local case_dir head=8888888888888888888888888888888888888888
+  case_dir=$(make_case github-native-approval)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  # The durable form, for the day a second account makes GitHub's own verdict
+  # reachable: no verdict line at all, approved through the forge's state.
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry APPROVED "$head" reviewer 'Looks right.')"
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-native-approval: a natively approved pull request should merge"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 95 example/repo --squash
+  assert_grep 'approved by reviewer' "$case_dir/stderr" \
+    "github-native-approval: the merge did not name the approver"
+  pass "fm-pr-merge accepts GitHub's own APPROVED state with no verdict line, so the verbal form needs no migration"
+}
+
+test_merge_discloses_an_approval_it_cannot_separate_from_the_author() {
+  local case_dir head=9999999999999999999999999999999999999999
+  case_dir=$(make_case github-same-account)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" "$(approving_review "$head" solo)" solo
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-same-account: the merge should proceed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'cannot separate the two here' "$case_dir/stderr" \
+    "github-same-account: the merge did not disclose that the approver is the author"
+
+  # The same gate says nothing of the kind once the accounts differ, so the
+  # disclosure is the unverifiable case speaking rather than boilerplate.
+  case_dir=$(make_case github-two-accounts)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" "$(approving_review "$head" reviewer)" worker
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-two-accounts: the merge should proceed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_no_grep 'cannot separate the two here' "$case_dir/stderr" \
+    "github-two-accounts: a separable approval must not carry the disclosure"
+  pass "fm-pr-merge names the approver and says when the forge cannot tell it apart from the author"
+}
+
+test_no_flag_waives_the_approval() {
+  local case_dir rc head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  case_dir=$(make_case github-allow-red-no-approval)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_view_json "$case_dir" "$head" \
+    '{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"FAILURE"}' ''
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    --attended-override --allow-red ci > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-allow-red-no-approval: waiving the check must not waive the approval"
+  assert_grep 'no review has been posted' "$case_dir/stderr" \
+    "github-allow-red-no-approval: the refusal did not name the missing approval"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-allow-red-no-approval: gh pr merge ran unapproved under --allow-red --attended-override"
+  pass "fm-pr-merge lets neither --allow-red nor --attended-override waive the approval"
+}
+
+test_unreadable_reviews_refuse_the_merge() {
+  local case_dir rc head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc
+  case_dir=$(make_case github-reviews-unreadable)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  # Everything else readable and green, with the reviews array absent: an
+  # approval that cannot be read is not an approval.
+  cat > "$case_dir/github-view.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main","author":{"login":"worker"},"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-reviews-unreadable: unreadable reviews must not merge"
+  assert_grep 'could not read the GitHub pull request reviews' "$case_dir/stderr" \
+    "github-reviews-unreadable: the refusal did not name the failed reviews read"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-reviews-unreadable: gh pr merge ran without reading the reviews"
+  pass "fm-pr-merge refuses when the reviews cannot be read rather than merging unapproved"
+}
+
+test_gitlab_merge_refuses_without_an_approval() {
+  local case_dir rc
+  case_dir=$(make_gitlab_case gitlab-no-approval)
+  printf '{"approved_by":[]}\n' > "$case_dir/glab-approvals.json"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-no-approval: an unapproved merge request must not merge"
+  assert_grep 'no approval' "$case_dir/stderr" \
+    "gitlab-no-approval: the refusal did not name the missing approval"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-no-approval: glab mr merge ran without an approval"
+  pass "fm-pr-merge refuses a GitLab merge request nobody approved"
+}
+
+test_gitlab_merge_refuses_when_approvals_cannot_be_read() {
+  local case_dir rc
+  case_dir=$(make_gitlab_case gitlab-approvals-unreadable)
+  : > "$case_dir/glab-approvals-fail"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-approvals-unreadable: an unreadable approval must not merge"
+  assert_grep 'approvals could not be read' "$case_dir/stderr" \
+    "gitlab-approvals-unreadable: the refusal did not name the failed approvals read"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-approvals-unreadable: glab mr merge ran on an unreadable approval"
+  pass "fm-pr-merge refuses a GitLab merge whose approvals it could not read"
+}
+
+test_gitlab_merge_discloses_that_an_approval_is_not_head_bound() {
+  local case_dir
+  case_dir=$(make_gitlab_case gitlab-approval-not-head-bound)
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "gitlab-approval-not-head-bound: the merge should proceed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'not proven to cover head' "$case_dir/stderr" \
+    "gitlab-approval-not-head-bound: the merge claimed a head binding GitLab does not report"
+  pass "a GitLab merge says its approval is not proven against the head, unlike the GitHub path"
+}
+
+test_merge_refuses_a_pull_request_with_no_review
+test_merge_refuses_a_review_that_states_no_verdict
+test_merge_refuses_an_approval_of_a_superseded_commit
+test_merge_refuses_a_review_that_declines
+test_a_declining_review_beats_an_approval_at_the_same_head
+test_a_quoted_verdict_is_not_the_reviews_own_verdict
+test_github_native_approved_state_is_accepted
+test_merge_discloses_an_approval_it_cannot_separate_from_the_author
+test_no_flag_waives_the_approval
+test_unreadable_reviews_refuse_the_merge
+test_gitlab_merge_refuses_without_an_approval
+test_gitlab_merge_refuses_when_approvals_cannot_be_read
+test_gitlab_merge_discloses_that_an_approval_is_not_head_bound
