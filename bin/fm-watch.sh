@@ -2406,7 +2406,16 @@ while :; do
                 fm_wake_append check "pr-head-$id" \
                   "check: $id's record could not be updated to the head its pull request is on ($poll_head), $left_note: $url" \
                   || exit 1
-                printf '%s %s\n' "$poll_head" "$rebind_rc" > "$rebind_marker" || exit 1
+                # Unguarded, like every other marker write in this file - the
+                # .dead-reported-* sibling this record was modelled on writes
+                # exactly this way. The row is already appended by the time this
+                # runs, so a failed write costs one duplicate row on the next
+                # sweep; exiting would cost the supervision cycle itself, which
+                # is a far worse answer to a failure this record exists only to
+                # make tidier. Ordering is the half that does matter and is kept:
+                # append first, then mark.
+                printf '%s %s\n' "$poll_head" "$rebind_rc" > "$rebind_marker" \
+                  || triage_log "could not write the report-once record for $id; a duplicate row may follow"
               fi
             fi
           fi

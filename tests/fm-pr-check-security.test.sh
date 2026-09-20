@@ -1048,6 +1048,42 @@ test_a_failed_rebind_is_never_silent() {
   pass "a merged poll that cannot record its head reaches the durable queue, and one that can stays quiet"
 }
 
+# The report-once record is a tidiness aid, not a safety record: the row it
+# gates is already appended before it is written. Taking the supervision cycle
+# down because that write failed trades the whole fleet's watcher for one
+# duplicate row - and every other marker write in bin/fm-watch.sh, including the
+# .dead-reported-* sibling this was modelled on, writes unguarded.
+test_an_unwritable_report_once_record_does_not_kill_the_watcher() {
+  local dir state rc
+  dir=$(make_case rebind-marker-unwritable)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  strand_record_lock "$dir" "$state" task-a
+  # A directory where the record wants to be: the write cannot succeed.
+  mkdir "$state/.pr-head-reported-task-a"
+
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  case "$rc" in
+    0|124) ;;
+    *) fail "an unwritable report-once record took the watcher down (rc=$rc): $(cat "$dir/watch.err")" ;;
+  esac
+  # The row it gates still reached the queue, which is the part that matters.
+  grep -F 'pr-head-task-a' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "the actionable row was lost with the record write: $(cat "$state/.wake-queue" 2>/dev/null)"
+  grep -F 'could not write the report-once record for task-a' "$state/.watch-triage.log" >/dev/null \
+    || fail "the failed record write left no trace"
+  rmdir "$state/.pr-head-reported-task-a"
+  pass "a report-once record that cannot be written costs a duplicate row, not the watcher"
+}
+
 # The report-once record is dropped when a head is recorded, so the next failure
 # is news again. A sweep where the poll printed NOTHING - an unreachable forge, a
 # gh failure, an unparseable head - records nothing and must not count as one:
@@ -3407,6 +3443,7 @@ test_a_failed_rebind_is_never_silent
 test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so
 test_a_merged_row_names_what_the_record_actually_holds
 test_a_sweep_that_recorded_nothing_keeps_the_report_once_record
+test_an_unwritable_report_once_record_does_not_kill_the_watcher
 test_a_repeating_rebind_failure_is_reported_once_per_condition
 test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
