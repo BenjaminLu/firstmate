@@ -1291,6 +1291,27 @@ write_flat_hints() {
   done < <("$runner" --list --lane portable-parallel-2)
 }
 
+# A hint table where every lane 1 member is 1 ms except the named one, which
+# carries `tail_ms`. With the rest negligible, that one script alone sets the
+# lane's wall whatever the dispatch order does with the others, so a change to
+# its weight shows up in the projection undiluted.
+write_tail_weighted_hints() {
+  local runner=$1 out=$2 tail_path=$3 tail_ms=$4 f
+  : >"$out"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ "$f" = "$tail_path" ]; then
+      printf '%s %s\n' "$f" "$tail_ms" >>"$out"
+    else
+      printf '%s %s\n' "$f" 1000 >>"$out"
+    fi
+  done < <("$runner" --list --lane portable-parallel-1)
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s %s\n' "$f" 1000 >>"$out"
+  done < <("$runner" --list --lane portable-parallel-2)
+}
+
 wall_of() {
   printf '%s\n' "$2" | sed -n "s/^lane=$1 .*wall_ms=\([0-9]*\).*/\1/p"
 }
@@ -1399,38 +1420,62 @@ test_equal_lane_sums_do_not_hide_a_lane_over_its_wall() {
   pass "identical lane sums no longer hide a serial lane projected past its cap"
 }
 
-# A projection that silently drops the work it cannot measure would read as
-# headroom precisely when the packing is least trustworthy. Withhold one
-# member's hint and require the projection to rise, and the guard to say it is
-# now packing on a guess.
-test_an_unmeasured_member_is_still_weighed_and_reported() {
-  local tmp runner dropped full partial unhinted
+# An unmeasured member is refused, not merely counted, and the reason is that
+# the fallback under it is NOT conservative. It is a flat default well below
+# this set's mean member, so for anything heavier - eight of the current 24 -
+# losing a hint makes the projection FALL. Both directions are asserted here on
+# one fixture, because the pair is the whole point: the fallback keeps the
+# arithmetic honest about members lighter than it and lies about heavier ones,
+# which is exactly why the answer cannot be to trust it.
+test_an_unmeasured_member_is_weighed_and_then_refused() {
+  local tmp runner last full partial fallback each
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-unhinted.XXXXXX")
   make_wall_fixture "$tmp"
   runner="$tmp/bin/fm-test-run.sh"
-  dropped=$("$runner" --list --lane portable-parallel-1 | tail -1)
-  [ -n "$dropped" ] || fail "could not choose a member to leave unmeasured"
+  # The member dispatched LAST is the one whose weight lands on the critical
+  # path, so changing only its weight moves the lane's wall by exactly that
+  # much and neither direction can be absorbed by rebalancing.
+  last=$("$runner" --list-dispatch-order --lane portable-parallel-1 | tail -1)
+  [ -n "$last" ] || fail "could not choose a member to leave unmeasured"
 
-  # Every member hinted well below the conservative fallback, so withholding one
-  # hint has to move the projection up and cannot be absorbed by rebalancing.
-  write_flat_hints "$runner" "$tmp/all" 1000 1000
-  set_parallel_hints "$runner" "$tmp/all"
-  full=$("$runner" --check-lane-walls) || fail "the fully hinted fixture must pass: $full"
-  assert_contains "$full" "lane=1 jobs=2 wall_ms=" "lane 1 projects a wall"
-  [ "$(printf '%s\n' "$full" | sed -n 's/^lane=1 .*unhinted=\([0-9]*\).*/\1/p')" = "0" ] \
-    || fail "every member is hinted in this fixture: $full"
+  # Read the fallback back through behaviour rather than from the source: hint
+  # every member at 1 ms, withhold one, and the rise IS the fallback.
+  write_flat_hints "$runner" "$tmp/one" 1 1
+  set_parallel_hints "$runner" "$tmp/one"
+  full=$("$runner" --check-lane-walls) || fail "a fully hinted fixture must pass:"$'\n'"$full"
+  grep -v "^$last " "$tmp/one" >"$tmp/probe"
+  set_parallel_hints "$runner" "$tmp/probe"
+  partial=$("$runner" --check-lane-walls) || true
+  fallback=$(( $(wall_of 1 "$partial") - $(wall_of 1 "$full") + 1 ))
+  [ "$fallback" -gt 1 ] || fail "could not read the fallback weight back:"$'\n'"$partial"
 
-  grep -v "^$dropped " "$tmp/all" >"$tmp/partial"
-  set_parallel_hints "$runner" "$tmp/partial"
+  # Below the fallback: losing the hint RAISES the projection, and it is refused.
+  write_tail_weighted_hints "$runner" "$tmp/light" "$last" $((fallback / 2))
+  set_parallel_hints "$runner" "$tmp/light"
+  full=$("$runner" --check-lane-walls) || fail "a fully hinted fixture must pass:"$'\n'"$full"
+  assert_contains "$full" "unhinted=0" "every member hinted"
+  grep -v "^$last " "$tmp/light" >"$tmp/light-partial"
+  set_parallel_hints "$runner" "$tmp/light-partial"
   partial=$("$runner" --check-lane-walls) \
-    || fail "one missing hint must be reported, not refused on its own:"$'\n'"$partial"
-  unhinted=$(printf '%s\n' "$partial" | sed -n 's/^lane=1 .*unhinted=\([0-9]*\).*/\1/p')
-  [ "$unhinted" = "1" ] \
-    || fail "the unmeasured member must be counted, got unhinted=$unhinted"
+    && fail "an unmeasured member must be refused, not merely counted:"$'\n'"$partial"
+  assert_contains "$partial" "unhinted=1" "the unmeasured member is counted"
   [ "$(wall_of 1 "$partial")" -gt "$(wall_of 1 "$full")" ] \
-    || fail "an unmeasured member must still be weighed into its lane's projection"
+    || fail "a member lighter than the fallback must raise the projection when its hint is lost"
+
+  # Above the fallback: losing the hint LOWERS it. This is the case the retired
+  # wording claimed could not happen, and the refusal is the only thing covering
+  # it - the fallback here is optimistic, not conservative.
+  write_tail_weighted_hints "$runner" "$tmp/heavy" "$last" $((fallback * 3))
+  set_parallel_hints "$runner" "$tmp/heavy"
+  full=$("$runner" --check-lane-walls) || true
+  grep -v "^$last " "$tmp/heavy" >"$tmp/heavy-partial"
+  set_parallel_hints "$runner" "$tmp/heavy-partial"
+  partial=$("$runner" --check-lane-walls) \
+    && fail "an unmeasured heavy member must be refused:"$'\n'"$partial"
+  [ "$(wall_of 1 "$partial")" -lt "$(wall_of 1 "$full")" ] \
+    || fail "losing the hint of a member heavier than the fallback must LOWER the projection, which is why counting it is not enough:"$'\n'"$partial"
   rm -rf "$tmp"
-  pass "an unmeasured parallel member is still weighed and is reported as a guess"
+  pass "an unmeasured member is weighed, moves the projection either way, and is refused"
 }
 
 test_portable_serial_shards_partition_the_serial_lane() {
@@ -2184,7 +2229,7 @@ test_the_wall_projection_walks_the_dispatch_order
 test_parallel_wall_guard_fails_and_passes_either_side_of_the_budget
 test_the_coverage_guard_refuses_an_over_budget_pack
 test_equal_lane_sums_do_not_hide_a_lane_over_its_wall
-test_an_unmeasured_member_is_still_weighed_and_reported
+test_an_unmeasured_member_is_weighed_and_then_refused
 test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_hint_coverage_is_reported_and_bounded
 test_portable_serial_shard_lane_refusals

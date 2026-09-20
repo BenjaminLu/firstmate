@@ -92,8 +92,9 @@ jobs:
     # now is not the cap: bin/fm-test-run.sh projects each lane's WALL - over
     # the worker count this workflow gives it AND over the order the runner
     # really dispatches in, which for these lanes is alphabetical - and refuses
-    # a pack past 522000 ms, so an overloaded lane reds the five-minute coverage
-    # job rather than being cancelled here ten minutes in. Read the projection
+    # a pack past 522000 ms, or one carrying a member it has never measured, so
+    # an overloaded lane reds the five-minute coverage job rather than being
+    # cancelled here ten minutes in. Read the projection
     # with fm-test-run.sh --check-lane-walls; a hint SUM is not a wall, and a
     # wall computed over a better schedule than the runner uses is not one
     # either. Evidence and refresh procedure: docs/fm-test-portable-shards.md.
