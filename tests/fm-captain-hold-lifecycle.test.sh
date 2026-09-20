@@ -4040,7 +4040,7 @@ test_completion_gate_reads_an_answered_call_out_of_the_archive() {
   if run_captain "$home" complete "$id" "$plain" > "$home/plain.out" 2> "$home/plain.err"; then
     fail "the completion gate attested an archived close that carries no captain answer"
   fi
-  assert_contains "$(cat "$home/plain.err")" "no recorded captain answer" \
+  assert_contains "$(cat "$home/plain.err")" "no captain answer recorded" \
     "the archived ordinary close was refused for some other reason than the missing answer"
   if run_captain "$home" complete "$id" sample-never-existed \
     > "$home/absent.out" 2> "$home/absent.err"; then
@@ -4178,7 +4178,7 @@ test_a_replayed_answer_stays_idempotent_after_retention() {
   out=$(run_captain "$home" answer sample-zero-plain \
     --decision-file "$home/replay-decision.txt" 2>&1) \
     && fail "an archived ordinary close was dressed up as an answered captain call: $out"
-  assert_contains "$out" "no recorded captain answer" \
+  assert_contains "$out" "no captain answer recorded" \
     "the archived ordinary close was refused for some other reason: $out"
   show=$(cat "$home/data/done-archive.md")
   assert_contains "$show" "Fund the clock seam." "the archive lost the captain's recorded words"
@@ -4258,6 +4258,95 @@ test_hold_refuses_an_id_the_archive_already_owns() {
     --reason "captain choice pending" --repo sample >/dev/null \
     || fail "the archive check refused an id nothing owns"
   pass "hold refuses an id the archive already owns"
+}
+
+# One state, two consumers. A captain-held row closed outside this owner - the
+# sanctioned backlog command does exactly that - records no answer, and once
+# retention archives it tasks-axi will not write it again, so the answer can
+# never be added. The gate then can never pass and a pending reconcile request
+# points at a row nothing can act on. Neither is repairable at its own site;
+# both must end somewhere a person can act, without ever clearing a call
+# nobody answered.
+test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act() {
+  local home origin call other out meta
+  home=$(make_home unanswerable-archived)
+  origin=sample-unrecoverable-origin
+  call=sample-unrecoverable-call
+  other=sample-durable-call
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate the unrecoverable call" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the unrecoverable origin"
+  write_origin_meta "$home" "$origin"
+  printf '# Unrecoverable\n\nTwo captain choices remain.\n' > "$home/data/$origin/report.md"
+  tasks_in "$home" add "$call" "Choose the unrecoverable option" --repo sample >/dev/null \
+    || fail "could not create the unrecoverable call"
+  tasks_in "$home" add "$other" "Choose the durable option" --repo sample >/dev/null \
+    || fail "could not create the durable call"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the unrecoverable call"
+  run_captain "$home" hold "$other" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the durable call"
+  run_captain "$home" complete "$origin" "$call" "$other" >/dev/null \
+    || fail "could not attest the inventory"
+  request_reconciles "$home" unrecoverable-src "$call" \
+    || fail "could not file the reconcile request"
+
+  # The state, made the way the fleet actually makes it: the sanctioned
+  # backlog command closes a captain-held row with no answer recorded.
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the call outside this owner"
+  assert_grep "$call" "$home/data/done-archive.md" "the fixture did not archive the closed call"
+  printf 'Any answer at all.\n' > "$home/unrecoverable.txt"
+
+  # Consumer one: the pending reconcile request. It is retired deliberately,
+  # because it points at a row nothing can act on - and the command still
+  # reports failure, because a person owes the call a new task.
+  out=$(run_captain "$home" reconcile close "$call" --evidence-file "$home/unrecoverable.txt" 2>&1) \
+    && fail "reconcile close reported success over an unanswerable row: $out"
+  assert_contains "$out" "unrecoverable: $call" "the reconciliation did not name the state: $out"
+  assert_contains "$out" "Raise the call again" "the refusal ended nowhere a person can act: $out"
+  assert_absent "$home/state/reconcile-requests/$call.request" \
+    "the pending request was left pointing at a row no command can act on"
+
+  # The answer path says the same thing and points the same way.
+  out=$(run_captain "$home" answer "$call" --decision-file "$home/unrecoverable.txt" 2>&1) \
+    && fail "answer recorded a captain answer on an archived row: $out"
+  assert_contains "$out" "raise the call again as its own task" "the answer refusal ended nowhere: $out"
+
+  # Consumer two: the gate. It refuses, names the drop, and the drop is the
+  # only thing that clears it.
+  out=$(run_captain "$home" verify "$origin" 2>&1) \
+    && fail "the gate passed an unanswered captain call: $out"
+  assert_contains "$out" "--drop-unrecoverable $call" "the gate refusal named no exit: $out"
+
+  # A drop is refused for anything that is not that exact state.
+  out=$(run_captain "$home" complete "$origin" --drop-unrecoverable "$other" 2>&1) \
+    && fail "a durable captain call was dropped from the inventory: $out"
+  assert_contains "$out" "not an unrecoverable archived row" \
+    "the durable call was refused for some other reason: $out"
+  out=$(run_captain "$home" complete "$origin" --drop-unrecoverable sample-never-attested 2>&1) \
+    && fail "an id that was never attested was dropped: $out"
+  assert_contains "$out" "nothing to drop" "the unattested drop was refused for some other reason: $out"
+
+  # The drop itself: narrow, recorded, and it leaves the durable call attested.
+  out=$(run_captain "$home" complete "$origin" --drop-unrecoverable "$call" 2>&1) \
+    || fail "the exit the gate named did not work: $out"
+  assert_contains "$out" "dropped as unrecoverable: $call" "the drop was not reported: $out"
+  meta=$(cat "$home/state/$origin.meta")
+  assert_contains "$meta" "decision_dropped=$call" "the drop was not recorded in the metadata"
+  assert_contains "$(grep '^decision_keys=' "$home/state/$origin.meta" | tail -1)" "$other" \
+    "the drop took the durable call with it"
+  assert_not_contains "$(grep '^decision_keys=' "$home/state/$origin.meta" | tail -1)" "$call" \
+    "the dropped key stayed in the attested inventory"
+
+  # The gate now passes on the remaining durable call, and cleanup proceeds.
+  run_captain "$home" verify "$origin" >/dev/null 2> "$home/verify-after-drop.err" \
+    || fail "the gate still could not pass after the named exit: $(cat "$home/verify-after-drop.err")"
+  run_teardown "$home" "$origin" >/dev/null 2> "$home/drop-teardown.err" \
+    || fail "cleanup stayed blocked after the named exit: $(cat "$home/drop-teardown.err")"
+  pass "an unanswerable archived call ends somewhere a person can act, in both consumers"
 }
 
 # --- cleanup owns the close of a row whose worker is still up ----------------
@@ -4466,6 +4555,7 @@ test_archive_follows_its_configuration_and_reports_an_unreadable_store
 test_a_replayed_answer_stays_idempotent_after_retention
 test_a_reconciliation_retires_its_request_after_retention
 test_hold_refuses_an_id_the_archive_already_owns
+test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
 test_an_interrupted_close_still_finishes_when_a_worker_appears
