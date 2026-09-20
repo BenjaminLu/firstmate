@@ -33,8 +33,8 @@ With a non-empty inventory it appends a `captain-held [key=<key>]: tracked by <i
 Scout teardown calls the read-only `verify` subcommand after checking for the report and before removing any source state.
 `verify` requires the recorded attestation, requires every recorded inventory entry to still be durable (actively captain-held, or carrying a recorded answer), and fails on any keyed status decision that opened after the last `complete`, which makes re-running `complete` the repair.
 Both subcommands read durability across both halves of a markdown backlog, because `done_keep` retires a closed row out of the active file into the archive beside it, and a reader of the active file alone reports an answered call as simply gone - which is how a finished scout came to be unable to pass its own gate.
-Every read of a row that may already have been retired follows that rule, not only the gate: `answer` and the keyed intake resolve a retired row out of the archive too, so a replayed answer stays the documented idempotent no-op instead of reporting the captain's landed answer as absent from the backlog.
-An archived row is read-only to tasks-axi, so replay is all either command offers there, and only for the same decision and the same close.
+The rule is not the gate's alone: `answer`, the keyed intake, and `reconcile close` each resolve a retired row out of the archive too, so a replay stays the documented idempotent no-op instead of reporting a landed answer as absent from the backlog and leaving a pending reconcile request no command can retire.
+An archived row is read-only to tasks-axi, so replay is all any of them offers there, and only for the same decision and the same close.
 Retention is not a resolution: an archived row counts only through the captain answer recorded in it, while an archived row carrying no answer, and an id present in neither file, both stay refusals, so nothing passes this gate merely by having disappeared.
 The `--force` path remains the explicit captain-approved discard escape hatch.
 

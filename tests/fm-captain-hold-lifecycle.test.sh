@@ -4183,6 +4183,48 @@ test_a_replayed_answer_stays_idempotent_after_retention() {
   pass "a replayed answer stays idempotent once retention has archived the row"
 }
 
+# The reconciliation half of the same rule. A close that landed while its
+# request retirement did not leaves the row in the archive on a home that
+# keeps no Done entries, and a reader of the active file alone left the
+# pending request with no command able to retire it - the dead end where the
+# only action left is deleting a private state file by hand.
+test_a_reconciliation_retires_its_request_after_retention() {
+  local home id out
+  home=$(make_home reconcile-after-retention)
+  id=sample-zero-reconcile
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$id" "Reconcile under zero retention" --repo sample >/dev/null \
+    || fail "could not create the zero-retention reconcile fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the zero-retention reconcile fixture"
+  request_reconciles "$home" zero-reconcile-src "$id" \
+    || fail "could not file the reconcile request"
+  printf 'The release it asked about shipped on its own, so the call is moot.\n' \
+    > "$home/zero-evidence.txt"
+  cp "$home/state/reconcile-requests/$id.request" "$home/zero-request.backup"
+
+  run_captain "$home" reconcile close "$id" --evidence-file "$home/zero-evidence.txt" >/dev/null \
+    || fail "could not reconcile the zero-retention fixture"
+  # The crash window R2 was ruled on: the close landed, the retirement did not.
+  cp "$home/zero-request.backup" "$home/state/reconcile-requests/$id.request"
+  out=$(run_captain "$home" reconcile close "$id" --evidence-file "$home/zero-evidence.txt" 2>&1) \
+    || fail "an interrupted reconciliation could not be finished after retention: $out"
+  assert_contains "$out" "reconciled: $id" "the archived reconciliation did not replay: $out"
+  assert_absent "$home/state/reconcile-requests/$id.request" \
+    "the replayed reconciliation left its pending request with no command able to retire it"
+
+  # Drift and a non-reconciliation mode are still refused by name.
+  cp "$home/zero-request.backup" "$home/state/reconcile-requests/$id.request"
+  printf 'Different evidence entirely.\n' > "$home/zero-drift.txt"
+  out=$(run_captain "$home" reconcile close "$id" --evidence-file "$home/zero-drift.txt" 2>&1) \
+    && fail "drifted evidence replayed against an archived reconciliation: $out"
+  assert_contains "$out" "different resolution" \
+    "the archived reconciliation replay accepted drift instead of naming it: $out"
+  pass "a reconciliation retires its request even once retention has archived the row"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4366,6 +4408,7 @@ test_completion_gate_attests_and_transfers
 test_completion_gate_reads_an_answered_call_out_of_the_archive
 test_archive_follows_its_configuration_and_reports_an_unreadable_store
 test_a_replayed_answer_stays_idempotent_after_retention
+test_a_reconciliation_retires_its_request_after_retention
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
 test_an_interrupted_close_still_finishes_when_a_worker_appears

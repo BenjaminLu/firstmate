@@ -1732,7 +1732,11 @@ reconcile_close() {
   reconcile_request_read "$id" \
     || fail "task $id has no pending board-created reconcile request"
   require_tasks_axi
-  task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  if ! task_show "$id"; then
+    replay_archived_reconciliation "$id"
+    return $?
+  fi
+  show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
   body=$(show_field "$show" body)
@@ -1772,6 +1776,33 @@ reconcile_close() {
   remove_interrupted_answer_stamp "$id"
   body_has_resolution_record "$(closed_row_body "$id")" \
     || fail "captain-held task $id did not retain its durable resolution record"
+  publish_parent_hold "$id" "$occurrence" resolved reconciled
+  [ "$PARENT_HOLD_PUBLISHED" = 1 ] \
+    || fail "could not publish the reconciled captain-held task $id to its parent"
+  reconcile_request_retire "$id"
+  printf 'reconciled: %s\n' "$id"
+}
+
+# The reconciliation twin of replay_archived_answer, for the same reason and
+# with the same limits: a close that landed and whose request retirement did
+# not leaves a row done_keep may already have retired, and reading the active
+# file alone reported it absent - which left the pending request with no
+# command able to retire it and a person with nothing to do but delete a
+# private state file by hand.
+replay_archived_reconciliation() {  # <task-id>
+  local id=$1 archived status=0 occurrence
+  archived=$(archived_row_body "$id") || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "the backlog archive could not be read while resolving captain-held task $id"
+  [ "$status" -eq 0 ] \
+    || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+  body_has_resolution_record "$archived" \
+    || fail "task $id is closed and archived with no resolution record; use answer to record what closed it"
+  [ "$(recorded_decision_digest "$archived" || true)" = "$DECISION_DIGEST" ] \
+    || fail "archived task $id records a different resolution; it cannot be reconciled again"
+  [ "$(recorded_resolution_mode "$archived" || true)" = reconciled ] \
+    || fail "archived task $id was not closed by reconciliation"
+  occurrence=$(resolution_record_count "$archived")
   publish_parent_hold "$id" "$occurrence" resolved reconciled
   [ "$PARENT_HOLD_PUBLISHED" = 1 ] \
     || fail "could not publish the reconciled captain-held task $id to its parent"
