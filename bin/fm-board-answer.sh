@@ -31,13 +31,19 @@
 # intake in bin/fm-captain-hold.sh and the acknowledgement lifecycle in
 # bin/fm-bearings-board.sh.
 #
-# A CLICK CARRIES AN ANSWER, NEVER AN INSTRUCTION. The only thing this channel
-# can express is "the captain picked this option on this card" - the same thing
-# a chat answer expresses. It cannot merge, discard, spawn, tear down, or run
-# anything, because the only commands it invokes are the four above and none of
-# them takes an action from its input. What follows from an answer is
-# firstmate's to decide under the rules that already govern it, which is why
-# step 5 wakes firstmate instead of acting.
+# A CLICK CARRIES WHAT THE CAPTAIN COULD SAY IN CHAT, AND NOTHING MORE. Almost
+# every message says "the captain picked this option on this card". The one
+# exception is the dispatch bar, which names no card and says "he ticked these
+# queued rows" - an order to start work, named here rather than filed under
+# "answer", because an absolute with one unstated exception is what invites a
+# second.
+#
+# Neither can merge, discard, spawn, tear down, or run anything, because the
+# only commands this file invokes are the four above and none of them takes an
+# action from its input. Even the dispatch order decides nothing: it
+# acknowledges the rows and wakes firstmate. What follows is firstmate's to
+# decide under the rules that already govern it, which is why step 5 wakes him
+# instead of acting.
 #
 # INPUT. One row per line, fields separated by tabs, already free of control
 # characters (the caller is the boundary that sanitizes, because it is the one

@@ -106,11 +106,19 @@
 # the captain. It is also not new: before the origin allowlist above there was
 # no check at all and any origin could already subscribe.
 #
-# AND IT CAN ONLY EVER CARRY AN ANSWER. Nothing an inbound message says is an
-# instruction: the one thing it can express is which option the captain picked
-# on which card, which is exactly what he can say in chat. bin/fm-board-answer.sh
-# owns what happens next, and every merge, dispatch, and teardown stays behind
-# the rules that already govern it.
+# AND IT CAN ONLY EVER CARRY WHAT THE CAPTAIN COULD SAY IN CHAT. Almost
+# everything an inbound message can express is which option he picked on which
+# card. The one exception is the dispatch bar, whose message names no card and
+# carries no option: it says he ticked these queued rows, which is an order to
+# start work and is worth naming rather than filing under "answer". It is
+# still only what he could say in chat, and it still decides nothing - it
+# acknowledges the rows and wakes firstmate, who rules on the dispatch under
+# the ordinary rules.
+#
+# That is the whole list, and it is written as a list rather than an absolute
+# because an absolute with one unstated exception is what invites a second.
+# bin/fm-board-answer.sh owns what happens next, and every merge, dispatch and
+# teardown stays behind the rules that already govern it.
 #
 # WHY A FILE AND NOT A SOCKET. A publisher that had to reach a process could
 # fail in a caller that must not fail, and would lose the event when the server
