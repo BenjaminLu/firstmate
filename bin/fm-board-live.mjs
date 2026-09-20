@@ -12,11 +12,11 @@
 //   fm-board-live.mjs state
 //   fm-board-live.mjs --help
 //
-// serve   Run the server in the foreground. It holds one authoritative board
-//         state, pushes it to every subscriber, and exits nonzero rather than
-//         running on a port it could not take. --once serves until the first
-//         client has been sent its state and then exits, which is what the
-//         tests drive.
+// serve   Run the server in the foreground. It serves the board page at `/`,
+//         holds one authoritative board state, pushes it to every subscriber,
+//         and exits nonzero rather than running on a port it could not take.
+//         --once serves until the first client has been sent its state and
+//         then exits, which is what the tests drive.
 // state   Print the merged board state this server would serve right now, as
 //         one JSON document, and exit. Reads nothing from the network and
 //         starts no server, so a home can be inspected without one running.
@@ -47,6 +47,64 @@
 // stale, naming what changed, and the page says a rebuild is owed. A board
 // that is quietly missing a captain's call is the failure this whole branch
 // exists to stop; a board that says it is behind is not that failure.
+//
+// AND THE PAGE ITSELF IS SERVED FROM THIS PORT. The board used to be hosted by
+// an external tool, so a clone without that tool installed had a live server,
+// a built page, and no way to open it. This port already belonged to the home,
+// so it answers GET / with that page and nothing else: exactly the one file
+// bin/fm-bearings-board.sh built, never a directory, never state/, never data/,
+// where the reports and briefs live. There is no path to traverse because
+// nothing here joins a request to a path - each route names its own file, and
+// every unmatched request is a plain 404. The listener stays on 127.0.0.1.
+//
+// TWO THINGS HERE ARE KNOWN TO BE SHORT-LIVED, and are written as routes
+// rather than as facts for that reason. This home is to serve the decision
+// packet from this same port, separated by path, so `/` is the first route
+// and not the only one there will ever be; and the board file moves from
+// .lavish/bearings-board.html - named after a tool this no longer uses - to
+// state/board.html. Both are decided and both land on the system-wide branch
+// that rebases onto this one. Nothing below should be read as "one port, one
+// file, forever".
+//
+// WHAT SERVING IT COSTS, AND FOR HOW LONG. The built page carries the inbound
+// token, and the board file is mode 0600, so until now only the captain's own
+// user could read that credential. Serving the page puts it behind the port
+// instead of behind the file mode: every local process that can reach this
+// port can now fetch the page and answer as the captain. That is the read
+// side of this port, which serves the whole board to any allowed origin
+// without proof.
+//
+// The captain has since decided that reading requires the token too, knowing
+// it stops every board already built until it is rebuilt. That lands on the
+// system-wide branch, not here, so this paragraph describes a posture with a
+// known end date rather than a standing design. The token check on every
+// inbound message is unchanged and was never the part in question.
+//
+// THE PORT HAS TWO ENTRY POINTS, AND EVERY CLAIM HERE COVERS BOTH OR NAMES
+// WHICH. A page request and a websocket handshake arrive on the same port and
+// are handled separately, so a guard written on one of them is not a guard on
+// the port. The Host allowlist is on both; the frame headers belong to the
+// response and so to the page request; the origin allowlist and the token
+// belong to the socket. When you add a guard here, say which of the two it is
+// on, because the previous version of this block enumerated the socket alone
+// and read as though it covered everything.
+//
+// NOBODY MAY FRAME THIS, AND THAT IS A SEPARATE FACT FROM WHO MAY READ IT.
+// An earlier draft of this block concluded "no browser gains anything" from
+// two true statements about READING: another origin cannot read this
+// response, and the origin allowlist refuses its socket. Both still hold.
+// Neither is about the attack that works. A page on any origin could FRAME
+// this board, draw its own control over the frame, and let the captain click
+// through it. Nothing is read. The framed document's origin is this board's
+// own, so the allowlist admits its socket and the token baked into the page
+// authenticates it, and a captain's call is settled with a real answer and
+// real provenance while every check in this file correctly sees a legitimate
+// board - because it is one. So framing is refused outright, on every
+// response, by x-frame-options and frame-ancestors together.
+//
+// The lesson is worth more than the header: reading and acting are different
+// boundaries, and a conclusion about one of them drawn from two true premises
+// about the other is how this got shipped in the first place.
 //
 // AND THE CLICK COMES BACK THE SAME WAY. The socket carries the fleet out and
 // the captain's answer in. The inbound half is the dangerous one - an answer
@@ -80,7 +138,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import {
-  existsSync, mkdirSync, openSync, readSync, closeSync, fstatSync,
+  constants, existsSync, mkdirSync, openSync, readSync, closeSync, fstatSync,
   readFileSync, statSync, watch, writeFileSync, unlinkSync, appendFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -783,7 +841,45 @@ function endpointUrl(port) {
   return `ws://127.0.0.1:${port}/board-live`;
 }
 
+/* The same port, read as a page rather than as a subscription. This is the
+   URL a clone gets with nothing installed. */
+function pageUrl(port) {
+  return `http://127.0.0.1:${port}/`;
+}
+
+/* The two spellings of this machine, at the port this server actually took -
+   never the configured one, because a server that fell back would then refuse
+   its own address. A name that merely RESOLVES to 127.0.0.1 is not one of
+   these, which is the whole point: see THE HOST IS CHECKED FIRST. */
+function hostAllowed(host, port) {
+  if (typeof host !== "string") return false;
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+}
+
+/* O_NOFOLLOW, the same refusal bin/fm-remote-file.sh and bin/fm-wake-lib.sh
+   already make on a file that carries something private. The board page
+   carries the answer token, and this commit is what put it behind a port, so
+   a symlink dropped in its place must not become something this server reads
+   out to whoever asked. Refusing at open() rather than checking first is what
+   makes it a guard instead of a race: there is no gap between the test and
+   the read. A symlink surfaces as ELOOP and is reported by that code. It
+   takes the path so the packet's route can use the same guard rather than
+   growing a second one. */
+function readServedFile(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function serve(opts) {
+  // The port this server actually took, which is what the Host check compares
+  // against. Null until listen succeeds, and the handler refuses while it is:
+  // no request can arrive before then, and answering one if it did would mean
+  // answering without knowing our own address.
+  let boundPort = null;
   const base = { ...readBase() };
   const log = new EventLog(LOG_PATH);
   log.read();
@@ -903,16 +999,99 @@ function serve(opts) {
   }
 
   const server = createServer((req, res) => {
-    // The board page is served by its own surface; this port answers one
-    // question, so anything else gets a plain refusal rather than a 404 page.
-    res.writeHead(426, { "content-type": "text/plain; charset=utf-8" });
-    res.end("fm-board-live: websocket only, connect to /board-live\n");
+    const method = req.method || "GET";
+    const path = (req.url || "/").split("?")[0];
+    const head = method === "HEAD";
+    const send = (code, type, body) => {
+      res.writeHead(code, {
+        "content-type": type,
+        "content-length": Buffer.byteLength(body),
+        "cache-control": "no-store",
+        // The page carries a credential, so nothing may guess at its type and
+        // nothing may keep a copy it was not handed directly.
+        "x-content-type-options": "nosniff",
+        // AND NOTHING MAY PUT IT IN A FRAME. Both spellings, because the old
+        // header is what actually stops an old browser and the CSP directive
+        // is what the current ones read. See NOBODY MAY FRAME THIS in the
+        // header block: this is the whole defence against a page that never
+        // reads the board and settles a captain's call anyway.
+        "x-frame-options": "DENY",
+        "content-security-policy": "frame-ancestors 'none'",
+      });
+      res.end(head ? undefined : body);
+    };
+    // THE HOST IS CHECKED FIRST, AND IT AUTHENTICATES NOBODY. It is what makes
+    // the same-origin policy mean anything on this port. A name an attacker
+    // controls can be pointed at 127.0.0.1, and then their page and this board
+    // share an origin as far as the browser is concerned - so the browser
+    // hands them the page, the token in it, and the socket. Answering only to
+    // this home's own loopback address closes that, and it stays correct
+    // whichever way the separate read-authentication decision goes.
+    // THIS PORT HAS TWO ENTRY POINTS and both make this check: here, and the
+    // upgrade handler below. Neither is the complete guard on its own.
+    const host = req.headers.host;
+    if (!boundPort || !hostAllowed(host, boundPort)) {
+      send(403, "text/plain; charset=utf-8",
+        "fm-board-live: this port answers 127.0.0.1 and localhost only\n");
+      return;
+    }
+    if (path === "/board-live") {
+      // Reached without an Upgrade, so it is not the subscription it names.
+      send(426, "text/plain; charset=utf-8",
+        "fm-board-live: this path is the websocket; the board is at /\n");
+      return;
+    }
+    if (method !== "GET" && !head) {
+      send(405, "text/plain; charset=utf-8", "fm-board-live: GET only\n");
+      return;
+    }
+    // Each route names its own file. A request never contributes a path
+    // segment to anything opened, so the home's state and data directories
+    // are not "protected" from this server - they are unreachable by it, and
+    // they stay unreachable when the packet's route is added beside this one.
+    const file = path === "/" ? BOARD_PATH : null;
+    if (file === null) {
+      send(404, "text/plain; charset=utf-8", "fm-board-live: the board is at /\n");
+      return;
+    }
+    let page;
+    try {
+      page = readServedFile(file);
+    } catch (e) {
+      // ONLY "it is not there" reads as "nothing has built one". Anything else
+      // - a mode that cannot be read, a directory in its place, the symlink
+      // refusal below - is a condition someone has to fix, and telling them to
+      // re-run the command they just ran would hide it behind advice that
+      // cannot work.
+      if (e && e.code === "ENOENT") {
+        send(404, "text/plain; charset=utf-8",
+          "fm-board-live: no board has been built in this home yet (run /bearings)\n");
+        return;
+      }
+      send(500, "text/plain; charset=utf-8",
+        `fm-board-live: cannot read the board page (${(e && e.code) || "unknown error"}): ${file}\n`);
+      return;
+    }
+    send(200, "text/html; charset=utf-8", page);
   });
 
   server.on("upgrade", (req, socket) => {
     const key = req.headers["sec-websocket-key"];
     if (req.headers.upgrade?.toLowerCase() !== "websocket" || typeof key !== "string") {
       socket.destroy();
+      return;
+    }
+    // THE SAME HOST CHECK AS THE REQUEST HANDLER, because this is the port's
+    // SECOND entry point and it is the one that hands out live board state.
+    // A name an attacker controls, pointed at 127.0.0.1, reaches both; a check
+    // on only one of them is a false map for whoever changes this next.
+    if (!boundPort || !hostAllowed(req.headers.host, boundPort)) {
+      socket.end(
+        "HTTP/1.1 403 Forbidden\r\n" +
+        "content-type: text/plain; charset=utf-8\r\n" +
+        "connection: close\r\n\r\n" +
+        "fm-board-live: this port answers 127.0.0.1 and localhost only\n",
+      );
       return;
     }
     const origin = req.headers.origin;
@@ -1019,12 +1198,14 @@ function serve(opts) {
   });
   server.listen(opts.port, "127.0.0.1", () => {
     const port = server.address().port;
+    boundPort = port;
     writeFileSync(
       ENDPOINT_PATH,
       `${endpointUrl(port)}\n`,
       { mode: 0o600 },
     );
     process.stdout.write(`endpoint: ${endpointUrl(port)}\n`);
+    process.stdout.write(`page: ${pageUrl(port)}\n`);
     process.stdout.write(`log: ${LOG_PATH}\n`);
     process.stdout.write(`board: ${BOARD_PATH}\n`);
   });

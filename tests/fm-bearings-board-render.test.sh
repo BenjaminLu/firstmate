@@ -26,31 +26,15 @@ make_home() {  # <name>
   fm_test_track_procevent_home "$home" "$home/procevent-claims"
   mkdir -p "$home/state" "$home/data"
   fakebin=$(fm_fakebin "$home")
-  # The build proves the board session is live before it arms anything, so the
-  # stub reports the opened shape the real lavish-axi emits. This suite is about
-  # what the template renders, not about session liveness, which
-  # tests/fm-bearings-board.test.sh owns.
+  # A TRIPWIRE, not a stub. Nothing on the board path may reach for lavish-axi
+  # any more, so this records the attempt and fails rather than answering it.
+  # A stub that answered would let the dependency come back silently; this
+  # makes it come back by name, in whichever case reintroduced it.
   cat > "$fakebin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-case "${1-}" in
-  --version) printf '0.1.61\n' ;;
-  '')
-    printf 'sessions[1]{file,status,url,pending_prompts}:\n'
-    [ ! -s "$FM_HOME/lavish-open" ] \
-      || printf '  %s,open,"http://127.0.0.1/session/render",0\n' "$(cat "$FM_HOME/lavish-open")"
-    ;;
-  poll)
-    # Bounded, so a listener that escapes its test stops on its own.
-    while [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ]; do sleep 1; done
-    exit 75
-    ;;
-  *)
-    real=$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")
-    printf '%s\n' "$real" > "$FM_HOME/lavish-open"
-    printf 'session:\n  status: opened\n'
-    ;;
-esac
-exit 0
+printf '%s\n' "$*" >> "$FM_HOME/lavish-invoked"
+printf 'lavish-axi was invoked by the board path, which must not need it\n' >&2
+exit 127
 SH
   chmod +x "$fakebin/lavish-axi"
   printf '%s\n' "$home"
@@ -1491,21 +1475,6 @@ test_a_disconnected_live_seam_refuses_instead_of_reporting_success() {
   pass "a disconnected live seam refuses instead of reporting success"
 }
 
-# Both seams present: the live one is preferred, because it is the one that
-# reaches firstmate on the machine the captain is actually using.
-test_the_live_seam_is_preferred_over_the_serving_surface() {
-  local home out
-  home=$(make_home live-seam-both)
-  out=$(BOARD_LIVE_SEAM=connected render_payload "$home" "$(no_channel_payload)")
-
-  [ "$(printf '%s' "$out" | jq -r '.live_answers | length')" = "1" ] \
-    || fail "the live seam was not used when both were present: $out"
-  [ "$(printf '%s' "$out" | jq -r '.cards[0].on_enter')" = "null" ] \
-    || fail "the answer also went to the serving surface, sending it twice: $out"
-
-  pass "the live seam is preferred over the serving surface"
-}
-
 test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered() {
   local home out
   home=$(make_home no-channel)
@@ -2128,7 +2097,7 @@ test_a_packet_with_figures_opens_its_tabs_inside_the_card() {
           # sends down the answer channel is the value that option carries
           and (.panels[1] | .label == "Error stream only" and .cost == "Two lines of code leave."
             and ([.buttons[] | .queues.selection] == ["quiet"])
-            and (.buttons[0].queues | .schema == "fm-bearings-answer.v1" and .question == "stream-choice")
+            and (.buttons[0].queues.question == "stream-choice")
             and (.buttons[0].text | test("Choose Error stream only")))
           and (.panels[2] | .label == "Both streams" and ([.buttons[] | .queues.selection] == ["loud"]))
           and (.panels[3] | [.buttons[] | .queues.selection] == ["reconcile"]))
@@ -2345,11 +2314,13 @@ test_an_inline_packet_never_offers_a_second_address() {
   printf '%s' "$out" | jq -e '
     (.cards[0] | (.chips | index("open the packet")) == null and .packet != null)
   ' >/dev/null || fail "an inline packet still offered its own separate page: $out"
-  # And the build opened exactly one Lavish session: the board itself.
-  [ "$(wc -l < "$home/lavish-open" | tr -d ' ')" = 1 ] \
-    || fail "the build established more than the board's own session"
-  grep -q 'bearings-board.html$' "$home/lavish-open" \
-    || fail "the one opened session was not the board: $(cat "$home/lavish-open")"
+  # And nothing reached for an external tool to give the packet an address of
+  # its own. The fixture's lavish-axi is a tripwire that records and fails, so
+  # this is a real assertion rather than a file nothing could have written:
+  # any invocation at all, by the board path or by fm-packet.sh serve, lands
+  # in that record and is named here.
+  [ ! -s "$home/lavish-invoked" ] \
+    || fail "the board path invoked lavish-axi, which it must not need: $(cat "$home/lavish-invoked")"
   pass "a card with the packet inline opens no second session and offers no second address"
 }
 
@@ -2419,7 +2390,7 @@ test_a_free_form_answer_never_counts_as_choosing_an_option() {
     # the channel, and the note that followed it hid the vote from the check.
     ((.cards[0].on_enter_all | length) == 1)
     and (.cards[0].on_enter_all[0]
-      | .schema == "fm-bearings-answer.v1" and .question == "stream-choice"
+      | .question == "stream-choice"
         and .selection == "" and .note == "in my own words")
   ' >/dev/null || fail "a free-form answer was recorded as choosing an option: $out"
   pass "a free-form answer with no option chosen is queued as a note, not a vote"
@@ -2769,7 +2740,6 @@ test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered
 test_the_dispatch_bar_refuses_visibly_when_it_cannot_send
 test_an_answer_goes_down_the_live_seam_when_the_serving_surface_is_absent
 test_a_disconnected_live_seam_refuses_instead_of_reporting_success
-test_the_live_seam_is_preferred_over_the_serving_surface
 test_a_card_that_cannot_send_says_so_before_the_captain_composes_an_answer
 test_a_send_that_reports_failure_leaves_the_card_unanswered
 test_a_call_that_carried_no_options_says_so_on_the_card

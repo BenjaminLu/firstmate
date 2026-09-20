@@ -1095,11 +1095,12 @@ __FM_BEARINGS_BOARD_DATA__
      inert, which is 為什麼船長裁決這一塊一直是空的 with a better error
      message. The live transport now carries answers down the same socket it
      receives on, and names its seam window.fmBoardLive.
-     The live seam is preferred when it is there AND says it can reach
-     firstmate right now; the serving surface is the fallback; neither present
-     means no channel, and every caller already refuses visibly in that case.
-     Order matters: canAnswer() is asked before falling back, so a live seam
-     that exists but is disconnected does not shadow a working fallback. */
+     There is ONE channel now. The board is served by this home's own server
+     and answers down that socket; the surface that used to host the page is
+     gone from this path entirely, so the fallback that reached for it has
+     gone with it rather than being kept in case. Absent or unable to reach
+     firstmate means no channel, and every caller already refuses visibly in
+     that case. */
   function answerChannel() {
     var live = window.fmBoardLive;
     if (live && typeof live.answer === "function"
@@ -1119,9 +1120,6 @@ __FM_BEARINGS_BOARD_DATA__
           close: d.close
         }) !== false;
       };
-    }
-    if (window.lavish && typeof window.lavish.queuePrompt === "function") {
-      return function (text, opts) { window.lavish.queuePrompt(text, opts); return true; };
     }
     return null;
   }

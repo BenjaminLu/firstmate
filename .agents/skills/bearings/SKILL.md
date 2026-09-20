@@ -3,9 +3,8 @@ name: bearings
 description: >-
   Generate a "pick up where I left off" fleet digest from firstmate's live fleet state.
   Use when the captain invokes /bearings or asks for a bearings report, morning brief, status report, catch-up, "where did I leave off", or "what's in the works".
-  Plain /bearings is chat-only by default, /bearings file explicitly writes the dated data/status-report-<YYYY-MM-DD>.md artifact, and /bearings lavish additionally builds and arms the interactive fleet board; live PR enrichment remains opt-in and composes with the other modes.
+  Plain /bearings is chat-only by default, /bearings file explicitly writes the dated data/status-report-<YYYY-MM-DD>.md artifact, and /bearings lavish (board mode) additionally builds the interactive fleet board and serves it from this home's own server; live PR enrichment remains opt-in and composes with the other modes.
   Also use on a contributions check wake or when filing work linked to an upstream issue.
-  Also load this skill's board-wake handling when a procevent lavish wake's source id matches the canonical source id of the stable bearings board path.
 user-invocable: true
 metadata:
   internal: true
@@ -17,7 +16,7 @@ Generate a complete current snapshot from the fleet's current state, so the capt
 Plain `/bearings` returns only the concise four-section chat digest.
 Only `/bearings file` writes the dated markdown report artifact and then returns the concise four-section chat digest linked to that report.
 Only `/bearings lavish` builds the interactive fleet board beside that digest, through `bin/fm-bearings-board.sh` (its header owns every board mechanic and the fm-bearings-board.v1 payload contract).
-A digest/build invocation is operationally read-only apart from observational remote-ledger cache refreshes, durable per-target reconcile-notify requests when the captured state needs them, plus the explicit per-mode artifacts: the dated report in file mode, and in lavish mode the board file plus the answer binding and source registration that `bin/fm-bearings-board.sh build` records through their own owners.
+A digest/build invocation is operationally read-only apart from observational remote-ledger cache refreshes, durable per-target reconcile-notify requests when the captured state needs them, plus the explicit per-mode artifacts: the dated report in file mode, and in board mode the board file plus the answer binding that `bin/fm-bearings-board.sh build` records through its own owner.
 During that invocation it never tears down a task, merges a PR, dispatches new work, steers a worker, answers a decision, cleans up work, or mutates backlog or task state.
 Board answers are acted on later under the normal authority rules; this skill's board-wake section explicitly owns the guarded routing at that time.
 
@@ -25,9 +24,9 @@ Board answers are acted on later under the normal authority rules; this skill's 
 
 - Plain `/bearings` gathers a fresh bounded snapshot and renders the four-section chat digest without creating, deleting, reading, or replacing `data/status-report-<YYYY-MM-DD>.md`.
 - `/bearings file` gathers a fresh bounded snapshot, replaces today's `data/status-report-<YYYY-MM-DD>.md` from scratch, and renders the four-section chat digest with a link or path to that report.
-- `/bearings lavish` gathers a fresh bounded snapshot, rebuilds and arms the interactive fleet board (the "Lavish board mode" section below), and renders the four-section chat digest with the board's URL inside it.
-- Treat `file` and `lavish` only as explicit invocation options in the slash command.
-- Do not treat natural-language requests such as "write a report", "save this", "persist it", "make a file", or "make a board" as file or lavish mode unless the invocation explicitly includes the standalone option.
+- `/bearings lavish` gathers a fresh bounded snapshot, rebuilds and serves the interactive fleet board (the "Board mode" section below), and renders the four-section chat digest with the board's URL inside it.
+- Treat `file` and `lavish` only as explicit invocation options in the slash command; `lavish` is the option's spelling, not a tool the board uses.
+- Do not treat natural-language requests such as "write a report", "save this", "persist it", "make a file", or "make a board" as file or board mode unless the invocation explicitly includes the standalone option.
 - When the captain asks to include PRs, pass the snapshot command's live-PR opt-in.
 - `/bearings include PRs` remains chat-only and makes the live-PR opt-in.
 - `/bearings file include PRs` and `/bearings lavish include PRs` compose the same way.
@@ -91,10 +90,12 @@ For a contribution wake or linked-issue filing, go directly to Contribution foll
    After writing the file, return the concise four-section chat digest and include the report path or link without adding a fifth section.
    For a richer review surface, offer `/bearings lavish` when the report has enough structure to deserve one, but only after the required digest is ready.
 
-## Lavish board mode
+## Board mode
 
-`/bearings lavish` adds one deliverable beside the unchanged chat digest: the interactive fleet board, a myfirstmate-styled Lavish page where the captain answers Captain's Call items directly instead of replying in chat.
-`bin/fm-bearings-board.sh` owns every board mechanic - the stable board path, the deterministic payload skeleton, fm-bearings-board.v1 payload validation, template injection, live Lavish session verification and ended-session reopening, the any-origin answer binding, and listener registration - so the per-invocation work is filling the skeleton and running its `build`.
+`/bearings lavish` adds one deliverable beside the unchanged chat digest: the interactive fleet board, a myfirstmate-styled page this home serves itself, where the captain answers Captain's Call items directly instead of replying in chat.
+The board uses no external tool at all, so `lavish` here is only how the invocation is still spelled.
+Renaming it, and whether the old spelling keeps working, is the captain's call and is held for him; when he answers, the change is this spelling wherever it appears as a literal invocation, and `BOARD_INVOCATION` in `bin/fm-bearings-board.sh`.
+`bin/fm-bearings-board.sh` owns every board mechanic - the stable board path, the deterministic payload skeleton, fm-bearings-board.v1 payload validation, template injection, serving the page from this home's own server, and the answer binding - so the per-invocation work is filling the skeleton and running its `build`.
 
 Never hand-write the payload from the snapshot.
 Start from `bin/fm-bearings-board.sh compose --lang <captain's language> --out <file>`, which reads the same snapshot command and maps every structured row deterministically: Underway, Recently Landed, and Charted Next rows (including an unavailable or externally held secondmate home and every inventory-mismatch notice, as non-dispatchable warning rows), one decision card per live captain hold THIS home owns whose task id is a routable key, and a merge card per merge-ready PR that a task in THIS home's backlog claims (the script header owns the exact mapping and the placeholder shapes).
@@ -132,9 +133,11 @@ The board rules that govern what you write into the skeleton:
 - Every Captain's Call item and every Underway, Recently Landed, and Charted Next row carries an explicit `repo` field. Fill it from the snapshot and task records wherever known; use null or an empty string only as the deliberate genuinely-no-repo marker, in which case the template may show the internal id. Ids otherwise stay in the payload only as the routing channel, and composed reasons name blockers in plain words - the skeleton already words a blocked gate that carries no hold reason as `waiting on <blocker>`, which you may reword but must not blank.
 
 Run `build` once after the filled skeleton passes `compose --check`.
-Its serve-first sequence publishes the board, establishes and verifies its Lavish session with `lavish-axi`, reopens an ended session when necessary, and only then binds the answer source and proves a live polling listener; use the session URL it prints in the chat digest.
-Never bind or arm the board before its session is listed open.
-Never run `lavish-axi poll` for the board yourself: the armed source's supervised runner owns the blocking poll, and both the build and the watcher's ordinary reconcile repair a missing listener, so no conversational turn ever blocks on the board.
+It publishes the board and serves it from this home's own server, and the `url:` line it prints is the address to put in the chat digest.
+The board depends on no external command at all: this home's own server builds, serves and answers it, so a clone on a machine configured with nothing gets the working board.
+If `build` says on stderr that nothing is serving it, report that rather than handing the captain a board he cannot open.
+The captain's answer comes back over the same socket the board subscribes on, so there is no source to arm for it and none is registered - `bin/fm-bearings-board.sh`'s header owns why, and the ordering rule it still enforces.
+The board is a LOCAL surface and the address is loopback; never widen it, and never add a remote or mobile path to this contract.
 
 The board `build` publishes keeps itself fresh between rebuilds: it subscribes to this home's fleet events and repaints as they land, and `build` starts that server itself, so nothing here is a step to remember.
 What it can repaint is what the fleet can express without new words - a worker's state, a row that went underway or landed, a call that was answered.
@@ -149,7 +152,6 @@ So there is nothing here to route - what remains is whatever his answer now asks
 A wake saying part of it did NOT land names `state/board-inbound.jsonl`, where his exact answer is; reconcile that key by hand with a direct `answer` rather than asking him again.
 `dispatch.charted` is the one key that names no task: its wake carries the ids he ticked, and starting them is the ordinary dispatch decision.
 
-A board answer captured by the older review channel instead arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake. Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, regardless of which answer kinds the result contains; then load `process-event-sources` and follow its contract for the result read, adapter classification, and the handled acknowledgement.
 Decision answers need no routing from you: the runner feeds the board's binding into `bin/fm-captain-hold.sh`'s one keyed-answer intake, which closes or releases each answered captain-held task at answer time; reconcile any `skipped:` key yourself with a direct `answer`, and when the captain's answer is "later", record it as a deferral with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` instead of a closure.
 A current structured Reconcile selection closes nothing: the versioned board context carries its exact selected option separately from any typed note, and the adapter routes that selection only into a durable re-check request while preserving the note as provenance.
 The rollout-compatible old context still feeds ordinary non-reconcile answers, but its bare or separator-annotated reconcile values and every structurally uncertain choice feed neither intake and remain announced for deliberate handling.
@@ -227,9 +229,9 @@ Rules that keep the contract unambiguous:
 - Include the required direct address to the captain inside one item or empty-state sentence.
 - Every PR appears as the full `https://...` URL; a shorthand `#number` is fine only as a back-reference after the full URL has already appeared in the same digest.
 - The chat follows `AGENTS.md` section 9 and carries one scannable line per item.
-- Detailed decisions, plans, full gate reasons, and evidence stay out of chat; file mode puts them in the report, while lavish mode puts only its payload-backed interactive detail on the board.
+- Detailed decisions, plans, full gate reasons, and evidence stay out of chat; file mode puts them in the report, while board mode puts only its payload-backed interactive detail on the board.
 - In file mode, include the report path or link inside the four-section digest without adding another heading.
-- In lavish mode, include the board URL inside the four-section digest the same way.
+- In board mode, include the board URL inside the four-section digest the same way.
 
 ## Tone and content rules
 

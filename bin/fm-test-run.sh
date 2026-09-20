@@ -422,7 +422,6 @@ family_for_basename() {
       printf '%s\n' session-bootstrap
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
-    fm-bearings-board-lavish-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
@@ -910,7 +909,6 @@ tests/fm-backend.test.sh 22539
 tests/fm-backlog-atomicity.test.sh 205547
 tests/fm-backlog-handoff.test.sh 52247
 tests/fm-backlog-read-bound.test.sh 28890
-tests/fm-bearings-board-lavish-live-e2e.test.sh 50
 tests/fm-bearings-board-render.test.sh 48025
 tests/fm-bearings-board.test.sh 102017
 tests/fm-bearings-snapshot.test.sh 172524

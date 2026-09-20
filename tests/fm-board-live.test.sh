@@ -648,6 +648,312 @@ test_a_home_with_no_board_says_so_rather_than_serving_nothing() {
   pass "a home that has never built a board says so instead of serving nothing"
 }
 
+# --- the page this port serves -----------------------------------------------
+#
+# The board used to be hosted by an external tool, so a home without it had a
+# live server, a built page, and no way to open either. These cases hold what
+# replaced that: this port serves the board itself, serves ONLY the board, and
+# a page served from it answers exactly as a page opened from the file does.
+
+# Prints the status code; writes the body to <outfile> byte for byte, which a
+# command substitution could not do - it would eat the page's last newline and
+# turn a faithful serve into a failing diff.
+http_get() {  # <url> <outfile>
+  node -e '
+    const http = require("node:http");
+    const fs = require("node:fs");
+    http.get(process.argv[1], (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        fs.writeFileSync(process.argv[2], Buffer.concat(chunks));
+        process.stdout.write(String(res.statusCode));
+      });
+    }).on("error", (e) => { process.stderr.write(String(e.message)); process.exit(1); });
+  ' "$1" "$2"
+}
+
+# Status plus the response headers, lowercased, one per line. A header this
+# port must send is not provable from the body.
+http_head() {  # <url> [host-header]
+  node -e '
+    const http = require("node:http");
+    const opts = new URL(process.argv[1]);
+    const headers = {};
+    if (process.argv[2]) headers.host = process.argv[2];
+    http.get({hostname: opts.hostname, port: opts.port, path: opts.pathname, headers}, (res) => {
+      let out = String(res.statusCode) + "\n";
+      for (const [k, v] of Object.entries(res.headers)) out += k.toLowerCase() + ": " + v + "\n";
+      res.resume();
+      res.on("end", () => process.stdout.write(out));
+    }).on("error", (e) => { process.stderr.write(String(e.message)); process.exit(1); });
+  ' "$1" "${2-}"
+}
+
+# THE ATTACK THIS CLOSES NEVER READS ANYTHING. A page on any origin can frame
+# this board and draw its own control over the frame; the captain clicks once,
+# and because the framed document's origin IS the board's own, the origin
+# allowlist admits its socket and the token baked into the page authenticates
+# it. A real captain's call is settled with real provenance while every check
+# in the server correctly sees a legitimate board. Refusing the frame is the
+# whole defence, so both headers are asserted on the page itself and on a
+# refusal, because a header sent only on the happy path is not a defence.
+test_no_origin_may_put_the_board_in_a_frame() {
+  local home port got
+  home=$(make_home framed) || fail "could not build a home"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(http_head "http://127.0.0.1:$port/") || fail "nothing answered"
+  assert_equals 200 "$(printf '%s\n' "$got" | head -1)" "the board did not serve"
+  assert_contains "$got" "x-frame-options: DENY" \
+    "the board can be framed by any page that wants the captain's click"
+  assert_contains "$got" "frame-ancestors 'none'" \
+    "the board carries no frame-ancestors directive"
+  got=$(http_head "http://127.0.0.1:$port/nope") || fail "nothing answered the 404"
+  assert_contains "$got" "x-frame-options: DENY" \
+    "a refusal may be framed even though the page may not"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "no page on any origin may frame the board, on any response this port sends"
+}
+
+# A Host check authenticates nobody. It is what makes the same-origin policy
+# actually hold for this port: a name an attacker controls can be pointed at
+# 127.0.0.1, and their page would then share an origin with the board as far
+# as the browser is concerned.
+test_a_host_this_home_does_not_answer_to_is_refused() {
+  local home port got
+  home=$(make_home rebound) || fail "could not build a home"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(http_head "http://127.0.0.1:$port/" "attacker.example:$port") \
+    || fail "nothing answered the forged Host"
+  assert_equals 403 "$(printf '%s\n' "$got" | head -1)" \
+    "a name pointed at this loopback address borrowed the board's origin"
+  # A bare name with no port is the other spelling of the same attempt.
+  got=$(http_head "http://127.0.0.1:$port/" "attacker.example") \
+    || fail "nothing answered the portless forged Host"
+  assert_equals 403 "$(printf '%s\n' "$got" | head -1)" \
+    "a portless forged Host was answered"
+  # Both spellings of this machine still work, or the fix would have broken
+  # the board to defend it.
+  assert_equals 200 "$(http_head "http://127.0.0.1:$port/" "127.0.0.1:$port" | head -1)" \
+    "the board refused its own address"
+  assert_equals 200 "$(http_head "http://127.0.0.1:$port/" "localhost:$port" | head -1)" \
+    "the board refused localhost, which is how a captain reaches it"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "the port answers only this home's own loopback address, by either name"
+}
+
+# "It is not there" and "it is there and I cannot read it" are different facts,
+# and sending the captain to re-run the command he just ran hides the second.
+# The symlink case is also the O_NOFOLLOW guard: the board page carries the
+# answer token, and this is the commit that put it behind a port.
+# THE PORT HAS TWO ENTRY POINTS. The page request is one; this handshake is the
+# other, and it is the one that hands out live board state. A guard on only the
+# first reads, to whoever changes this next, as though the entry conditions were
+# in one place. Spoken raw rather than through the client helper, because what
+# is being asserted is exactly the header that helper fills in correctly.
+ws_handshake_status() {  # <port> <host-header> ; prints the status line
+  node -e '
+    const net = require("node:net");
+    const [port, host] = process.argv.slice(1);
+    const sock = net.connect(Number(port), "127.0.0.1", () => {
+      sock.write(
+        "GET /board-live HTTP/1.1\r\n" +
+        "Host: " + host + "\r\n" +
+        "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+        "Sec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+    });
+    let buf = "";
+    sock.on("data", (c) => {
+      buf += c;
+      if (buf.includes("\r\n")) { process.stdout.write(buf.split("\r\n")[0]); sock.destroy(); }
+    });
+    sock.on("close", () => { if (!buf) process.stdout.write("(closed with no answer)"); });
+    sock.on("error", () => { process.stdout.write("(error)"); });
+    setTimeout(() => { sock.destroy(); }, 5000).unref();
+  ' "$1" "$2"
+}
+
+test_the_websocket_handshake_refuses_a_host_this_home_does_not_answer_to() {
+  local home port got
+  home=$(make_home rebound-socket) || fail "could not build a home"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(ws_handshake_status "$port" "evil.example.com:$port")
+  case $got in
+    *101*) fail "a forged Host was upgraded and handed the live board: $got" ;;
+    *403*) ;;
+    *) fail "the handshake answered a forged Host with neither 403 nor 101: $got" ;;
+  esac
+  got=$(ws_handshake_status "$port" "evil.example.com")
+  case $got in
+    *101*) fail "a portless forged Host was upgraded: $got" ;;
+    *403*) ;;
+    *) fail "the handshake answered a portless forged Host unexpectedly: $got" ;;
+  esac
+  # And both real spellings still upgrade, or the fix would have closed the
+  # board to defend it.
+  for spelling in "127.0.0.1:$port" "localhost:$port"; do
+    got=$(ws_handshake_status "$port" "$spelling")
+    case $got in
+      *101*) ;;
+      *) fail "the handshake refused $spelling, which is how the board connects: $got" ;;
+    esac
+  done
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "the websocket handshake refuses a forged Host exactly as the page request does"
+}
+
+test_a_board_that_cannot_be_read_says_why_rather_than_blaming_the_captain() {
+  local home port board got real
+  home=$(make_home unreadable) || fail "could not build a home"
+  board="$home/.lavish/bearings-board.html"
+  real="$home/.lavish/real.html"
+  port=$(serve_home "$home") || fail "the server did not start"
+  mv "$board" "$real"
+  got=$(http_head "http://127.0.0.1:$port/") || fail "nothing answered"
+  assert_equals 404 "$(printf '%s\n' "$got" | head -1)" "an absent board was not a 404"
+  http_get "http://127.0.0.1:$port/" "$home/absent.txt" >/dev/null
+  assert_contains "$(cat "$home/absent.txt")" "no board has been built" \
+    "an absent board did not say that is what is missing"
+
+  # A symlink where the board should be is refused, not followed and served.
+  ln -s "$real" "$board"
+  got=$(http_head "http://127.0.0.1:$port/") || fail "nothing answered the symlink"
+  assert_equals 500 "$(printf '%s\n' "$got" | head -1)" \
+    "a symlink in the board's place was served as though it were the board"
+  http_get "http://127.0.0.1:$port/" "$home/link.txt" >/dev/null
+  assert_contains "$(cat "$home/link.txt")" "ELOOP" \
+    "the symlink refusal does not name the condition"
+  case $(cat "$home/link.txt") in
+    *"no board has been built"*) fail "a symlink was reported as nothing having been built" ;;
+  esac
+  rm -f "$board"
+  mv "$real" "$board"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "a board that cannot be read names the condition instead of blaming the captain"
+}
+
+test_the_port_serves_the_board_page_itself() {
+  local home port url status
+  home=$(make_home served-page) || fail "could not build a home"
+  port=$(serve_home "$home") || fail "the server did not start"
+  url=$(FM_HOME="$home" "$LIVE" page) || fail "a running server printed no page address"
+  assert_equals "http://127.0.0.1:$port/" "$url" \
+    "the page address is not the port this home's server actually took"
+  status=$(http_get "$url" "$home/served.html") || fail "nothing answered at $url"
+  assert_equals 200 "$status" "the board's own address did not serve the board"
+  # Byte for byte the file the build wrote: this port hosts the board, it does
+  # not render a second version of it.
+  diff -q "$home/.lavish/bearings-board.html" "$home/served.html" >/dev/null \
+    || fail "the served page is not the board file on disk"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "the port that pushes the fleet also serves the board page, unchanged"
+}
+
+test_the_port_serves_the_board_and_nothing_else() {
+  local home port url status path
+  home=$(make_home served-scope) || fail "could not build a home"
+  printf 'the captain only\n' > "$home/data/secret-report.md"
+  port=$(serve_home "$home") || fail "the server did not start"
+  url="http://127.0.0.1:$port/"
+  # The home's own files, asked for every way a request can spell them. None of
+  # these is "blocked" by a rule that could be got round - the server joins no
+  # request to a path at all, so there is no path for a request to reach - and
+  # the assertion is that each is a plain refusal carrying none of the file.
+  for path in "data/secret-report.md" "../data/secret-report.md" \
+      "state/board-live.token" "..%2F..%2Fetc%2Fpasswd" "index.html" "board" \
+      ".lavish/bearings-board.html"; do
+    status=$(http_get "$url$path" "$home/refused.txt") \
+      || fail "the server did not answer $path"
+    assert_equals 404 "$status" "$path was served instead of refused"
+    case $(cat "$home/refused.txt") in
+      *"the captain only"*) fail "$path served the home's own data" ;;
+    esac
+  done
+  status=$(http_get "${url}board-live" "$home/socket.txt") \
+    || fail "the server did not answer the socket path"
+  assert_equals 426 "$status" "a plain GET of the socket path was not told what it is"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "the port serves the board and refuses every other path, the home's own files included"
+}
+
+test_a_home_with_no_board_page_is_told_so_rather_than_served_something_else() {
+  local home port status
+  home="$TMP_ROOT/served-empty"
+  mkdir -p "$home/state"
+  port=$(serve_home "$home") || fail "the server did not start"
+  status=$(http_get "http://127.0.0.1:$port/" "$home/empty.txt") \
+    || fail "the server did not answer"
+  assert_equals 404 "$status" "a home that has never built a board served something anyway"
+  assert_contains "$(cat "$home/empty.txt")" "no board has been built" \
+    "a home with no board did not say that is what is missing"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "a home with no board page says so rather than serving something else"
+}
+
+# A DERIVED port may move when it is taken; a PINNED one may not, because a pin
+# exists to be honoured. The holder announces itself rather than being probed
+# for, so this can never pass by having failed to take the port in the first
+# place - a guard that cannot tell "refused" from "nothing was holding it" is
+# not a guard.
+test_a_pinned_port_that_is_taken_is_an_error_not_a_quiet_move() {
+  local home busy out rc holder waited
+  home=$(make_home pinned-port) || fail "could not build a home"
+  busy=$(free_port)
+  node -e '
+    const net = require("node:net");
+    const fs = require("node:fs");
+    net.createServer().listen(Number(process.argv[1]), "127.0.0.1", () => {
+      fs.writeFileSync(process.argv[2], "listening\n");
+      setTimeout(() => process.exit(0), 30000);
+    });
+  ' "$busy" "$home/holder-ready" &
+  holder=$!
+  waited=0
+  while [ "$waited" -lt 100 ] && [ ! -f "$home/holder-ready" ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -f "$home/holder-ready" ] || { kill "$holder" 2>/dev/null; fail "nothing ever took the port, so this case would prove nothing"; }
+
+  set +e
+  out=$(FM_HOME="$home" node "$SERVER" serve --port "$busy" 2>&1)
+  rc=$?
+  set -e
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  [ "$rc" -ne 0 ] || fail "a pinned port that was taken did not refuse: $out"
+  assert_contains "$out" "$busy" "the refusal does not name the port it could not take: $out"
+  [ ! -f "$home/state/board-live.endpoint" ] \
+    || fail "a refused pinned start still recorded an endpoint: $(cat "$home/state/board-live.endpoint")"
+  pass "a pinned port that is already taken refuses rather than moving to another one"
+}
+
+test_an_answer_from_the_served_page_is_accepted() {
+  local home port token got
+  need_tasks_axi || return 0
+  home=$(make_answering_home served-answer) \
+    || fail "could not build a home with a captain-held task"
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  # A board fetched from this port presents THIS origin, not a file's `null`.
+  # If the allowlist did not admit it, every button on the served board would
+  # be dead while the board still looked live - the exact failure the served
+  # page would otherwise introduce and nothing else would catch.
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 2 60000 --count-type inbound \
+    --origin "http://127.0.0.1:$port" \
+    --send "$(inbound_message "$token" served-click \
+      '[{"key":"pick-one","selection":"yes","label":"Yes","close":"done"}]')") \
+    || fail "the served page's own origin got no answer back"
+  assert_equals accepted "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].status')" \
+    "an answer from the origin this port itself serves was refused"
+  assert_equals recorded "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")] | last | .status')" \
+    "an answer from the served board never landed"
+  assert_equals "done" "$(cd "$home" && tasks-axi show pick-one | sed -n 's/^  state: //p')" \
+    "an answer from the served board did not settle the call"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "an answer sent from a page this port served is accepted and recorded"
+}
+
 # --- the socket --------------------------------------------------------------
 
 test_a_subscriber_is_sent_the_whole_board_before_anything_else() {
@@ -881,6 +1187,15 @@ test_a_pull_request_on_underway_work_is_reported_not_guessed
 test_landing_moves_the_row_and_retires_its_call
 test_a_rebuild_supersedes_every_earlier_event
 test_a_home_with_no_board_says_so_rather_than_serving_nothing
+test_the_port_serves_the_board_page_itself
+test_no_origin_may_put_the_board_in_a_frame
+test_a_host_this_home_does_not_answer_to_is_refused
+test_the_websocket_handshake_refuses_a_host_this_home_does_not_answer_to
+test_a_board_that_cannot_be_read_says_why_rather_than_blaming_the_captain
+test_the_port_serves_the_board_and_nothing_else
+test_a_home_with_no_board_page_is_told_so_rather_than_served_something_else
+test_a_pinned_port_that_is_taken_is_an_error_not_a_quiet_move
+test_an_answer_from_the_served_page_is_accepted
 test_a_subscriber_is_sent_the_whole_board_before_anything_else
 test_an_append_reaches_an_open_subscriber
 test_events_published_while_the_server_was_down_are_not_lost

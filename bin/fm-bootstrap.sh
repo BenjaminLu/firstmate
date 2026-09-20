@@ -6,9 +6,9 @@
 #          exits 0.
 #          Silent = all good.
 #          Lines: "MISSING: <tool> (install: <command>)",
-#                 "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=<floor>; install: <command>) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish",
+#                 "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=<floor>; install: <command>) - the captain's board is NOT affected ... What needs a compatible build is a Lavish REVIEW session ...",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
-#                 "PRESENTATION_UNSTABLE_URL: <why the board gets no stable address>",
+#                 "PRESENTATION_UNSTABLE_URL: <why a Lavish session gets no stable address>",
 #                 "CLAUDE_PERMISSIONS: <n> of this repository's toolchain commands
 #                 are not pre-approved in <settings> ... merge with: <command>",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
@@ -68,11 +68,14 @@
 #          LAVISH_AXI_MIN below; the per-tool owners point there. An installed
 #          essential build below its floor reports MISSING like no-mistakes.
 #          Missing or incompatible lavish-axi reports PRESENTATION_UNAVAILABLE:
-#          nonvisual dispatch continues with plain-text decisions and reports,
-#          but Lavish use still requires a compatible build at or above its floor.
+#          the captain's board is unaffected and does not use Lavish at all,
+#          because this home's own server builds, serves and answers it with
+#          nothing installed beyond node; what a Lavish REVIEW session needs is
+#          a compatible build at or above its floor.
+#          bin/fm-bearings-board.sh's header owns the board's path.
 #          A compatible build is then asked the separate CAPABILITY question the
 #          floor cannot answer - whether it accepts --name, which is what gives
-#          the board one stable /s/<slug> address. The published package does not
+#          a Lavish session one stable /s/<slug> address. The published package does not
 #          carry that flag and reports a HIGHER version than the fork build that
 #          does, so a floor cannot stand in for the probe; bin/fm-lavish-lib.sh
 #          owns it. A probe that cannot run reports PRESENTATION_UNSTABLE_URL as
@@ -1842,7 +1845,7 @@ detect_local_tools() {
     echo "MISSING: gh-axi (install: $(install_cmd gh-axi))"
   fi
   if ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
-    echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
+    echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - the captain's board is NOT affected: this home's own server builds, serves and answers it (bin/fm-bearings-board.sh url). What needs a compatible build is a Lavish REVIEW session: an annotated review of an HTML artifact, bin/fm-packet.sh serve, and a visual scout's review loop; install or upgrade before using one"
   else
     detect_lavish_named_session
   fi
@@ -1854,26 +1857,28 @@ detect_local_tools() {
   fi
 }
 
-# The board's stable /s/<slug> URL needs lavish-axi's --name, and the version
-# floor above cannot answer that question - the published release is NEWER than
-# the fork build that carries the flag, so a floor a feature-less release clears
-# reports a working presentation layer and the board quietly comes up at a URL
-# that changes. fm-lavish-lib.sh owns the probe and why it is a probe.
+# A Lavish session's stable /s/<slug> URL needs lavish-axi's --name, and the
+# version floor above cannot answer that question - the published release is
+# NEWER than the fork build that carries the flag, so a floor a feature-less
+# release clears reports a working presentation layer and the session quietly
+# comes up at a URL that changes. fm-lavish-lib.sh owns the probe and why it is
+# a probe. The captain's board has its own stable address either way; this is
+# about the optional Lavish surface beside it.
 #
 # Only reached when the floor already passed, so lavish-axi is present and
 # compatible here and the two lines never both fire for one install. An
 # unverifiable probe is reported as unverifiable rather than folded into either
-# verdict: the board degrades to a plain open in that case too, so a silent pass
-# would be the one outcome that hides a URL the captain's rule depends on.
+# verdict: the session degrades to a plain open in that case too, so a silent
+# pass would be the one outcome that hides a changing URL.
 detect_lavish_named_session() {
   fm_lavish_named_session_support
   case $? in
     0) return 0 ;;
     1)
-      echo "PRESENTATION_UNSTABLE_URL: lavish-axi $(tool_version lavish-axi) does not accept --name, so the board opens at a generated session URL that changes instead of one stable address - the published package does not carry that flag; install a build that does before relying on one captain-facing URL"
+      echo "PRESENTATION_UNSTABLE_URL: lavish-axi $(tool_version lavish-axi) does not accept --name, so a Lavish session opens at a generated URL that changes instead of one stable address - the published package does not carry that flag; install a build that does before relying on one Lavish URL. The captain's board is unaffected: this home serves it at a stable address of its own"
       ;;
     *)
-      echo "PRESENTATION_UNSTABLE_URL: could not read lavish-axi --help, so whether the board gets one stable address could not be verified - re-run once lavish-axi answers --help"
+      echo "PRESENTATION_UNSTABLE_URL: could not read lavish-axi --help, so whether a Lavish session gets one stable address could not be verified - re-run once lavish-axi answers --help. The captain's board is unaffected: this home serves it at a stable address of its own"
       ;;
   esac
 }
