@@ -936,6 +936,54 @@ EOF
   pass "fm-dispatch: a brief predating design records is given one on the next dispatch"
 }
 
+# The captain's own words reach the brief verbatim, and they can contain anything -
+# including this contract line, quoted inside a CLOSED code fence in an ask about
+# delivery modes. The heading and unclosed-fence guards do not cover it: it is a
+# structural line, not a heading. Read unbounded, that quote came first and won,
+# and the task was undispatchable until someone hand-edited the captain's text.
+# The promoted shape is here because it is what a first-section rule would break:
+# a promoted scout carries its own Definition of done AND the superseding one
+# bin/fm-promote.sh appends, and the contract belongs to the second.
+test_delivery_contract_is_read_from_its_own_section() {
+  local case_dir id brief out status
+  case_dir=$(make_case delivery-quoted)
+  id=dispatch-delivery-quoted
+  cat > "$case_dir/quoting-ask.md" <<'ASK'
+Stop briefs from recording the wrong delivery mode.
+
+The generated brief carries this line and the spawn reads it:
+
+```
+Delivery contract: mode=no-mistakes
+```
+
+That line is what the two refusals compare against.
+ASK
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/quoting-ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "an ask quoting the contract line should dispatch, not refuse: $out"
+  brief="$case_dir/home/data/$id/brief.md"
+  assert_grep 'Delivery contract: mode=no-mistakes' "$brief" \
+    "the captain's quoted line was scrubbed instead of left alone"
+  assert_equals "direct-PR" "$(fm_brief_delivery_mode "$brief")" \
+    "the quoted line in the ask was read as the brief's delivery contract"
+  assert_equals "in_flight" "$(row_state "$case_dir" "$id")" "the quoting ask never reached the spawn"
+
+  # A promoted scout brief: two Definition of done sections, contract in the second.
+  brief="$case_dir/promoted-brief.md"
+  {
+    printf '%s\n' '# Task' '## Captain'"'"'s intent' 'investigate' '' \
+      '# Definition of done' 'Write your findings to report.md.' '' \
+      '# Current ship Firstmate spec' 'now ship it' ''
+    printf '%s\n' '# Definition of done' 'Delivery contract: mode=local-only' 'and stop.'
+  } > "$brief"
+  assert_equals "local-only" "$(fm_brief_delivery_mode "$brief")" \
+    "a promoted brief's superseding contract was missed; the scout section came first"
+  pass "fm-dod-lib: the delivery contract is read from its own section, not from anywhere in the brief"
+}
+
 test_full_call_files_briefs_and_spawns
 test_second_call_reuses_item_and_brief
 test_empty_ask_refuses_before_any_record
@@ -959,3 +1007,4 @@ test_dispatch_scaffolds_a_design_record_an_older_brief_never_had
 test_design_fill_is_bounded_to_the_decisions_section
 test_design_fill_matches_what_the_detector_accepted
 test_dispatch_refuses_a_design_record_that_is_not_a_file
+test_delivery_contract_is_read_from_its_own_section

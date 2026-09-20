@@ -157,6 +157,12 @@ fm_brief_task_placeholders_present() {  # <file>
 # fenced block is. That second decision is the thing this mode exists to
 # prevent: a shell loop tracking `##` by hand and this awk will agree on the
 # easy shapes and disagree on a fenced block, and the disagreement is silent.
+# First-body-line mode prints the first non-blank line under EVERY unfenced
+# occurrence of <heading>. Every occurrence, because a promoted scout brief
+# carries two `# Definition of done` sections - its own, and the superseding one
+# bin/fm-promote.sh appends - and the contract belongs to the second; first-line,
+# because fm_dod_block always opens its block with that contract line, which is a
+# shape this file states and guarantees rather than one that happens to hold.
 fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
@@ -197,6 +203,17 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
         }
       }
 
+      if (mode == "first-body-line") {
+        if (!was_fenced && !is_fence && line == heading) {
+          want = 1
+          next
+        }
+        if (want && line ~ /[^[:space:]]/) {
+          print line
+          want = 0
+        }
+        next
+      }
       if (mode == "mark") {
         if (!found && !was_fenced && line == heading) {
           found = 1
@@ -357,8 +374,18 @@ fm_brief_task_content_valid() {  # <file>
 # line existed. This is the one owner of that read: bin/fm-spawn.sh checks it
 # against the spawn's own --mode and bin/fm-dispatch.sh checks it against the
 # dispatch's, and those two refusals must not drift.
+#
+# Bounded to `# Definition of done` through the heading parser above, rather than
+# matched anywhere in the file. A brief carries the captain's own words under
+# `## Captain's intent`, and those words can contain anything - including this
+# contract line, quoted inside a closed code fence, in an ask about delivery
+# modes. Unbounded, that quote won every comparison against the real contract
+# because it comes first, and the task was undispatchable until someone hand-
+# edited the captain's text. Bounding the reader makes the quote harmless, which
+# is better than teaching the ask guard to refuse a legitimate quotation.
 fm_brief_delivery_mode() {  # <file>
-  sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$1" | head -n 1
+  fm_brief_heading_parse "$1" "# Definition of done" first-body-line |
+    sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' | head -n 1
 }
 
 # Print the first line of the captain-intent text on stdin that opens with an
