@@ -451,6 +451,34 @@ test_the_map_makes_no_risk_claim_nobody_made() {
   pass "the map makes no risk claim for a call nobody assessed"
 }
 
+# The other half of R12: a count the fleet could only establish a floor for
+# must READ as a floor, in the bubble and in the row beside it, or the page
+# turns "at least one" back into "one" on its way to the captain.
+test_a_floor_count_reads_as_a_floor_not_a_total() {
+  local home out
+  home=$(make_home map-floor)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"cut", type:"decision", repo:"s", title:"Blocker list was cut off",
+       risk:"low", reversible:"yes", blocks:1, blocks_partial:true,
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"whole", type:"decision", repo:"s", title:"Blocker list was complete",
+       risk:"low", reversible:"yes", blocks:1,
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
+
+  assert_contains "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "cut") | .aria')" "at least" \
+    "a floor count was spoken as an exact one: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.call_list[] | select(.key == "cut") | .text')" "at least" \
+    "the ranked row read a floor count as an exact one: $out"
+  # And an exact count is still exact, or the hedge is on everything and says
+  # nothing.
+  [ "$(printf '%s' "$out" | jq -r '.call_list[] | select(.key == "whole") | .text' | grep -c "at least")" = "0" ] \
+    || fail "an exact count was hedged as a floor: $out"
+  pass "a count the fleet could only floor reads as a floor, not a total"
+}
+
 test_the_map_colours_each_bubble_by_its_own_risk() {
   local home out
   home=$(make_home map-colour)
@@ -1934,3 +1962,4 @@ test_the_masthead_counts_the_fleet_it_is_showing
 test_a_board_that_knows_no_lanes_offers_no_fleet_counters
 test_the_dispatch_bar_refuses_a_send_that_reports_failure
 test_the_map_makes_no_risk_claim_nobody_made
+test_a_floor_count_reads_as_a_floor_not_a_total

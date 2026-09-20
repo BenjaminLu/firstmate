@@ -1845,6 +1845,49 @@ test_compose_places_every_worker_it_can_and_names_the_rest() {
   pass "compose places every worker it can and names the state of the rest"
 }
 
+# R12. The snapshot writes a gate's blocker ids joined and cut to 120
+# characters, so a gate blocked by seven or eight of them ends in an ellipsis
+# with the rest gone. Counting what is left and calling it the total is the
+# board claiming to know more than it read - and this number is the vertical
+# axis of the decision map and the radius of the bubble.
+test_compose_says_when_a_stalled_count_is_only_a_floor() {
+  local home skeleton snap long
+  home=$(make_compose_home compose-blocks-cut)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  # Exactly what the snapshot emits past its limit: a joined list, cut mid-id,
+  # ending in the ellipsis trunc() appends.
+  long="other-one,other-two,other-three,other-four,other-five,other-six,other-sev…"
+  jq --arg long "$long" '.gates[0].blocked_by = $long
+    | .gates[2].blocked_by = "gated-work"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the truncated fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose blocker list was cut off"
+  # One gate names it outright, so the floor is 1 - and the cut gate could name
+  # it too, which is exactly what makes this a floor rather than a total.
+  jq -e '[.captains_call[] | select(.key == "gated-work") | {blocks, partial: (.blocks_partial == true)}]
+    == [{blocks: 1, partial: true}]' "$skeleton" >/dev/null \
+    || fail "a cut-off blocker list was reported as an exact count: $(jq -c '[.captains_call[] | {key, blocks, blocks_partial}]' "$skeleton")"
+  pass "compose says when a stalled count is a floor rather than a total"
+}
+
+# And an untruncated list is still reported as exact, or the warning would be
+# on every card and mean nothing.
+test_compose_reports_an_intact_blocker_list_as_exact() {
+  local home skeleton snap
+  home=$(make_compose_home compose-blocks-intact)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.gates[0].blocked_by = "gated-work" | .gates[2].blocked_by = "other"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the intact fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with intact blocker lists"
+  jq -e '[.captains_call[] | select(.key == "gated-work")
+    | {blocks, partial: has("blocks_partial")}] == [{blocks: 1, partial: false}]' "$skeleton" >/dev/null \
+    || fail "an intact blocker list was reported as a floor: $(jq -c '[.captains_call[] | {key, blocks, blocks_partial}]' "$skeleton")"
+  pass "an intact blocker list is still reported as an exact count"
+}
+
 test_build_names_the_unfilled_card_slot_it_refuses() {
   local home skeleton filled board out rc
   home=$(make_compose_home compose-unfilled-slot)
@@ -2395,6 +2438,8 @@ test_compose_survives_a_card_record_it_cannot_read
 test_compose_ignores_a_card_record_of_a_schema_it_does_not_know
 test_compose_counts_the_work_stalled_behind_each_call
 test_compose_counts_zero_for_a_call_nothing_waits_on
+test_compose_says_when_a_stalled_count_is_only_a_floor
+test_compose_reports_an_intact_blocker_list_as_exact
 test_compose_gives_every_open_pull_request_its_reason
 test_compose_tells_a_failed_check_from_an_unclaimed_pull_request
 test_compose_places_a_worker_by_its_pull_request_when_it_has_one

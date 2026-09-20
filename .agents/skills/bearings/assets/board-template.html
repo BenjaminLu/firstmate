@@ -648,6 +648,7 @@ __FM_BEARINGS_BOARD_DATA__
       quad_first: "decide first", quad_think: "think it through",
       quad_pick: "just pick one", quad_when: "whenever",
       map_blocks: "{n} waiting", map_blocks_none: "nothing waiting",
+      map_blocks_atleast: "at least {n} waiting",
       map_empty: "No open calls to plot.",
       map_unassessed: "nobody assessed what a wrong answer costs",
       map_note_unassessed: "A bubble with a broken outline carries no risk assessment at all - nobody wrote one - so it sits at the left edge because the cost is unknown, not because it is cheap.",
@@ -713,6 +714,7 @@ __FM_BEARINGS_BOARD_DATA__
       quad_first: "先決定這個", quad_think: "要想清楚",
       quad_pick: "隨便挑一個", quad_when: "有空再說",
       map_blocks: "{n} 件在等", map_blocks_none: "沒有人在等",
+      map_blocks_atleast: "至少 {n} 件在等",
       map_empty: "沒有待決事項可畫。",
       map_unassessed: "沒有人評估過答錯的代價",
       map_note_unassessed: "虛線外框的泡泡完全沒有風險評估 —— 沒有人寫過 —— 所以它靠在最左邊是因為代價不明，不是因為代價低。",
@@ -778,6 +780,7 @@ __FM_BEARINGS_BOARD_DATA__
       quad_first: "先决定这个", quad_think: "要想清楚",
       quad_pick: "随便挑一个", quad_when: "有空再说",
       map_blocks: "{n} 件在等", map_blocks_none: "没有人在等",
+      map_blocks_atleast: "至少 {n} 件在等",
       map_empty: "没有待决事项可画。",
       map_unassessed: "没有人评估过答错的代价",
       map_note_unassessed: "虚线外框的泡泡完全没有风险评估 —— 没有人写过 —— 所以它靠在最左边是因为代价不明，不是因为代价低。",
@@ -1708,6 +1711,16 @@ __FM_BEARINGS_BOARD_DATA__
     /* A bubble is labelled with the card's own title, cut to something that
        fits beside a circle. Cutting is done on the rendered string, so it
        follows the captain's language like everything else. */
+    /* How a stalled-work count is worded, in ONE place so the bubble and the
+       ranked row beside it can never say different things about the same
+       number. A count the fleet could only establish a floor for is said as a
+       floor: the snapshot cuts a long blocker list off, and reporting the
+       remainder as a total would be the board claiming to know more than it
+       read. */
+    function blocksWords(c) {
+      if (!c.blocks) return c.blocks_partial ? t("map_blocks_atleast", { n: 0 }) : t("map_blocks_none");
+      return c.blocks_partial ? t("map_blocks_atleast", { n: c.blocks }) : t("map_blocks", { n: c.blocks });
+    }
     function shortLabel(item) {
       var w = pick(item.title);
       return w.length > 22 ? w.slice(0, 21) + "\u2026" : w;
@@ -1808,8 +1821,7 @@ __FM_BEARINGS_BOARD_DATA__
         var c = pt.c;
         var g = svgEl("g", { "data-key": c.key, tabindex: 0, role: "button" });
         g.setAttribute("class", "bb-bub");
-        g.setAttribute("aria-label", pick(c.title) + ". " +
-          (c.blocks ? t("map_blocks", { n: c.blocks }) : t("map_blocks_none")) +
+        g.setAttribute("aria-label", pick(c.title) + ". " + blocksWords(c) +
           ". " + (assessed(c) ? t("risk", { r: t("risk_" + c.risk) }) : t("map_unassessed")));
         var circle = svgEl("circle", { cx: pt.x.toFixed(1), cy: pt.y.toFixed(1), r: pt.r,
           fill: riskFill(c.risk), "fill-opacity": 0.6,
@@ -1852,8 +1864,7 @@ __FM_BEARINGS_BOARD_DATA__
         b.setAttribute("data-key", pt.c.key);
         b.appendChild(el("span", "bb-clrow__n", String(rank + 1)));
         b.appendChild(el("span", "bb-clrow__t", pick(pt.c.title)));
-        b.appendChild(el("span", "bb-clrow__meta",
-          pt.c.blocks ? t("map_blocks", { n: pt.c.blocks }) : t("map_blocks_none")));
+        b.appendChild(el("span", "bb-clrow__meta", blocksWords(pt.c)));
         b.addEventListener("click", function () { onPick(pt.i); });
         pt.row = b;
         list.appendChild(b);

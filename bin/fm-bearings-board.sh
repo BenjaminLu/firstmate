@@ -781,6 +781,7 @@ validate_payload() {  # <data.json>
       and ((has("thin") | not) or (.thin | type == "boolean"))
       and ((has("blocks") | not)
         or ((.blocks | type == "number") and .blocks >= 0 and (.blocks | floor) == .blocks))
+      and ((has("blocks_partial") | not) or (.blocks_partial | type == "boolean"))
       and ((has("recommend_value") | not)
         or (.recommend_value | placeholder)
         or ((.recommend_value | slug(128))
@@ -1262,7 +1263,8 @@ EOF
     # row it came from.
     def with_ack($key): if $acks[$key] == null then . else . + {ack: $acks[$key]} end;
     def repo_of($id): record($id) | if . == null then null else .repo end;
-    # How much work stops until the captain answers this call.
+    # How much work stops until the captain answers this call, and whether
+    # that number is exact.
     #
     # Read from the snapshot gate rows, which already name the ids each queued
     # item is blocked by, so this is counted from what the fleet holds rather
@@ -1272,14 +1274,29 @@ EOF
     #
     # Zero is an ordinary answer and means exactly what it says - nothing is
     # waiting on this call - not that the number is unknown.
-    def blocked_behind($id):
+    #
+    # THE LIST CAN BE CUT OFF, AND THAT IS WHY THIS RETURNS TWO VALUES.
+    # `bin/fm-bearings-snapshot.sh` writes blocked_by as the joined ids passed
+    # through trunc(120), so a gate blocked by seven or eight of them ends in
+    # an ellipsis with the rest gone. The id at the cut is a fragment that can
+    # never match, and matching it by prefix would be a guess in the other
+    # direction, so it is dropped - and the count that remains is a FLOOR, not
+    # a total. A floor reported as a total is the surface saying more than it
+    # knows, so `partial` says which it is and the page says "at least".
+    #
+    # Truncation only matters for a gate that does not already name this id:
+    # once it names it, what was cut off cannot change the answer.
+    def blocked_stat($id):
       [$snap.gates[]?
        | (.blocked_by // "-")
        | select(. != "-" and . != "")
-       | split(",")
-       | map(sub("^ +"; "") | sub(" +$"; ""))
-       | select(index($id) != null)]
-      | length;
+       | . as $raw
+       | ($raw | endswith("…")) as $cut
+       | ($raw | split(",") | map(sub("^ +"; "") | sub(" +$"; ""))) as $all
+       | (if $cut then $all[0:-1] else $all end) as $ids
+       | {named: (($ids | index($id)) != null), cut: $cut}]
+      | {n: ([.[] | select(.named)] | length),
+         partial: (([.[] | select(.cut and (.named | not))] | length) > 0)};
     def owned: .owner == "(main)";
     # The Charted Next id IS the dispatch.charted routing channel, so a row
     # keeps its real backlog id whenever that id is already a routable key; a
@@ -1370,10 +1387,12 @@ EOF
     # verified packet the worker wrote, then placeholders for a composer.
     def decision_card: . as $row | ($written[$row.id] // null) as $call
       | ($cards[$row.id] // null) as $card
+      | blocked_stat($row.id) as $b
       | (if $call != null then record_seeded($call)
          elif $card == null then placeholder_card
          else packet_seeded($card) end)
-      + {blocks: blocked_behind($row.id)};
+      + {blocks: $b.n}
+      + (if $b.partial then {blocks_partial: true} else {} end);
     def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
     def merge_card: .task as $task
       | ((record($task) | if . == null then null else .title end)
@@ -1386,8 +1405,9 @@ EOF
          options: [
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
            {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
-         blocks: blocked_behind($task),
+         blocks: (blocked_stat($task) | .n),
          allow_freeform: true}
+      + (if (blocked_stat($task) | .partial) then {blocks_partial: true} else {} end)
       + (if (.url | https_url) then {pr_url: .url} else {} end);
     # Why this pull request is NOT on the desk of the captain as a merge
     # call, or null when it is.
