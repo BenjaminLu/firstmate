@@ -30,7 +30,12 @@
 #     escalated - firstmate handed the call to the captain.
 #     refused   - firstmate kept something off the captain's desk, or declined
 #                 to perform it, because a standing condition was not met.
-#     deferred  - the call was correct but deliberately not acted on now.
+#                 A permanent decline belongs here, including an out-of-scope
+#                 review finding ruled "won't fix".
+#     deferred  - the call was correct and firstmate means to come back to it,
+#                 just not now. A reader counting what is still owed reads
+#                 these, so a decline that will never be revisited is
+#                 `refused`, not `deferred`.
 #
 #   `grounds` is the only field allowed to span lines, because a refusal is
 #   often a list of conditions and flattening it loses which one failed; the

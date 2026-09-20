@@ -19,8 +19,9 @@
 # script, and that is what this command is for:
 #
 #   - a finding decided under .agents/skills/ask-user-authority  -> decided
-#   - a reviewer finding declined or deferred under
-#     .agents/skills/pr-review                                   -> deferred
+#   - a reviewer finding declined as out of scope under
+#     .agents/skills/pr-review                                   -> refused
+#   - the same finding genuinely postponed rather than declined   -> deferred
 #   - a pull request kept off the captain's desk because its checks
 #     are not green, which never reaches a merge attempt          -> refused
 #

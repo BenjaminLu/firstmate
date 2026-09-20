@@ -116,7 +116,9 @@ bin/fm-gate-call.sh record --site review-finding --task <id> --verdict <verdict>
   --link '<the pull request url>' --key 'R<n>'
 ```
 
-The four rulings map onto three verdicts: **Fix** and **Not a defect** are `decided`, **Won't fix** is `deferred`, and **Captain's call** needs no command because `bin/fm-captain-hold.sh hold` already recorded it as `escalated`.
+The four rulings map onto three verdicts: **Fix** and **Not a defect** are `decided`, **Won't fix** is `refused`, and **Captain's call** needs no command because `bin/fm-captain-hold.sh hold` already recorded it as `escalated`.
+**Won't fix** is `refused` and not `deferred` because it is a decline, not a postponement: `deferred` tells a reader firstmate means to come back to it, so recording a permanent decline there pads the list of what is still owed with things that will never be done.
+Use `deferred` only when you genuinely mean later, and say when in the grounds.
 `bin/fm-gate-calls-lib.sh` owns the record and what happens when a call cannot be written; recording never changes the ruling it observes.
 
 ## Land the fixes

@@ -293,29 +293,45 @@ test_a_drops_record_reads_with_the_same_parser_as_the_log() {
   pass "the drops record is the same JSON object plus its reason, so one parser reads both"
 }
 
-test_a_declined_review_finding_is_recorded_as_deferred() {
+test_a_declined_review_finding_is_recorded_as_refused() {
   local home log rc=0
-  home=$(make_home deferred)
+  home=$(make_home declined)
   log="$home/state/gate-calls.jsonl"
 
   run_gate_call "$home" record \
     --site review-finding \
     --task acknowledgement-branch \
-    --verdict deferred \
-    --what 'R5 widen the acknowledgement to every board key' \
-    --grounds 'the marginal one of the five: closest to a criterion the captain settled, and cut only because the round was held to three' \
+    --verdict refused \
+    --what 'R9 wire every refusal path in fm-pr-merge.sh' \
+    --grounds 'correct but out of scope: wiring them all commits this project to keeping them wired as that script grows' \
     --link https://github.com/example/repo/pull/30 \
-    --key R5 >/dev/null 2> "$home/stderr" || rc=$?
+    --key R9 >/dev/null 2> "$home/stderr" || rc=$?
 
-  expect_code 0 "$rc" "deferred: declining a finding must record"
+  expect_code 0 "$rc" "declined: declining a finding must record"
+  assert_equals refused "$(log_field "$log" 1 verdict)" \
+    "declined: a permanent decline must be refused, not deferred - deferred says firstmate means to come back to it"
+  assert_equals review-finding "$(log_field "$log" 1 site)" "declined: wrong site"
+  assert_equals R9 "$(log_field "$log" 1 key)" \
+    "declined: the finding id must be the routing key so the ruling lines up with the review"
+  assert_contains "$(log_field "$log" 1 grounds)" 'out of scope' \
+    "declined: the reason for declining it was lost"
+  pass "a review finding declined as out of scope is recorded as refused, with its reason"
+}
+
+test_a_postponed_call_is_the_only_thing_recorded_as_deferred() {
+  local home log rc=0
+  home=$(make_home postponed)
+  log="$home/state/gate-calls.jsonl"
+
+  run_gate_call "$home" record --site review-finding --task stale-badge \
+    --verdict deferred --what 'R4 the stale badge' \
+    --grounds 'correct and worth doing, but after seventeen fix rounds it goes to follow-up work rather than a eighteenth' \
+    --key R4 >/dev/null 2>&1 || rc=$?
+
+  expect_code 0 "$rc" "postponed: a genuine postponement must record"
   assert_equals deferred "$(log_field "$log" 1 verdict)" \
-    "deferred: a declined finding must be recorded as deferred"
-  assert_equals review-finding "$(log_field "$log" 1 site)" "deferred: wrong site"
-  assert_equals R5 "$(log_field "$log" 1 key)" \
-    "deferred: the finding id must be the routing key so the ruling lines up with the review"
-  assert_contains "$(log_field "$log" 1 grounds)" 'held to three' \
-    "deferred: the reasoning behind declining it was lost"
-  pass "a review finding declined rather than fixed is recorded as deferred, with its reason"
+    "postponed: something firstmate means to come back to is deferred"
+  pass "deferred is reserved for a call firstmate means to come back to"
 }
 
 test_an_over_long_identity_field_is_refused_rather_than_cut() {
@@ -431,7 +447,8 @@ test_a_bad_task_id_still_costs_the_whole_record
 test_every_verdict_in_the_vocabulary_is_accepted
 test_a_call_with_no_grounds_is_refused_and_reported
 test_a_multi_line_refusal_keeps_its_structure_on_one_line
-test_a_declined_review_finding_is_recorded_as_deferred
+test_a_declined_review_finding_is_recorded_as_refused
+test_a_postponed_call_is_the_only_thing_recorded_as_deferred
 test_an_oversized_call_is_shortened_visibly
 test_concurrent_writers_never_tear_a_record
 test_an_unwritable_log_is_reported_not_swallowed
