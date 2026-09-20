@@ -37,6 +37,20 @@ fixture_crew_state_fails() {  # <case-dir>
   _fixture_crew_state_bin "$dir"
 }
 
+# fixture_crew_state_hangs <dir>: install a reader that never answers, the way a
+# wedged backend or a remote host that has stopped responding never answers. The
+# bounds, not the reader, have to end the drain.
+fixture_crew_state_hangs() {  # <case-dir>
+  local dir=$1
+  cat > "$dir/fm-crew-state.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "${1:-}" >> "${FM_FAKE_CREW_STATE_CALLS:-/dev/null}"
+while :; do sleep 1; done
+SH
+  chmod +x "$dir/fm-crew-state.sh"
+}
+
 _fixture_crew_state_bin() {  # <case-dir>
   local dir=$1
   cat > "$dir/fm-crew-state.sh" <<'SH'
@@ -197,6 +211,60 @@ test_current_state_is_read_once_per_status_key_not_once_per_line() {
   pass "current state is read once per status key, never once per unread line"
 }
 
+test_hung_current_state_reads_stay_inside_the_presentation_lock_budget() {
+  local dir out started elapsed hung
+  dir=$(make_case hung-reads)
+  # Two keys, each with a reader that never answers. Before the whole-phase
+  # deadline these cost one bound EACH, serially, and the per-key bound was
+  # larger than the presentation lock's own contention budget - so one drain
+  # holding the lock starved every concurrent drain of its entire status
+  # presentation. The reads run while that lock is held, so their total, not
+  # just each one, is what has to stay small.
+  fixture_task "$dir" hung-one 'working: still implementing the parser'
+  fixture_task "$dir" hung-two 'working: still implementing the parser'
+  fixture_crew_state_hangs "$dir"
+
+  started=$(date +%s)
+  out=$(drain "$dir") || fail "drain failed with unanswering current-state readers: $out"
+  elapsed=$(( $(date +%s) - started ))
+
+  # bin/fm-wake-drain.sh waits FM_STATUS_PRESENTATION_LOCK_TIMEOUT (default 10s)
+  # for this lock, so the whole drain must finish well inside it even when every
+  # read hangs.
+  [ "$elapsed" -lt 10 ] \
+    || fail "two unanswering reads held the drain for ${elapsed}s, at or past the presentation lock budget"
+  hung=$(grep -c 'current state could not be read' <<EOF
+$out
+EOF
+)
+  [ "$hung" = 2 ] \
+    || fail "expected both unanswering keys to report an unread current state, got $hung"
+  assert_not_contains "$out" 'current state disagrees' \
+    "an unanswering reader produced a contradiction verdict"
+  pass "hung current-state reads stay inside the presentation lock's own budget"
+}
+
+test_the_whole_phase_budget_is_shared_by_every_status_key() {
+  local dir out started elapsed
+  dir=$(make_case shared-budget)
+  fixture_task "$dir" slow-one 'working: still implementing the parser'
+  fixture_task "$dir" slow-two 'working: still implementing the parser'
+  fixture_task "$dir" slow-three 'working: still implementing the parser'
+  fixture_crew_state_hangs "$dir"
+
+  # Three keys, a two-second budget for the phase. A per-key-only bound would
+  # spend it three times over.
+  started=$(date +%s)
+  out=$(export FM_WAKE_CURRENT_STATE_BUDGET=2; drain "$dir") \
+    || fail "drain failed under an explicit phase budget: $out"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -lt 6 ] \
+    || fail "three unanswering keys spent ${elapsed}s against a 2s whole-phase budget"
+  assert_contains "$out" 'current state could not be read' \
+    "a spent budget stayed silent instead of saying the state was not read"
+  pass "the current-state budget is spent once across the drain, not once per status key"
+}
+
 test_annotation_names_current_state_when_it_disagrees
 test_annotation_is_unchanged_when_current_state_agrees
 test_unreadable_current_state_says_so_rather_than_claiming_agreement
@@ -204,5 +272,7 @@ test_unknown_current_state_is_reported_as_unreadable_not_as_a_contradiction
 test_a_verb_the_current_state_spells_differently_is_not_a_contradiction
 test_a_status_key_with_no_task_gains_no_clause
 test_current_state_is_read_once_per_status_key_not_once_per_line
+test_hung_current_state_reads_stay_inside_the_presentation_lock_budget
+test_the_whole_phase_budget_is_shared_by_every_status_key
 
 echo "all fm-wake annotation-contradiction tests passed"

@@ -2322,11 +2322,33 @@ fm_wake_latest_event() {  # <validated-status-path> <tail-byte-cap>
 # read only enriches a terminal run's DETAIL, never the verb this reads, so the
 # drain buys nothing by waiting on the network. A bound that fires reads as 1 -
 # could not be read - which is the honest answer.
-fm_wake_current_state_verb() {  # <task-id> -> state verb on stdout
-  local task=$1 bin line rc=0 timeout=${FM_WAKE_CURRENT_STATE_TIMEOUT:-15}
+#
+# TWO bounds, because one is not enough. This runs on the blocking path of every
+# supervision turn, while the status presentation lock is held, and that lock's
+# own contention budget is FM_STATUS_PRESENTATION_LOCK_TIMEOUT (default 10s in
+# bin/fm-wake-drain.sh). A per-key bound alone says nothing about N keys: reads
+# are strictly serial, so N slow keys cost N bounds and starve every concurrent
+# drain of its whole status presentation.
+#   FM_WAKE_CURRENT_STATE_TIMEOUT  per key, default 3s - deliberately below that
+#                                  lock budget, so one slow key cannot exhaust it
+#   FM_WAKE_CURRENT_STATE_BUDGET   the whole annotation phase, default 5s - the
+#                                  aggregate deadline bin/fm-inactive-reconcile.sh's
+#                                  scan_pass already carries across its own loop
+# <deadline-epoch> is that whole-phase deadline; the caller owns it so every key
+# in one drain shares it. A spent budget reads as "could not be read", which is
+# exactly what it is: this drain did not read that crew's state.
+fm_wake_current_state_verb() {  # <task-id> [<deadline-epoch>] -> state verb on stdout
+  local task=$1 deadline=${2:-} bin line rc=0 now remaining
+  local timeout=${FM_WAKE_CURRENT_STATE_TIMEOUT:-3}
   [ -n "$task" ] || return 2
   [ -f "$STATE/$task.meta" ] || return 2
-  case "$timeout" in ''|*[!0-9]*|0) timeout=15 ;; esac
+  case "$timeout" in ''|*[!0-9]*|0) timeout=3 ;; esac
+  if [ -n "$deadline" ]; then
+    fm_now now || return 1
+    remaining=$((deadline - now))
+    [ "$remaining" -gt 0 ] || return 1
+    [ "$remaining" -ge "$timeout" ] || timeout=$remaining
+  fi
   bin=${FM_WAKE_CREW_STATE_BIN:-$FM_WAKE_LIB_DIR/fm-crew-state.sh}
   [ -x "$bin" ] || return 1
   _fm_wake_require_timeout || return 1
@@ -2349,6 +2371,7 @@ fm_wake_print_annotations() {  # <deduped-raw-rows> [<presentation-snapshot>]
   local rows=$1 snapshot=${2:-} manifest status_key mode path prefix line task endpoint
   local snapshot_task snapshot_endpoint _snapshot_ident offset last_event event_line
   local cur_state_read cur_state_verb cur_state_rc event_state
+  local cur_state_deadline cur_state_budget=${FM_WAKE_CURRENT_STATE_BUDGET:-5} cur_state_now
   local LC_ALL=C
 
   manifest=$(fm_wake_annotation_manifest "$rows" | awk -F '\t' '
@@ -2376,6 +2399,14 @@ fm_wake_print_annotations() {  # <deduped-raw-rows> [<presentation-snapshot>]
   esac
 
   _fm_wake_require_classify || return 1
+  # One deadline for the whole annotation phase, shared by every status key, so
+  # N slow keys cost one budget rather than N bounds while the presentation lock
+  # is held. An unreadable clock leaves the per-key bound as the only bound.
+  case "$cur_state_budget" in ''|*[!0-9]*|0) cur_state_budget=5 ;; esac
+  cur_state_deadline=
+  if fm_now cur_state_now; then
+    cur_state_deadline=$((cur_state_now + cur_state_budget))
+  fi
   while IFS=$(printf '\t') read -r status_key mode; do
     [ -n "$status_key" ] || continue
     path="$STATE/$status_key"
@@ -2442,7 +2473,8 @@ EOF
         if [ -z "$cur_state_read" ]; then
           cur_state_read=1
           cur_state_rc=0
-          cur_state_verb=$(fm_wake_current_state_verb "$task") || cur_state_rc=$?
+          cur_state_verb=$(fm_wake_current_state_verb "$task" "$cur_state_deadline") \
+            || cur_state_rc=$?
         fi
         case "$cur_state_rc" in
           0) [ "$cur_state_verb" = "$event_state" ] \
