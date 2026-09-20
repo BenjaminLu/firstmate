@@ -989,7 +989,7 @@ run_teardown_case() {
 
 test_teardown_conformance_old_vs_new() {
   local old_bin fb proj wt id old_tmux_ref saved_base_ref
-  local state_old state_new config_old config_new home_old home_new data log_old log_new out_old out_new rc_old rc_new
+  local state_old state_new home_old home_new data log_old log_new out_old out_new rc_old rc_new
   # Force the post-squash topology inside this case: merge-base with main may
   # equal HEAD on default-branch CI, and that must not make the legacy kill
   # fixture self-referential. build_old_bin still uses BASE_REF for entrypoints;
@@ -1014,7 +1014,6 @@ test_teardown_conformance_old_vs_new() {
   home_old=$(make_spawn_home "$TMP_ROOT/teardown-home-old") || fail "could not build the old teardown run's firstmate home"
   home_new=$(make_spawn_home "$TMP_ROOT/teardown-home-new") || fail "could not build the new teardown run's firstmate home"
   state_old="$home_old/state"; state_new="$home_new/state"
-  config_old="$home_old/config"; config_new="$home_new/config"
 
   fm_write_meta "$state_old/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
