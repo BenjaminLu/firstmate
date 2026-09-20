@@ -346,11 +346,12 @@ test_the_reconcile_choice_is_not_recorded_as_an_answer() {
 # The fifo holds its stdin open so it is blocked exactly where a slow backlog
 # read would block it.
 interrupt_answer_path() {  # <home> <signal> ; prints nothing
-  local home=$1 signal=$2 fifo="$home/answer-stdin" pid
+  local home=$1 signal=$2 pid holder
+  local fifo="$home/answer-stdin"
   rm -f -- "$fifo"
   mkfifo "$fifo" || return 1
   ( sleep 30 > "$fifo" ) &
-  local holder=$!
+  holder=$!
   FM_HOME="$home" "$ANSWER" apply --source "an interrupted run" < "$fifo" \
     >/dev/null 2>&1 &
   pid=$!
