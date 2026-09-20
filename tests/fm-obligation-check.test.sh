@@ -572,7 +572,7 @@ test_an_undischarged_obligation_is_reported_again() {
   # Age the last report past the repeat horizon. Acknowledging a wake is not
   # discharging the obligation, so it has to come back.
   now=$(date +%s)
-  sed "s/^epoch=.*/epoch=$((now - 7200))/" "$home/state/.fleet-obligations" > "$home/state/.fleet-obligations.new"
+  sed "s/^reported_at=.*/reported_at=$((now - 7200))/" "$home/state/.fleet-obligations" > "$home/state/.fleet-obligations.new"
   mv -f "$home/state/.fleet-obligations.new" "$home/state/.fleet-obligations"
   run "$home" "$out" FM_OBLIGATION_REPEAT=3600
   assert_contains "$(cat "$out")" "epsilon has been steered" \
@@ -581,21 +581,51 @@ test_an_undischarged_obligation_is_reported_again() {
 }
 
 test_a_silent_sweep_does_not_push_the_repeat_horizon_out() {
-  local home out now recorded
+  local home out now recorded probed
   home=$(make_home horizon)
   task "$home" epsilon "kind=ship"
   steer "$home" epsilon 2
   out="$home/out.txt"
   run "$home" "$out"
   now=$(date +%s)
-  sed "s/^epoch=.*/epoch=$((now - 100))/" "$home/state/.fleet-obligations" > "$home/state/.fleet-obligations.new"
+  sed "s/^reported_at=.*/reported_at=$((now - 100))/" "$home/state/.fleet-obligations" > "$home/state/.fleet-obligations.new"
   mv -f "$home/state/.fleet-obligations.new" "$home/state/.fleet-obligations"
   run "$home" "$out"
   assert_silent "$out" "the unchanged set was reported again too early"
-  recorded=$(grep '^epoch=' "$home/state/.fleet-obligations" | cut -d= -f2)
+  recorded=$(grep '^reported_at=' "$home/state/.fleet-obligations" | cut -d= -f2)
   [ "$recorded" = "$((now - 100))" ] \
     || fail "a silent sweep rewrote the report clock, so each suppressed sweep would push the repeat another interval away"
-  pass "a suppressed sweep leaves the report clock alone so the repeat still arrives"
+  # The probe clock is the other half: it MUST move, or the no-probe interval
+  # never engages on a home whose finding set stops changing.
+  probed=$(grep '^epoch=' "$home/state/.fleet-obligations" | cut -d= -f2)
+  [ "$probed" -ge "$now" ] \
+    || fail "a silent sweep left the probe clock behind, so the no-probe interval would never engage"
+  pass "a suppressed sweep moves the probe clock and leaves the report clock alone"
+}
+
+test_a_home_where_all_four_are_met_stops_reading_the_forge() {
+  local home out calls sweep
+  # The steady state. An all-met home's finding set is empty every sweep and so
+  # never changes; when the record was written only on a change, its clock
+  # stayed at zero and the forge was read on every single watcher sweep - the
+  # full cost paid permanently by exactly the homes where nothing is wrong.
+  home=$(make_home met-rate)
+  forge_pr "$home" "$SLUG" 20 OPEN "$(commit 6)" 1 2
+  task "$home" iota "kind=ship" "pr=$PR_BASE/20" "pr_head=$(commit 6)"
+  out="$home/out.txt"
+  for sweep in 1 2 3 4 5; do
+    local status=0
+    env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+      FM_OBLIGATION_INTERVAL=900 FM_CHECK_TIMEOUT=30 \
+      PATH="$home/bin:$PATH" "$CHECK" > "$out" 2>&1 || status=$?
+    expect_code 0 "$status" "sweep $sweep exit"
+    assert_silent "$out" "an all-met home reported on sweep $sweep"
+  done
+  calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 1 ] \
+    || fail "five sweeps of an all-met home made $calls forge reads, so the no-probe interval never engaged"
+  assert_present "$home/state/.fleet-obligations" "an all-met sweep wrote no record, so it has no probe clock to gate on"
+  pass "an all-met home probes once per interval rather than on every sweep"
 }
 
 test_the_forge_is_not_read_between_intervals() {
@@ -897,6 +927,7 @@ test_the_same_finding_is_reported_once
 test_a_new_finding_is_news
 test_an_undischarged_obligation_is_reported_again
 test_a_silent_sweep_does_not_push_the_repeat_horizon_out
+test_a_home_where_all_four_are_met_stops_reading_the_forge
 test_the_forge_is_not_read_between_intervals
 test_a_record_spelled_in_another_case_still_reports
 test_one_pull_request_spelled_two_ways_is_one_read

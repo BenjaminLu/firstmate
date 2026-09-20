@@ -683,7 +683,20 @@ evaluate_targets() {
 
 # --- report record ----------------------------------------------------------
 
+# Two clocks, because they answer two different questions and sharing one made
+# the first of them never engage. `epoch` is when the forge was last PROBED and
+# is written after every completed sweep, including a silent one - it is what
+# the no-probe interval reads. `reported_at` is when a report was last PRINTED
+# and moves only when one is; it is what the repeat horizon reads, so a silent
+# sweep can no longer push a suppressed repeat another interval into the future.
+#
+# Sharing one field meant the record was written only when the finding set
+# changed, and on a home where everything is met the set is empty every sweep,
+# never changes, and so the record was never written at all: the gate read a
+# zero epoch forever and the forge was read on every single watcher sweep. That
+# is the steady state - the healthy home - paying the full cost permanently.
 RECORD_EPOCH=0
+RECORD_REPORTED_AT=0
 RECORD_OWED=
 RECORD_UNKNOWN=
 
@@ -694,6 +707,7 @@ RECORD_UNKNOWN=
 record_read() {
   local line first=1
   RECORD_EPOCH=0
+  RECORD_REPORTED_AT=0
   RECORD_OWED=
   RECORD_UNKNOWN=
   [ -f "$RECORD" ] || return 0
@@ -711,6 +725,13 @@ record_read() {
           *) RECORD_EPOCH=$line ;;
         esac
         ;;
+      reported_at=*)
+        line=${line#reported_at=}
+        case "$line" in
+          ''|*[!0-9]*) RECORD_REPORTED_AT=0 ;;
+          *) RECORD_REPORTED_AT=$line ;;
+        esac
+        ;;
       owed=*) RECORD_OWED="$RECORD_OWED${line#owed=}
 " ;;
       unknown=*) RECORD_UNKNOWN="$RECORD_UNKNOWN${line#unknown=}
@@ -720,14 +741,18 @@ record_read() {
   return 0
 }
 
+# record_write <reported_at>: the probe clock is always now, because this is
+# called at the end of a sweep that probed. The caller passes the report clock
+# so a silent sweep carries the previous one forward unchanged.
 record_write() {
-  local tmp now finding
+  local reported_at=$1 tmp now finding
   fm_now now
   tmp=$(mktemp "$RECORD.XXXXXX" 2>/dev/null) || return 1
   chmod 0600 "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
   {
     printf '%s\n' "$RECORD_SCHEMA"
     printf 'epoch=%s\n' "$now"
+    printf 'reported_at=%s\n' "$reported_at"
     while IFS= read -r finding; do
       [ -n "$finding" ] || continue
       printf 'owed=%s\n' "$finding"
@@ -823,23 +848,23 @@ action_check() {
   # The whole finding set decides whether this is news, not the cut line: a
   # finding that lands past the cut leaves the printed line unchanged and would
   # otherwise be suppressed for good. An unchanged set still reports again once
-  # the last report has aged past the repeat interval, because an acknowledged
+  # the last report has aged past the repeat horizon, because an acknowledged
   # wake is not a discharged obligation.
-  age=$((now - RECORD_EPOCH))
+  age=$((now - RECORD_REPORTED_AT))
   if [ -n "$line" ] \
-    && { [ "$changed" -eq 1 ] || [ "$RECORD_EPOCH" -eq 0 ] \
+    && { [ "$changed" -eq 1 ] || [ "$RECORD_REPORTED_AT" -eq 0 ] \
       || { [ "$REPEAT" -ne 0 ] && [ "$age" -ge "$REPEAT" ]; }; }; then
     # Report before recording, so a record that cannot be written costs a
     # repeated report rather than a lost one.
     printf '%s\n' "$line"
-    record_write || true
+    record_write "$now" || true
     return 0
   fi
-  # Nothing printed. Keep the finding set current, but only by rewriting the
-  # record when the set actually changed: rewriting it on every silent sweep
-  # would push each suppressed repeat another whole interval into the future,
-  # so an owed obligation could go quiet for good.
-  [ "$changed" -eq 1 ] && { record_write || true; }
+  # Nothing printed, but this sweep DID probe the forge, so the probe clock
+  # moves and the no-probe interval engages - including on a home where
+  # everything is met, which is the case that runs most. The report clock is
+  # carried forward untouched, so a suppressed repeat still arrives on time.
+  record_write "$RECORD_REPORTED_AT" || true
   return 0
 }
 
