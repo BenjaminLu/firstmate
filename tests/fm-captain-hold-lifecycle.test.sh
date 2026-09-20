@@ -106,7 +106,12 @@ case "${1:-} ${2:-}" in
   "pr view")
     case " $* " in
       *statusCheckRollup*)
-        printf '%s\n' '{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"main","statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
+        # author and reviews are part of what gh returns for this --json set,
+        # and the merge entrypoint reads the approval out of them, so the
+        # fixture carries a standing approving review at the same head. These
+        # cases are about captain holds, not approvals; without it every one of
+        # them would be refused for a reason it never meant to exercise.
+        printf '%s\n' '{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"1111111111111111111111111111111111111111","baseRefName":"main","author":{"login":"worker"},"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"1111111111111111111111111111111111111111"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}],"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
         ;;
       *headRefOid*) printf '%s\n' 1111111111111111111111111111111111111111 ;;
     esac

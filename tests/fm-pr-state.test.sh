@@ -42,6 +42,18 @@ serve() {
     "api /repos/o/r/pulls/7/reviews?per_page=100 --paginate --jq "*)
       printf '%s\n' "${FM_TEST_REVIEWS:-[]}"
       ;;
+    "pr view "*" --json reviews --jq "*)
+      # The approval read. The verdict line and the head reach the shell as
+      # data, so this answers the payload and the --jq program does the rest.
+      # Defaults to one standing approval at the head, so every fixture that is
+      # not about the approval stays silent the way it always did.
+      if [ -n "${FM_TEST_APPROVAL_ERROR-}" ]; then
+        printf '%s\n' "$FM_TEST_APPROVAL_ERROR" >&2
+        exit 1
+      fi
+      default='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}'
+      printf '%s\n' "${FM_TEST_APPROVAL_REVIEWS:-$default}"
+      ;;
     "pr checks "*" --required --json name,state,bucket --jq "*)
       if [ -n "${FM_TEST_CHECKS_ERROR-}" ]; then
         printf '%s\n' "$FM_TEST_CHECKS_ERROR" >&2
@@ -177,12 +189,164 @@ test_authors_own_changes_requested_review_is_not_a_blocker() {
   pass "the author's own review is never listed as a blocker"
 }
 
-test_pending_approval_is_not_a_blocker() {
+# GitHub's REVIEW_REQUIRED never becomes APPROVED here, because the verdict
+# lives in a COMMENTED body that reviewDecision does not count. So it is not the
+# signal this command blocks on; the approval read below is.
+test_review_required_decision_is_not_itself_a_blocker() {
   local out
   out=$(FM_TEST_VIEW_REVIEW_DECISION=REVIEW_REQUIRED run_state) \
     || fail "review-required fixture was refused"
-  [ -z "$out" ] || fail "awaiting approval is not a blocker this command reports, got: $out"
-  pass "a pending approval is not reported as a blocker"
+  [ -z "$out" ] || fail "reviewDecision alone is not a blocker this command reports, got: $out"
+  pass "a REVIEW_REQUIRED decision is not itself reported, because the approval is read directly"
+}
+
+# The blocker the merge path enforces: bin/fm-pr-merge.sh refuses without an
+# approval at the head, so this command has to say so rather than fall silent
+# and read as ready.
+test_a_missing_approval_is_a_blocker() {
+  local out head=c2eac54c17a1ddc2633ad51b83e21e5fe888142e
+
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[]}' run_state) \
+    || fail "no-review fixture was refused"
+  case "$out" in
+    *"NO APPROVAL AT HEAD: $head (no review has been posted)"*) ;;
+    *) fail "an unreviewed pull request must say no review was posted, got: $out" ;;
+  esac
+
+  # Approved, but of a commit that is no longer what would merge.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"2710bc5efc936efb70e95b86ca3582e9da7e60f4"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "stale-approval fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(the newest review is of commit 2710bc5efc936efb70e95b86ca3582e9da7e60f4)'*) ;;
+    *) fail "an approval of a superseded commit must name that commit, got: $out" ;;
+  esac
+
+  # Approved at the head by an account with no standing on this repository.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "outside-approval fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(an approval at this head is from an account with no standing)'*) ;;
+    *) fail "a stranger's approval must be named as such, got: $out" ;;
+  esac
+
+  # "The newest review" must mean the newest by submission time, not the order
+  # the forge happened to return, and must name the same commit the merge path
+  # names. The newer review is listed first here.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r2"},"commit":{"oid":"4dc2291e6969de1bf204fbdb53c9e57a8353d4e2"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"},{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r1"},"commit":{"oid":"2710bc5efc936efb70e95b86ca3582e9da7e60f4"},"submittedAt":"2026-09-19T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "out-of-order fixture was refused"
+  case "$out" in
+    *'(the newest review is of commit 4dc2291e6969de1bf204fbdb53c9e57a8353d4e2)'*) ;;
+    *) fail "the newest review must be the newest by submission time, got: $out" ;;
+  esac
+
+  # A withdrawn review at the head, which is not the same as a stale approval
+  # and must not be reported as one.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"DISMISSED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "withdrawn-approval fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(every review at this head is withdrawn or unsubmitted)'*) ;;
+    *) fail "a withdrawn review at the head must be named as such, got: $out" ;;
+  esac
+
+  # A review that declined is not a review that stated no verdict: it wants
+  # findings fixed and a new review, not a verdict line added. Both the verbal
+  # decline (the only form this fleet can post) and GitHub's own
+  # CHANGES_REQUESTED state must say so.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"R1 defect high.\n\nReview verdict: NOT APPROVED"}]}' run_state) \
+    || fail "declined fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "a declined review must not be reported as stating no verdict, got: $out" ;;
+  esac
+
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"CHANGES_REQUESTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Please fix R1."}]}' run_state) \
+    || fail "changes-requested fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "a CHANGES_REQUESTED review must not be reported as stating no verdict, got: $out" ;;
+  esac
+
+  # Several verdictless reviews are counted, matching the gate rather than
+  # asserting a singularity neither surface checked.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r1"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T08:00:00Z","body":"Notes."},{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r2"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"More notes."}]}' run_state) \
+    || fail "two-verdictless fixture was refused"
+  case "$out" in
+    *'(none of the 2 reviews at this head states a verdict)'*) ;;
+    *) fail "several verdictless reviews were called the review, got: $out" ;;
+  esac
+
+  # A standing review at the head that reached no verdict.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Some notes, no verdict."}]}' run_state) \
+    || fail "no-verdict fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(the review at this head states no verdict)'*) ;;
+    *) fail "a verdictless review at the head must be named as such, got: $out" ;;
+  esac
+
+  # A read it cannot complete says so rather than staying silent.
+  out=$(FM_TEST_APPROVAL_ERROR='could not resolve host' run_state) \
+    || fail "approval-error fixture was refused"
+  case "$out" in
+    *'APPROVAL UNREADABLE'*) ;;
+    *) fail "an unreadable approval must be reported, not omitted, got: $out" ;;
+  esac
+  # This file captures gh's stderr for the checks read and prints what it does
+  # not recognise; the approval read was made to do the same, and that half was
+  # unasserted. Which of rate limit, expired token or DNS it was decides what
+  # firstmate does next.
+  case "$out" in
+    *'the forge said:'*'could not resolve host'*) ;;
+    *) fail "the forge's own account of the failed approval read was discarded, got: $out" ;;
+  esac
+  pass "each way of being unapproved is reported apart, the way the merge path reports them"
+}
+
+# Every other fixture in this suite is a SINGLE review at the head, which is why
+# a decline hidden behind an approval survived three rounds. These are the
+# combinations, and each asserts the same condition bin/fm-pr-merge.sh names for
+# the same payload.
+test_combinations_at_one_head_agree_with_the_gate() {
+  local out
+  local head=c2eac54c17a1ddc2633ad51b83e21e5fe888142e
+
+  # (A) A standing approval beside a standing decline. The gate refuses on the
+  # decline; silence here would report a declined pull request as review-ready.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r1"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T08:00:00Z","body":"Review verdict: APPROVED"},{"state":"CHANGES_REQUESTED","authorAssociation":"COLLABORATOR","author":{"login":"r2"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Fix R1."}]}' run_state) \
+    || fail "approval-beside-decline fixture was refused"
+  [ -n "$out" ] \
+    || fail "(A) a declined pull request read as ready: the preview printed nothing while the gate refuses it"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "(A) an approval hid a decline, got: $out" ;;
+  esac
+
+  # (B) A decline from an account with no standing. The gate's refusal test does
+  # not ask about standing, so this is a decline on both surfaces.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"CHANGES_REQUESTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"No."}]}' run_state) \
+    || fail "nonstanding-decline fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "(B) a decline from an account with no standing was not reported as a decline, got: $out" ;;
+  esac
+
+  # The same decline written as a body verdict rather than a forge state.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: NOT APPROVED"}]}' run_state) \
+    || fail "nonstanding-verbal-decline fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "(B) a verbal decline from an account with no standing was not reported as a decline, got: $out" ;;
+  esac
+
+  # (D) A standing review with no verdict beside an approval from an account
+  # with no standing. The gate reports the outside approval, not the verdict.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r1"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T08:00:00Z","body":"Notes, no verdict."},{"state":"COMMENTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "verdictless-beside-outside fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(an approval at this head is from an account with no standing)'*) ;;
+    *) fail "(D) the preview named a different condition than the gate, got: $out" ;;
+  esac
+  [ -n "$head" ]
+  pass "combinations at one head are reported the way the gate reports them, and an approval never hides a decline"
 }
 
 test_required_failure_is_a_blocker() {
@@ -277,7 +441,9 @@ test_approved_pr_with_only_stale_changes_requested_is_silent
 test_current_changes_requested_review_is_a_blocker
 test_changes_requested_decision_is_never_silent
 test_authors_own_changes_requested_review_is_not_a_blocker
-test_pending_approval_is_not_a_blocker
+test_review_required_decision_is_not_itself_a_blocker
+test_a_missing_approval_is_a_blocker
+test_combinations_at_one_head_agree_with_the_gate
 test_required_failure_is_a_blocker
 test_unreported_required_checks_are_unconfirmed
 test_no_reported_checks_is_unverified

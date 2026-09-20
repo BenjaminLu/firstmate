@@ -10,17 +10,29 @@
 # --squash, --merge, --rebase, or --method after the optional -- separator.
 # A GitHub merge is refused unless every pre-merge condition holds, each read
 # live at merge time rather than taken from recorded metadata: the pull request
-# is open, not a draft, mergeable, free of conflicts, and every unwaived check
-# is green at the exact current head commit, where github_checks_not_green below
-# owns what makes a check green and judges each one by its current run.
-# Every failing condition is reported, not
+# is open, not a draft, mergeable, free of conflicts, approved at the exact
+# current head commit, and every unwaived check is green at that same commit,
+# where github_checks_not_green below owns what makes a check green and judges
+# each one by its current run, and github_approval_state below owns what counts
+# as an approval, including which accounts may give one and the one class of
+# approver it cannot tell apart. Every failing condition is reported, not
 # just the first, and the same list is recorded as this task's `refused` gate
 # call through bin/fm-gate-calls-lib.sh, which owns that record and never lets
-# it change the merge. The verified head is then passed to gh as
+# it change the merge.
+# A read that does not produce a verdict says which read failed, quotes the
+# forge's own error text where the forge produced any, and says whether
+# retrying can clear it: the forge not answering is one message, a payload that
+# will not parse another, fields that do not read back a third, and the checks
+# and reviews reads their own. They send an operator to different places - a
+# network problem clears on its own, a shape this cannot parse never will.
+# The verified head is then passed to gh as
 # --match-head-commit, so a push that lands between that read and the merge
 # fails the merge instead of landing commits nothing verified. Reading that
 # state needs gh and jq, and either one absent stops the merge before any
-# state is recorded. An attended --allow-red <check-name> may be passed once,
+# state is recorded. An approval is a gate of its own rather than a check: no
+# flag waives it, --allow-red reaches only named checks, and --attended-override
+# reaches only forge flags.
+# An attended --allow-red <check-name> may be passed once,
 # with the name as a separate argument; it waives only checks with that exact
 # name, still requires every other check green, and still binds the head. It is
 # refused while the away-posture record exists, and it never
@@ -59,8 +71,9 @@
 # A GitLab merge is refused unless every pre-merge condition holds, each read
 # live at merge time rather than taken from recorded metadata: the merge request
 # is open, detailed_merge_status is mergeable, has_conflicts is false,
-# blocking_discussions_resolved is true, and the head pipeline succeeded at the
-# exact current head commit. Every failing condition is reported, not just the
+# blocking_discussions_resolved is true, at least one account has approved it,
+# and the head pipeline succeeded at the exact current head commit.
+# Every failing condition is reported, not just the
 # first. The verified head is then passed to glab as --sha, so a push that lands
 # between that read and the merge fails the merge instead of landing commits
 # nothing verified. A recorded pr_head that disagrees with the live head is
@@ -120,6 +133,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-gate-calls-lib.sh
 . "$SCRIPT_DIR/fm-gate-calls-lib.sh"
+# shellcheck source=bin/fm-review-verdict-lib.sh
+. "$SCRIPT_DIR/fm-review-verdict-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-merge-outcome-lib.sh
@@ -396,25 +411,86 @@ if [ "$PROVIDER" = gitlab ]; then
   RECORDED_HEAD=$(grep '^pr_head=' "$META" | tail -1 | cut -d= -f2- || true)
 fi
 
+# The approval condition on GitLab, read from the merge request's own approvals.
+# Echoes "count=<n>" and "approvers=<comma-separated usernames>"; returns
+# non-zero when the approvals cannot be read at all, so an instance that does
+# not answer refuses the merge instead of merging an unapproved merge request.
+#
+# GitLab accepts an approval from the account that opened the merge request, so
+# its native approval state is reachable here and is the whole record; unlike
+# GitHub, no verdict written into a body is needed or accepted.
+# Two things GitLab does not report, both disclosed on every merge rather than
+# left to look like the GitHub path's guarantees: which commit an approval
+# covers, so the approval cannot be bound to the head here, and any association
+# for the approver, so there is no equivalent of the GitHub standing check.
+# Whether the approver is also the account that opened the merge request IS
+# knowable, and gitlab_verify_mergeable says which of those two cases it saw.
+gitlab_read_approvals() {
+  local encoded body err
+  encoded=$(printf '%s' "$PR_PATH" | sed 's|/|%2F|g')
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || return 1
+  if ! body=$(GITLAB_HOST="$FM_PR_HOST" glab api "projects/$encoded/merge_requests/$PR_NUMBER/approvals" 2>"$err") \
+    || [ -z "$body" ]; then
+    # The forge's own account of why, for the same reason the GitHub read keeps
+    # it: rate limit, expired token and a wrong project are one refusal
+    # otherwise, and they want different things done next.
+    # The forge text is handed back rather than printed here, because this
+    # function returns a refusal LINE the caller is still accumulating:
+    # printing now flushes the quote to stderr above the word "refusing",
+    # detached from the sentence it explains. Every other read on this path
+    # quotes the forge under its own sentence.
+    # It goes through a file because this runs inside a command substitution,
+    # so a variable set here cannot reach the caller.
+    if [ -s "$err" ] && [ -n "$FM_PR_GITLAB_APPROVALS_ERR_FILE" ]; then
+      sed 's/^/    /' "$err" > "$FM_PR_GITLAB_APPROVALS_ERR_FILE"
+    fi
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
+  printf '%s' "$body" | jq -r '
+    if type == "object" and (.approved_by | type) == "array" then
+      "count=" + ((.approved_by | length) | tostring),
+      "approvers=" + ((.approved_by | map(.user.username // .user.name // "") | join(", ")) | tostring)
+    else
+      error("approvals payload is not an object")
+    end' 2>/dev/null || return 1
+}
+
 # Pre-merge conditions for a GitLab merge request, read from one live view of
 # the merge request. Sets FM_PR_MERGE_HEAD to the verified head on success and
 # returns non-zero after reporting every condition that failed.
 FM_PR_MERGE_HEAD=
+FM_PR_GITLAB_APPROVALS_ERR_FILE=
 FM_PR_GITLAB_ASYNC_CONFIGURED=false
 gitlab_verify_mergeable() {
-  local json fields line
+  local json fields line approvals glab_err
   local total=0 named=0 refusals=''
   local state='' detail='' conflicts='' discussions=''
   local live_head='' pipeline_sha='' pipeline_status='' async_configured=''
+  local approval_total=0 approval_named=0 approval_count='' approvers='' mr_author=''
 
   # GITLAB_HOST is set to the same host the project URL already carries, so the
   # instance is taken from the parsed URL by both signals and never from the
   # operator's configured default.
-  if ! json=$(GITLAB_HOST="$FM_PR_HOST" glab mr view "$PR_NUMBER" -R "$PROJECT_URL" -F json 2>/dev/null) \
+  glab_err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || {
+    echo "error: could not create a temporary file to capture the forge's error" >&2
+    return 1
+  }
+  if ! json=$(GITLAB_HOST="$FM_PR_HOST" glab mr view "$PR_NUMBER" -R "$PROJECT_URL" -F json 2>"$glab_err") \
     || [ -z "$json" ]; then
-    echo "error: could not read the GitLab merge request state before merging" >&2
+    echo "error: the forge did not answer the read of $URL before merging; nothing was merged" >&2
+    if [ -s "$glab_err" ]; then
+      echo "the forge said:" >&2
+      sed 's/^/  /' "$glab_err" >&2
+      echo "whether retrying clears it depends on which of those it was" >&2
+    else
+      echo "the forge said nothing, so what stopped the read is unknown and retrying may or may not clear it" >&2
+    fi
+    rm -f "$glab_err"
     return 1
   fi
+  rm -f "$glab_err"
   # One named field per line. The names keep a trailing empty value readable
   # after command substitution strips blank lines, and an absent or null field
   # becomes an empty string or the literal "null", neither of which satisfies any
@@ -428,11 +504,12 @@ gitlab_verify_mergeable() {
         "head=" + ((.sha // "") | tostring),
         "pipeline_sha=" + ((.head_pipeline.sha // "") | tostring),
         "pipeline_status=" + ((.head_pipeline.status // "") | tostring),
-        "async_configured=" + (if .merge_when_pipeline_succeeds == true or (.merge_after != null) then "true" else "false" end)
+        "async_configured=" + (if .merge_when_pipeline_succeeds == true or (.merge_after != null) then "true" else "false" end),
+        "author=" + ((.author.username // .author.name // "") | tostring)
       else
         error("merge request payload is not an object")
       end' 2>/dev/null); then
-    echo "error: could not read the GitLab merge request state before merging" >&2
+    echo "error: the forge answered with a merge request payload this could not parse; retrying will not clear it" >&2
     return 1
   fi
   while IFS= read -r line; do
@@ -446,6 +523,7 @@ gitlab_verify_mergeable() {
       pipeline_sha=*) pipeline_sha=${line#pipeline_sha=} ;;
       pipeline_status=*) pipeline_status=${line#pipeline_status=} ;;
       async_configured=*) async_configured=${line#async_configured=} ;;
+      author=*) mr_author=${line#author=} ;;
       *) continue ;;
     esac
     named=$((named + 1))
@@ -455,13 +533,13 @@ FIELDS
   # Every field named exactly once and no unnamed line: a value carrying a
   # newline would split into a line no name matches, so it is refused here
   # rather than silently truncated into a value a check could accept.
-  if [ "$named" -ne 8 ] || [ "$total" -ne 8 ]; then
-    echo "error: could not read the GitLab merge request state before merging" >&2
+  if [ "$named" -ne 9 ] || [ "$total" -ne 9 ]; then
+    echo "error: the merge request's own fields did not read back cleanly, so its state is unknown; retrying will not clear it" >&2
     return 1
   fi
 
   if ! fm_pr_head_valid "$live_head"; then
-    echo "error: could not read the GitLab merge request head commit before merging" >&2
+    echo "error: the merge request's head commit did not read back as a commit, so there is nothing to bind the merge to; retrying will not clear it" >&2
     return 1
   fi
   # A rebase moves the head and leaves the recorded value behind, so the
@@ -490,6 +568,38 @@ FIELDS
     || refusals="$refusals  - the head pipeline ran at \"${pipeline_sha:-none}\", not at the current head $live_head
 "
 
+  FM_PR_GITLAB_APPROVALS_ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || \
+    FM_PR_GITLAB_APPROVALS_ERR_FILE=
+  if ! approvals=$(gitlab_read_approvals); then
+    refusals="$refusals  - the merge request's approvals could not be read, so no approval is proven
+"
+    if [ -n "$FM_PR_GITLAB_APPROVALS_ERR_FILE" ] && [ -s "$FM_PR_GITLAB_APPROVALS_ERR_FILE" ]; then
+      refusals="$refusals    the forge said:
+$(cat "$FM_PR_GITLAB_APPROVALS_ERR_FILE")
+"
+    fi
+  else
+    while IFS= read -r line; do
+      approval_total=$((approval_total + 1))
+      case "$line" in
+        count=*) approval_count=${line#count=} ;;
+        approvers=*) approvers=${line#approvers=} ;;
+        *) continue ;;
+      esac
+      approval_named=$((approval_named + 1))
+    done <<APPROVALS
+$approvals
+APPROVALS
+    if [ "$approval_named" -ne 2 ] || [ "$approval_total" -ne 2 ]; then
+      refusals="$refusals  - the merge request's approvals did not read back cleanly, so the approval is unknown; retrying will not clear it
+"
+    elif [ "$approval_count" -eq 0 ]; then
+      refusals="$refusals  - the merge request has no approval
+"
+    fi
+  fi
+  rm -f "$FM_PR_GITLAB_APPROVALS_ERR_FILE"
+
   if [ -n "$refusals" ]; then
     printf 'error: refusing to merge %s\n' "$URL" >&2
     printf '%s' "$refusals" >&2
@@ -497,14 +607,34 @@ FIELDS
       "merge merge request $PR_NUMBER in $PR_PATH" "$refusals"
     return 1
   fi
-  printf 'verified: %s is open and mergeable, with a successful pipeline at head %s\n' \
+  # The same disclosure the GitHub path makes, on the same two cases, because a
+  # notice printed on one of two parallel paths reads as a guarantee on the
+  # other. GitLab accepts an approval from the account that opened the merge
+  # request, so the approver and the author being one account is possible here
+  # too, and it is the operator's to judge.
+  case ", $approvers, " in
+    *", $mr_author, "*)
+      printf 'notice: %s approved, and %s is also the account that opened the merge request; GitLab cannot separate the two here, so the approver being someone other than the worker rests on how firstmate dispatched it, not on this check\n' \
+        "${approvers:-an unnamed approver}" "$mr_author" >&2
+      ;;
+    *)
+      printf 'notice: approved by %s, which does not include the account that opened the merge request (%s); GitLab reports no association for an approver, so this is not evidence that firstmate dispatched one, which this check cannot establish\n' \
+        "${approvers:-an unnamed approver}" "${mr_author:-unreadable}" >&2
+      ;;
+  esac
+  printf 'notice: GitLab does not report which commit an approval covers, so unlike the GitHub path this approval is not proven to cover head %s and that binding rests on the project resetting approvals on push\n' \
+    "$live_head" >&2
+  printf 'verified: %s is open and mergeable, approved, with a successful pipeline at head %s\n' \
     "$URL" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITLAB_ASYNC_CONFIGURED=$async_configured
 }
 
 # Every GitHub check that is not green in the given live pull-request JSON, one
-# name per line. An entry is green when it is a status context whose state is
+# per line as "<STATE> <name>", where the state is the check's own status or
+# conclusion so a refusal can say whether it failed, is still running, never
+# started, or was cancelled.
+# An entry is green when it is a status context whose state is
 # SUCCESS, or a check run that completed with SUCCESS, NEUTRAL, or SKIPPED (so
 # a pending check is not green either). Exits nonzero when the rollup cannot be
 # read, so a malformed answer is a failed read and never an empty red set.
@@ -542,28 +672,74 @@ github_checks_not_green() {
         | if .__typename == "CheckRun" then
             {
               kind: "check_run",
-              name: (.name // ""),
+              # The sentinel is decided here, on the name itself, never on the
+              # rendered row: a check genuinely named "Lint " renders exactly
+              # like an unnamed one, and --allow-red matches the name parsed
+              # back out of that row. Deciding it downstream would let a real
+              # name be renamed to the sentinel, so the refusal would name a
+              # check that does not exist and one waiver would cover every
+              # unnamed check at once.
+              # The sentinel is what gets DISPLAYED; whether a check is
+              # unnamed is carried separately, so a check genuinely named
+              # "(unnamed check)" is never grouped with the truly unnamed ones
+              # and never waived by a flag aimed at them. R19 moved this
+              # collision from a plausible name to an implausible one; this
+              # removes it.
+              unnamed: ((.name // "") == ""),
+              name: (if (.name // "") == "" then "(unnamed check)" else .name end),
+              why: (if .status != "COMPLETED" then (.status // "UNKNOWN")
+                    else (.conclusion // "UNKNOWN") end),
               completed: (.status == "COMPLETED"),
               ok: (.status == "COMPLETED" and (.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED")),
               at: (.startedAt | settled_at)
             }
-            | . + {group: (if .name == "" then ["", $i] else [.name, -1] end)}
+            | . + {group: (if .unnamed then ["", $i] else [.name, -1] end)}
           else
-            {kind: "status_context", name: (.context // ""), ok: (.state == "SUCCESS")}
+            {kind: "status_context",
+             unnamed: ((.context // "") == ""),
+             name: (if (.context // "") == "" then "(unnamed check)" else .context end),
+             why: (.state // "UNKNOWN"),
+             ok: (.state == "SUCCESS")}
           end
       ]
     | . as $entries
     | (
         ($entries[]
           | select(.kind == "status_context" and (.ok | not))
-          | .name
+          | .why + " " + .name
         ),
         ($entries
           | [.[] | select(.kind == "check_run")]
           | group_by(.group)[]
+          | ([.[] | select(.ok | not)]) as $reds
           | {
               name: .[0].name,
-              reds: [.[] | select(.ok | not)],
+              # The state REPORTED comes from the newest non-green run,
+              # decided by the same .at this expression already trusts to
+              # decide red or green, never by array position. Two runs of one
+              # check are one state of the world: an older cancelled run under
+              # a newer one still in flight means wait rather than re-run it,
+              # and forge ordering must not be what picks which of those an
+              # operator is told. A run with no startedAt is one that has not
+              # started, which is the most recent thing to have happened to
+              # that name, so it ranks after every dated run rather than being
+              # dropped: a re-run queued behind an old failure means wait.
+              # sort_by is stable, so a key that cannot separate two runs
+              # leaves forge array order to break the tie. Two runs of one name
+              # triggered in the same whole second, and two undated runs, both
+              # map to one key - so the key carries a second term: a run that
+              # has not COMPLETED outranks one that has. That is the same
+              # reasoning as ranking undated runs last, applied to the inputs
+              # the timestamp cannot separate, and it is the answer an operator
+              # needs either way, because a run still in flight means wait
+              # whatever an older run of that name concluded.
+              why: (
+                $reds
+                | sort_by([(.at // "9999-12-31T23:59:59Z"), (if .completed then 0 else 1 end)])
+                | last
+                | .why
+              ),
+              reds: $reds,
               newest_green: ([.[] | select(.ok) | .at | select(. != null)] | max)
             }
           | select(
@@ -574,25 +750,143 @@ github_checks_not_green() {
                 or ([.reds[] | .at] | max) >= .newest_green
               )
             )
-          | .name
+          | .why + " " + .name
         )
       )
-    | if . == "" then "(unnamed check)" else . end
+  ' 2>/dev/null || return 1
+}
+
+# The approval condition, read from the same live pull-request view as every
+# other GitHub condition. One line per named field, the way github_verify_mergeable
+# reads its own fields, so an absent or null value becomes an empty string that
+# satisfies no check rather than a value one could pass.
+#
+# A review counts as approving when GitHub's own review state is APPROVED, or
+# when the last non-empty line of its body is exactly the approved verdict line.
+# It counts as refusing on CHANGES_REQUESTED or on that line's NOT APPROVED
+# form. Both forms are read from the same reviews array and both are bound to
+# the same commit, so the day a second account makes GitHub's native verdict
+# reachable here, that state is already accepted and nothing has to migrate.
+# The last-line rule is what keeps a verdict quoted inside a review body from
+# counting as that review's own verdict, and it is the captain's rule stated as
+# the reviewer contract states it: a review ends with a verdict.
+# The verdict string itself is not written here. bin/fm-review-verdict-lib.sh
+# owns it and every program that must agree on it sources that file, so the two
+# sides cannot drift apart rather than merely being told not to.
+#
+# Only reviews whose commit.oid is the live head are considered. An approval of
+# a superseded commit is not an approval of what would merge, so a push after a
+# review leaves the pull request unapproved again and the refusal names the
+# commit that was reviewed.
+#
+# A review also has to be one that was submitted and still stands. Only the
+# three states that mean that - APPROVED, CHANGES_REQUESTED, and COMMENTED -
+# are read at all, so DISMISSED, PENDING, and any state GitHub adds later are
+# ignored in both directions rather than falling through to the body text.
+# DISMISSED is a repository saying that approval no longer counts, and PENDING
+# is a draft nobody has submitted and nobody else can see; neither approves,
+# and neither refuses either, because a withdrawn or unsent review is not a
+# verdict. Listing the states that count rather than excluding the ones that do
+# not is what keeps a state GitHub invents next year from arriving permissive.
+#
+# WHO may approve is checked as well as what they wrote, because on a public
+# repository any account with read access can submit a COMMENTED review, and a
+# gate that reads only the text would be satisfied by a stranger typing one
+# line. authorAssociation comes back in the same view already, so an approving
+# review counts only from OWNER, MEMBER, or COLLABORATOR: the associations the
+# repository itself grants. Every other association, CONTRIBUTOR and NONE
+# included, is reported by name rather than silently ignored, because an
+# approval that was written and then refused is the case an operator most needs
+# to see.
+#
+# What this cannot distinguish, stated plainly because the merge line must not
+# imply otherwise: among accounts that DO hold one of those associations, this
+# has no way to tell a reviewer firstmate dispatched from any other. GitHub
+# records standing, not who was asked. That half of the captain's separation
+# rests on firstmate dispatching the reviewer and the reviewer not being the
+# worker, and the merge line says which of the two cases it is looking at.
+github_approval_state() {
+  local json=$1 head=$2
+  printf '%s' "$json" | jq -r --arg head "$head" \
+    --arg yes "$FM_REVIEW_VERDICT_APPROVED" --arg no "$FM_REVIEW_VERDICT_DECLINED" '
+    def tail_line:
+      (.body // "")
+      | split("\n")
+      | map(sub("\r$"; "") | sub("^[ \t]+"; "") | sub("[ \t]+$"; ""))
+      | map(select(. != ""))
+      | last // "";
+    def submitted:
+      (.state // "") as $st
+      | ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] | index($st) != null;
+    def approves:
+      submitted and (.state == "APPROVED" or (tail_line == $yes));
+    def refuses:
+      submitted and (.state == "CHANGES_REQUESTED" or (tail_line == $no));
+    def standing:
+      (.authorAssociation // "") as $a
+      | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
+    if type != "object" or (.reviews | type) != "array" then error("no reviews") else . end
+    | (.reviews | sort_by(.submittedAt // "")) as $all
+    | ($all | map(select((.commit.oid // "") == $head))) as $at_any
+    | ($at_any | map(select(submitted))) as $at
+    | ($at | map(select(standing))) as $at_standing
+    | ($at | map(select(standing | not))) as $nonstanding
+    | ($at_standing | map(select(approves))) as $ok
+    | ($at | map(select(approves and (standing | not)))) as $outside
+    | ($at | map(select(refuses))) as $no
+    | "pr_author=" + ((.author.login // "") | tostring),
+      "reviews_total=" + (($all | length) | tostring),
+      "at_head_any=" + (($at_any | length) | tostring),
+      "at_head_standing=" + (($at_standing | length) | tostring),
+      "nonstanding=" + (($nonstanding | length) | tostring),
+      "nonstanding_login=" + (($nonstanding | last | .author.login // "") | tostring),
+      "approving=" + (($ok | length) | tostring),
+      "outside=" + (($outside | length) | tostring),
+      "refusing=" + (($no | length) | tostring),
+      "approver=" + (($ok | last | .author.login // "") | tostring),
+      "approver_assoc=" + (($ok | last | .authorAssociation // "") | tostring),
+      "outside_approver=" + (($outside | last | .author.login // "") | tostring),
+      "outside_assoc=" + (($outside | last | .authorAssociation // "") | tostring),
+      "refuser=" + (($no | last | .author.login // "") | tostring),
+      "newest_reviewed=" + (($all | last | .commit.oid // "") | tostring)
   ' 2>/dev/null || return 1
 }
 
 # Pre-merge conditions for a GitHub pull request, read from one live view.
 # Sets FM_PR_MERGE_HEAD to the verified head on success.
 github_verify_mergeable() {
-  local json fields line red name covered
+  local json fields line red red_row why reason name covered approval gh_err
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
+  local approval_total=0 approval_named=0
+  local pr_author='' reviews_total='' at_head_any='' at_head_standing=''
+  local nonstanding='' nonstanding_login='' approving='' outside='' refusing=''
+  local approver='' approver_assoc='' outside_approver='' outside_assoc=''
+  local refuser='' newest_reviewed=''
 
-  if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup 2>/dev/null) \
+  # gh's own stderr is kept and printed, because which of rate limit, expired
+  # token, DNS failure or a wrong URL it was entirely determines what firstmate
+  # does next, and this refusal is the only place that text can reach it.
+  # It is quoted and marked as the forge's, kept apart from this script's own
+  # verdict, the way every other forge output here is.
+  gh_err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || {
+    echo "error: could not create a temporary file to capture the forge's error" >&2
+    return 1
+  }
+  if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup,reviews,author 2>"$gh_err") \
     || [ -z "$json" ]; then
-    echo "error: could not read the GitHub pull request state before merging" >&2
+    echo "error: the forge did not answer the read of $URL before merging; nothing was merged" >&2
+    if [ -s "$gh_err" ]; then
+      echo "the forge said:" >&2
+      sed 's/^/  /' "$gh_err" >&2
+      echo "whether retrying clears it depends on which of those it was" >&2
+    else
+      echo "the forge said nothing, so what stopped the read is unknown and retrying may or may not clear it" >&2
+    fi
+    rm -f "$gh_err"
     return 1
   fi
+  rm -f "$gh_err"
   if ! fields=$(printf '%s' "$json" | jq -r '
       if type == "object" then
         "state=" + ((.state // "") | tostring),
@@ -604,7 +898,7 @@ github_verify_mergeable() {
       else
         error("pull request payload is not an object")
       end' 2>/dev/null); then
-    echo "error: could not read the GitHub pull request state before merging" >&2
+    echo "error: the forge answered with a pull request payload this could not parse; retrying will not clear it" >&2
     return 1
   fi
   while IFS= read -r line; do
@@ -623,16 +917,51 @@ github_verify_mergeable() {
 $fields
 FIELDS
   if [ "$named" -ne 6 ] || [ "$total" -ne 6 ] || [ -z "$base" ]; then
-    echo "error: could not read the GitHub pull request state before merging" >&2
+    echo "error: the pull request's own fields did not read back cleanly, so its state is unknown; retrying will not clear it" >&2
     return 1
   fi
 
   if ! fm_pr_head_valid "$live_head"; then
-    echo "error: could not read the GitHub pull request head commit before merging" >&2
+    echo "error: the pull request's head commit did not read back as a commit, so there is nothing to bind the merge to; retrying will not clear it" >&2
     return 1
   fi
   if ! red=$(github_checks_not_green "$json"); then
-    echo "error: could not read the GitHub pull request state before merging" >&2
+    echo "error: could not read the GitHub pull request checks before merging; retrying will not clear it" >&2
+    return 1
+  fi
+  if ! approval=$(github_approval_state "$json" "$live_head"); then
+    echo "error: could not read the GitHub pull request reviews before merging; they came back in a shape this cannot read, so retrying will not clear it" >&2
+    return 1
+  fi
+  while IFS= read -r line; do
+    approval_total=$((approval_total + 1))
+    case "$line" in
+      pr_author=*) pr_author=${line#pr_author=} ;;
+      reviews_total=*) reviews_total=${line#reviews_total=} ;;
+      at_head_any=*) at_head_any=${line#at_head_any=} ;;
+      at_head_standing=*) at_head_standing=${line#at_head_standing=} ;;
+      nonstanding=*) nonstanding=${line#nonstanding=} ;;
+      nonstanding_login=*) nonstanding_login=${line#nonstanding_login=} ;;
+      approving=*) approving=${line#approving=} ;;
+      outside=*) outside=${line#outside=} ;;
+      refusing=*) refusing=${line#refusing=} ;;
+      approver=*) approver=${line#approver=} ;;
+      approver_assoc=*) approver_assoc=${line#approver_assoc=} ;;
+      outside_approver=*) outside_approver=${line#outside_approver=} ;;
+      outside_assoc=*) outside_assoc=${line#outside_assoc=} ;;
+      refuser=*) refuser=${line#refuser=} ;;
+      newest_reviewed=*) newest_reviewed=${line#newest_reviewed=} ;;
+      *) continue ;;
+    esac
+    approval_named=$((approval_named + 1))
+  done <<APPROVAL
+$approval
+APPROVAL
+  # A login or commit carrying a newline would split into a line no name
+  # matches, so a payload that does not read as exactly these fifteen fields is
+  # a failed read rather than one an approval count could be taken from.
+  if [ "$approval_named" -ne 15 ] || [ "$approval_total" -ne 15 ]; then
+    echo "error: the pull request's reviews did not read back cleanly, so the approval is unknown; retrying will not clear it" >&2
     return 1
   fi
 
@@ -653,20 +982,99 @@ FIELDS
     || refusals="$refusals  - mergeStateStatus is DIRTY (conflicts)
 "
 
+  # The approval is a gate of its own, not a check: --allow-red waives named
+  # checks and --attended-override re-enables forge flags, and neither reaches
+  # here. Each way of being unapproved gets its own line, because they send the
+  # operator somewhere different - dispatch a reviewer, dispatch it again at the
+  # new head, or read a review that declined.
+  if [ "$refusing" -gt 0 ]; then
+    refusals="$refusals  - the review by ${refuser:-an unnamed reviewer} at the current head $live_head does not approve
+"
+  elif [ "$approving" -eq 0 ]; then
+    if [ "$reviews_total" -eq 0 ]; then
+      refusals="$refusals  - no review has been posted, so nothing has approved this pull request
+"
+    elif [ "$outside" -gt 0 ]; then
+      # Both branches are guarded on a count greater than zero and name the
+      # last account of several, so neither may call it the only one. The count
+      # is already in hand, so it says how many rather than asserting one.
+      if [ "$outside" -eq 1 ]; then
+        refusals="$refusals  - the only approval at the current head $live_head is by ${outside_approver:-an unnamed account}, whose association with this repository is \"${outside_assoc:-unreadable}\"; an approval counts only from OWNER, MEMBER, or COLLABORATOR
+"
+      else
+        refusals="$refusals  - all $outside approvals at the current head $live_head are from accounts with no standing, the most recent by ${outside_approver:-an unnamed account} as \"${outside_assoc:-unreadable}\"; an approval counts only from OWNER, MEMBER, or COLLABORATOR
+"
+      fi
+    elif [ "$at_head_standing" -gt 0 ]; then
+      # Guarded on a count, so several verdictless reviews are reachable. This
+      # line names no account, so unlike the two R20 corrected there is no
+      # "which one" to mislead about - but it should not claim a singularity it
+      # did not check either, and the remedy is the same for one or for five.
+      if [ "$at_head_standing" -eq 1 ]; then
+        refusals="$refusals  - the review at the current head $live_head states no verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
+"
+      else
+        refusals="$refusals  - none of the $at_head_standing reviews at the current head $live_head states a verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
+"
+      fi
+    elif [ "$nonstanding" -gt 0 ]; then
+      # A review from an account with no standing, whatever it says. Telling
+      # this operator to add a verdict line would be the wrong remedy: adding
+      # one produces a different refusal, discovered on the second attempt.
+      if [ "$nonstanding" -eq 1 ]; then
+        refusals="$refusals  - the only review at the current head $live_head is by ${nonstanding_login:-an account} with no standing on this repository; an approval counts only from OWNER, MEMBER, or COLLABORATOR
+"
+      else
+        refusals="$refusals  - all $nonstanding reviews at the current head $live_head are by accounts with no standing on this repository, the most recent by ${nonstanding_login:-an account}; an approval counts only from OWNER, MEMBER, or COLLABORATOR
+"
+      fi
+    elif [ "$at_head_any" -gt 0 ]; then
+      # Reviews exist at this head but none of them is one that still stands:
+      # every one is dismissed, unsubmitted, or in a state this does not read.
+      # Saying the head was never reviewed would send the operator to push a
+      # commit that already has a review sitting on it.
+      refusals="$refusals  - every review at the current head $live_head has been withdrawn or was never submitted, so none of them counts; the head does not need a new commit, it needs a review that stands
+"
+    else
+      refusals="$refusals  - the newest review is of commit ${newest_reviewed:-unreadable}, not the current head $live_head, so nothing has approved what would merge
+"
+    fi
+  fi
+
+  # Each non-green check says what is actually wrong with it. Failed, still
+  # running, never started and cancelled want four different actions from an
+  # operator - fix it, wait, wait, re-run it - and this fleet spent a day
+  # establishing that a cancelled job means several things and that only its own
+  # timestamps separate them. The gate whose job is to say what stopped the
+  # merge must not hand the next supervisor that same trap.
+  # --allow-red still matches the NAME alone, so the displayed wording can vary
+  # without changing which checks a waiver covers.
   uncovered=''
-  while IFS= read -r name; do
-    [ -n "$name" ] || continue
+  while IFS= read -r red_row; do
+    [ -n "$red_row" ] || continue
+    why=${red_row%% *}
+    name=${red_row#* }
     covered=0
     if [ "${#ALLOW_RED[@]}" -gt 0 ]; then
       for check in "${ALLOW_RED[@]}"; do
         [ "$check" = "$name" ] && covered=1
       done
     fi
-    [ "$covered" -eq 1 ] || {
-      refusals="$refusals  - check '$name' is not green
+    if [ "$covered" -ne 1 ]; then
+      case "$why" in
+        FAILURE|ERROR|STARTUP_FAILURE) reason="failed" ;;
+        TIMED_OUT) reason="timed out" ;;
+        CANCELLED) reason="was cancelled, so it reported no result" ;;
+        ACTION_REQUIRED) reason="needs an action before it can finish" ;;
+        IN_PROGRESS) reason="is still running" ;;
+        QUEUED|WAITING|PENDING|REQUESTED) reason="has not started yet" ;;
+        STALE) reason="is stale" ;;
+        *) reason="is not green (${why:-unreadable})" ;;
+      esac
+      refusals="$refusals  - check '$name' $reason
 "
       uncovered="${uncovered:+$uncovered, }$name"
-    }
+    fi
   done <<EOF
 $red
 EOF
@@ -679,8 +1087,25 @@ EOF
       "merge pull request $PR_NUMBER in $PR_OWNER/$PR_REPO" "$refusals"
     return 1
   fi
-  printf 'verified: %s is open and mergeable, with every required check green at head %s\n' \
-    "$URL" "$live_head" >&2
+  # Naming the approver is the whole audit trail this gate leaves behind, and
+  # both cases get a line, because saying nothing in one of them is what makes
+  # the other one read as a guarantee. Neither case is checkable here: GitHub
+  # records an account's standing, never who firstmate asked to review.
+  if [ -z "$pr_author" ]; then
+    # Neither of the two cases below can be asserted without an author to
+    # compare against, and claiming one anyway is the same defect as a merge
+    # line implying a separation the forge never checked.
+    printf 'notice: %s approved at head %s as %s; the account that opened the pull request could not be read, so this cannot say whether the approver is that account\n' \
+      "${approver:-an unnamed reviewer}" "$live_head" "${approver_assoc:-an unreadable association}" >&2
+  elif [ "$approver" = "$pr_author" ]; then
+    printf 'notice: %s approved at head %s, which is also the account that opened the pull request; GitHub cannot separate the two here, so the reviewer being someone other than the worker rests on how firstmate dispatched it, not on this check\n' \
+      "$approver" "$live_head" >&2
+  else
+    printf 'notice: %s approved at head %s as %s, and is not the account that opened the pull request (%s); that association is standing on this repository, not evidence that firstmate dispatched this reviewer, which this check cannot establish\n' \
+      "${approver:-an unnamed reviewer}" "$live_head" "${approver_assoc:-an unreadable association}" "$pr_author" >&2
+  fi
+  printf 'verified: %s is open and mergeable, approved by %s (%s), with every required check green at head %s\n' \
+    "$URL" "${approver:-an unnamed reviewer}" "${approver_assoc:-unreadable}" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base
 }
@@ -1123,13 +1548,22 @@ github_report_unmerged_outcome() {
 }
 
 gitlab_confirm_merged() {
-  local json state
+  local json state err
+  err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge.XXXXXX") || err=
   if ! json=$(GITLAB_HOST="$FM_PR_HOST" glab mr view "$PR_NUMBER" \
-    -R "$PROJECT_URL" -F json 2>/dev/null) || [ -z "$json" ]; then
+    -R "$PROJECT_URL" -F json 2>"${err:-/dev/null}") || [ -z "$json" ]; then
     printf 'actionable: GitLab accepted the merge request for %s but its landed state could not be confirmed; the merge poll remains armed\n' \
       "$URL" >&2
+    # This one happens after the forge accepted the merge, so what it says is
+    # the only evidence of whether the merge landed.
+    if [ -n "$err" ] && [ -s "$err" ]; then
+      echo "the forge said:" >&2
+      sed 's/^/  /' "$err" >&2
+    fi
+    rm -f "$err"
     return 2
   fi
+  rm -f "$err"
   if ! state=$(printf '%s' "$json" | jq -r \
     'if type == "object" and (.state | type == "string") then .state else error("invalid state") end' \
     2>/dev/null); then

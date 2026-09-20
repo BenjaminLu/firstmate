@@ -24,7 +24,11 @@
 #   confirms the supported lavish-axi floor; otherwise it asks for a text report.
 #   --review writes the reviewer contract: the deliverable is one review POSTED on
 #   the named pull request, and this file is the single owner of what that review
-#   owes (the four review disciplines, the finding format, and the local record).
+#   owes (the four review disciplines, the finding format, how the verdict line
+#   is presented, and the local record). The verdict line is the approval itself:
+#   bin/fm-pr-merge.sh reads it back off the forge and refuses a merge without it.
+#   The string is not written here - bin/fm-review-verdict-lib.sh owns it and both
+#   programs source that file, so they cannot drift apart.
 #   It is scout-shaped in every mechanical respect - scratch worktree, no branch,
 #   no commit, no push, no PR of its own - so it is spawned and torn down as a
 #   scout, and it writes data/<task-id>/report.md as the local pointer to the
@@ -110,6 +114,8 @@ esac
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-review-verdict-lib.sh
+. "$SCRIPT_DIR/fm-review-verdict-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 CREWMATE_PAUSE_WAIT_EXAMPLES='an upstream release, a rate-limit reset, a scheduled window, or your own validation round'
 
@@ -334,7 +340,7 @@ Report only true captain-relevant outcomes or a declared external wait by append
 States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
 Use \`$PAUSED_VERB: {why}\` (distinct from \`blocked:\`) only when your domain is deliberately idling on a known external wait you expect to clear on its own, naming when it clears with \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) when you know; use \`blocked:\` when you are stuck and need firstmate to act.
 Use this only for material phase changes, a captain decision, a real blocker, a failure, work ready for review, or work you landed.
-Work you landed includes a merge you performed yourself under standing merge authority and one the captain merged on the forge: under that authority nothing is ever \"ready for review\", so a landed merge that goes unreported reaches the captain as silence.
+Work you landed includes a merge you performed yourself under standing merge authority and one the captain merged on the forge: under that authority nothing is ever "ready for review", so a landed merge that goes unreported reaches the captain as silence.
 This is also how you return the answer to a marked from-firstmate request above.
 A marked request requires one correlated answer after the work; it does not require a separate receipt or start acknowledgement.
 Never append \`working:\` merely to acknowledge receipt or announce that a marked request has started.
@@ -456,8 +462,6 @@ Write the review to a file in the worktree, then post it. Number findings \`R1\`
 \`\`\`
 ## Review of PR $PR_NUMBER
 
-Verdict: <blocking | non-blocking | clean>
-
 ### R1 - <defect|preference> - <high|medium|low> - <one-line title>
 Where: <file:line, and every other place this class occurs>
 Class: <the general mistake, stated so it can be searched for>
@@ -467,10 +471,30 @@ Widens scope: <no | yes - what acting on it would commit the project to>
 
 ### Not verified
 - <what you could not check, and why>
+
+$FM_REVIEW_VERDICT_PREFIX <APPROVED | NOT APPROVED>
 \`\`\`
 
+# The verdict line
+Your review MUST end with exactly one of these two lines, character for character, as the last non-empty line of the body:
+
+\`\`\`
+$FM_REVIEW_VERDICT_APPROVED
+$FM_REVIEW_VERDICT_DECLINED
+\`\`\`
+
+This is the approval, and it is read by machine. \`bin/fm-pr-merge.sh\` refuses to merge a pull request whose current head has no approving review, so a pull request you do not approve does not merge, and one you never gave a verdict for does not merge either. Nothing else counts: "blocking", "non-blocking", "clean", "LGTM", or an approval written into a sentence are not this line.
+
+It must be the LAST non-empty line so that a verdict quoted anywhere earlier in your body is never mistaken for your own.
+
+APPROVED means: you would merge this as it stands. Unresolved defects mean NOT APPROVED. A finding you marked as widening scope does not by itself block approval - that one is firstmate's call, so say so beside it and let your verdict follow from the rest.
+
+You approve someone else's work, never your own. Do not try to establish that from the pull request's author field: one fleet account opens and reviews everything here, so that field says your own account name on every pull request you will ever be asked to review, and reading it as "this is mine" would stop every review this fleet dispatches.
+
+The separation rests on who was dispatched, not on who pushed. You were dispatched to review this change and you are not the worker who wrote it. The only case that is genuinely yours is the one you know from this session: if YOU did the work on this branch, append \`blocked: asked to review my own change\` and stop.
+
 Post it with \`gh-axi pr review $PR_NUMBER $PR_REPO_FLAG --comment --body-file <your file>\`.
-Use \`--comment\`. Do not use \`--approve\` or \`--request-changes\`: GitHub refuses both on a pull request opened by the same account (\`Review Can not approve your own pull request\`), and one fleet account opens and reviews these, so the verdict lives in the body text instead.
+Use \`--comment\`. Do not use \`--approve\` or \`--request-changes\`: GitHub refuses both on a pull request opened by the same account (\`Review Can not approve your own pull request\`), and one fleet account opens and reviews these, which is exactly why the verdict is that line of body text and why the merge gate reads it there.
 Then read it back with \`gh-axi pr view $PR_NUMBER $PR_REPO_FLAG --reviews\` and confirm your review is there. An unverified post is not a posted review.
 If the post fails, append \`blocked: {the exact forge error}\` and stop. Never fall back to leaving the review only in your terminal or only in the local record below.
 
@@ -510,9 +534,9 @@ $INBOX_SECTION
 The posted review is the deliverable. Everything below exists so firstmate and the captain can find it.
 
 1. Post the review on $PR_URL and read it back, as **The review you post** above requires.
-2. Write the local record at \`$DATA/$ID/report.md\`: the pull request URL, the URL or identifier of the review you posted, your verdict, one line per finding (\`R<n>\`, defect or preference, severity, whether it widens scope), and the **Not verified** list. This record is a pointer to the posted review, not a second copy of it - the pull request is where the review lives.
+2. Write the local record at \`$DATA/$ID/report.md\`: the pull request URL, the URL or identifier of the review you posted, your verdict line verbatim, one line per finding (\`R<n>\`, defect or preference, severity, whether it widens scope), and the **Not verified** list. This record is a pointer to the posted review, not a second copy of it - the pull request is where the review lives.
 3. Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate: a finding you marked as widening scope is a captain call this review exposed.
-4. Append \`done: review posted on $PR_URL - <verdict>, <n> findings\` to the status file and stop.
+4. Append \`done: review posted on $PR_URL - <APPROVED or NOT APPROVED>, <n> findings\` to the status file and stop.
 
 EOF
 echo "scaffolded: $BRIEF (review of $PR_URL; replace {TASK} and {FIRSTMATE_SPEC}; spawn with --scout)"

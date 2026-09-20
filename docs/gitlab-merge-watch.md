@@ -253,6 +253,11 @@ error: refusing to merge https://gitlab.com/KarotKris/gitlab-merge-watch-fixture
   - the head pipeline ran at "none", not at the current head 66b8a6777bea5e291d7fa2fc20c42ad7686f6bc8
 ```
 
+An approval condition was added to both forge paths after these runs, on 2026-09-20, and it is not reflected in the recorded output above.
+A GitLab merge now also reads the merge request's own approvals through `glab api .../approvals` and refuses with `- the merge request has no approval`, or with `- the merge request's approvals could not be read, so no approval is proven` when that read fails.
+Each refusal above would carry one more line on a merge request with no approval, and a merge that passes every condition now prints notices naming the approvers, saying whether they include the account that opened the merge request, and stating the two things GitLab does not report: which commit an approval covers, and any association for the approver.
+Re-running these against the fixture would mean approving someone else's merge request to produce evidence, so the condition is covered by `tests/fm-pr-merge.test.sh` instead and this record says so rather than showing output that no longer matches.
+
 The remaining refusal conditions, and the merge itself, are covered by `tests/fm-pr-merge.test.sh` against fixtures.
 The conflict, unresolved-discussion, and running-pipeline conditions were additionally exercised against real merge requests on a private instance; those runs cannot be reproduced here, so their identifiers stay out of this record.
 The merge itself is not exercised against any live merge request, in either direction: `glab mr merge` has no dry run, so a live success path would mean merging someone's work to produce evidence.
