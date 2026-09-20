@@ -4068,6 +4068,8 @@ test_completion_gate_reads_an_answered_call_out_of_the_archive() {
     > "$home/ghost.out" 2> "$home/ghost.err"; then
     fail "an archived title mentioning an id attested that id as a durable captain call"
   fi
+  assert_contains "$(cat "$home/ghost.err")" "no captain-held task sample-ghost-call" \
+    "the mentioned id was refused for some other reason than being unresolvable"
   pass "the completion gate reads an answered call out of the backlog's archive"
 }
 
