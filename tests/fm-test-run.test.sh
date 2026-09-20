@@ -1097,22 +1097,24 @@ test_portable_shard_union_and_coverage_guard() {
 # measured hint and the packing over those hints stays even. Both halves went
 # unchecked until one lane grew past its CI job cap and was cancelled on every
 # run, so assert them through the guard's own reported numbers.
-# What has to hold of the two parallel lanes is that each one FITS, not that
-# their sums match. They are packed to equal projected WALL, and their walls are
-# not their sums in the same way: CI runs shard 1 with --jobs 2, so its wall is
-# a fraction of its sum, while shard 2 runs serial and its wall IS its sum.
+# The two parallel lanes are held to the SAME five-percent balance this file has
+# always asserted, and to the cap. What changed is the unit: sums, not walls,
+# were what five percent used to be measured in, and the two are not the same
+# thing here because CI runs shard 1 with --jobs 2 and shard 2 serial. A serial
+# lane's wall IS its sum; a two-worker lane's wall is at best half of its own.
 #
-# Equal sums is not merely a weaker rule here, it is an unsatisfiable one. At the
-# hints this lane carries, an even split puts about 677s in each lane, and that
-# is 77s past the 600s cap for the serial one - so a partition that passed the
-# old five-percent rule would be a partition that always times out. The rule was
-# written when the sums were small enough for both to be true at once and stayed
-# after they were not.
+# Measured in sums the rule is reachable and wrong: a 0.00% split exists, and it
+# puts both lanes near 677s, which is 77s past the cap for the one running
+# serial. So the old assertion would have passed a partition that always times
+# out, and failed the partition that fits. Measured in walls it is reachable AND
+# right - the current packing sits at about 3.4% - so the tolerance did not need
+# loosening, only moving to the quantity that governs.
 #
-# The margin below is what absorbs the drift between refreshes, and the cap
-# stays the tripwire that reports a lane outgrowing it.
-test_portable_parallel_lanes_each_fit_under_the_cap() {
-  local out unhinted serial_ms jobs2_ms jobs2_wall budget
+# Between them these two assertions still catch what the five-percent rule was
+# there to catch: a lane starving beside a twin at the cap fails the balance
+# check, and a lane packed past what its runner can finish fails the fit check.
+test_portable_parallel_lanes_fit_and_stay_wall_balanced() {
+  local out unhinted serial_ms jobs2_ms serial_wall jobs2_wall spread budget
   # The lane cap in .github/workflows/ci.yml, which owns it; 600000ms = 10min.
   local cap=600000
   # Fit with room: a lane packed to the cap has no margin for the next refresh.
@@ -1125,17 +1127,31 @@ test_portable_parallel_lanes_each_fit_under_the_cap() {
     || fail "coverage guard must report parallel_unhinted and both parallel lane sums: $out"
   [ "$unhinted" = "0" ] \
     || fail "$unhinted proven-isolated scripts have no measured parallel hint, so the lanes are packed on a guess"
-  [ "$serial_ms" -gt 0 ] || fail "parallel_serial_lane_ms must be a positive packed duration, got $serial_ms"
-  # Shard 2 runs serial, so its packed sum IS the wall it will take.
-  [ "$serial_ms" -le "$budget" ] \
-    || fail "the serial parallel lane packs ${serial_ms}ms against a ${cap}ms cap, leaving no margin (budget ${budget}ms)"
-  # Shard 1 runs --jobs 2. Two workers cannot beat half the sum, and cannot beat
-  # the longest single script either; half the sum is the bound a packing choice
-  # controls, so that is what is held to the budget.
+  [ "$serial_ms" -gt 0 ] && [ "$jobs2_ms" -gt 0 ] \
+    || fail "both parallel lane sums must be positive, got serial=$serial_ms jobs2=$jobs2_ms"
+  # Shard 2 runs serial, so its packed sum IS the wall it will take. Shard 2
+  # runs --jobs 2, whose wall cannot beat half its sum; half is the bound a
+  # packing choice actually controls, so that is the wall compared here.
+  serial_wall=$serial_ms
   jobs2_wall=$((jobs2_ms / 2))
+  [ "$serial_wall" -le "$budget" ] \
+    || fail "the serial parallel lane packs ${serial_wall}ms against a ${cap}ms cap, leaving no margin (budget ${budget}ms)"
   [ "$jobs2_wall" -le "$budget" ] \
     || fail "the --jobs 2 parallel lane packs ${jobs2_ms}ms, whose two-worker floor ${jobs2_wall}ms exceeds the ${budget}ms budget"
-  pass "both portable parallel lanes are fully hinted and each fits under the cap with margin"
+  if [ "$serial_wall" -ge "$jobs2_wall" ]; then
+    spread=$((serial_wall - jobs2_wall))
+  else
+    spread=$((jobs2_wall - serial_wall))
+  fi
+  # 5% of the slower lane - the same tolerance, measured on walls.
+  if [ "$serial_wall" -ge "$jobs2_wall" ]; then
+    [ "$((spread * 20))" -le "$serial_wall" ] \
+      || fail "parallel lane walls differ by ${spread}ms against a ${serial_wall}ms slower lane, more than 5%"
+  else
+    [ "$((spread * 20))" -le "$jobs2_wall" ] \
+      || fail "parallel lane walls differ by ${spread}ms against a ${jobs2_wall}ms slower lane, more than 5%"
+  fi
+  pass "portable parallel lanes are fully hinted, each fits under the cap, and their walls stay within 5%"
 }
 
 test_portable_serial_shards_partition_the_serial_lane() {
@@ -1883,7 +1899,7 @@ test_exclude_family
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights
 test_portable_shard_union_and_coverage_guard
-test_portable_parallel_lanes_each_fit_under_the_cap
+test_portable_parallel_lanes_fit_and_stay_wall_balanced
 test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_hint_coverage_is_reported_and_bounded
 test_portable_serial_shard_lane_refusals

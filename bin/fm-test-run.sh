@@ -587,9 +587,10 @@ portable_parallel_lane_weight() {
 # lane with --jobs 2, so its wall is well under its sum - 296 s against a 506 s
 # sum on run 35509935039 - and the two lanes are balanced on projected WALL
 # rather than on equal sums. A large parallel_imbalance_ms here is that design,
-# not a packing error: equal sums would leave the serial lane doing nearly
-# twice the wall of this one. At the hints above this lane sums 856 s and is
-# projected at about 501 s against the 600 s cap.
+# not a packing error: equal sums are reachable and would put BOTH lanes near
+# 677 s, which the serial one cannot survive under a 600 s cap. At the hints
+# above this lane sums 892 s and is
+# projected at a 446 s two-worker floor against the 600 s cap.
 # Stored order agrees with this lane's --list-scheduled output.
 # tests/fm-pi-primary-types.test.sh belongs to this lane because
 # this is the parallel job that installs the Pi package; moving it needs that
@@ -599,6 +600,7 @@ list_portable_parallel_1() {
 tests/fm-lint.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-test-run.test.sh
+tests/fm-crew-state.test.sh
 tests/fm-arm-pretool-check.test.sh
 tests/fm-x-mode.test.sh
 tests/fm-backend-herdr.test.sh
@@ -621,19 +623,21 @@ tests/fm-transition-lib.test.sh
 EOF
 }
 
-# Portable parallel shard 2: the serial lane, kept deliberately small. It holds
-# tests/fm-captain-hold-lifecycle.test.sh because that script CANNOT move to the
+# Portable parallel shard 2: the serial lane, and at present ONE script. That is
+# not a lane left starving - it is the packing with the closest matched walls
+# available, and the arithmetic is worth keeping here because the shape is
+# surprising. tests/fm-captain-hold-lifecycle.test.sh cannot move to the
 # --jobs 2 lane: the workflow's own measurement has contention lengthening this
-# lane's makespan-setting script by 79 s, and at its current 462 s that would
-# put shard 1 at the cap instead of this one. A serial lane's wall IS its sum,
-# so this one is packed to about 498 s against a 600 s cap - roughly the same
-# projected wall as shard 1, which is what balancing on wall means here. The
-# ~100 s left under the cap is what absorbs the next drift, and the cap stays
-# the tripwire that reports it rather than a number sized to be survived.
+# lane's makespan-setting script by 79 s, so moving it would put THAT lane at
+# the cap instead. It therefore sets this lane's floor at its own 462 s. A
+# serial lane's wall IS its sum, so every script added here is added on top of
+# that floor, while the same script in shard 1 costs only half its weight
+# against two workers. Matching the two walls therefore means adding nothing:
+# 462 s here against a 446 s two-worker floor there is a 3.4% spread, and any
+# script moved across widens it. Both sit about 140 s under the cap.
 list_portable_parallel_2() {
   cat <<'EOF'
 tests/fm-captain-hold-lifecycle.test.sh
-tests/fm-crew-state.test.sh
 EOF
 }
 
