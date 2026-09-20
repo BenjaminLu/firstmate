@@ -637,6 +637,85 @@ test_a_poll_on_a_merged_pull_request_is_silent() {
   pass "a merge poll whose pull request has merged is silent"
 }
 
+# The poll sidecar is the other record obligation 2 rests on. An unreadable one
+# used to be dropped with nothing said, so a poll left bound to a superseded
+# commit - the exact miss obligation 2 exists for - went unreported.
+assert_poll_control_is_owed() {
+  local home=$1 out
+  out="$home/control.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "the recorded head for beta is" \
+    "the control did not report the stale head, so this case cannot prove anything about silence"
+  rm -f "$home/state/.fleet-obligations"
+}
+
+test_a_poll_record_that_cannot_be_read_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home poll-unreadable)
+  forge_pr "$home" "$SLUG" 8 OPEN "$(commit 2)" 1 0 fm/poll-unreadable
+  task "$home" beta "kind=ship" "pr=$PR_BASE/8" "pr_head=$(commit 1)"
+  poll "$home" beta "$PR_BASE/8"
+  assert_poll_control_is_owed "$home"
+  chmod 000 "$home/state/beta.pr-poll"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  chmod 644 "$home/state/beta.pr-poll"
+  [ -s "$out" ] || fail "an unreadable poll record produced silence while the poll watched a superseded commit"
+  assert_contains "$report" "the merge poll record for beta cannot be read" \
+    "an unreadable poll record was dropped instead of reported"
+  assert_contains "$report" "unknown:" "an unreadable poll record did not produce an unknown answer"
+  pass "a merge poll record that cannot be read is unknown, not clean"
+}
+
+test_a_poll_record_that_is_a_symlink_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home poll-symlink)
+  forge_pr "$home" "$SLUG" 8 OPEN "$(commit 2)" 1 0 fm/poll-symlink
+  task "$home" beta "kind=ship" "pr=$PR_BASE/8" "pr_head=$(commit 1)"
+  poll "$home" beta "$PR_BASE/8"
+  assert_poll_control_is_owed "$home"
+  rm -f "$home/state/beta.pr-poll"
+  ln -s /etc/hosts "$home/state/beta.pr-poll"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a symlinked poll record produced silence while the poll watched a superseded commit"
+  assert_contains "$report" "the merge poll record for beta cannot be read" \
+    "a symlinked poll record was followed or dropped instead of reported"
+  pass "a merge poll record that is a symlink is unknown, not clean"
+}
+
+test_a_poll_record_naming_no_pull_request_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home poll-truncated)
+  forge_pr "$home" "$SLUG" 8 OPEN "$(commit 2)" 1 0 fm/poll-truncated
+  task "$home" beta "kind=ship" "pr=$PR_BASE/8" "pr_head=$(commit 1)"
+  poll "$home" beta "$PR_BASE/8"
+  assert_poll_control_is_owed "$home"
+  printf 'github\n' > "$home/state/beta.pr-poll"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a truncated poll record produced silence while the poll watched a superseded commit"
+  assert_contains "$report" "the merge poll record for beta names no pull request" \
+    "a poll record with no URL where its format puts one was dropped instead of reported"
+  pass "a merge poll record naming no pull request is unknown, not clean"
+}
+
+test_a_home_with_no_poll_record_stays_silent() {
+  local home out
+  # The control for all three: no sidecar at all is not an unreadable one.
+  home=$(make_home poll-absent)
+  forge_pr "$home" "$SLUG" 8 OPEN "$(commit 2)" 1 0 fm/poll-absent
+  task "$home" beta "kind=ship" "pr=$PR_BASE/8" "pr_head=$(commit 2)"
+  task_branch "$home" beta fm/poll-absent
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a task with no armed poll at all was reported as having an unreadable one"
+  pass "a task with no armed poll record is silent, not undeterminable"
+}
+
 test_a_poll_with_no_recorded_head_is_silent() {
   local home out
   home=$(make_home o2-nohead)
@@ -1567,6 +1646,10 @@ test_a_poll_bound_to_a_superseded_commit_is_reported
 test_a_poll_bound_to_the_live_commit_is_silent
 test_a_poll_on_a_closed_pull_request_is_reported
 test_a_poll_on_a_merged_pull_request_is_silent
+test_a_poll_record_that_cannot_be_read_is_unknown_not_clean
+test_a_poll_record_that_is_a_symlink_is_unknown_not_clean
+test_a_poll_record_naming_no_pull_request_is_unknown_not_clean
+test_a_home_with_no_poll_record_stays_silent
 test_a_poll_with_no_recorded_head_is_silent
 test_a_merged_pull_request_left_on_the_board_is_reported
 test_an_open_pull_request_on_the_board_is_silent

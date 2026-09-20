@@ -743,10 +743,25 @@ collect_task_targets() {
     # request: consulted afterwards, a task whose poll named its pull request
     # still spent a discovery call, and the finding then said its records do
     # not name it, which points firstmate at the wrong repair.
+    #
+    # A sidecar that is present but cannot be read, or that does not carry the
+    # URL where its own format puts it, is an input this check cannot read -
+    # never an obligation met. The poll is still armed and still watching; what
+    # cannot be established is whether it is bound to the right commit, and
+    # polls left on superseded commits are the exact miss obligation 2 exists
+    # for. bin/fm-pr-poll.sh owns the sidecar's format; only its presence and
+    # its second line are read here.
     poll_url=
     poll="$STATE/$id.pr-poll"
-    if readable_file "$poll"; then
-      poll_url=$(sed -n '2p' "$poll" 2>/dev/null)
+    if [ -e "$poll" ] || [ -L "$poll" ]; then
+      if ! readable_file "$poll"; then
+        unknown "the merge poll record for $id cannot be read, so whether it still watches the right commit could not be established"
+      else
+        poll_url=$(sed -n '2p' "$poll" 2>/dev/null)
+        if [ -z "$poll_url" ]; then
+          unknown "the merge poll record for $id names no pull request, so whether it still watches the right commit could not be established"
+        fi
+      fi
     fi
 
     url=$(meta_value "$meta" pr)
