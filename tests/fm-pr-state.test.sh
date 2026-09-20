@@ -42,6 +42,17 @@ serve() {
     "api /repos/o/r/pulls/7/reviews?per_page=100 --paginate --jq "*)
       printf '%s\n' "${FM_TEST_REVIEWS:-[]}"
       ;;
+    "pr view "*" --json reviews")
+      # The approval read, fetched raw because the verdict line reaches jq as
+      # data. Defaults to one standing approval at the head, so every fixture
+      # that is not about the approval stays silent the way it always did.
+      if [ -n "${FM_TEST_APPROVAL_ERROR-}" ]; then
+        printf '%s\n' "$FM_TEST_APPROVAL_ERROR" >&2
+        exit 1
+      fi
+      default='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}'
+      printf '%s\n' "${FM_TEST_APPROVAL_REVIEWS:-$default}"
+      ;;
     "pr checks "*" --required --json name,state,bucket --jq "*)
       if [ -n "${FM_TEST_CHECKS_ERROR-}" ]; then
         printf '%s\n' "$FM_TEST_CHECKS_ERROR" >&2
@@ -62,7 +73,11 @@ for arg in "$@"; do
   [ "$prev" != --jq ] || prog=$arg
   prev=$arg
 done
-serve "$@" | jq -r "$prog"
+if [ -z "$prog" ]; then
+  serve "$@"
+else
+  serve "$@" | jq -r "$prog"
+fi
 SH
 chmod +x "$FAKEBIN/gh"
 
@@ -177,12 +192,54 @@ test_authors_own_changes_requested_review_is_not_a_blocker() {
   pass "the author's own review is never listed as a blocker"
 }
 
-test_pending_approval_is_not_a_blocker() {
+# GitHub's REVIEW_REQUIRED never becomes APPROVED here, because the verdict
+# lives in a COMMENTED body that reviewDecision does not count. So it is not the
+# signal this command blocks on; the approval read below is.
+test_review_required_decision_is_not_itself_a_blocker() {
   local out
   out=$(FM_TEST_VIEW_REVIEW_DECISION=REVIEW_REQUIRED run_state) \
     || fail "review-required fixture was refused"
-  [ -z "$out" ] || fail "awaiting approval is not a blocker this command reports, got: $out"
-  pass "a pending approval is not reported as a blocker"
+  [ -z "$out" ] || fail "reviewDecision alone is not a blocker this command reports, got: $out"
+  pass "a REVIEW_REQUIRED decision is not itself reported, because the approval is read directly"
+}
+
+# The blocker the merge path enforces: bin/fm-pr-merge.sh refuses without an
+# approval at the head, so this command has to say so rather than fall silent
+# and read as ready.
+test_a_missing_approval_is_a_blocker() {
+  local out head=c2eac54c17a1ddc2633ad51b83e21e5fe888142e
+
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[]}' run_state) \
+    || fail "no-review fixture was refused"
+  case "$out" in
+    *"NO APPROVAL AT HEAD: $head"*) ;;
+    *) fail "an unreviewed pull request must not read as ready, got: $out" ;;
+  esac
+
+  # Approved, but of a commit that is no longer what would merge.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"2710bc5efc936efb70e95b86ca3582e9da7e60f4"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "stale-approval fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*) ;;
+    *) fail "an approval of a superseded commit must not read as ready, got: $out" ;;
+  esac
+
+  # Approved at the head by an account with no standing on this repository.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "outside-approval fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*) ;;
+    *) fail "a stranger's approval must not read as ready, got: $out" ;;
+  esac
+
+  # A read it cannot complete says so rather than staying silent.
+  out=$(FM_TEST_APPROVAL_ERROR='could not resolve host' run_state) \
+    || fail "approval-error fixture was refused"
+  case "$out" in
+    *'APPROVAL UNREADABLE'*) ;;
+    *) fail "an unreadable approval must be reported, not omitted, got: $out" ;;
+  esac
+  pass "a missing, stale, outside, or unreadable approval is reported as a blocker"
 }
 
 test_required_failure_is_a_blocker() {
@@ -277,7 +334,8 @@ test_approved_pr_with_only_stale_changes_requested_is_silent
 test_current_changes_requested_review_is_a_blocker
 test_changes_requested_decision_is_never_silent
 test_authors_own_changes_requested_review_is_not_a_blocker
-test_pending_approval_is_not_a_blocker
+test_review_required_decision_is_not_itself_a_blocker
+test_a_missing_approval_is_a_blocker
 test_required_failure_is_a_blocker
 test_unreported_required_checks_are_unconfirmed
 test_no_reported_checks_is_unverified

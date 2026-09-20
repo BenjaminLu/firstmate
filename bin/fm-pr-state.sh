@@ -10,11 +10,22 @@
 # is failing or pending; it does not mean the pull request is ready to merge.
 # When nothing has reported, or nothing required has, that is printed rather
 # than read as ready. Advisory checks do not block and are omitted.
-# A pull request that only awaits an approval (reviewDecision REVIEW_REQUIRED)
-# is not reported as blocked. GitHub's reviewDecision owns whether reviews
-# block; review history is printed only to explain CHANGES_REQUESTED, naming
-# each reviewer whose latest verdict still requests changes and marking it
-# STALE when it was left at a superseded head.
+# A missing approval IS reported as a blocker, because bin/fm-pr-merge.sh
+# refuses a merge without one and this command exists to say what would stop
+# that merge. It cannot use GitHub's reviewDecision for it: this fleet posts
+# from one account, GitHub refuses --approve on a self-opened pull request, and
+# the verdict therefore lives in the last line of a COMMENTED review body,
+# which reviewDecision does not count and can never report as APPROVED.
+# So the approval is read the same way the merge path reads it, from the same
+# owner - bin/fm-review-verdict-lib.sh for the line, and the same rules for
+# which review counts: submitted, standing, at the current head, and written by
+# an account this repository granted standing. reviewDecision still owns
+# CHANGES_REQUESTED, whose review history is printed to explain it, naming each
+# reviewer whose latest verdict still requests changes and marking it STALE when
+# it was left at a superseded head.
+# This is a read-only preview of one condition the merge path proves for itself;
+# bin/fm-pr-merge.sh remains the authority, and a disagreement between them is
+# this command being out of date, never permission to merge.
 # A closed or merged pull request reports that terminal state and nothing else.
 # Unresolved review-thread state is out of this command's scope.
 #
@@ -28,6 +39,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-review-verdict-lib.sh
+. "$SCRIPT_DIR/fm-review-verdict-lib.sh"
 
 usage() {
   sed -n '2,/^set -eu$/s/^# \{0,1\}//p' "$0"
@@ -125,6 +138,48 @@ if ! REQUIRED=$(gh pr checks "$URL" --required --json name,state,bucket --jq '
   fi
 fi
 [ -z "$REQUIRED" ] || printf '%s\n' "$REQUIRED"
+
+# The approval the merge path requires, read by its rules rather than by
+# reviewDecision. A review counts when it is submitted and standing, sits at the
+# current head, comes from an account this repository granted standing, and
+# either carries GitHub's own APPROVED state or ends with the approved verdict
+# line. The reviews are fetched raw and evaluated with jq rather than through
+# gh's own --jq, because the verdict line has to reach the program as data and
+# gh accepts no --arg; interpolating it into the program text instead would put
+# a string this repository edits inside an expression it also parses.
+# Any read failure, jq included, prints a blocker rather than staying silent: an
+# approval this cannot see is one it must not report as present.
+APPROVAL=
+if ! command -v jq >/dev/null 2>&1; then
+  printf 'APPROVAL UNREADABLE: jq is required to read the approval on this pull request\n'
+elif ! REVIEWS_JSON=$(gh pr view "$URL" --json reviews 2>/dev/null) || [ -z "$REVIEWS_JSON" ]; then
+  printf 'APPROVAL UNREADABLE: could not read the reviews on this pull request\n'
+else
+  # shellcheck disable=SC2016  # jq, not the shell, expands $head and $yes.
+  APPROVAL=$(printf '%s' "$REVIEWS_JSON" | jq -r \
+    --arg head "$HEAD" --arg yes "$FM_REVIEW_VERDICT_APPROVED" '
+      def tail_line:
+        (.body // "")
+        | split("\n")
+        | map(sub("\r$"; "") | sub("^[ \t]+"; "") | sub("[ \t]+$"; ""))
+        | map(select(. != ""))
+        | last // "";
+      def submitted:
+        (.state // "") as $st
+        | ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] | index($st) != null;
+      def standing:
+        (.authorAssociation // "") as $a
+        | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
+      if type != "object" or (.reviews | type) != "array" then error("no reviews") else . end
+      | [ .reviews[]
+          | select(submitted and standing and (.commit.oid // "") == $head)
+          | select(.state == "APPROVED" or tail_line == $yes)
+        ] | length' 2>/dev/null) || APPROVAL=
+  case "$APPROVAL" in
+    0) printf 'NO APPROVAL AT HEAD: %s\n' "$HEAD" ;;
+    ''|*[!0-9]*) printf 'APPROVAL UNREADABLE: could not read the reviews on this pull request\n' ;;
+  esac
+fi
 
 if [ "$REVIEW_DECISION" = CHANGES_REQUESTED ]; then
   printf 'REVIEW DECISION: CHANGES_REQUESTED\n'
