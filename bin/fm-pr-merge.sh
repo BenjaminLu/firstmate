@@ -701,9 +701,18 @@ github_checks_not_green() {
               # started, which is the most recent thing to have happened to
               # that name, so it ranks after every dated run rather than being
               # dropped: a re-run queued behind an old failure means wait.
+              # sort_by is stable, so a key that cannot separate two runs
+              # leaves forge array order to break the tie. Two runs of one name
+              # triggered in the same whole second, and two undated runs, both
+              # map to one key - so the key carries a second term: a run that
+              # has not COMPLETED outranks one that has. That is the same
+              # reasoning as ranking undated runs last, applied to the inputs
+              # the timestamp cannot separate, and it is the answer an operator
+              # needs either way, because a run still in flight means wait
+              # whatever an older run of that name concluded.
               why: (
                 $reds
-                | sort_by(.at // "9999-12-31T23:59:59Z")
+                | sort_by([(.at // "9999-12-31T23:59:59Z"), (if .completed then 0 else 1 end)])
                 | last
                 | .why
               ),

@@ -4182,6 +4182,24 @@ test_combinations_at_one_head_refuse_for_the_named_reason() {
 
 test_combinations_at_one_head_refuse_for_the_named_reason
 
+# Drive one two-run rollup through the entrypoint and assert which state the
+# refusal reported. Args: head label first_entry second_entry expected_phrase
+assert_reported_state() {
+  local head=$1 label=$2 first=$3 second=$4 want=$5 case_dir rc
+  case_dir=$(make_case "github-multi-run-$label")
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" "$first" "$second"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-multi-run-$label: a non-green check must not merge"
+  assert_grep "check 'ci' $want" "$case_dir/stderr" \
+    "github-multi-run-$label: array order decided the reported state"
+}
+
 # Two runs of one check name are one state of the world. Which state the refusal
 # reports must come from the same .at that decides red or green, not from the
 # order the forge happened to list them - an older cancelled run under a newer
@@ -4221,7 +4239,23 @@ test_a_multi_run_check_reports_its_newest_run() {
     "github-multi-run-order-b: array order decided which state was reported"
   assert_no_grep 'was cancelled' "$case_dir/stderr" \
     "github-multi-run-order-b: an older cancelled run was reported over a newer one in flight"
-  pass "a check with several non-green runs reports the newest one's state, whatever order the forge listed them"
+
+  # Two runs the timestamp cannot separate: same whole second, and both undated.
+  # sort_by is stable, so without a second key the forge's array order decides
+  # which state is reported - the defect one layer under the one above.
+  local tied_done tied_live undated_done undated_live
+  tied_done=$(check_run ci COMPLETED CANCELLED 2026-09-20T09:00:00Z)
+  tied_live=$(check_run ci IN_PROGRESS - 2026-09-20T09:00:00Z)
+  undated_done=$(check_run ci COMPLETED FAILURE)
+  undated_live=$(check_run ci QUEUED -)
+
+  # Both orders of each pair, because a stable sort with an inseparable key is
+  # exactly what leaves array position deciding.
+  assert_reported_state "$head" tied "$tied_done" "$tied_live" 'is still running'
+  assert_reported_state "$head" tied-rev "$tied_live" "$tied_done" 'is still running'
+  assert_reported_state "$head" undated "$undated_done" "$undated_live" 'has not started yet'
+  assert_reported_state "$head" undated-rev "$undated_live" "$undated_done" 'has not started yet'
+  pass "a check with several non-green runs reports the newest one's state, and a run still in flight wins the ties the timestamp cannot separate"
 }
 
 test_a_multi_run_check_reports_its_newest_run
