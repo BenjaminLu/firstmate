@@ -4989,6 +4989,13 @@ test_each_live_worker_refusal_describes_a_way_out_that_works() {
     "the scout refusal did not name the owner of the step cleanup requires: $out"
   assert_not_contains "$out" "complete $id" \
     "the scout refusal went back to printing a command line with its own grammar: $out"
+  # Stated in the order it must be run. A reader works left to right, and
+  # naming cleanup before its prerequisite walks them into cleanup's own
+  # refusal - the thing rule 3 exists to prevent, reached through prose.
+  case "$out" in
+    *"bin/fm-captain-hold.sh"*"bin/fm-teardown.sh"*) : ;;
+    *) fail "the scout refusal names cleanup before the step cleanup requires: $out" ;;
+  esac
   assert_present "$home/state/reconcile-requests/$id.request" \
     "the refused reconciliation retired its own pending request"
 

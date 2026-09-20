@@ -1245,11 +1245,17 @@ ANSWER_LIVE_WORKER_REMEDY="record the captain's answer with --release, which kee
 # first time. So this one names the state and the owner of the procedure, the
 # way bin/fm-teardown.sh's own refusal in the same area does; that one has
 # never needed correcting.
+#
+# The steps are stated in the order they must be run, because a reader works
+# left to right: naming cleanup first and its prerequisite afterwards sends
+# that reader into bin/fm-teardown.sh's own refusal before they reach the
+# sentence telling them not to, which is what rule 3 exists to prevent -
+# arrived at through prose instead of a command line.
 reconcile_live_worker_remedy() {  # <task-id>
   local id=$1 kind=''
   [ ! -f "$STATE/$id.meta" ] || kind=$(meta_value "$STATE/$id.meta" kind)
   if [ "$kind" = scout ]; then
-    printf '%s' "stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence. This is a scout, so cleanup has a prerequisite of its own: inventory its report and any visual review through bin/fm-captain-hold.sh before standing it down"
+    printf '%s' "this is a scout, so cleanup has a prerequisite of its own: inventory its report and any visual review through bin/fm-captain-hold.sh, then stand the worker down with bin/fm-teardown.sh - cleanup keeps this row open and still held for the captain - and then reconcile close it with the same evidence"
     return 0
   fi
   printf '%s' "stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"
