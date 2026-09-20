@@ -114,7 +114,7 @@ The retained values are the slowest each script reached across six green runs on
 All sixteen scripts completed in all six runs, so every hint carries six samples.
 
 Two shards is the whole win available here, and the reason is worth recording so the count is not raised in the hope of more.
-`tests/fm-backend-herdr-presentation-e2e.test.sh` is 433530 ms of a 638722 ms lane - 68% of it in one script - and it is one flat script that builds a single real lab session across its whole length, so it sets the makespan at every count above one:
+`tests/fm-backend-herdr-presentation-e2e.test.sh` is 433530 ms of a 638676 ms lane - 68% of it in one script - and it is one flat script that builds a single real lab session across its whole length, so it sets the makespan at every count above one:
 
 | shards | modelled makespan |
 |---:|---|
