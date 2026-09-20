@@ -642,15 +642,40 @@ archived_without_answer() {  # <task-id>
 # remedy has to repeat it. Printing the shorter form there names a command
 # guaranteed to answer "there is nothing to drop", which is the whole of R20
 # and R25.
-drop_remedy_command() {  # <origin> <entry> [<supplied-ids>]
-  printf 'bin/fm-captain-hold.sh complete %s%s --drop-unrecoverable %s' \
-    "$1" "${3:+ $3}" "$2"
+#
+# BUILT WHERE THE STATE IS, AND ONLY THERE. The command is evaluated against
+# the whole of the origin's state - every unrecoverable entry, the entries
+# that survive, and whether an open status decision remains - and none of
+# that is visible from the single entry a durability check aborted on. Built
+# there, it named one entry at a time (so two of them printed each other
+# forever) and it could empty the inventory into a refusal about `--none`
+# nobody typed. So the durability checks no longer fail on this state at all:
+# they report it, and the two commands that own the whole inventory compose
+# one remedy once, from everything they can see.
+drop_remedy_command() {  # <origin> <supplied-ids> <entries> <survivors> <open>
+  local origin=$1 supplied=$2 entries=$3 survivors=$4 open=$5 flags='' entry extra=''
+  for entry in $entries; do
+    flags="$flags --drop-unrecoverable $entry"
+  done
+  # Dropping every attested entry while a status decision is still open
+  # leaves the inventory empty, which the empty-inventory guard refuses. The
+  # way through is to raise the question again and attest the new row in the
+  # same command - and the dead ids must stay as positional arguments, or
+  # they are in neither the metadata nor this command line and cannot be
+  # dropped at all. Nothing said that before; it was discoverable only by
+  # reading the source.
+  if [ -z "$survivors" ] && [ -n "$open" ]; then
+    extra=' <new-id>'
+  fi
+  printf 'bin/fm-captain-hold.sh complete %s%s%s%s' \
+    "$origin" "${supplied:+ $supplied}" "$extra" "$flags"
 }
 
-verify_hold_durable() {  # <task-id> [<attested-entry>] [<drop-remedy>]
-  local id=$1 entry=${2:-$1} drop_remedy=${3:-} show state hold_kind body archived archived_status=0
-  [ -n "$drop_remedy" ] \
-    || drop_remedy="bin/fm-captain-hold.sh complete <origin> --drop-unrecoverable $entry"
+# 3 = this entry is archived with no captain answer: the one state no command
+# can repair. Reported rather than failed, so the caller can collect every
+# such entry before composing a single remedy that retires all of them.
+verify_hold_durable() {  # <task-id> [<attested-entry>]
+  local id=$1 entry=${2:-$1} show state hold_kind body archived archived_status=0
   if ! task_show "$id"; then
     # Retention is not a resolution. An archived row proves durability only
     # through the captain answer recorded in it; an archived row without one,
@@ -661,8 +686,7 @@ verify_hold_durable() {  # <task-id> [<attested-entry>] [<drop-remedy>]
       || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
     [ "$archived_status" -eq 0 ] \
       || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
-    body_has_resolution_record "$archived" \
-      || fail "attested captain call $entry $ARCHIVED_UNANSWERABLE; it is not a durable captain call and never can be. To carry the question forward, $RAISE_AGAIN_REMEDY; then retire this one from the inventory with $drop_remedy, which records the drop rather than skipping it"
+    body_has_resolution_record "$archived" || return 3
     return 0
   fi
   show=$TASK_SHOW_OUTPUT
@@ -964,8 +988,10 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
 # answered, which is not the same as an unknown entry and must not be spent
 # as absence. On success prints "<id> <how>" so the caller can keep the
 # attestation evidence.
-verify_entry_durable() {  # <origin-or-empty> <entry> [<supplied-ids>]; prints "<id> <how>"
-  local origin=$1 entry=$2 supplied=${3:-} resolved resolve_status=0
+# 3 means the entry is unrecoverable; the caller collects those and composes
+# one remedy. Every other failure still stops the command where it happens.
+verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
+  local origin=$1 entry=$2 resolved resolve_status=0
   resolved=$(resolve_entry "$origin" "$entry") || resolve_status=$?
   if [ "$resolve_status" -ne 0 ]; then
     [ "$resolve_status" -ne 124 ] \
@@ -976,8 +1002,15 @@ verify_entry_durable() {  # <origin-or-empty> <entry> [<supplied-ids>]; prints "
   # The attested spelling travels with the resolved row, so a refusal names
   # the entry the metadata actually holds rather than an identity the caller
   # cannot find there.
-  verify_hold_durable "${resolved%% *}" "$entry" \
-    "$(drop_remedy_command "$origin" "$entry" "$supplied")"
+  verify_hold_durable "${resolved%% *}" "$entry"
+}
+
+# The one refusal both inventory owners raise for unrecoverable entries, from
+# everything they can see rather than from the entry that tripped first.
+fail_unrecoverable_entries() {  # <origin> <supplied> <entries> <survivors> <open>
+  local entries=$3 label
+  label=$(printf '%s' "$entries" | tr ' ' ',')
+  fail "attested captain call(s) $label $ARCHIVED_UNANSWERABLE; they are not durable captain calls and never can be. To carry each question forward, $RAISE_AGAIN_REMEDY; then retire them from the inventory with $(drop_remedy_command "$@"), which records the drops rather than skipping them"
 }
 
 # The closed-task refusal above, for a row the active backlog no longer lists.
@@ -2106,7 +2139,7 @@ keys_without() {  # <comma-list> <space-separated-drops>
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc resolved
   local resolved_how attested_by_prefix='' drops='' none=0 dropped_previous='' drop dropped_entries=''
-  local drop_candidates='' drop_status=0
+  local drop_candidates='' drop_status=0 entry_status=0 unrecoverable=''
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -2166,10 +2199,21 @@ command_complete() {
   done
   keys=$(sorted_key_union "$previous" "$supplied")
   [ -z "$dropped_entries" ] || keys=$(keys_without "$keys" "$dropped_entries")
+  status_file="$STATE/$origin.status"
+  open=$(status_open_decisions "$status_file")
   if [ -n "$keys" ]; then
+    # Every entry is checked before anything is refused, so the remedy below
+    # names all the unrecoverable ones at once. Composing it from the first
+    # one alone is what made two of them print each other forever.
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
-      resolved=$(verify_entry_durable "$origin" "$entry" "$supplied") || exit $?
+      entry_status=0
+      resolved=$(verify_entry_durable "$origin" "$entry") || entry_status=$?
+      if [ "$entry_status" -eq 3 ]; then
+        unrecoverable="${unrecoverable}${unrecoverable:+ }$entry"
+        continue
+      fi
+      [ "$entry_status" -eq 0 ] || exit "$entry_status"
       resolved_how=${resolved##* }
       resolved=${resolved%% *}
       if [ "$resolved_how" = migrated-prefix ]; then
@@ -2178,10 +2222,11 @@ command_complete() {
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
+    [ -z "$unrecoverable" ] \
+      || fail_unrecoverable_entries "$origin" "$supplied" "$unrecoverable" \
+        "$(keys_without "$keys" "$unrecoverable")" "$open"
   fi
 
-  status_file="$STATE/$origin.status"
-  open=$(status_open_decisions "$status_file")
   if [ -n "$open" ] && [ -z "$keys" ]; then
     fail "origin $origin still has open captain decisions in its status stream; hold a captain task for what remains, or answer them, before attesting --none"
   fi
@@ -2233,7 +2278,7 @@ EOF
 }
 
 command_verify() {
-  local origin=${1:-} meta reviewed keys entry key open resolved
+  local origin=${1:-} meta reviewed keys entry key open resolved entry_status=0 unrecoverable=
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   meta="$STATE/$origin.meta"
@@ -2242,15 +2287,25 @@ command_verify() {
   reviewed=$(meta_value "$meta" decisions_reviewed)
   [ "$reviewed" = 1 ] || fail "origin $origin has no completed captain-call inventory"
   keys=$(meta_value "$meta" decision_keys)
+  open=$(status_open_decisions "$STATE/$origin.status")
   if [ -n "$keys" ]; then
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
-      verify_entry_durable "$origin" "$entry" >/dev/null
+      entry_status=0
+      verify_entry_durable "$origin" "$entry" >/dev/null || entry_status=$?
+      if [ "$entry_status" -eq 3 ]; then
+        unrecoverable="${unrecoverable}${unrecoverable:+ }$entry"
+        continue
+      fi
+      [ "$entry_status" -eq 0 ] || exit "$entry_status"
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
+    # Nothing is supplied on a verify, so the remedy names only the metadata.
+    [ -z "$unrecoverable" ] \
+      || fail_unrecoverable_entries "$origin" "" "$unrecoverable" \
+        "$(keys_without "$keys" "$unrecoverable")" "$open"
   fi
-  open=$(status_open_decisions "$STATE/$origin.status")
   while IFS=$'\t' read -r key _verb _summary; do
     [ -n "$key" ] || continue
     # "re-run complete" names no form that works: complete requires two

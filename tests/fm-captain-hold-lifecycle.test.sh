@@ -4617,7 +4617,7 @@ test_the_drop_works_on_a_first_attestation() {
   # Exactly what the refusal named, read back out of it rather than retyped.
   # Retyping is how the previous round's version of this test came to run a
   # shape the message does not print, and pass while the printed one failed.
-  gate=$(named_captain_hold_command "$out" "retire this one from the inventory with ") \
+  gate=$(named_captain_hold_command "$out" "retire them from the inventory with ") \
     || fail "the gate refusal named no runnable drop command: $out"
   # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
   out=$(run_captain "$home" $gate 2>&1) \
@@ -4744,6 +4744,107 @@ test_verify_names_a_complete_that_works() {
   assert_contains "$out" "before attesting" \
     "the --none refusal in this state was something other than the empty-inventory guard: $out"
   pass "verify names a complete that works, in both states it fires in"
+}
+
+# Rule 2 with the clause R1 forced: one extract-and-execute certifies the
+# printed string in ONE state. Both states below print a command that works
+# on the first run and then refuses, so each is driven to a FIXED POINT - run
+# what it prints, then what THAT prints, until the sequence converges.
+run_to_fixed_point() {  # <home> <origin> <first-output> [<lead>]
+  local home=$1 origin=$2 out=$3 lead=${4:-} cmd seen='' i=0
+  while [ "$i" -lt 6 ]; do
+    cmd=$(named_captain_hold_command "$out" "$lead") || return 1
+    case " $seen " in
+      *" $cmd "*) printf 'loop: %s\n' "$cmd"; return 2 ;;
+    esac
+    seen="$seen $cmd"
+    # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+    if out=$(run_captain "$home" $cmd 2>&1); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  printf 'did not converge: %s\n' "$out"
+  return 3
+}
+
+# Instance A: the drop empties the inventory while a status decision is still
+# open, so the empty-inventory guard refuses with a sentence about --none the
+# reader never typed. The escape - raise the call again AND keep the dead id
+# positional - existed but no message named it.
+test_the_drop_remedy_reaches_a_fixed_point() {
+  local home origin call second out meta
+  home=$(make_home drop-fixed-point)
+  origin=sample-fixpoint-origin
+  call=sample-fixpoint-call
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate to a fixed point" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the fixed-point origin"
+  write_origin_meta "$home" "$origin"
+  printf '# Fixed point\n\nOne captain choice remains.\n' > "$home/data/$origin/report.md"
+  printf 'needs-decision [key=still-open]: a question the status stream still holds\n' \
+    > "$home/state/$origin.status"
+  tasks_in "$home" add "$call" "Choose the option" --repo sample >/dev/null \
+    || fail "could not create the call"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the call"
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the call outside this owner"
+
+  out=$(run_captain "$home" complete "$origin" "$call" 2>&1) \
+    && fail "the first attestation passed an unanswered captain call: $out"
+  assert_contains "$out" "<new-id>" \
+    "the refusal did not name the new row the empty-inventory guard requires: $out"
+  assert_contains "$out" "complete $origin $call <new-id> --drop-unrecoverable $call" \
+    "the refusal did not keep the dead id positional, so its own drop cannot find it: $out"
+
+  # Raise the call again, as the refusal's first step says, then run what it
+  # prints with the placeholder filled in - and keep running.
+  run_captain "$home" hold sample-fixpoint-raised --title "The question again" \
+    --reason "captain owns the re-raised call" --repo sample >/dev/null \
+    || fail "the raise step the refusal names was refused"
+  out=${out//<new-id>/sample-fixpoint-raised}
+  out=$(run_to_fixed_point "$home" "$origin" "$out" "retire them from the inventory with ") \
+    || fail "the drop remedy did not converge: $out"
+  assert_contains "$out" "dropped as unrecoverable: $call" "the converged run recorded no drop: $out"
+  meta=$(cat "$home/state/$origin.meta")
+  assert_contains "$meta" "decision_dropped=$call" "the drop left no record"
+  run_captain "$home" verify "$origin" >/dev/null 2> "$home/fixpoint-verify.err" \
+    || fail "the gate did not pass after the converged remedy: $(cat "$home/fixpoint-verify.err")"
+
+  # Instance B: two unrecoverable entries. One remedy has to name both, or
+  # each round prints the other and the sequence never terminates.
+  home=$(make_home drop-fixed-point-two)
+  origin=sample-fixpoint-two
+  call=sample-fixpoint-a
+  second=sample-fixpoint-b
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate two dead calls" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the two-call origin"
+  write_origin_meta "$home" "$origin"
+  printf '# Two dead calls\n\nTwo captain choices remain.\n' > "$home/data/$origin/report.md"
+  for out in "$call" "$second"; do
+    tasks_in "$home" add "$out" "Choose an option" --repo sample >/dev/null \
+      || fail "could not create $out"
+    run_captain "$home" hold "$out" --reason "captain choice pending" >/dev/null \
+      || fail "could not hold $out"
+    tasks_in "$home" "done" "$out" >/dev/null || fail "could not close $out"
+  done
+  out=$(run_captain "$home" complete "$origin" "$call" "$second" 2>&1) \
+    && fail "the attestation passed two unanswered captain calls: $out"
+  out=$(run_to_fixed_point "$home" "$origin" "$out" "retire them from the inventory with ") \
+    || fail "two unrecoverable entries did not converge: $out"
+  assert_contains "$out" "$call" "the converged run did not drop the first entry: $out"
+  assert_contains "$out" "$second" "the converged run did not drop the second entry: $out"
+  run_captain "$home" verify "$origin" >/dev/null \
+    || fail "the gate did not pass after both entries were retired"
+  pass "the drop remedy reaches a fixed point in both states it fires in"
 }
 
 # --- cleanup owns the close of a row whose worker is still up ----------------
@@ -4964,6 +5065,7 @@ test_hold_refuses_an_id_the_archive_already_owns
 test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act
 test_a_drop_judges_the_row_the_gate_judges
 test_the_drop_works_on_a_first_attestation
+test_the_drop_remedy_reaches_a_fixed_point
 test_the_remaining_reads_see_the_archive_too
 test_the_note_refusal_reads_what_it_says_it_read
 test_verify_names_a_complete_that_works
