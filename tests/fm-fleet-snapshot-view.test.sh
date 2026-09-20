@@ -197,6 +197,62 @@ test_fixture_snapshot_json() {
   pass "fixture snapshot covers task rows, backlog rows, pointers, and stable ordering"
 }
 
+# The recorded head only stays on the pull request's current commit while an
+# armed merge poll re-binds it. Without one, what is recorded is whatever was
+# last written, and a consumer showing it to a human cannot tell those apart
+# from the value alone - the same "captured once, read later as if current"
+# class this snapshot's neighbours already guard with a freshness. Both states
+# are asserted, and so is the absence of a claim when there is no head at all.
+test_pr_head_says_whether_anything_maintains_it() {
+  local home fakebin out state
+  home=$(make_home pr-head-freshness)
+  write_fixture "$home"
+  state="$home/state"
+  fakebin=$(make_fakebin "$home")
+
+  # ship-task records a head with no poll behind it.
+  printf 'pr_head=%s\n' 1111111111111111111111111111111111111111 >> "$state/ship-task.meta"
+  # A second task records one WITH a registered merge poll behind it.
+  fm_write_meta "$state/polled-task.meta" \
+    "window=firstmate:fm-polled-task" \
+    "worktree=$home/projects/alpha-worktree" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=ship" \
+    "pr=https://github.com/kunchenguid/firstmate/pull/11" \
+    "pr_head=2222222222222222222222222222222222222222"
+  cp "$ROOT/bin/fm-pr-poll.sh" "$state/polled-task.check.sh"
+  printf '%s\n%s\n%s\n%s\n%s\n' github \
+    https://github.com/kunchenguid/firstmate/pull/11 github.com kunchenguid/firstmate 11 \
+    > "$state/polled-task.pr-poll"
+  printf 'fm-pr-poll-registration-v2\n' > "$state/polled-task.pr-poll-registration"
+  chmod 0600 "$state/polled-task.check.sh" "$state/polled-task.pr-poll" \
+    "$state/polled-task.pr-poll-registration"
+
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e . >/dev/null || fail "snapshot must be valid JSON"
+
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "polled-task")
+    | .pr.head == "2222222222222222222222222222222222222222"
+      and .pr.head_freshness == "tracked"
+  ' >/dev/null || fail "a head an armed poll re-binds was not reported as tracked"
+
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "ship-task")
+    | .pr.head == "1111111111111111111111111111111111111111"
+      and .pr.head_freshness == "unmaintained"
+  ' >/dev/null || fail "a head with no poll behind it was not reported as unmaintained"
+
+  # No head recorded is no claim about one, rather than a default that reads as
+  # a verdict.
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "scout-task") | .pr.head == null and .pr.head_freshness == null
+  ' >/dev/null || fail "a task with no recorded head still claimed a freshness"
+  pass "a recorded pull request head says whether anything is keeping it current"
+}
+
 # R1 owner contract: main_inventory discloses orphan in-flight and unstructured
 # current rows without inventing task rows.
 test_hold_buckets_are_total_and_text_blind() {
@@ -1098,6 +1154,7 @@ test_empty_fleet_json
 test_fixture_snapshot_json
 test_home_summary_excludes_secondmate_from_child_inventory
 test_undated_captain_hold_phrasing_and_aging
+test_pr_head_says_whether_anything_maintains_it
 test_hold_buckets_are_total_and_text_blind
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness

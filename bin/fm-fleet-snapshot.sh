@@ -771,6 +771,21 @@ task_json_lines() {
     if [ -z "$pr" ]; then
       pr_source=absent
     fi
+    # The recorded head is kept on the pull request's current commit by the
+    # armed merge poll, which re-binds it on every watcher sweep. Without one
+    # nothing maintains it, and what is recorded is whatever was last written -
+    # at arming, or by the last sweep before the poll retired. A consumer that
+    # shows a head to a human cannot tell those apart from the value alone, and
+    # this object is where that value reaches the captain's board, so say which
+    # it is rather than leaving the reader to assume the freshness of its
+    # neighbours. Presence of the published triple is exactly the claim made:
+    # a merge poll is registered for this task. Whether its bytes still
+    # authenticate is the watcher's check at execution time, not this one.
+    pr_head_freshness=unmaintained
+    if [ -f "$STATE/$id.check.sh" ] && [ -f "$STATE/$id.pr-poll" ] \
+      && [ -f "$STATE/$id.pr-poll-registration" ]; then
+      pr_head_freshness=tracked
+    fi
 
     current_file="$SNAPSHOT_TASK_DIR/$id.json"
     current_json=$(<"$current_file") || {
@@ -857,6 +872,7 @@ task_json_lines() {
       --arg pr "$pr" \
       --arg pr_source "$pr_source" \
       --arg pr_head "$(meta_value "$meta" pr_head)" \
+      --arg pr_head_freshness "$pr_head_freshness" \
       --arg agent_alive "$agent_alive" \
       --arg observed_at "$SNAPSHOT_NOW" \
       --arg last_event_raw "$last_event_raw" \
@@ -895,7 +911,9 @@ task_json_lines() {
                   elif $agent_alive == "alive" or $agent_alive == "dead" then $agent_alive
                   else "unknown" end),
           observed_at:$observed_at,freshness:"fresh"},
-        pr:{url:($pr | if . == "" then null else . end),source:$pr_source,head:($pr_head | if . == "" then null else . end)},
+        pr:{url:($pr | if . == "" then null else . end),source:$pr_source,
+          head:($pr_head | if . == "" then null else . end),
+          head_freshness:($pr_head | if . == "" then null else $pr_head_freshness end)},
         hints:{
           pending_decision:$pending_decision,
           blocked_event:$blocked_event,
