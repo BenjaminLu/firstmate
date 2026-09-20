@@ -672,7 +672,7 @@ test_build_injects_binds_then_arms() {
   board="$home/.lavish/bearings-board.html"
   write_valid_payload "$data"
 
-  out=$(run_board "$home" build "$data") || fail "a valid payload did not build"
+  out=$(run_board "$home" build --lavish "$data") || fail "a valid payload did not build"
   assert_contains "$out" "board: $board" "build did not report the board path: $out"
   assert_contains "$out" "served: $board" "build did not establish the Lavish session: $out"
   assert_contains "$out" "bound: " "build did not report the answer binding: $out"
@@ -779,7 +779,7 @@ SH
     FM_BEARINGS_BOARD_TEMPLATE="$ROOT/.agents/skills/bearings/assets/board-template.html" \
     REAL_LAVISH_ADAPTER="$ROOT/bin/fm-procevent-lavish.sh" \
     REAL_PROCEVENT="$ROOT/bin/fm-procevent.sh" ORDER_PROOF_HOLD="$hold" \
-    "$runtime/bin/fm-bearings-board.sh" build "$data" >/dev/null \
+    "$runtime/bin/fm-bearings-board.sh" build --lavish "$data" >/dev/null \
     || fail "the order-proof board build failed"
 
   show=$(cd "$home" && tasks-axi show "$hold" --full) \
@@ -806,7 +806,7 @@ SH
   chmod +x "$home/fakebin/lavish-axi"
 
   set +e
-  run_board "$home" build "$data" >/dev/null 2>&1
+  run_board "$home" build --lavish "$data" >/dev/null 2>&1
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "build continued after Lavish session establishment failed"
@@ -832,10 +832,10 @@ test_rebuild_is_idempotent_and_does_not_double_arm() {
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
   write_valid_payload "$data"
-  run_board "$home" build "$data" >/dev/null || fail "the first build failed"
+  run_board "$home" build --lavish "$data" >/dev/null || fail "the first build failed"
 
   jq '.generated = "2026-08-19T01:00Z"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
-  out=$(run_board "$home" build "$data") || fail "the rebuild failed"
+  out=$(run_board "$home" build --lavish "$data") || fail "the rebuild failed"
   assert_contains "$out" "already-armed: " "the rebuild re-armed an already registered source: $out"
   extract_payload "$board" | jq -e '.generated == "2026-08-19T01:00Z"' >/dev/null \
     || fail "the rebuild did not refresh the board payload in place"
@@ -888,7 +888,7 @@ test_build_reopens_a_session_the_captain_ended() {
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
   write_valid_payload "$data"
-  run_board "$home" build "$data" >/dev/null || fail "the first build failed"
+  run_board "$home" build --lavish "$data" >/dev/null || fail "the first build failed"
   sid=$(run_lavish_source_id "$home" "$board")
   claim="$home/procevent-claims/$sid.claim"
   old_pid=$(sed -n '2p' "$claim")
@@ -907,7 +907,7 @@ test_build_reopens_a_session_the_captain_ended() {
     || fail "the old listener did not receive its terminal result"
   rm -f "$home/lavish-state/poll-trigger"
   end_session_as_captain "$home"
-  out=$(run_board "$home" build "$data") || fail "the rebuild refused a recoverable ended session"
+  out=$(run_board "$home" build --lavish "$data") || fail "the rebuild refused a recoverable ended session"
   rm -f "$home/lavish-state/hold-after-terminal"
   assert_contains "$out" "session: reopened" \
     "the rebuild did not reopen the ended session: $out"
@@ -929,7 +929,7 @@ test_build_reopens_when_an_opened_session_ends_before_listing() {
   board="$home/.lavish/bearings-board.html"
   write_valid_payload "$data"
   : > "$home/lavish-state/end-before-next-list"
-  out=$(run_board "$home" build "$data") || fail "the raced session build failed: $out"
+  out=$(run_board "$home" build --lavish "$data") || fail "the raced session build failed: $out"
   assert_contains "$out" "session: reopened" \
     "the build trusted an opened response after the server no longer listed it: $out"
   sid=$(run_lavish_source_id "$home" "$board")
@@ -944,7 +944,7 @@ test_name_support_probe_never_lists_before_the_session_is_established() {
   home=$(make_home name-probe-inert)
   data="$home/payload.json"
   write_valid_payload "$data"
-  run_board "$home" build "$data" >/dev/null || fail "the build failed"
+  run_board "$home" build --lavish "$data" >/dev/null || fail "the build failed"
   # A listing is the read the liveness proof consumes, so nothing the build asks
   # before opening the session may be one. Pinning the FIRST call keeps a future
   # probe from answering a question the build has not asked yet.
@@ -960,7 +960,7 @@ test_name_support_probe_follows_what_the_release_advertises() {
   home=$(make_home name-probe-absent)
   data="$home/payload.json"
   write_valid_payload "$data"
-  run_board "$home" build "$data" >/dev/null || fail "the unnamed build failed"
+  run_board "$home" build --lavish "$data" >/dev/null || fail "the unnamed build failed"
   opened=$(grep -c -- '--name bearings' "$home/lavish-state/calls" || true)
   [ "$opened" = 0 ] \
     || fail "the build named a session on a release that does not advertise --name"
@@ -969,7 +969,7 @@ test_name_support_probe_follows_what_the_release_advertises() {
   data="$home/payload.json"
   write_valid_payload "$data"
   : > "$home/lavish-state/advertise-name"
-  run_board "$home" build "$data" >/dev/null || fail "the named build failed"
+  run_board "$home" build --lavish "$data" >/dev/null || fail "the named build failed"
   grep -q -- '--name bearings' "$home/lavish-state/calls" \
     || fail "the build did not name the session on a release that advertises --name"
   pass "the session-name probe reads the installed release in both directions"
@@ -984,7 +984,7 @@ test_build_refuses_to_arm_when_the_session_stays_ended() {
   # register a poll against it.
   : > "$home/lavish-state/refuse-reopen"
   set +e
-  out=$(run_board "$home" build "$data" 2>&1)
+  out=$(run_board "$home" build --lavish "$data" 2>&1)
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "build armed a poll on a session that stayed ended: $out"
@@ -1003,7 +1003,7 @@ test_build_starts_a_listener_for_an_already_armed_board() {
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
   write_valid_payload "$data"
-  run_board "$home" build "$data" >/dev/null || fail "the first build failed"
+  run_board "$home" build --lavish "$data" >/dev/null || fail "the first build failed"
   sid=$(run_lavish_source_id "$home" "$board")
 
   # Registered is not listening: drop the listener the way a crashed generation
@@ -1014,7 +1014,7 @@ test_build_starts_a_listener_for_an_already_armed_board() {
   kill -KILL "$(sed -n '2p' "$claim")" 2>/dev/null || true
   sleep 1
 
-  out=$(run_board "$home" build "$data") || fail "the rebuild failed"
+  out=$(run_board "$home" build --lavish "$data") || fail "the rebuild failed"
   assert_contains "$out" "already-armed: $sid" "the rebuild re-registered the source: $out"
   [ "$(run_procevent "$home" list | awk -v id="$sid" 'NR > 1 && $1 == id { print $3 }')" = live ] \
     || fail "the rebuilt board is registered but nothing is listening"
@@ -1100,7 +1100,7 @@ test_build_fails_when_reconcile_cannot_establish_a_listener() {
   home=$(make_home no-listener)
   data="$home/payload.json"
   write_valid_payload "$data"
-  run_board "$home" build "$data" >/dev/null || fail "could not establish the listener fixture"
+  run_board "$home" build --lavish "$data" >/dev/null || fail "could not establish the listener fixture"
   sid=$(run_lavish_source_id "$home" "$home/.lavish/bearings-board.html")
   cat > "$home/fakebin/ps" <<'SH'
 #!/usr/bin/env bash
@@ -1108,7 +1108,7 @@ exit 1
 SH
   chmod +x "$home/fakebin/ps"
   set +e
-  out=$(FM_PROC_ROOT_OVERRIDE="$home/no-proc" run_board "$home" build "$data" 2>&1)
+  out=$(FM_PROC_ROOT_OVERRIDE="$home/no-proc" run_board "$home" build --lavish "$data" 2>&1)
   rc=$?
   set -e
   rm -f "$home/fakebin/ps"
@@ -2418,25 +2418,114 @@ test_skeleton_fails_build_until_its_placeholders_are_filled() {
   pass "a skeleton fails build until filled, and the filled skeleton builds"
 }
 
+# --- the board a clone with nothing installed gets ---------------------------
+# The captain's board used to be hosted by lavish-axi, so a machine without it
+# had a live server, a built page, and no way to open either. These cases hold
+# the whole of what replaced that: the build needs no external tool, the home's
+# own server hosts the page, and the address it prints serves the board the
+# build just wrote.
+#
+# The tool is REMOVED from the path rather than stubbed, because a stub proves
+# only that the stub was not called and this has to prove the tool is not
+# needed. It is removed by dropping every directory that actually carries it,
+# so the case is identical on a machine that has lavish-axi installed and on
+# one that never did - the premise is then asserted rather than assumed.
+
+path_without_lavish() {
+  local dir out="" IFS=:
+  for dir in $PATH; do
+    [ -x "$dir/lavish-axi" ] && continue
+    out="${out:+$out:}$dir"
+  done
+  printf '%s\n' "$out"
+}
+
+run_board_no_lavish() {  # <home> <args...>
+  local home=$1
+  shift
+  PATH="$(path_without_lavish)" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
+    "$BOARD" "$@"
+}
+
+# Prints the status code; writes the body to <outfile> byte for byte, which a
+# command substitution could not do - it would eat the page's last newline and
+# turn a faithful serve into a failing diff.
+http_get() {  # <url> <outfile>
+  node -e '
+    const http = require("node:http");
+    const fs = require("node:fs");
+    http.get(process.argv[1], (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        fs.writeFileSync(process.argv[2], Buffer.concat(chunks));
+        process.stdout.write(String(res.statusCode));
+      });
+    }).on("error", (e) => { process.stderr.write(String(e.message)); process.exit(1); });
+  ' "$1" "$2"
+}
+
+stop_board_server() {  # <home>
+  FM_HOME="$1" "$ROOT/bin/fm-board-live.sh" stop >/dev/null 2>&1 || true
+}
+
+test_a_board_builds_and_is_served_with_no_lavish_installed() {
+  local home data board out url status
+  command -v node >/dev/null 2>&1 || { pass "skip: node not found"; return 0; }
+  home=$(make_home no-lavish)
+  data="$home/payload.json"
+  board="$home/.lavish/bearings-board.html"
+  write_valid_payload "$data"
+  PATH="$(path_without_lavish)" command -v lavish-axi >/dev/null 2>&1 \
+    && fail "the no-lavish fixture can still reach lavish-axi, so it proves nothing"
+
+  out=$(run_board_no_lavish "$home" build "$data" 2>&1) \
+    || { stop_board_server "$home"; fail "a board could not be built without lavish-axi: $out"; }
+  assert_present "$board" "build reported success without a board"
+  assert_contains "$out" "board: $board" "build did not report the board path: $out"
+  assert_contains "$out" "bound: " "build did not name the channel the answer lands on: $out"
+  assert_contains "$out" "url: http://127.0.0.1:" "build did not print a URL to open: $out"
+  case $out in
+    *lavish-axi*) stop_board_server "$home"; fail "a build that needs no lavish-axi still talked about it: $out" ;;
+  esac
+
+  url=$(printf '%s\n' "$out" | sed -n 's/^url: //p')
+  status=$(http_get "$url" "$home/served.html") \
+    || { stop_board_server "$home"; fail "nothing is serving the board at $url"; }
+  assert_equals 200 "$status" "the board's own address did not serve the board"
+  # What is served IS the board that was built, not a second rendering of it.
+  diff -q "$board" "$home/served.html" >/dev/null \
+    || { stop_board_server "$home"; fail "the served page is not the board file the build wrote"; }
+
+  out=$(run_board_no_lavish "$home" url) \
+    || { stop_board_server "$home"; fail "url failed without lavish-axi: $out"; }
+  assert_equals "$url" "$out" "url printed a different address from the one build printed"
+  stop_board_server "$home"
+  pass "a clone with no lavish-axi builds the board, gets a URL, and that URL serves it"
+}
+
 test_url_reads_the_live_session_listing() {
   local home data board out rc
   home=$(make_home url)
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
-  set +e; out=$(run_board "$home" url 2>&1); rc=$?; set -e
+  set +e; out=$(run_board "$home" url --lavish 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "url succeeded before any board was built"
   assert_contains "$out" "no board has been built" "url did not explain the missing board: $out"
   write_valid_payload "$data"
-  run_board "$home" build "$data" >/dev/null || fail "a valid payload did not build"
-  out=$(run_board "$home" url) || fail "url failed for a built, open board: $out"
+  run_board "$home" build --lavish "$data" >/dev/null || fail "a valid payload did not build"
+  out=$(run_board "$home" url --lavish) || fail "url failed for a built, open board: $out"
   assert_contains "$out" "http://" "url did not print the session URL: $out"
   end_session_as_captain "$home"
-  set +e; out=$(run_board "$home" url 2>&1); rc=$?; set -e
+  set +e; out=$(run_board "$home" url --lavish 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "url printed a URL for a session the captain ended"
-  pass "url prints the open session's URL and refuses when none is open"
+  pass "url --lavish prints the open session's URL and refuses when none is open"
 }
 
 test_path_is_stable_and_home_scoped
+test_a_board_builds_and_is_served_with_no_lavish_installed
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
 test_build_injects_binds_then_arms

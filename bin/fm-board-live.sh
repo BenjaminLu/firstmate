@@ -10,6 +10,7 @@
 #   fm-board-live.sh stop
 #   fm-board-live.sh status
 #   fm-board-live.sh endpoint
+#   fm-board-live.sh page
 #   fm-board-live.sh token [--rotate]
 #   fm-board-live.sh doctor
 #
@@ -47,6 +48,7 @@
 #           and why.
 #
 # start     Start the server if this home has none, and print its endpoint.
+#           The same server hosts the board page; `page` prints that URL.
 #           Idempotent while the running server is on this code: a second start
 #           prints the running endpoint and exits 0. A server running code that
 #           has since changed is REPLACED rather than reported as already
@@ -59,6 +61,11 @@
 #           on the code now on disk, and how many events the log holds.
 # endpoint  Print the endpoint URL a page should connect to, from the running
 #           server's own record, or exit 1 when none is running.
+# page      Print the URL the board PAGE is served at, derived from that same
+#           record, or exit 1 when no server is running. This is the whole of
+#           what a clone needs to open the board: the server that pushes the
+#           fleet also hosts the page, so nothing external has to be installed
+#           to host it. bin/fm-board-live.mjs owns the route.
 # token     Print this home's inbound token, creating it on first use, and
 #           make sure the inbound channel is bound to the keyed-answer intake
 #           before printing anything. This is what a board build injects into
@@ -469,8 +476,22 @@ command_endpoint() {
   cat "$ENDPOINT"
 }
 
+# The page URL is the endpoint's own authority read a second way, never a
+# second derivation of the port: a page URL computed from the configured port
+# would be wrong for exactly the home whose server fell back to another one.
+command_page() {
+  local endpoint
+  endpoint=$(command_endpoint) || return 1
+  case $endpoint in
+    ws://*/board-live) ;;
+    *) printf 'fm-board-live: the recorded endpoint is not one this board serves: %s\n' "$endpoint" >&2; return 1 ;;
+  esac
+  endpoint=${endpoint#ws://}
+  printf 'http://%s/\n' "${endpoint%/board-live}"
+}
+
 command_doctor() {
-  local ok=0
+  local ok=0 page
   if command -v node >/dev/null 2>&1; then
     printf 'node: %s\n' "$(node -v)"
   else
@@ -485,6 +506,11 @@ command_doctor() {
   fi
   if [ -f "$FM_HOME/.lavish/bearings-board.html" ]; then
     printf 'board: %s\n' "$FM_HOME/.lavish/bearings-board.html"
+    if page=$(command_page 2>/dev/null); then
+      printf 'served: %s\n' "$page"
+    else
+      printf 'served: no server is running here, so the board is not being served\n'
+    fi
   else
     # A home with no board is complete, not broken: nothing has built one yet.
     printf 'board: none built in this home yet\n'
@@ -506,6 +532,7 @@ case $cmd in
   stop) command_stop "$@" ;;
   status) command_status "$@" ;;
   endpoint) command_endpoint "$@" ;;
+  page) command_page "$@" ;;
   token) command_token "$@" ;;
   doctor) command_doctor "$@" ;;
   ''|--help|-h) usage; [ -n "$cmd" ] && exit 0 || exit 2 ;;
