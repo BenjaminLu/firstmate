@@ -809,8 +809,8 @@ __FM_BEARINGS_BOARD_DATA__
    control that looks like it worked and did not is worse than one that says
    it cannot, because the captain walks away believing he answered. */
   function answerChannel() {
-  if (!window.lavish || typeof window.lavish.queuePrompt !== "function") return null;
-  return function (text, opts) { return window.lavish.queuePrompt(text, opts); };
+    if (!window.lavish || typeof window.lavish.queuePrompt !== "function") return null;
+    return function (text, opts) { return window.lavish.queuePrompt(text, opts); };
   }
 
   function utf8ByteLength(text) { return new TextEncoder().encode(text).length; }
@@ -880,7 +880,7 @@ __FM_BEARINGS_BOARD_DATA__
     if (document.documentElement) {
       document.documentElement.lang = lang === "en" ? "en" : (lang === "hant" ? "zh-Hant" : "zh-Hans");
     }
-  LANGS.forEach(function (l) {
+    LANGS.forEach(function (l) {
       var b = document.getElementById("bb-lang-" + l);
       b.className = "bb-lang__btn" + (l === lang ? " is-active" : "");
       b.setAttribute("aria-pressed", l === lang ? "true" : "false");
