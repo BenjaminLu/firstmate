@@ -116,12 +116,18 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          # --jobs 2 costs no extra runner: this lane is exactly the set
-          # bin/fm-test-isolation-proof.sh proved safe to run concurrently, and
-          # the runner refuses --jobs > 1 on anything else, so the proof - not
-          # this file - is what admits the concurrency. Standard public
-          # ubuntu-latest runners have 4 cores; two workers leave headroom for
-          # the tests' own subprocesses.
+          # --jobs 2 costs no extra runner. The coverage guard proves this
+          # lane and shard 2 together equal bin/fm-test-isolation-proof.sh's
+          # output exactly, so every script here is individually proven and
+          # the proof - not this file - is what admits the concurrency.
+          # The runner admits --jobs > 1 by one of TWO routes, individual
+          # proof or a family with a recorded concurrent proof, and refuses
+          # anything that has neither; this lane qualifies on the first, and
+          # a future lane relying on the second is a different argument.
+          # Concurrency is not free just because cores are idle: it pays only
+          # on a packing-bound lane, which is why shard 2 runs serial. The
+          # test to apply before adding it anywhere is in
+          # docs/fm-test-portable-shards.md.
           bin/fm-test-run.sh --lane portable-parallel-1 --jobs 2 \
             --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json"
