@@ -1673,10 +1673,10 @@ assert_poll_absent() {
   done
 }
 
-# The armed poll and the canonical record it points at. The recorded head is
-# excluded on purpose: the poll re-binds it to the pull request's live commit
-# on every cycle, so it is the one part of the record that is MEANT to move,
-# and a caller that cares about it asserts on it directly.
+# The armed poll and the canonical record it points at, compared whole - every
+# byte of the record included. A case that expects the poll to have re-bound the
+# head says so itself and then calls take_recorded_head, rather than this helper
+# being widened to stop noticing: what it can detect is shared by every caller.
 poll_artifact_snapshot() {
   local state=$1 id=$2 suffix path
   for suffix in check.sh pr-poll pr-poll-registration pr-poll-retirement meta; do
@@ -1686,15 +1686,23 @@ poll_artifact_snapshot() {
       printf 'link %s %s\n' "$suffix" "$(readlink "$path")"
     elif [ -f "$path" ]; then
       printf 'file %s %s ' "$suffix" "$(file_mode "$path")"
-      if [ "$suffix" = meta ]; then
-        grep -v '^pr_head=' "$path" | shasum -a 256 | awk '{print $1}'
-      else
-        shasum -a 256 "$path" | awk '{print $1}'
-      fi
+      shasum -a 256 "$path" | awk '{print $1}'
     else
       printf 'other %s\n' "$suffix"
     fi
   done
+}
+
+# Assert the record now carries exactly <head>, then remove that line, returning
+# the record to what it was before the re-bind. A caller pairs this with
+# poll_artifact_snapshot to say "the head moved, and nothing else did".
+take_recorded_head() {  # <state> <id> <head> <what>
+  local state=$1 id=$2 head=$3 what=$4 rest
+  local meta="$state/$id.meta"
+  grep -qxF "pr_head=$head" "$meta" || fail "$what did not record the head the forge returned"
+  [ "$(grep -c '^pr_head=' "$meta")" -eq 1 ] || fail "$what left more than one recorded head"
+  rest=$(grep -v '^pr_head=' "$meta")
+  printf '%s\n' "$rest" > "$meta"
 }
 
 test_merged_poll_retires_once() {
@@ -2208,12 +2216,12 @@ test_external_merge_transition_retires_only_terminal_poll() {
     set -e
     [ "$rc" -eq 0 ] || fail "$label watcher cycle failed: $(cat "$dir/$label.err")"
     case "$(cat "$dir/$label.out")" in check:*z-stop.check.sh:*stop-cycle) ;; *) fail "$label did not reach the control check" ;; esac
-    [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "$label changed the armed poll"
     case "$label" in
       open-green|open-red|closed-unmerged|malformed)
         # The forge answered, so the recorded head is now the one it returned.
-        grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
-          || fail "$label left the recorded head unbound"
+        # Taking it back also leaves the next label proving its own read rather
+        # than inheriting this one's.
+        take_recorded_head "$state" task-a "$DEFAULT_POLL_HEAD" "$label"
         ;;
       *)
         # It did not, so nothing may be recorded from a read that never landed.
@@ -2221,10 +2229,7 @@ test_external_merge_transition_retires_only_terminal_poll() {
           "$label recorded a head from a read that did not succeed"
         ;;
     esac
-    # Start the next label from an unbound head, so each one proves its own
-    # read rather than inheriting the previous label's.
-    grep -v '^pr_head=' "$state/task-a.meta" > "$dir/meta-without-head"
-    cat "$dir/meta-without-head" > "$state/task-a.meta"
+    [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "$label changed the armed poll"
     ack_watcher_cycle "$state" || fail "$label control wake acknowledgement failed"
   done
 
@@ -2351,6 +2356,10 @@ test_retirement_queue_failure_and_receipt_tampering() {
   set -e
   [ "$rc" -ne 0 ] || fail "watcher retired despite queue publication failure"
   [ -s "$dir/gh.log" ] || fail "queue failure fixture did not reach the authenticated poll"
+  # The poll read the head before the outcome failed to publish, so recording it
+  # is correct and expected - name it, then hold everything else to being byte
+  # identical, which is what this case is here to prove.
+  take_recorded_head "$state" task-a "$DEFAULT_POLL_HEAD" "queue failure"
   [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "queue failure changed poll artifacts"
   [ ! -e "$state/task-a.pr-poll-retirement" ] || fail "queue failure published a receipt"
 
