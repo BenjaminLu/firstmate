@@ -558,6 +558,7 @@ For a captain-requested completion, or any wake that needs the captain's review,
 Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision, and render anything that needs a visual surface - a packet, a report, a multi-option decision - inside its card on the captain's one board rather than handing over a second place to look; the `bearings` skill owns how.
+Write a file you intend to hand to another tool under this session's own scratchpad, never a path another session could own: a pull request body composed at a shared `/tmp` path was appended to by two sessions and published to the wrong pull request.
 Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 Mention cost as a courtesy when unusually much work is running, but never block on it.
 
