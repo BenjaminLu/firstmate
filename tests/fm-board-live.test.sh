@@ -268,6 +268,30 @@ test_an_answer_is_durable_before_anything_is_attempted_with_it() {
   pass "an answer is on disk, without its credential, before anything is attempted with it"
 }
 
+test_an_answer_that_cannot_be_written_down_is_refused_rather_than_attempted() {
+  local home token port got
+  home=$(make_answering_home inbound-journal-broken) \
+    || fail "could not build a home with a captain-held task"
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  # The journal is the file three separate places tell the captain and
+  # firstmate to go read when something did not land. A directory in its place
+  # makes the append fail the way a full disk or a bad mode would.
+  mkdir -p "$home/state/board-inbound.jsonl" \
+    || fail "could not make the journal unwritable"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 20000 --count-type inbound \
+    --send "$(inbound_message "$token" nojournal '[{"key":"pick-one","selection":"yes"}]')") \
+    || fail "the server never answered when it could not write the answer down"
+  assert_equals refused "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].status')" \
+    "an answer that could not be written down was accepted anyway"
+  assert_equals not-recorded "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].reason')" \
+    "the refusal does not say the answer could not be written down"
+  [ "$(cd "$home" && tasks-axi show pick-one 2>/dev/null | sed -n 's/^  state: //p')" != "done" ] \
+    || fail "the call was settled with no durable record of the captain ever answering"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "an answer that cannot be written down is refused, not attempted behind a recovery story that is false"
+}
+
 test_the_reconcile_choice_is_not_recorded_as_an_answer() {
   local home token port got
   home=$(make_answering_home inbound-reconcile) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
@@ -831,6 +855,7 @@ test_a_message_with_no_token_is_refused_out_loud
 test_an_inbound_message_can_only_ever_carry_an_answer
 test_the_captains_click_settles_the_call_the_way_a_typed_answer_does
 test_an_answer_is_durable_before_anything_is_attempted_with_it
+test_an_answer_that_cannot_be_written_down_is_refused_rather_than_attempted
 test_the_reconcile_choice_is_not_recorded_as_an_answer
 test_an_answer_path_stopped_mid_run_still_tells_firstmate
 test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked

@@ -840,14 +840,25 @@ function serve(opts) {
       return;
     }
     const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-    journalInbound({
+    // REFUSED WHEN IT CANNOT BE WRITTEN DOWN, because three places tell the
+    // captain and firstmate to go read this file when something did not land:
+    // the answer path's fallback wake, its "part of this did NOT land"
+    // rewrite, and the bearings skill. An append that failed silently would
+    // point all three at a file that does not contain his answer, and nothing
+    // anywhere would have said so. Refusing hands him back a press he can
+    // repeat; proceeding hands him a recovery story that is false.
+    if (!journalInbound({
       schema: INBOUND_SCHEMA,
       at,
       id,
       origin: conn.origin,
       type: message.type,
       rows: read.rows,
-    });
+    })) {
+      reply(conn, id, "refused", "not-recorded",
+        `the captain's answer could not be written to ${INBOUND_PATH}, so nothing was attempted with it`);
+      return;
+    }
     const provenance =
       `the captain's own board over its live connection${id ? ` (message ${id})` : ""}`;
     reply(conn, id, "accepted", "accepted", null);
