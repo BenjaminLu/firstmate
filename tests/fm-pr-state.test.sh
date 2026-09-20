@@ -229,6 +229,16 @@ test_a_missing_approval_is_a_blocker() {
     *) fail "a stranger's approval must be named as such, got: $out" ;;
   esac
 
+  # "The newest review" must mean the newest by submission time, not the order
+  # the forge happened to return, and must name the same commit the merge path
+  # names. The newer review is listed first here.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r2"},"commit":{"oid":"4dc2291e6969de1bf204fbdb53c9e57a8353d4e2"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"},{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r1"},"commit":{"oid":"2710bc5efc936efb70e95b86ca3582e9da7e60f4"},"submittedAt":"2026-09-19T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "out-of-order fixture was refused"
+  case "$out" in
+    *'(the newest review is of commit 4dc2291e6969de1bf204fbdb53c9e57a8353d4e2)'*) ;;
+    *) fail "the newest review must be the newest by submission time, got: $out" ;;
+  esac
+
   # A withdrawn review at the head, which is not the same as a stale approval
   # and must not be reported as one.
   out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"DISMISSED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \

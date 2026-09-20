@@ -143,7 +143,10 @@ fi
 # reviewDecision. A review counts when it is submitted and standing, sits at the
 # current head, comes from an account this repository granted standing, and
 # either carries GitHub's own APPROVED state or ends with the approved verdict
-# line. The ways of being unapproved are reported apart rather than collapsed
+# line. Reviews are sorted by submission time before any of that, because the
+# blocker names "the newest review" and bin/fm-pr-merge.sh establishes that
+# ordering the same way; taking the forge's array order would let the two name
+# different commits for one pull request. The ways of being unapproved are reported apart rather than collapsed
 # into one line: no review posted, a review at this head that states no verdict,
 # one from an account with no standing, one withdrawn or never submitted, and an
 # approval of a superseded commit each send the operator somewhere different,
@@ -177,7 +180,9 @@ if ! APPROVAL_ROWS=$(gh pr view "$URL" --json reviews --jq '
   def standing:
     (.authorAssociation // "") as $a
     | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
-  .reviews[]
+  .reviews
+  | sort_by(.submittedAt // "")
+  | .[]
   | (.commit.oid // "") as $oid
   | if (submitted | not) then $oid + " D"
     elif (standing | not) then $oid + " X"
