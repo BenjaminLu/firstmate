@@ -1093,26 +1093,208 @@ test_portable_shard_union_and_coverage_guard() {
   pass "portable shard union, disjointness, and coverage guard hold"
 }
 
-# The two parallel lanes are only "duration-balanced" while every member has a
-# measured hint and the packing over those hints stays even. Both halves went
-# unchecked until one lane grew past its CI job cap and was cancelled on every
-# run, so assert them through the guard's own reported numbers.
-test_portable_parallel_lanes_stay_duration_balanced() {
-  local out max imbalance unhinted
+# What a CI job cap kills is one lane's WALL, so that is what the guard has to
+# report and what this asserts. The predecessor of this test compared the two
+# lanes' hint SUMS and required them within 5% of each other, and on
+# 2026-09-20 it was green - 414269 ms against 417163 ms, 0.7% apart - while
+# shard 2 ran 10m03s against a 10-minute cap and was cancelled on main and on
+# every branch that rebased onto it. Equal sums were never the property worth
+# holding: CI runs shard 1 with two workers and shard 2 with one, so the same
+# sum buys two different walls, and balance says nothing about either one
+# clearing the cap.
+test_portable_parallel_lane_walls_stay_under_budget() {
+  local out l1 l2 max budget cap j1 j2 unhinted
   out=$("$RUNNER" --check-coverage)
   unhinted=$(printf '%s\n' "$out" | sed -n 's/.*parallel_unhinted=\([0-9]*\).*/\1/p')
-  max=$(printf '%s\n' "$out" | sed -n 's/.*parallel_max_ms=\([0-9]*\).*/\1/p')
-  imbalance=$(printf '%s\n' "$out" | sed -n 's/.*parallel_imbalance_ms=\([0-9]*\).*/\1/p')
-  [ -n "$unhinted" ] && [ -n "$max" ] && [ -n "$imbalance" ] \
-    || fail "coverage guard must report parallel_unhinted, parallel_max_ms, parallel_imbalance_ms: $out"
+  l1=$(printf '%s\n' "$out" | sed -n 's/.*parallel_lane1_wall_ms=\([0-9]*\).*/\1/p')
+  l2=$(printf '%s\n' "$out" | sed -n 's/.*parallel_lane2_wall_ms=\([0-9]*\).*/\1/p')
+  max=$(printf '%s\n' "$out" | sed -n 's/.*parallel_max_wall_ms=\([0-9]*\).*/\1/p')
+  budget=$(printf '%s\n' "$out" | sed -n 's/.*parallel_wall_budget_ms=\([0-9]*\).*/\1/p')
+  cap=$(printf '%s\n' "$out" | sed -n 's/.*parallel_wall_cap_ms=\([0-9]*\).*/\1/p')
+  j1=$(printf '%s\n' "$out" | sed -n 's/.*parallel_lane1_jobs=\([0-9]*\).*/\1/p')
+  j2=$(printf '%s\n' "$out" | sed -n 's/.*parallel_lane2_jobs=\([0-9]*\).*/\1/p')
+  [ -n "$unhinted" ] && [ -n "$l1" ] && [ -n "$l2" ] && [ -n "$max" ] \
+    && [ -n "$budget" ] && [ -n "$cap" ] && [ -n "$j1" ] && [ -n "$j2" ] \
+    || fail "coverage guard must report per-lane walls, worker counts, budget and cap: $out"
   [ "$unhinted" = "0" ] \
     || fail "$unhinted proven-isolated scripts have no measured parallel hint, so the lanes are packed on a guess"
-  [ "$max" -gt 0 ] || fail "parallel_max_ms must be a positive packed duration, got $max"
-  # 5% of the worst lane: wide enough that one script's growth does not trip it,
-  # narrow enough that a lopsided partition cannot call itself balanced.
-  [ "$((imbalance * 20))" -le "$max" ] \
-    || fail "parallel lanes differ by ${imbalance}ms against a ${max}ms worst lane, more than 5%"
-  pass "portable parallel lanes are fully hinted and packed within 5% of each other"
+  [ "$l1" -gt 0 ] && [ "$l2" -gt 0 ] \
+    || fail "both parallel lanes must project a positive wall, got $l1 and $l2"
+  [ "$max" = "$l1" ] || [ "$max" = "$l2" ] \
+    || fail "parallel_max_wall_ms=$max is neither lane's wall ($l1, $l2)"
+  [ "$l1" -le "$max" ] && [ "$l2" -le "$max" ] \
+    || fail "parallel_max_wall_ms=$max is not the worse of $l1 and $l2"
+  [ "$budget" -lt "$cap" ] \
+    || fail "the modeled budget ${budget}ms must stay below the ${cap}ms CI job cap"
+  [ "$max" -le "$budget" ] \
+    || fail "portable parallel lanes project a ${max}ms wall against a ${budget}ms budget"
+  pass "portable parallel lanes are fully hinted and both project a wall inside the budget"
+}
+
+# Build a throwaway repository root holding the runner, the isolation-proof
+# owner it cross-checks itself against, and a stub for every tests/*.test.sh
+# this repository has, so the coverage guard can be run end to end against a
+# hint table this test controls instead of the real one.
+make_coverage_root() {
+  local root=$1 f
+  mkdir -p "$root/bin" "$root/tests"
+  cp "$RUNNER" "$ROOT/bin/fm-test-isolation-proof.sh" "$root/bin/"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$root/$f"
+    chmod +x "$root/$f"
+  done < <("$RUNNER" --list --all)
+}
+
+# Swap the copied runner's parallel hint table for the "<path> <ms>" lines in
+# the named file.
+set_parallel_hints() {
+  local runner=$1 table=$2
+  awk -v table="$table" '
+    state == 0 && $0 == "portable_parallel_weight_hints() {" { print; state = 1; next }
+    state == 1 { print; if ($0 ~ /cat <</) { state = 2 } ; next }
+    state == 2 && $0 == "EOF" {
+      while ((getline line < table) > 0) { print line }
+      close(table)
+      print
+      state = 3
+      next
+    }
+    state == 2 { next }
+    { print }
+  ' "$runner" >"$runner.rewritten"
+  mv "$runner.rewritten" "$runner"
+  chmod +x "$runner"
+}
+
+# Write a hint table giving every member of lane 1 the same weight and the sole
+# member of lane 2 its own, so a case can place each lane's projected wall
+# exactly where it wants it.
+write_flat_hints() {
+  local runner=$1 out=$2 lane1_each=$3 lane2_ms=$4 f
+  : >"$out"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s %s\n' "$f" "$lane1_each" >>"$out"
+  done < <("$runner" --list --lane portable-parallel-1)
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s %s\n' "$f" "$lane2_ms" >>"$out"
+  done < <("$runner" --list --lane portable-parallel-2)
+}
+
+# The guard is only worth having if it moves. Drive the same end-to-end
+# --check-coverage over hint tables placed either side of the budget, one lane
+# at a time, and require it to change its answer each time. A guard that cannot
+# be made to fail is not evidence that the packing is sound, and a guard that
+# cannot be made to pass would just be noise the next person deletes.
+test_parallel_wall_guard_fails_and_passes_either_side_of_the_budget() {
+  local tmp runner budget each out status
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-wall-budget.XXXXXX")
+  make_coverage_root "$tmp"
+  runner="$tmp/bin/fm-test-run.sh"
+  budget=$("$RUNNER" --check-coverage | sed -n 's/.*parallel_wall_budget_ms=\([0-9]*\).*/\1/p')
+  [ -n "$budget" ] || fail "could not read the modeled wall budget"
+
+  # Lane 2 runs serial, so its wall is exactly its one script's hint: set that
+  # hint to the budget, then one millisecond past it.
+  write_flat_hints "$runner" "$tmp/at" 1000 "$budget"
+  set_parallel_hints "$runner" "$tmp/at"
+  out=$("$runner" --check-coverage 2>&1) || fail "a lane exactly at the budget must pass: $out"
+  assert_contains "$out" "parallel_lane2_wall_ms=$budget" "lane 2 wall at the budget"
+
+  make_coverage_root "$tmp"
+  runner="$tmp/bin/fm-test-run.sh"
+  write_flat_hints "$runner" "$tmp/over" 1000 "$((budget + 1))"
+  set_parallel_hints "$runner" "$tmp/over"
+  status=0
+  out=$("$runner" --check-coverage 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a serial lane one millisecond past the budget must fail: $out"
+  assert_contains "$out" "portable parallel shard 2" "the failure names the lane that is over"
+
+  # Lane 1 runs with more than one worker, so its wall is its makespan, not its
+  # sum: it takes twice the budget of work to put it over, and the guard has to
+  # name shard 1 rather than the lane carrying the larger sum.
+  make_coverage_root "$tmp"
+  runner="$tmp/bin/fm-test-run.sh"
+  each=$(( (budget * 2) / $("$runner" --list --lane portable-parallel-1 | wc -l | tr -d ' ') + 1000 ))
+  write_flat_hints "$runner" "$tmp/lane1" "$each" 1000
+  set_parallel_hints "$runner" "$tmp/lane1"
+  status=0
+  out=$("$runner" --check-coverage 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "a concurrent lane past the budget must fail: $out"
+  assert_contains "$out" "portable parallel shard 1" "the failure names the concurrent lane"
+
+  rm -rf "$tmp"
+  pass "the parallel wall guard fails past the budget on either lane and passes at it"
+}
+
+# A projection that silently drops the work it cannot measure would read as
+# headroom precisely when the packing is least trustworthy. Withhold one
+# member's hint and require the guard to keep weighing that script on the
+# conservative fallback, and to say it is now packing on a guess.
+test_an_unmeasured_member_is_still_weighed_and_reported() {
+  local tmp runner dropped full partial unhinted
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-unhinted.XXXXXX")
+  make_coverage_root "$tmp"
+  runner="$tmp/bin/fm-test-run.sh"
+  dropped=$("$runner" --list --lane portable-parallel-1 | tail -1)
+  [ -n "$dropped" ] || fail "could not choose a member to leave unmeasured"
+
+  # Every member hinted well below the conservative fallback, so withholding one
+  # hint has to move the projection up and cannot be absorbed by rebalancing.
+  write_flat_hints "$runner" "$tmp/all" 1000 1000
+  set_parallel_hints "$runner" "$tmp/all"
+  full=$("$runner" --check-coverage) || fail "the fully hinted fixture must pass: $full"
+  assert_contains "$full" "parallel_unhinted=0" "every member measured"
+
+  make_coverage_root "$tmp"
+  runner="$tmp/bin/fm-test-run.sh"
+  write_flat_hints "$runner" "$tmp/all" 1000 1000
+  grep -v "^$dropped " "$tmp/all" >"$tmp/partial"
+  set_parallel_hints "$runner" "$tmp/partial"
+  partial=$("$runner" --check-coverage) \
+    || fail "one missing hint must be reported, not refused on its own: $partial"
+  unhinted=$(printf '%s\n' "$partial" | sed -n 's/.*parallel_unhinted=\([0-9]*\).*/\1/p')
+  [ "$unhinted" = "1" ] \
+    || fail "the unmeasured member must be counted, got parallel_unhinted=$unhinted"
+  # A lane that still weighs the unmeasured script must project MORE than one
+  # that drops it, never the same and never less.
+  [ "$(printf '%s\n' "$partial" | sed -n 's/.*parallel_lane1_wall_ms=\([0-9]*\).*/\1/p')" \
+    -gt "$(printf '%s\n' "$full" | sed -n 's/.*parallel_lane1_wall_ms=\([0-9]*\).*/\1/p')" ] \
+    || fail "an unmeasured member must still be weighed into its lane's projection"
+  rm -rf "$tmp"
+  pass "an unmeasured parallel member is still weighed and is reported as a guess"
+}
+
+# The exact shape the retired sum assertion could not see, run end to end: two
+# lanes whose hint sums are identical - 0% apart, inside the old 5% band - while
+# the serial lane's wall is over the budget and the concurrent lane's is not.
+# This is not a hypothetical; it is the 2026-09-20 cancellation in miniature.
+test_equal_lane_sums_do_not_hide_a_lane_over_its_wall() {
+  local tmp runner budget count each lane2 sum1 out status
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-equal-sums.XXXXXX")
+  make_coverage_root "$tmp"
+  runner="$tmp/bin/fm-test-run.sh"
+  budget=$("$RUNNER" --check-coverage | sed -n 's/.*parallel_wall_budget_ms=\([0-9]*\).*/\1/p')
+  [ -n "$budget" ] || fail "could not read the modeled wall budget"
+  count=$("$runner" --list --lane portable-parallel-1 | wc -l | tr -d ' ')
+  lane2=$((budget + 100000))
+  each=$((lane2 / count))
+  sum1=$((each * count))
+  write_flat_hints "$runner" "$tmp/hints" "$each" "$sum1"
+  set_parallel_hints "$runner" "$tmp/hints"
+  # Precondition, stated rather than assumed: by the retired rule these lanes
+  # were balanced, because their sums are equal.
+  [ "$sum1" -gt "$budget" ] \
+    || fail "fixture must put the serial lane past the budget, got $sum1 against $budget"
+  status=0
+  out=$("$runner" --check-coverage 2>&1) || status=$?
+  [ "$status" -ne 0 ] \
+    || fail "equal sums must not excuse a serial lane past its wall budget: $out"
+  assert_contains "$out" "portable parallel shard 2" "the over-budget lane is the serial one"
+  rm -rf "$tmp"
+  pass "identical lane sums no longer hide a serial lane projected past its cap"
 }
 
 test_portable_serial_shards_partition_the_serial_lane() {
@@ -1860,7 +2042,10 @@ test_exclude_family
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights
 test_portable_shard_union_and_coverage_guard
-test_portable_parallel_lanes_stay_duration_balanced
+test_portable_parallel_lane_walls_stay_under_budget
+test_parallel_wall_guard_fails_and_passes_either_side_of_the_budget
+test_equal_lane_sums_do_not_hide_a_lane_over_its_wall
+test_an_unmeasured_member_is_still_weighed_and_reported
 test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_hint_coverage_is_reported_and_bounded
 test_portable_serial_shard_lane_refusals
