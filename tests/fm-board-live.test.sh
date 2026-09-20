@@ -264,6 +264,47 @@ test_the_reconcile_choice_is_not_recorded_as_an_answer() {
   pass "the board's re-check choice records an obligation and never closes the call"
 }
 
+# An answer path stopped mid-run, driven through the script the server drives.
+# The fifo holds its stdin open so it is blocked exactly where a slow backlog
+# read would block it.
+interrupt_answer_path() {  # <home> <signal> ; prints nothing
+  local home=$1 signal=$2 fifo="$home/answer-stdin" pid
+  rm -f -- "$fifo"
+  mkfifo "$fifo" || return 1
+  ( sleep 30 > "$fifo" ) &
+  local holder=$!
+  FM_HOME="$home" "$ANSWER" apply --source "an interrupted run" < "$fifo" \
+    >/dev/null 2>&1 &
+  pid=$!
+  sleep 1
+  kill "-$signal" "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  kill "$holder" 2>/dev/null
+  wait "$holder" 2>/dev/null
+  rm -f -- "$fifo"
+  return 0
+}
+
+test_an_answer_path_stopped_mid_run_still_tells_firstmate() {
+  local home
+  home="$TMP_ROOT/answer-interrupted"
+  mkdir -p "$home/state"
+  # The server's timeout signals the answer path's whole process group with
+  # SIGTERM before it ever reaches for SIGKILL, because the answer path's own
+  # contract names SIGKILL as the one signal that loses the captain's answer.
+  # This is that difference, proved rather than asserted.
+  interrupt_answer_path "$home" TERM || fail "could not interrupt the answer path"
+  assert_contains "$(cat "$home/state/.wake-queue" 2>/dev/null)" "board-answer:" \
+    "an answer path stopped mid-run left firstmate never knowing the captain pressed anything"
+
+  home="$TMP_ROOT/answer-killed"
+  mkdir -p "$home/state"
+  interrupt_answer_path "$home" KILL || fail "could not kill the answer path"
+  [ ! -s "$home/state/.wake-queue" ] \
+    || fail "SIGKILL preserved the wake, so the case above proves nothing about the signal"
+  pass "an answer path stopped mid-run still tells firstmate, which is why the timeout does not use SIGKILL"
+}
+
 test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked() {
   local home token port got
   home=$(make_answering_home inbound-dispatch) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
@@ -769,6 +810,7 @@ test_an_inbound_message_can_only_ever_carry_an_answer
 test_the_captains_click_settles_the_call_the_way_a_typed_answer_does
 test_an_answer_is_durable_before_anything_is_attempted_with_it
 test_the_reconcile_choice_is_not_recorded_as_an_answer
+test_an_answer_path_stopped_mid_run_still_tells_firstmate
 test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked
 test_a_malformed_message_is_refused_rather_than_guessed_at
 test_reading_the_board_needs_no_token_which_is_exposure_not_a_guarantee

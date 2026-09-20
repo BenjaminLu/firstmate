@@ -60,7 +60,9 @@
 # and a wake that says the answer could not be recorded is worth far more than
 # silence. Dying on a signal that cannot be trapped is the one case that
 # defeats that, and it is why the caller writes the captain's answer down
-# before it ever runs this.
+# before it ever runs this - and why the caller's own timeout signals this
+# script's process group with SIGTERM, which the EXIT trap below survives,
+# rather than reaching straight for the signal named here.
 #
 # BOUND BEFORE IT CAN BE USED. `reconcile-requests` refuses a source that is
 # not bound to the keyed-answer intake. Nothing binds here: the binding is made

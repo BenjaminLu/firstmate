@@ -119,6 +119,9 @@ const MAX_INBOUND = 64 * 1024;
 // How long the answer path gets before the captain is told it did not land.
 // It reads the backlog through tasks-axi, which is the slow part.
 const ANSWER_TIMEOUT_MS = 120000;
+// What a timed-out answer path gets to run its EXIT trap in before it is
+// killed outright, so firstmate is still told the captain answered.
+const ANSWER_GRACE_MS = 5000;
 // One message may settle several cards - the dispatch bar ticks a list - but
 // not an unbounded number of them.
 const MAX_ANSWERS = 64;
@@ -690,6 +693,12 @@ function runAnswerPath(rows, provenance) {
       child = spawn(ANSWER_SCRIPT, ["apply", "--source", provenance], {
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, FM_HOME },
+        // Its own process group, so a timeout can reach what it started. The
+        // answer path runs the backlog backend underneath it, and signalling
+        // only the direct child leaves that running: it would then land the
+        // captain's answer seconds after he was told it had not been
+        // recorded, and nothing would ever have woken firstmate.
+        detached: true,
       });
     } catch (e) {
       done({ ok: false, reason: "answer-path-unavailable", detail: e.message });
@@ -698,8 +707,23 @@ function runAnswerPath(rows, provenance) {
     let out = "";
     let settled = false;
     const finish = (result) => { if (!settled) { settled = true; done(result); } };
+    // SIGTERM FIRST, AND THAT IS THE WHOLE POINT. The answer path guarantees
+    // it tells firstmate on every path out of it through an EXIT trap, and
+    // names SIGKILL as the one signal that defeats that guarantee. Killing it
+    // outright on a timeout would therefore use the one mechanism its own
+    // contract says destroys the thing the timeout exists to report. Bash
+    // runs an EXIT trap on SIGTERM even while blocked in a child, so the
+    // captain's answer still reaches firstmate; SIGKILL follows only for a
+    // group that ignored it.
+    const signalGroup = (signal) => {
+      try { process.kill(-child.pid, signal); } catch {
+        try { child.kill(signal); } catch { /* already gone */ }
+      }
+    };
     const timer = setTimeout(() => {
-      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      signalGroup("SIGTERM");
+      const hard = setTimeout(() => signalGroup("SIGKILL"), ANSWER_GRACE_MS);
+      hard.unref?.();
       finish({ ok: false, reason: "answer-path-timeout", detail: out.trim() });
     }, ANSWER_TIMEOUT_MS);
     timer.unref?.();
