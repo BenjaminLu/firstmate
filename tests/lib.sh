@@ -645,9 +645,11 @@ fm_capture_match() {
 # which the program under test reports its own failure - and 1 once
 # <max-attempts> captures have gone by with neither. At least one --present,
 # --absent or --absent-re is required, and every flag but --tail may repeat.
-# Matching is fixed-string except for --absent-re, and --tail N restricts every
-# pattern in the call to the last N lines of the capture; N must be a whole
-# number of at least 1, because a slice of nothing satisfies every absence.
+# Matching is fixed-string except for --absent-re, and --tail N restricts the
+# settle conditions - every --present, --absent and --absent-re - to the last N
+# lines of the capture; N must be a whole number of at least 1, because a slice
+# of nothing satisfies every absence. --abort texts are never scoped: see the
+# note at the abort scan below.
 #
 # Wait on the end state, never on the intermediate one. Captures are discrete
 # samples, so a state the program passes through can appear and vanish
@@ -738,7 +740,14 @@ fm_wait_capture_settled() {
     "$capture_fn" "$file" || true
     attempt=$((attempt + 1))
     for text in ${aborts[@]+"${aborts[@]}"}; do
-      if fm_capture_match "$file" "$tail_lines" fixed "$text"; then
+      # Aborts read the whole capture, never --tail's scope. A --tail exists to
+      # keep a settle condition off the transcript above the chrome; an abort
+      # is the opposite kind of text - the program under test reporting its own
+      # failure - and it lands wherever that program puts it. Scoping one out
+      # buys nothing and costs the full attempt bound spent waiting on work
+      # that was already refused, which is the diagnosis time this helper
+      # exists to remove.
+      if fm_capture_match "$file" '' fixed "$text"; then
         reason="reported '$text' instead of settling"
         rc=2
         break 2

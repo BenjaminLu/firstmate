@@ -257,6 +257,23 @@ test_a_bounded_absence_ignores_a_longer_word_containing_the_token() {
   pass "an --absent-re absence is bounded as written, and --absent stays a literal"
 }
 
+test_an_abort_is_read_from_the_whole_capture_even_under_a_scope() {
+  local out status
+  # A --tail keeps a settle condition off the transcript above the chrome. An
+  # abort text is the opposite kind of thing - the program saying it failed -
+  # and it lands where that program puts it, which here is the transcript.
+  # Scoping it out would buy nothing and cost the whole attempt bound waiting
+  # on work that had already been refused.
+  reset_capture 'Reload failed: extension threw\nchrome: Working...'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/abort-scoped" 400 \
+    --tail 1 --absent 'Working' --abort 'Reload failed:' 2>&1) && status=0 || status=$?
+  expect_code 2 "$status" "an abort above the scope must still abort the wait: $out"
+  assert_contains "$out" "reported 'Reload failed:'" "the abort must name the failure it read"
+  [ "$(capture_calls)" -lt 20 ] \
+    || fail "an abort above the scope was polled $(capture_calls) times before it was read"
+  pass "an abort text is read from the whole capture even when the settle conditions are scoped"
+}
+
 test_an_unusable_tail_count_is_refused_rather_than_matching_nothing() {
   local out status value
   # tail -n throws its own error away, so an unusable count leaves an empty
@@ -326,6 +343,7 @@ test_either_half_of_the_end_state_stands_alone
 test_every_text_the_next_assertion_needs_can_be_required
 test_a_scoped_absence_reads_its_scope_and_only_its_scope
 test_a_bounded_absence_ignores_a_longer_word_containing_the_token
+test_an_abort_is_read_from_the_whole_capture_even_under_a_scope
 test_an_unusable_tail_count_is_refused_rather_than_matching_nothing
 test_a_wait_that_requires_nothing_is_refused
 echo "# all fm-capture-settle tests passed"
