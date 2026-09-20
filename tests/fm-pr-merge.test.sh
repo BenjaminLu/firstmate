@@ -4019,7 +4019,47 @@ JSON
     "github-unreadable-checks: a failed checks read was not named as one"
   assert_no_grep 'reviews before merging' "$case_dir/stderr" \
     "github-unreadable-checks: a failed checks read was reported as a reviews read"
-  pass "a forge that did not answer, an unparseable payload, and an unreadable checks rollup each name their own read"
+
+  # The pull request's own fields not reading back. A value carrying a newline
+  # splits a field, so the six-field read comes back short and the state is
+  # unknown - which is not the same as the forge failing to answer.
+  case_dir=$(make_case github-fields-short)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  printf '%s\n' "$head" > "$case_dir/github-head"
+  cat > "$case_dir/github-view.json" <<JSON
+{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"$head","baseRefName":"main\nsplit","author":{"login":"worker"},"reviews":[$(approving_review "$head")],"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-fields-short: a short field read must not merge"
+  assert_grep 'did not read back cleanly' "$case_dir/stderr" \
+    "github-fields-short: a short field read was not named as one"
+  assert_no_grep 'did not answer' "$case_dir/stderr" \
+    "github-fields-short: a short field read was reported as an unanswered forge"
+
+  # The reviews not reading back cleanly, which is a different payload problem
+  # from the reviews being a shape this cannot read.
+  case_dir=$(make_case github-reviews-short)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" 'two
+lines' 'Review verdict: APPROVED')"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/98 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-reviews-short: a split reviews field must not merge"
+  assert_grep "reviews did not read back cleanly" "$case_dir/stderr" \
+    "github-reviews-short: a split reviews field was not named as one"
+  assert_no_grep 'came back in a shape' "$case_dir/stderr" \
+    "github-reviews-short: a split field was reported as an unreadable shape"
+  pass "each of the six read failures names its own read, including the two field-count guards"
 }
 
 test_each_failed_read_says_which_read_failed
