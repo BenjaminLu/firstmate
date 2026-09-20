@@ -332,11 +332,23 @@ emit_file_bytes() {  # <file>
 
 if fm_brief_task_placeholders_present "$BRIEF"; then
   BRIEF_TMP="$DATA/$ID/.brief.md.dispatch.$$"
-  # Each placeholder is replaced inside its own subsection, one pass each, through
-  # the same parser the placeholder checks use. An unbounded line match would
-  # splice the ask into an ask that quotes `{TASK}` on a line of its own, and a
-  # second section-tracking loop written here would disagree with that parser
-  # about a fenced block without saying so.
+  # Each placeholder is replaced inside its own subsection, one pass each, so an
+  # ask that quotes `{TASK}` on a line of its own is not spliced into twice, and
+  # so no second section-tracking loop is written here to disagree with the shared
+  # parser about a fenced block.
+  #
+  # It is NOT the same scope its detector uses, and the difference is worth
+  # stating rather than implying. fm_brief_task_placeholder_intact reads two
+  # levels - `# Task`'s body, then the subsection inside it - while this searches
+  # the whole file for `## Captain's intent` and `## Firstmate spec`. A brief with
+  # one of those subsections OUTSIDE `# Task` would be filled here and not seen
+  # there. No scaffold produces that: fm-brief.sh puts `# Task` at line 3 of every
+  # ship, scout and review brief, so the subsections only ever appear inside it,
+  # and only a hand-edited brief could differ. Closing the gap needs a two-level
+  # mark, because fm_brief_task_heading_body returns an extracted body rather than
+  # a position in the file, and that is machinery for a case nothing can reach.
+  # The design record's fill above has no such gap: fm_design_placeholder_intact
+  # reads `## Decisions` from the whole file, which is exactly what its fill marks.
   fill_brief_subsection() {  # <heading> <placeholder> <file>
     fm_brief_replace_placeholder_in_heading "$BRIEF_TMP.in" "$1" "$2" emit_file_bytes "$3"
   }
