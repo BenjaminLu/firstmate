@@ -2299,11 +2299,34 @@ while :; do
           else
             rebind_rc=0
           fi
-          # A re-bind never holds this loop up. Contention (2) is ordinary - a
-          # relaunch owns the task record for as long as a spawn takes - and the
-          # next poll re-reads the head, so it is logged and the cycle carries on.
-          if [ "$rebind_rc" -eq 2 ]; then
-            triage_log "deferred re-binding the recorded head of $id to $poll_head; the task record was locked"
+          # A re-bind never holds this loop up, and it never fails quietly.
+          # This branch exists because a poll bound to a stale head failed
+          # silently for hours; reporting its own failure only into the
+          # absorbed-wake debug log, which AGENTS.md calls never relied on and
+          # safe to delete, would be that same bug one level up. So anything
+          # that leaves the record NOT on the head the forge just returned is
+          # queued as an actionable row, and only one case is exempt.
+          #
+          # That case is contention (2): a relaunch owns the task record for as
+          # long as a spawn takes, the record is untouched, and the next poll
+          # re-reads the head. It is ordinary and self-correcting, so it is
+          # logged and the cycle carries on - EXCEPT on the merged path, where
+          # there is no next poll: the outcome publishes and the poll retires in
+          # this same cycle, so whatever the record holds now it holds forever.
+          if [ "$rebind_rc" -ne 0 ]; then
+            if [ "$out" = merged ]; then
+              triage_log "could not re-bind the recorded head of $id to $poll_head before retiring its merged poll (rc=$rebind_rc)"
+              fm_wake_append check "pr-head-$id" \
+                "check: $id merged at $poll_head but its record could not be updated, so the head it still names is stale and nothing will correct it: $url" \
+                || exit 1
+            elif [ "$rebind_rc" -eq 2 ]; then
+              triage_log "deferred re-binding the recorded head of $id to $poll_head; the task record was locked"
+            else
+              triage_log "could not re-bind the recorded head of $id to $poll_head (rc=$rebind_rc)"
+              fm_wake_append check "pr-head-$id" \
+                "check: $id's record could not be updated to the head its pull request is on ($poll_head), so the head it names is stale: $url" \
+                || exit 1
+            fi
           fi
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
           custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT

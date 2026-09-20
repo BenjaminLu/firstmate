@@ -941,6 +941,71 @@ test_rebind_never_waits_on_a_held_task_record() {
   pass "a task record held by another owner defers the re-bind instead of stalling the cycle"
 }
 
+# A re-bind that cannot complete leaves the record naming a head the pull request
+# is no longer on - the exact failure this branch exists to end. On the merged
+# path nothing will ever correct it: the outcome publishes and the poll retires
+# in the same cycle, so there is no later poll to try again. That is why the
+# contention this cycle otherwise treats as ordinary must still be reported
+# there, and reported to the durable queue rather than to the absorbed-wake
+# debug log AGENTS.md calls never relied on and safe to delete.
+#
+# Both directions are proven, because the silent half is the half that rots:
+# it says so when the write could not happen, and says nothing when it did.
+test_a_failed_rebind_is_never_silent() {
+  local dir state rc row armed_head
+  armed_head=0000000000000000000000000000000000000000
+  dir=$(make_case rebind-failure-reported)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  # A relaunch owning the record while the merge lands: the one way this write
+  # is refused that leaves the poll itself entirely valid.
+  start_lock_holder "$dir" "$state/.meta-task-a.lock"
+
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  [ "$rc" -eq 0 ] || fail "merged cycle with a held record failed: $(cat "$dir/watch.err")"
+
+  grep -qxF "pr_head=$armed_head" "$state/task-a.meta" \
+    || fail "the held record was written anyway"
+  row=$(grep -F "pr-head-task-a" "$state/.wake-queue" 2>/dev/null || true)
+  [ -n "$row" ] || fail "a merged poll that could not record its head queued nothing: $(cat "$state/.wake-queue" 2>/dev/null)"
+  case "$row" in
+    *"merged at $DEFAULT_POLL_HEAD"*stale*"https://github.com/o/r/pull/1"*) ;;
+    *) fail "the queued row does not say what is stale or which pull request: $row" ;;
+  esac
+  # The merge itself is never lost to a failed re-bind, and the poll still
+  # retires - so the row is the only thing that will ever say the head is wrong.
+  grep -F 'merge landed: task-a' "$state/.wake-queue" >/dev/null \
+    || fail "a failed re-bind swallowed the merge outcome"
+  assert_poll_absent "$state" task-a
+
+  # The other direction: the same merged cycle with nothing holding the record
+  # takes the head and says nothing at all about it.
+  dir=$(make_case rebind-success-silent)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "merged cycle with a free record failed: $(cat "$dir/watch.err")"
+  grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
+    || fail "the free record did not take the head"
+  ! grep -F "pr-head-task-a" "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "a re-bind that succeeded reported a failure anyway"
+  pass "a merged poll that cannot record its head reaches the durable queue, and one that can stays quiet"
+}
+
 # fm_pr_meta_rebind_head is what writes that value, so the refusals that keep a
 # head nobody saw out of the record are proven on it directly.
 test_recorded_head_refuses_what_the_forge_did_not_return() {
@@ -3041,6 +3106,7 @@ test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_poll_rebinds_the_recorded_head
 test_rebind_never_waits_on_a_held_task_record
+test_a_failed_rebind_is_never_silent
 test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication
