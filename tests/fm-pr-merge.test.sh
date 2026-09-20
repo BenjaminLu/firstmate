@@ -1948,7 +1948,10 @@ test_a_refusal_still_refuses_when_its_gate_call_cannot_be_recorded() {
 
   expect_code 1 "$rc" \
     "gate-call-unwritable: an unrecordable gate call must not change the refusal"
-  assert_grep "check 'Lint 2' is not green" "$case_dir/stderr" \
+  # The fixture's check is COMPLETED/FAILURE, so the refusal names it as failed.
+  # This assertion predates that wording and its intent is unchanged: the
+  # refusal must still name the red check when its gate call cannot be recorded.
+  assert_grep "check 'Lint 2' failed" "$case_dir/stderr" \
     "gate-call-unwritable: the refusal stopped naming the red check"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "gate-call-unwritable: the merge ran because its record could not be written"
