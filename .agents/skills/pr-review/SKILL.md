@@ -21,7 +21,8 @@ The reviewed-PR path is what a `direct-PR` ship task looks like end to end.
    It works on its own branch in its own worktree and opens the pull request itself, exactly as the `direct-PR` definition of done in `bin/fm-dod-lib.sh` states.
    No pipeline, no validation run, no gate response flow.
 2. **The pull request opens as soon as there is something to review**, not after everything is green.
-   The worker's `done: PR <url>` line is the signal; record it with `bin/fm-pr-check.sh <id> <PR url>` as section 7 requires.
+   The worker opens it at its first commit and reports the URL in a nonterminal `working:` line, which `bin/fm-dod-lib.sh`'s `direct-PR` definition of done owns; arm on that line with `bin/fm-pr-check.sh <id> <PR url> --arm-only` rather than waiting, as section 7 requires.
+   The worker's later `done: PR <url>` line is the finish, not the opening.
 3. **A reviewer reviews it on the pull request.**
    Dispatch it as soon as the pull request exists.
    Do not wait for the checks: a reviewer reading the diff and a CI run watching the same commit are independent, and serializing them buys nothing.
