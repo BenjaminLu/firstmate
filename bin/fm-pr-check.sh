@@ -5,7 +5,14 @@
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
 # including a merge request on a self-hosted GitLab instance.
-# Usage: fm-pr-check.sh <task-id> <pr-url>
+# Usage: fm-pr-check.sh <task-id> <pr-url> [--arm-only]
+# Arming the merge poll and announcing the PR as ready are separate acts.
+# The default does both, which is correct once the task's own ready signal
+# has been seen. --arm-only records and arms WITHOUT publishing the child's
+# PR-ready line to a parent channel, so the poll can be armed the moment a PR
+# URL exists - its pr step opening one, or a listing showing one - without
+# telling a parent home that work is ready while its checks are still red or
+# unrun. Both forms are idempotent and may be re-run for the same task.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +27,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
 
-if [ "$#" -ne 2 ]; then
+ARM_ONLY=0
+if [ "$#" -eq 3 ]; then
+  [ "$3" = "--arm-only" ] || { echo "error: invalid PR check request" >&2; exit 2; }
+  ARM_ONLY=1
+elif [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
   exit 2
 fi
@@ -80,14 +91,16 @@ if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/d
   fi
 fi
 
-META_TMP=
 META_LOCK=
 META_LOCK_HELD=0
 PR_POLL_PUBLISH_LOCK=
 PR_POLL_PUBLISH_LOCK_HELD=0
 pr_check_cleanup() {
   fm_pr_poll_cleanup
-  [ -z "$META_TMP" ] || rm -f -- "$META_TMP"
+  # fm_pr_meta_write_pr publishes the record by renaming this staged file and
+  # clears the name once that has succeeded, so a signal at any point during the
+  # write leaves it named here and removed on the way out.
+  [ -z "$FM_PR_META_TMP" ] || rm -f -- "$FM_PR_META_TMP"
   if [ "$PR_POLL_PUBLISH_LOCK_HELD" = 1 ]; then
     fm_lock_release "$PR_POLL_PUBLISH_LOCK" || true
     PR_POLL_PUBLISH_LOCK_HELD=0
@@ -110,29 +123,10 @@ META_LOCK_HELD=1
 META_DEVICE=$(fm_pr_file_device "$META") || exit 1
 STATE_DEVICE=$(fm_pr_file_device "$STATE") || exit 1
 [ "$META_DEVICE" = "$STATE_DEVICE" ] || { echo "error: task metadata is unavailable" >&2; exit 1; }
-META_TMP=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || exit 1
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    pr=*|pr_head=*) ;;
-    *) printf '%s\n' "$line" >> "$META_TMP" || exit 1 ;;
-  esac
-done < "$META"
-printf 'pr=%s\n' "$URL" >> "$META_TMP" || exit 1
-[ -z "$PR_HEAD" ] || printf 'pr_head=%s\n' "$PR_HEAD" >> "$META_TMP" || exit 1
-chmod 0600 "$META_TMP" || exit 1
-fm_pr_private_file_valid "$META_TMP" 600 "$STATE_DEVICE" || exit 1
-fm_pr_metadata_identity_parse "$META_TMP" || exit 1
-[ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \
-  && [ "$FM_PR_META_HOST" = "$HOST" ] && [ "$FM_PR_META_PATH" = "$PROJECT_PATH" ] \
-  && [ "$FM_PR_META_NUMBER" = "$NUMBER" ] || exit 1
-fm_pr_regular_destination_on_device_or_absent "$META" "$STATE_DEVICE" || exit 1
-mv -f -- "$META_TMP" "$META" || exit 1
-META_TMP=
-fm_pr_private_file_valid "$META" 600 "$STATE_DEVICE" || exit 1
-fm_pr_metadata_identity_parse "$META" || exit 1
-[ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \
-  && [ "$FM_PR_META_HOST" = "$HOST" ] && [ "$FM_PR_META_PATH" = "$PROJECT_PATH" ] \
-  && [ "$FM_PR_META_NUMBER" = "$NUMBER" ] || exit 1
+# One owner writes this pair, here and on every later re-bind by the poll
+# (bin/fm-pr-lib.sh's fm_pr_meta_write_pr).
+fm_pr_meta_write_pr "$STATE" "$META" "$STATE_DEVICE" \
+  "$PROVIDER" "$HOST" "$PROJECT_PATH" "$NUMBER" "$URL" "$PR_HEAD" || exit 1
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 
@@ -157,6 +151,15 @@ if command -v jq >/dev/null 2>&1; then
 else
   printf 'contributions: jq unavailable; coverage is unconfirmed\n' >&2
 fi
+# --arm-only stops here: the poll is armed and the canonical PR data recorded,
+# but nothing is announced. Arming early is safe; announcing early is not,
+# because the ready line below states the work IS ready, which is not yet true
+# when the poll is armed the moment a PR URL appears.
+if [ "$ARM_ONLY" -eq 1 ]; then
+  printf 'armed: state/%s.check.sh\n' "$ID"
+  exit 0
+fi
+
 # In a secondmate home the registration itself is a captain-facing fact:
 # publish the child's PR-ready line with the canonical URL just recorded, so it
 # reaches the parent whether or not the mate model appends anything
@@ -175,4 +178,12 @@ case "$READY_RC" in
   0|1) ;;
   *) printf 'actionable: PR %s is registered but its ready line did not reach the parent channel (rc=%s)\n' "$URL" "$READY_RC" >&2 ;;
 esac
+# Registering the pull request is the moment this home knows there is one, so
+# the captain's board is told now. The board cannot map a pull request onto
+# work it still lists as underway - a merge card is composed, never mapped, and
+# merging is the captain's call - so this event makes the board SAY a rebuild
+# is owed instead of quietly looking complete. One append; it cannot fail this
+# registration (bin/fm-board-live.sh).
+"$SCRIPT_DIR/fm-board-live.sh" event pr "$ID" --pr-url "$URL" >/dev/null 2>&1 || true
+
 printf 'armed: state/%s.check.sh\n' "$ID"

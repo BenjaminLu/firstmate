@@ -226,6 +226,10 @@
 # The hold or answer is already durable in the backlog, so a channel that
 # cannot be written is reported as `actionable:` on stderr rather than undoing
 # the record; bin/fm-inactive-reconcile.sh's diagnostics name a broken binding.
+#
+# Gate-call log: `hold` also appends this call's `escalated` entry to the
+# home's gate-call log. bin/fm-gate-calls-lib.sh owns that record's format and
+# what it does when it cannot be written; it observes the hold, never gates it.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -249,6 +253,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-gate-calls-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-gate-calls-lib.sh"
 
 PARENT_HOLD_PUBLISHED=0
 publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
@@ -260,6 +267,22 @@ publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
     0|1) PARENT_HOLD_PUBLISHED=1 ;;
     *) printf 'actionable: task %s is held for the captain in this home but that did not reach the parent channel (rc=%s)\n' "$id" "$rc" >&2 ;;
   esac
+}
+
+# A hold IS firstmate handing a call to the captain, so it is the `escalated`
+# entry in this home's gate-call log. bin/fm-gate-calls-lib.sh owns the record;
+# recording it never gates the hold, which is already durable in the backlog,
+# and a call it cannot record says so on stderr rather than going quiet.
+record_hold_gate_call() {  # <task-id> <occurrence> <title> <reason> <origin>
+  local id=$1 occurrence=$2 title=$3 reason=$4 origin=$5 link=''
+  if [ -f "$STATE/$id.meta" ]; then
+    link=$(meta_value "$STATE/$id.meta" pr)
+  fi
+  if [ -z "$link" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
+    link=$(meta_value "$STATE/$origin.meta" pr)
+  fi
+  fm_gate_call_record "$STATE" captain-hold "$id" escalated \
+    "${title:-$id}" "$reason" "$link" "captain-hold-$id-$occurrence" || true
 }
 
 CAPTAIN_META_LOCK=
@@ -995,6 +1018,8 @@ command_hold() {
   # has been shown stays; any other hold begins a call whose question he has
   # not been shown, and the previous call's card must not answer for it.
   [ "$preserve_hold_set" -eq 1 ] || retire_board_card "$id"
+  record_hold_gate_call "$id" "$occurrence" \
+    "$(show_field_value "$show" title)" "$reason" "$origin"
   printf '%s\n' "$id"
 }
 
@@ -2012,9 +2037,29 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
   exit 2
 }
 
+# The captain's board is one of the surfaces a hold and its answer are FOR, so
+# both are published to it here, where they are recorded, rather than at the
+# next rebuild. A hold publishes only the fact that a question exists: the
+# question's words are composed, never mapped, so the board says it is behind
+# rather than inventing a card. An answer publishes its key, which is the one
+# thing the board needs to stop asking. Neither can fail this script; see
+# bin/fm-board-live.sh.
+# Publishing must never change what this script reports. It runs AFTER the
+# command it follows, so without preserving that command's status the case
+# branch would exit with the publisher's - and a subcommand that returned
+# nonzero rather than calling fail() would silently read as success.
+publish_board_event() {  # <status> <kind> <task-id> [args...]
+  local status=$1 kind=$2 id=$3
+  shift 3
+  if [ -n "$id" ]; then
+    "$SCRIPT_DIR/fm-board-live.sh" event "$kind" "$id" "$@" >/dev/null 2>&1 || true
+  fi
+  return "$status"
+}
+
 case "${1:-}" in
-  hold) shift; command_hold "$@" ;;
-  answer) shift; command_answer "$@" ;;
+  hold) shift; command_hold "$@"; rc=$?; publish_board_event "$rc" call "${1-}" ;;
+  answer) shift; command_answer "$@"; rc=$?; publish_board_event "$rc" answered "${1-}" --key "${1-}" ;;
   answers) shift; command_answers "$@" ;;
   reconcile-requests) shift; command_reconcile_requests "$@" ;;
   bind) shift; command_bind "$@" ;;

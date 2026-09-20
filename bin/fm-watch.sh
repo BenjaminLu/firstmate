@@ -197,19 +197,10 @@ WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
 # before, byte-for-byte.
 
 # Portable stat. macOS (BSD) stat uses `-f <fmt>`; Linux (GNU) stat uses `-c <fmt>`.
-# Do NOT use the `stat -f <fmt> ... || stat -c <fmt> ...` fallback form: on Linux
-# `stat -f` is *filesystem* stat and writes a partial filesystem dump ("File: ...",
-# "Blocks: ...") to stdout before failing, so the fallback's correct output gets
-# appended to that garbage. Arithmetic under `set -u` then aborts on the stray
-# token (e.g. the word "File" read as an unset variable), which silently kills the
-# watcher mid-cycle. Detect the platform once and pick the right form.
-# On Darwin, call /usr/bin/stat rather than PATH-resolved stat so GNU coreutils
-# cannot shadow the BSD `-f` syntax.
-if [ "$(uname)" = Darwin ]; then
-  stat_mtime() { /usr/bin/stat -f %m "$1" 2>/dev/null; }        # epoch seconds of mtime
-else
-  stat_mtime() { stat -c %Y "$1" 2>/dev/null; }
-fi
+# Reading the clock and a file's mtime is bin/fm-clock-lib.sh's alone (sourced
+# transitively through fm-wake-lib.sh above): fm_now for the current time,
+# fm_path_mtime for a file's, and its header owns the platform rationale,
+# including the Linux `stat -f` trap that silently killed this watcher mid-cycle.
 # bin/fm-classify-lib.sh owns status reported-state signatures and presentation
 # markers, while bin/fm-wake-lib.sh owns their wake-facing routing, the legacy
 # turn-ended signature, annotation staleness checks, and guarded bookkeeping writes.
@@ -662,7 +653,7 @@ signal_turnend_panes_churned() {  # <file> ...
   done
   # Enforce the deferral bound BEFORE any .stale- state is touched, so a wake that
   # surfaces here leaves the staleness backbone's own classification alone.
-  now_s=$(date +%s)
+  fm_now now_s
   for key in "${churned_keys[@]}"; do
     marker="$STATE/.churn-since-$key"
     if [ ! -e "$marker" ]; then
@@ -780,7 +771,8 @@ secondmate_in_active_turn() {  # <window> <idle>
 # Receipts close the append-before-marker crash window without changing the
 # foreign queue.
 secondmate_wake_stall_tick() {
-  local now=$(( $(date +%s) )) threshold=$SECONDMATE_WAKE_STALL_SECS
+  local now threshold=$SECONDMATE_WAKE_STALL_SECS
+  fm_now now
   local meta task kind remote_host home queue row epoch seq row_key marker progress_marker progress observed_at observed_key
   local receipt receipt_dir notify_key queued idle reason episode_alerted
   # Endpoint metadata admits this queue-loop check; secondmate-liveness owns registered mates whose endpoint is missing or dead.
@@ -892,7 +884,7 @@ resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min
     [ "$(age_of "$throttle")" -ge "$PAUSE_RESURFACE_SECS" ] || return 0   # 999999 when no prior re-surface
   fi
   fm_wake_append stale "$win" "$reason" || exit 1
-  if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else date +%s > "$throttle"; fi
+  if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else fm_now > "$throttle"; fi
   wake "$reason"
 }
 
@@ -914,9 +906,9 @@ wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age>
   local win=$1 since_file=$2 label=$3 age=$4 key wsf wage
   key=$(window_key "$win")
   wsf="$STATE/.writing-since-$key"
-  [ -e "$wsf" ] || date +%s > "$wsf"
+  [ -e "$wsf" ] || fm_now > "$wsf"
   wage=$(age_of "$wsf")
-  date +%s > "$since_file"
+  fm_now > "$since_file"
   resurface_absorbed "$win" "$STATE/.writing-resurfaced-$key" "$wage" \
     "stale: $win (idle ${age}s, writing its worktree for ${wage}s, rechecked on a long cadence not a wedge; confirm the writes are real progress)"
   triage_log "absorbed $label (worktree written since the idle window opened, idle ${age}s): $win"
@@ -947,7 +939,7 @@ wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age>
 # so a recheck that named the wrong one would point the reader away from the
 # person who can clear it.
 wedge_wait_evidence() {  # <task> -> `declared` or `held` on stdout
-  local task=$1 last until
+  local task=$1 last until now
   [ -n "$task" ] || return 1
   last=$(last_status_line "$STATE/$task.status")
   if status_is_captain_held "$last"; then
@@ -956,7 +948,8 @@ wedge_wait_evidence() {  # <task> -> `declared` or `held` on stdout
   fi
   status_is_paused "$last" || return 1
   if until=$(status_paused_until "$last"); then
-    [ "$(date +%s)" -lt "$until" ] || return 1
+    fm_now now
+    [ "$now" -lt "$until" ] || return 1
   fi
   printf 'declared'
 }
@@ -986,7 +979,7 @@ wedge_wait_evidence() {  # <task> -> `declared` or `held` on stdout
 # this is not an escalation, and a later genuine one must keep the
 # demand-inspection history it had already earned.
 wedge_defer_wait() {  # <window> <task> <since-file> <triage-label> <idle-age> <declared|held>
-  local win=$1 task=$2 since_file=$3 label=$4 age=$5 evidence=$6 key mtime wage min_age kind action waited
+  local win=$1 task=$2 since_file=$3 label=$4 age=$5 evidence=$6 key mtime wage min_age kind action waited now
   if [ "$evidence" = held ]; then
     if afk_record_present; then
       triage_log "absorbed $label (captain-held, never rechecked while the away-posture record exists): $win"
@@ -999,7 +992,7 @@ wedge_defer_wait() {  # <window> <task> <since-file> <triage-label> <idle-age> <
     action='confirm the wait still holds'
   fi
   key=$(window_key "$win")
-  mtime=$(stat_mtime "$STATE/$task.status")
+  mtime=$(fm_path_mtime "$STATE/$task.status")
   case "$mtime" in
     ''|*[!0-9]*)
       # An unreadable status file ages from the quiet window already in hand.
@@ -1009,13 +1002,14 @@ wedge_defer_wait() {  # <window> <task> <since-file> <triage-label> <idle-age> <
       wage=$age; min_age=0; waited=''
       ;;
     *)
-      wage=$(( $(date +%s) - mtime ))
+      fm_now now
+      wage=$(( now - mtime ))
       [ "$wage" -ge 0 ] || wage=0
       min_age=$PAUSE_RESURFACE_SECS; waited=", waiting ${wage}s"
       ;;
   esac
   clear_write_tracking "$key"
-  date +%s > "$since_file"
+  fm_now > "$since_file"
   resurface_absorbed "$win" "$STATE/.waiting-resurfaced-$key" "$wage" \
     "stale: $win (idle ${age}s${waited} - $kind, rechecked on a long cadence not a wedge; $action)" \
     '' "$min_age"
@@ -1077,7 +1071,7 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
   esac
   # Re-arm the idle timer on BOTH paths below, so the backend probe above stays on
   # its once-per-STALE_ESCALATE_SECS budget instead of running on every poll.
-  date +%s > "$since_file"
+  fm_now > "$since_file"
   id=$hash
   if gen=$(fm_busy_current_gen "$STATE" "$task"); then
     id=$gen
@@ -1114,18 +1108,19 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
 # cheaper deferrals keep the panes they already own on their existing bounded
 # cadences and only a pane that would otherwise alarm pays for a backend read.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task> <pane-hash>
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence now
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
       # Publish the repaired timer only after its old write-deferral chain is
       # gone, so observers cannot mistake a new idle window for the old chain.
       clear_write_tracking "$(window_key "$win")"
-      date +%s > "$since_file"
+      fm_now > "$since_file"
       triage_log "absorbed $label timer reset: $win"
       ;;
     *)
-      age=$(( $(date +%s) - since ))
+      fm_now now
+      age=$(( now - since ))
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
         if evidence=$(wedge_wait_evidence "$task"); then
           wedge_defer_wait "$win" "$task" "$since_file" "$label" "$age" "$evidence"
@@ -1191,9 +1186,9 @@ handle_paused_stale() {  # <window> <task> <hash>
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
   clear_write_tracking "$key"
   statusf="$STATE/$task.status"
-  mtime=$(stat_mtime "$statusf")
-  case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
-  now=$(date +%s)
+  mtime=$(fm_path_mtime "$statusf")
+  fm_now now
+  case "$mtime" in ''|*[!0-9]*) mtime=$now ;; esac
   age=$(( now - mtime ))
   last=$(last_status_line "$statusf")
   min_age=$PAUSE_RESURFACE_SECS
@@ -1367,7 +1362,7 @@ pause_state_class() {  # <window> <task>
   # the bounded re-surface cadence, and a forgotten declaration would rot invisibly.
   [ "$class" = none ] && class=paused
   case "$class" in
-    paused) date +%s > "$recheck_file" ;;
+    paused) fm_now > "$recheck_file" ;;
     *) rm -f "$recheck_file" ;;
   esac
   printf '%s' "$class"
@@ -1500,7 +1495,7 @@ surface_nonterminal_stale() {  # <window> <hash>
     bounded=0
     STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
     if until=$(status_paused_until "$last"); then
-      now=$(date +%s)
+      fm_now now
       if [ "$now" -lt "$until" ]; then
         throttled=0
       else
@@ -1534,7 +1529,7 @@ surface_nonterminal_stale() {  # <window> <hash>
   clear_write_tracking "$key"
   if [ "$declared" -eq 0 ]; then
     : > "$STATE/.paused-$key"
-    date +%s > "$STATE/.paused-rechecked-$key"
+    fm_now > "$STATE/.paused-rechecked-$key"
   elif [ "$bounded" -eq 0 ]; then
     # A backlog hold is NOT a declared pause, and must not be dressed up as one:
     # the loop-top reconciliation and pause_state_class both read the status LINE,
@@ -1558,8 +1553,8 @@ surface_nonterminal_stale() {  # <window> <hash>
 # busy fleet. Persist the schedule as file mtimes instead.
 age_of() {  # seconds since file mtime; "due immediately" if missing
   local f=$1 m now
-  m=$(stat_mtime "$f") || { echo 999999; return; }
-  now=$(date +%s)
+  m=$(fm_path_mtime "$f") || { echo 999999; return; }
+  fm_now now
   [ "$m" -le "$now" ] || { echo 999999; return; }
   echo $(( now - m ))
 }
@@ -2103,6 +2098,10 @@ trap 'exit 1' HUP INT TERM
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
 WATCHER_PID=${BASHPID:-$$}
+# Counts completed supervision cycles for this watcher process; published in the
+# liveness beacon so an observer can see a cycle boundary without waiting for an
+# mtime second to turn over. Per-process, so it restarts at 1 with the watcher.
+WATCH_CYCLE=0
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 # shellcheck disable=SC2034 # Consumed by wake() in the separately linted transition owner.
@@ -2124,6 +2123,16 @@ fi
 
 # Shared by both the first-notification and already-notified paths below so
 # the retirement sequence (bin/fm-pr-lib.sh) is stated once.
+# The head a task's record names at this instant, empty when it names none.
+# Every row about a re-bind is built from this rather than from what the path
+# that failed assumed it had left behind: a clear that did not happen leaves the
+# arming-time head in place, and a task armed without one never had a head to be
+# stale. A durable row that asserts either without looking is the same defect
+# this whole poll exists to end, one level up.
+recorded_pr_head() {  # <id>
+  grep '^pr_head=' "$STATE/$1.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
 retire_merged_pr_poll() {  # <id>
   local id=$1
   if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" merged; then
@@ -2187,7 +2196,17 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
-  touch "$STATE/.last-watcher-beat"
+  #
+  # The content is this watcher's pid and cycle counter, and it exists for
+  # observers, not for supervision: every reader in bin/ still judges liveness
+  # from the mtime alone, which this write refreshes exactly as touch did. An
+  # mtime resolves to whole seconds, so "a cycle completed" is invisible until
+  # the second turns over, and anything watching for it has to wait a second per
+  # cycle no matter how fast the watcher actually runs. The counter changes the
+  # instant the cycle does, which is what lets a test drive the real watcher at
+  # a sub-second cadence instead of paying a second per observation.
+  WATCH_CYCLE=$((WATCH_CYCLE + 1))
+  printf '%s %s\n' "$WATCHER_PID" "$WATCH_CYCLE" > "$STATE/.last-watcher-beat"
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
@@ -2286,6 +2305,149 @@ while :; do
           run_check_capture "$SCRIPT_DIR/fm-pr-poll.sh" --validated \
             "$provider" "$url" "$host" "$path" "$number" || exit 1
           out=$FM_CHECK_RESULT
+          # The poll reads the pull request's head on the same call that reads
+          # its state (bin/fm-pr-poll.sh owns that output contract), so the
+          # recorded head is re-bound to the live one every cycle instead of
+          # staying on whatever was captured when the poll was armed. A head
+          # line is not supervisor-actionable - an open pull request's head
+          # moves with every push - so it is consumed here and clears $out
+          # rather than waking. A merged line carries the pull request's head at
+          # the moment the merge was seen - the last commit on its branch, NOT
+          # the commit created on the base, which under this fleet's default
+          # squash is a different object entirely - and that is what the record
+          # is for and what every consumer reads it as. Only a head this poll
+          # just read reaches metadata, and a line this watcher does not
+          # recognise is left alone and still surfaces as an ordinary wake.
+          poll_head=
+          unconfirmed_head=0
+          case "$out" in
+            'merged '*) poll_head=${out#merged }; out=merged ;;
+            'head '*) poll_head=${out#head }; out= ;;
+          esac
+          rebind_rc=0
+          if [ -n "$poll_head" ]; then
+            fm_pr_meta_rebind_head "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" "$poll_head" || rebind_rc=$?
+          elif [ "$out" = merged ] && [ "$provider" = github ]; then
+            # GitHub merged, and the forge would not give up a head. What the
+            # record still holds is the arming-time value - the superseded head
+            # this whole branch exists to stop anyone trusting - and the poll
+            # retires below, so nothing will ever correct it. Drop it rather
+            # than leave a head nobody has seen standing as the merged one;
+            # every consumer resolves a head live when none is recorded. The row
+            # is queued either way, because reporting while leaving the false
+            # record in place would fix only the half nobody reads.
+            #
+            # GitHub only, and the guard is the whole point. A bare merged from
+            # GitLab is that provider's DOCUMENTED output, not a degradation:
+            # plain glab exposes the head only inside JSON, so bin/fm-pr-poll.sh
+            # never emits one and bin/fm-pr-check.sh never records one to be
+            # stale. Reading a contract as a failure queued a durable row
+            # describing an incident that did not happen, on every GitLab merge,
+            # forever - which is the crowding the report-once record exists to
+            # stop, arriving through the path added to stop silence.
+            fm_pr_meta_clear_head "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" || rebind_rc=$?
+            unconfirmed_head=1
+          fi
+          # A re-bind never holds this loop up, and it never fails quietly.
+          # This branch exists because a poll bound to a stale head failed
+          # silently for hours; reporting its own failure only into the
+          # absorbed-wake debug log, which AGENTS.md calls never relied on and
+          # safe to delete, would be that same bug one level up. So anything
+          # that leaves the record off the head the forge just returned is
+          # queued as an actionable row.
+          #
+          # Exactly one case is exempt, and it is narrow: LIVE contention (2)
+          # on a poll that is not terminal. A relaunch owns the task record for
+          # as long as a spawn takes, the record is untouched, and the next poll
+          # re-reads the head, so it corrects itself. Every other lock failure
+          # is 1, because it is permanent - a stale lock nothing will reclaim,
+          # a timeout helper that would not load - and a later poll meets it
+          # again. Nothing on the merged path is exempt at all, contention
+          # included: the outcome publishes and the poll retires in this same
+          # cycle, so whatever the record holds then it holds forever.
+          if [ -n "$poll_head" ] && [ "$rebind_rc" -eq 0 ] && [ "${unconfirmed_head:-0}" = 0 ]; then
+            # A head was actually recorded, so anything reported before is
+            # answered and the next failure - even an identical one - is news
+            # again. The poll_head test is load-bearing: rebind_rc starts at 0
+            # and STAYS 0 on a sweep where no re-bind was even attempted, which
+            # is what a silent poll produces (an unreachable forge, a gh
+            # failure, an unparseable head). Dropping the record then would
+            # re-queue an already-reported condition on every forge hiccup,
+            # which is the crowding this record exists to prevent. "The re-bind
+            # did not fail" is not the same fact as "a head was recorded".
+            rm -f "$STATE/.pr-head-reported-$id"
+          fi
+          if [ "$rebind_rc" -ne 0 ] || [ "${unconfirmed_head:-0}" = 1 ]; then
+            if [ "$out" = merged ]; then
+              # Merged: the poll retires in this same cycle, so whatever the
+              # record holds now it holds forever. Read it rather than assume
+              # it - a clear or a re-bind that failed leaves the previous value
+              # standing, and telling a supervisor "no head is recorded" while a
+              # superseded one is exactly what is recorded points them away from
+              # the problem instead of at it.
+              # Two independent facts, each read rather than inferred: whether
+              # the forge gave a head at all, and what the record holds now.
+              # The row carries both, because "the head is X" and "the record
+              # says Y" are different things and a supervisor needs each. It
+              # also predicts nothing about a retirement that has not run yet.
+              left=$(recorded_pr_head "$id")
+              if [ -n "$poll_head" ]; then
+                merged_note="merged at $poll_head, but its record could not be updated"
+              else
+                merged_note="merged, but its pull request head could not be read"
+              fi
+              if [ -n "$left" ]; then
+                merged_note="$merged_note and still names $left, which is not confirmed to be the commit that landed"
+              elif [ -n "$poll_head" ]; then
+                merged_note="$merged_note and now names no head at all"
+              else
+                merged_note="$merged_note, so no head is recorded for what landed"
+              fi
+              triage_log "merged poll for $id: $merged_note (rc=$rebind_rc)"
+              fm_wake_append check "pr-head-$id" "check: $id $merged_note: $url" || exit 1
+            elif [ "$rebind_rc" -eq 2 ]; then
+              triage_log "deferred re-binding the recorded head of $id to $poll_head; the task record was locked"
+            else
+              # The one path here that repeats: the poll stays armed, so this
+              # cycle's failure recurs on every sweep until someone acts. The
+              # rc=1 causes are largely persistent - a record rebound to another
+              # pull request, a link count, a device mismatch - so an ungated row
+              # per sweep would crowd the queue that is meant to be the first
+              # work list. Report each distinct condition once, keyed on the
+              # task and the head it could not reach, exactly as this repo
+              # already does for pending tool updates and dead endpoints.
+              triage_log "could not re-bind the recorded head of $id to $poll_head (rc=$rebind_rc)"
+              rebind_marker="$STATE/.pr-head-reported-$id"
+              # Same rule as the merged path: a task armed without a head - no
+              # worktree, or no gh on PATH (bin/fm-pr-check.sh) - has no stale
+              # head to name, so the row must not claim one.
+              left=$(recorded_pr_head "$id")
+              if [ -n "$left" ]; then
+                left_note="so it still names $left"
+              else
+                left_note="so it still names no head at all"
+              fi
+              if [ "$(cat "$rebind_marker" 2>/dev/null || true)" = "$poll_head $rebind_rc" ]; then
+                triage_log "absorbed a repeat re-bind failure for $id (already reported once)"
+              else
+                fm_wake_append check "pr-head-$id" \
+                  "check: $id's record could not be updated to the head its pull request is on ($poll_head), $left_note: $url" \
+                  || exit 1
+                # Unguarded, like every other marker write in this file - the
+                # .dead-reported-* sibling this record was modelled on writes
+                # exactly this way. The row is already appended by the time this
+                # runs, so a failed write costs one duplicate row on the next
+                # sweep; exiting would cost the supervision cycle itself, which
+                # is a far worse answer to a failure this record exists only to
+                # make tidier. Ordering is the half that does matter and is kept:
+                # append first, then mark.
+                printf '%s %s\n' "$poll_head" "$rebind_rc" > "$rebind_marker" \
+                  || triage_log "could not write the report-once record for $id; a duplicate row may follow"
+              fi
+            fi
+          fi
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
           custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT
           run_check_capture "$custom_snapshot" || exit 1
@@ -2575,7 +2737,7 @@ EOF
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
               printf '%s' "$h" > "$sf"
-              date +%s > "$ssf"
+              fm_now > "$ssf"
               clear_write_tracking "$key"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
             elif captain_call_stale_bound "$key" "$task"; then
@@ -2636,7 +2798,7 @@ EOF
               working)
                 clear_pause_tracking "$key"
                 printf '%s' "$h" > "$sf"
-                date +%s > "$ssf"
+                fm_now > "$ssf"
                 triage_log "absorbed non-terminal stale (provably working): $w"
                 ;;
               paused)

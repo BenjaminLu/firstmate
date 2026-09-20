@@ -14,6 +14,8 @@
 #   fm-bearings-board.sh compose --check <data.json>
 #   fm-bearings-board.sh build <data.json>
 #   fm-bearings-board.sh refresh [--snapshot <file>] [--best-effort]
+#   fm-bearings-board.sh derive <data.json> [--out <file>] [--endpoint <ws-url>]
+#   fm-bearings-board.sh ack <key> (--acting | --refused --why-file <path> | --clear)
 #   fm-bearings-board.sh path
 #   fm-bearings-board.sh url
 #   fm-bearings-board.sh open
@@ -32,6 +34,8 @@
 #            here rather than left to agent memory). Output starts with
 #            `board: <path>`, then includes lavish-axi's session output and
 #            the remaining status:
+#              live: <ws endpoint>           (the board subscribes to fleet
+#                                            events and repaints as they land)
 #              session: live | reopened
 #              served: <path>
 #              bound: <source-id>
@@ -223,6 +227,23 @@
 #            appended to the bounded state/.bearings-board-refresh.log, so a
 #            supervision trigger can never be changed by this side-band
 #            publication. Output is `refreshed: <board>`.
+# derive     Write the LIVE board - the same derivation build performs, with
+#            the payload injected - without establishing a Lavish session,
+#            arming anything, or touching the board at its stable path.
+#            --endpoint pins the endpoint instead of starting this home's
+#            server. This is how the derivation is inspected and tested; build
+#            is how the captain gets a board.
+# ack        Write the acknowledgement the board shows on the row the captain
+#            clicked. <key> is the board's own routing key - a Captain's Call
+#            card key, or a Charted Next row id - because that is what the
+#            captain clicked and what the payload keys the row by.
+#            Exactly one mode is required. --acting records that the answer
+#            was received and is being acted on. --refused records that the
+#            picked item was verified and NOT set in motion, with the
+#            captain-facing reason read from --why-file (a file, never argv,
+#            so a reason may be prose of any length and any shape). --clear
+#            removes the record. Output is `ack: <path>` or
+#            `cleared: <path>`.
 # path       Print the stable board path for this home.
 # url        Print the board's Lavish session URL, read from the server's live
 #            session listing for the stable path; exit 1 with a reason when no
@@ -326,6 +347,72 @@
 # carrying translated prose in the payload; `detail` stays the raw evidence
 # line. `refreshed` is that row's own read time, which is what makes a stale
 # row visible as stale rather than silently old.
+#
+# THE ACKNOWLEDGEMENT LIFECYCLE, AND THIS SCRIPT OWNS IT. A control that sets
+# fleet work in motion must say so on the row the captain clicked immediately,
+# without waiting for what the click set in motion. Two things draw that pill -
+# the page, the instant he clicks it, and a publication, from the durable
+# record - so the rule between them is stated HERE, once and whole. The
+# template, the capture seam in bin/fm-procevent.sh, the handler contract in
+# .agents/skills/bearings/SKILL.md and the ledger line in AGENTS.md each carry
+# out one part of it and point back at this block; none of them restates it,
+# because a lifecycle with four owners is how the seams between them get lost.
+#
+#   BORN at capture. The captain's answer, read back from the board, writes one
+#   `acting` record per key that answer named - no more, no fewer.
+#   bin/fm-procevent.sh feeds it beside the keyed-answer intake, through the
+#   `ack` command below, which is the carrier's ONLY writer.
+#
+#   SHOWN newest first. A key can carry two acknowledgements at once: the
+#   published record, and a click the page itself remembers. Both carry the
+#   second they happened, and the NEWER wins. A publication still carrying a
+#   ten-minute-old unsettled record must not bury a click made three seconds
+#   ago - telling the captain his click did not happen is the one thing this
+#   whole behaviour exists to stop. An equal stamp goes to the publication,
+#   because only a publication can carry a refusal's reason.
+#
+#   AGES against one threshold and one clock, measured from the `at` stamp it
+#   was born with. Compose hands that stamp to the renderer and derives nothing
+#   from it, because the state it feeds reports a consequence that never
+#   arrived - and that is exactly the case in which nothing republishes the
+#   board. A row that could only age on a republication would report a slow
+#   answer and stay silent about a missed one, which is the discrimination the
+#   captain asked for, backwards.
+#
+#   RETIRES only when the handler settles it - a dispatch clears it (`ack <key>
+#   --clear`), a refusal replaces it (`ack <key> --refused`). Nothing else
+#   retires a record. Not compose: a publication enumerates what the snapshot's
+#   options and caps gave it, not every live row, so a key missing from one
+#   board says nothing about whether its row still exists. Not a clock either -
+#   an unsettled record goes on reporting itself as still waiting however long
+#   it has been, which is the report the captain asked for, and is how "the
+#   first mate is busy" is told apart from "the first mate missed it".
+#
+# ONLY the two surfaces the captain clicks carry it: a Captain's Call item and
+# a Charted Next row. Every control he named lives on one of those, and an
+# Underway row has nothing on it he clicks. Either MAY therefore carry `ack`:
+# {kind, at, why?}. `kind` is `acting` (received, being acted on) or `refused`
+# (verified and not set in motion); the template renders each one's words in
+# the captain's language, because a deterministic publication has no translator
+# in the loop. `at` is the epoch second of the click. `why` is the refusal's
+# reason and is the one ack field that is captain-facing copy, because the
+# first mate writes it. The carrier is state/board-acks/<key>.json.
+#
+# THE CARRIER KEY HAS NO SURFACE IN IT, AND THAT RESTS ON A PARTITION TWO FILES
+# AWAY. A record is keyed by the bare board key, so one `ack <key>` paints one
+# row. A decision card's key and a Charted Next row's id are drawn from the
+# same namespace - both are task ids - and they stay apart only because the
+# snapshot splits them: a card takes `select(.captain_actionable == true)` and
+# a gate takes `select(.captain_actionable != true)`, where captain_actionable
+# is `.hold_bucket == "live"`. Merge cards escape independently, being prefixed
+# `merge.`. So no key can name two rows today. If that partition ever changes -
+# a held task also surfaced as a gate - one `ack` would paint two rows and one
+# `--clear` would wipe both, contradicting "on the row the captain clicked".
+# The key format is deliberately NOT prefixed to guard a collision that cannot
+# currently happen: widening a published format is dear and recording the
+# dependency is cheap. tests/fm-bearings-snapshot.test.sh asserts the partition
+# holds, so a change to it fails there rather than quietly sharing a pill.
+#
 # A Charted Next row MAY carry `filed`, the durable filed date (YYYY-MM-DD, or
 # that date with a UTC timestamp) the template orders the section by, newest
 # first; a row with no comparable date keeps its payload order after every dated
@@ -341,6 +428,8 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-lavish-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-lavish-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
@@ -357,6 +446,25 @@ case "$REFRESH_TIMEOUT" in ''|*[!0-9]*|0) REFRESH_TIMEOUT=90 ;; esac
 TEMPLATE="${FM_BEARINGS_BOARD_TEMPLATE:-$SCRIPT_DIR/../.agents/skills/bearings/assets/board-template.html}"
 PLACEHOLDER='__FM_BEARINGS_BOARD_DATA__'
 BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
+# The live transport, and the two seams it is anchored on. The board has ONE
+# definition - the shipped template - and the live board is that same board
+# subscribing to fleet events, DERIVED here rather than re-authored, so every
+# card type, badge, picker and packet reaches it without anyone maintaining a
+# list of them. If either seam moves, build stops and names it instead of
+# emitting a board that would look right and never update.
+LIVE_TRANSPORT="${FM_BOARD_LIVE_TRANSPORT:-$SCRIPT_DIR/../.agents/skills/bearings/assets/live-transport.js}"
+LIVE_ANCHOR='<script id="bearings-data" type="application/json">'
+LIVE_ENDPOINT_SLOT='__FM_BOARD_LIVE_ENDPOINT__'
+# The other half of the same connection: what the board sends the captain's
+# answer back with. bin/fm-board-live.sh's header owns what it proves. It is a
+# credential, so it is injected ONLY into a board being written to a file at
+# mode 0600, never into one going to stdout, where it would be read in a
+# terminal, pasted into a report and captured in a log. That is a mechanism
+# and not a convention on purpose: the natural way to look at a derived board
+# is to run `derive` without --out, so relying on the caller to remember would
+# put the captain's answer credential in a transcript the first time anyone
+# debugged a board.
+LIVE_TOKEN_SLOT='__FM_BOARD_LIVE_TOKEN__'
 BOARD_SCHEMA=fm-bearings-board.v1
 PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
 # The one definition of a routable key, an acceptable captain-facing link, and
@@ -466,6 +574,91 @@ fail() {
 
 board_path() { printf '%s/.lavish/bearings-board.html\n' "$FM_HOME"; }
 
+# --- the live board ----------------------------------------------------------
+# The board the captain reads goes stale between rebuilds, and nothing about
+# that was ever the transport's fault: nothing wrote. The derivation below adds
+# the one thing a built page cannot do for itself - subscribe to the fleet's
+# own events and repaint the instant one lands - and adds nothing else.
+# bin/fm-board-live.mjs owns what an event may change; the transport owns what
+# the page says about its own freshness.
+
+# Start this home's live server and print the endpoint a page should use.
+# Prints nothing and returns 1 when there is none: a board with no live server
+# still renders from the payload built into it and says it is not updating, so
+# this can never be the reason a board is not built.
+live_endpoint() {
+  local out
+  out=$("$SCRIPT_DIR/fm-board-live.sh" start 2>/dev/null) || return 1
+  printf '%s\n' "$out" | grep -m1 '^ws://' || return 1
+}
+
+# Write the shipped template with the live transport inserted above the data
+# slot, carrying <endpoint>. Above the slot is where the transport must sit: it
+# captures the board's markup BEFORE the shipped script renders into it, which
+# is what lets a repaint restore first paint exactly and lets the board's own
+# error card be undone. Fails rather than emitting a board that cannot update.
+derive_live_board() {  # <endpoint> <destination> <may-carry-token 0|1>
+  local endpoint=$1 dest=$2 with_token=${3:-0} anchors token
+  [ -f "$LIVE_TRANSPORT" ] && [ ! -L "$LIVE_TRANSPORT" ] \
+    || { printf 'the live transport is missing: %s\n' "$LIVE_TRANSPORT" >&2; return 1; }
+  grep -qF "$LIVE_ENDPOINT_SLOT" "$LIVE_TRANSPORT" \
+    || { printf 'the live transport carries no endpoint slot\n' >&2; return 1; }
+  grep -qF "$LIVE_TOKEN_SLOT" "$LIVE_TRANSPORT" \
+    || { printf 'the live transport carries no answer-token slot\n' >&2; return 1; }
+  anchors=$(grep -cxF "$LIVE_ANCHOR" "$TEMPLATE")
+  [ "$anchors" -eq 1 ] \
+    || { printf 'board template does not carry exactly one data slot opening: %s\n' "$TEMPLATE" >&2; return 1; }
+  # A board that cannot send an answer back is a picture of a board, so a
+  # board being KEPT refuses rather than being written with buttons that would
+  # do nothing. A board going to stdout is an inspection copy: it is emitted
+  # with an empty slot, and says on the page that it cannot answer, because
+  # the alternative is a credential on a terminal.
+  token=""
+  if [ "$with_token" = 1 ]; then
+    token=$("$SCRIPT_DIR/fm-board-live.sh" token) \
+      || { printf 'cannot issue the answer token this board would need to reach firstmate\n' >&2; return 1; }
+  fi
+
+  local filled
+  filled=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-board-live-transport.XXXXXX") || return 1
+  if ! FM_LIVE_ENDPOINT="$endpoint" FM_LIVE_TOKEN="$token" perl -pe \
+      "s/\\Q$LIVE_ENDPOINT_SLOT\\E/\$ENV{FM_LIVE_ENDPOINT}/g;
+       s/\\Q$LIVE_TOKEN_SLOT\\E/\$ENV{FM_LIVE_TOKEN}/g" "$LIVE_TRANSPORT" > "$filled"; then
+    rm -f -- "$filled"
+    printf 'cannot set the live endpoint on the transport\n' >&2
+    return 1
+  fi
+  # getline reads the transport verbatim, so nothing in it is interpreted as a
+  # pattern or a replacement however it is punctuated.
+  if ! awk -v anchor="$LIVE_ANCHOR" -v tfile="$filled" '
+      $0 == anchor && !done {
+        print "<script id=\"fm-board-live\">";
+        while ((getline line < tfile) > 0) print line;
+        print "</script>";
+        done = 1;
+      }
+      { print }
+    ' "$TEMPLATE" > "$dest"; then
+    rm -f -- "$filled"
+    printf 'cannot derive the live board\n' >&2
+    return 1
+  fi
+  rm -f -- "$filled"
+  if ! grep -qxF '<script id="fm-board-live">' "$dest"; then
+    printf 'the live transport did not reach the derived board\n' >&2
+    return 1
+  fi
+  if grep -qF "$LIVE_ENDPOINT_SLOT" "$dest"; then
+    printf 'the live endpoint slot survived derivation\n' >&2
+    return 1
+  fi
+  if grep -qF "$LIVE_TOKEN_SLOT" "$dest"; then
+    printf 'the answer-token slot survived derivation\n' >&2
+    return 1
+  fi
+  return 0
+}
+
 # The board INLINES a packet's drawings into the captain's page, beside the
 # answer channel, so the bytes it inlines are held to the figure contract that
 # governs a drawing anywhere. The check is not restated here: it is
@@ -514,6 +707,107 @@ $rows
 EOF
   rm -f -- "$tmp"
   return "$status"
+}
+
+# --- the acknowledgement carrier ---------------------------------------------
+# One record per board key, written only through `ack`. The key is a board
+# routing key, so it satisfies the same slug rule the payload validator applies
+# to a card key and a Charted Next id; with no path separator accepted, a key
+# can never address anything outside the carrier directory.
+
+acks_dir() { printf '%s/board-acks\n' "$STATE"; }
+ack_path() { printf '%s/%s.json\n' "$(acks_dir)" "$1"; }
+
+validate_ack_key() {  # <key>
+  case "$1" in
+    ''|.|..) fail "not a board key: $1" ;;
+  esac
+  printf '%s' "$1" | LC_ALL=C grep -Eq '^[A-Za-z0-9._-]{1,128}$' \
+    || fail "not a board key: $1"
+}
+
+write_ack() {  # <key> <kind> <why-file-or-empty>
+  local key=$1 kind=$2 why_file=$3 path dir tmp
+  path=$(ack_path "$key")
+  dir=$(acks_dir)
+  (umask 077; mkdir -p "$dir") || fail "cannot create $dir"
+  tmp=$(umask 077; mktemp "$dir/.board-ack.XXXXXX") || fail "cannot stage the acknowledgement for $key"
+  if ! jq -n --arg kind "$kind" --arg at "$(date -u +%s)" \
+    --rawfile why "${why_file:-/dev/null}" '
+      {schema: "fm-board-ack.v1", kind: $kind, at: ($at | tonumber)}
+      + (($why | sub("\\s+$"; "")) as $w | if $w == "" then {} else {why: $w} end)' > "$tmp"; then
+    rm -f -- "$tmp"
+    fail "cannot stage the acknowledgement for $key"
+  fi
+  if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$path"; }; then
+    rm -f -- "$tmp"
+    fail "cannot publish the acknowledgement for $key"
+  fi
+  printf 'ack: %s\n' "$path"
+}
+
+command_ack() {
+  local key=${1-} mode='' why_file=''
+  [ "$#" -ge 1 ] || { usage >&2; exit 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --acting|--clear) [ -z "$mode" ] || { usage >&2; exit 2; }; mode=${1#--}; shift ;;
+      --refused) [ -z "$mode" ] || { usage >&2; exit 2; }; mode=refused; shift ;;
+      --why-file) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; why_file=$2; shift 2 ;;
+      *) usage >&2; exit 2 ;;
+    esac
+  done
+  validate_ack_key "$key"
+  [ -n "$mode" ] || { usage >&2; exit 2; }
+  [ -z "$why_file" ] || [ "$mode" = refused ] \
+    || fail "--why-file explains a refusal and means nothing without --refused"
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  case "$mode" in
+    refused)
+      [ -n "$why_file" ] || fail "--refused needs --why-file: a refusal the captain cannot read is not a refusal"
+      [ -f "$why_file" ] && [ ! -L "$why_file" ] || fail "refusal reason does not exist: $why_file"
+      [ -n "$(LC_ALL=C tr -d '[:space:]' < "$why_file")" ] \
+        || fail "refusal reason is empty: $why_file"
+      write_ack "$key" refused "$why_file"
+      ;;
+    acting) write_ack "$key" acting '' ;;
+    clear)
+      rm -f -- "$(ack_path "$key")" || fail "cannot clear the acknowledgement for $key"
+      printf 'cleared: %s\n' "$(ack_path "$key")"
+      ;;
+  esac
+}
+
+# Every stored acknowledgement, resolved for one publication: {key: {kind, at,
+# why?}}. The stamp is carried through untouched - see AGES in the lifecycle
+# block above. A record that is unreadable or not this schema is skipped rather
+# than refusing the board: a malformed side-band file must never cost the
+# captain every other row. The merge lands in a scratch variable first,
+# because a failed command substitution assigns its empty output BEFORE the
+# `||` runs - accumulating in place would let one unmergeable record wipe the
+# map it had already built and fail the whole publication.
+board_acks_map() {
+  local dir f key acc='{}' resolved merged
+  dir=$(acks_dir)
+  [ -d "$dir" ] || { printf '%s\n' "$acc"; return 0; }
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    key=${f##*/}; key=${key%.json}
+    resolved=$(jq -c '
+      select(type == "object" and .schema == "fm-board-ack.v1")
+      | select(.kind == "acting" or .kind == "refused")
+      | select(.at | type == "number")
+      | {kind, at}
+        + (if (.why | type == "string") and (.why | length) > 0 then {why: .why} else {} end)
+      ' "$f" 2>/dev/null) || continue
+    [ -n "$resolved" ] || continue
+    merged=$(jq -n --argjson acc "$acc" --arg key "$key" --argjson ack "$resolved" \
+      '$acc + {($key): $ack}' 2>/dev/null) || continue
+    [ -n "$merged" ] || continue
+    acc=$merged
+  done
+  printf '%s\n' "$acc"
 }
 
 validate_payload() {  # <data.json>
@@ -602,6 +896,16 @@ validate_payload() {  # <data.json>
           # them unique within itself: two drawings sharing a slug share an id
           # namespace once the board inlines them side by side
           and ([.figures[].slug] | length == (unique | length)));
+    # The acknowledgement the board shows on the row the captain clicked.
+    # `kind` is a closed vocabulary the template translates, `at` the epoch
+    # second of the click it ages from, and `why` the only captain-facing copy
+    # in it.
+    def ack_item:
+      type == "object"
+      and (.kind == "acting" or .kind == "refused")
+      and (.at | type == "number")
+      and ((has("why") | not) or (.why | copy));
+    def optional_ack: (has("ack") | not) or (.ack == null) or (.ack | ack_item);
     def call_item:
       type == "object"
       and (.key | slug(128))
@@ -651,7 +955,8 @@ validate_payload() {  # <data.json>
           and (.recommend_value as $recommend
             | ([.options[].value] | index($recommend) != null))))
       and ([.options[].value] | index("reconcile") == null)
-      and (if .type == "merge" then (.risk | nonempty_string) else true end);
+      and (if .type == "merge" then (.risk | nonempty_string) else true end)
+      and optional_ack;
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
       and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string)
@@ -667,7 +972,8 @@ validate_payload() {  # <data.json>
       and (.dispatchable | type == "boolean")
       and ((has("kind") | not) or (.kind == "queued" or .kind == "warning"))
       and optional_filed
-      and (if .kind == "warning" then .dispatchable == false else true end);
+      and (if .kind == "warning" then .dispatchable == false else true end)
+      and optional_ack;
     type == "object"
     and (.schema == $schema)
     and (.home | nonempty_string)
@@ -734,14 +1040,13 @@ lavish_board_live() {  # <establish output> <canonical-board-path>
 # this board, which is exactly the attention `--reopen` exists for - and a
 # session that is still not live after that refuses the build rather than
 # arming a poll that can never attach.
-# The installed lavish-axi advertises session names in its own help text; an
-# older release gets the plain open so the board still works there. The probe
-# reads `--help` rather than the bare session listing, because it runs before
-# the session is established and a listing is not inert: it is the same read the
-# liveness proof below depends on, so probing with one lets the probe answer a
-# question the build has not asked yet.
+# A build that advertises session names gets the stable `/s/<slug>` address; a
+# build without the flag gets the plain open so the board still works there.
+# fm-lavish-lib.sh owns that question - including why it is a capability probe
+# rather than a version floor - so only a positive verdict adds the flag and
+# both "no" and "could not tell" degrade to the plain open exactly as before.
 lavish_name_args() {
-  if lavish-axi --help 2>/dev/null | grep -q -- '--name <slug>'; then
+  if fm_lavish_named_session_support; then
     printf -- '--name\n%s\n' "$BOARD_SESSION_NAME"
   fi
 }
@@ -1068,13 +1373,13 @@ command_compose_check() {  # <data.json>
 
 command_compose() {
   local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' links='{}' id record card link ids tmp readable=true
-  local deterministic=false progress='{}' row merge_cards
+  local deterministic=false progress='{}' row merge_cards acks='{}'
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --check) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; command_compose_check "$2"; return $? ;;
-      --lang) lang=${2-}; shift 2 ;;
-      --out) out=${2-}; shift 2 ;;
-      --snapshot) snapshot_file=${2-}; shift 2 ;;
+      --lang) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; lang=$2; shift 2 ;;
+      --out) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; out=$2; shift 2 ;;
+      --snapshot) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; snapshot_file=$2; shift 2 ;;
       --deterministic) deterministic=true; shift ;;
       *) usage >&2; exit 2 ;;
     esac
@@ -1141,10 +1446,14 @@ $(printf '%s\n' "$snapshot" | jq -r '.in_flight[]? | select(.id | contains("/") 
 EOF
   merge_cards=$(stored_merge_cards) \
     || fail "cannot read the stored merge cards under $DATA"
+  # What the captain has already clicked and has not yet seen the consequence
+  # of. Read once per publication, and attached below to whichever row carries
+  # the key he clicked.
+  acks=$(board_acks_map)
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
     --argjson records "$records" --argjson cards "$cards" --argjson links "$links" \
-    --argjson merge_cards "$merge_cards" \
+    --argjson merge_cards "$merge_cards" --argjson acks "$acks" \
     --argjson progress "$progress" --argjson deterministic "$deterministic" \
     --argjson readable "$readable" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     . as $snap |
@@ -1174,6 +1483,11 @@ EOF
       gsub("[^A-Za-z0-9._-]"; "-") | .[0:128] | gsub("^-+|-+$"; "")
       | if length == 0 then "row" else . end;
     def record($id): $records[$id] // null;
+    # The acknowledgement rides the key the captain actually clicked, which is
+    # the card key on a Captain'"'"'s Call item and the emitted row id everywhere
+    # else, so this is applied to the built object rather than to the snapshot
+    # row it came from.
+    def with_ack($key): if $acks[$key] == null then . else . + {ack: $acks[$key]} end;
     def repo_of($id): record($id) | if . == null then null else .repo end;
     def owned: .owner == "(main)";
     # The Charted Next id IS the dispatch.charted routing channel, so a row
@@ -1324,7 +1638,7 @@ EOF
           | select([$prs[] | select(.task == $pr.task)] | length == 1)
           | merge_card ]
         + carried_merge_cards
-        | first_per_key),
+        | first_per_key | map(with_ack(.key))),
       underway: [ .in_flight[]? | . as $row
         | {id, repo, name: t(.name; .id), state, kind, doing: t(.doing; .state)}
         + (($progress[$row.id] // null) as $p
@@ -1387,7 +1701,8 @@ EOF
             title: t("This home cannot read its own backlog"; "backlog-unreadable"),
             reason: t("merge cards are suppressed: no task record can be read to key or route a merge answer";
               "backlog-unreadable"),
-            dispatchable: false, kind: "warning", filed: null}] end))
+            dispatchable: false, kind: "warning", filed: null}] end)
+        | map(with_ack(.id)))
     }
     + (if gates_omitted > 0 and ($deterministic | not) then {
         charted_more: more_slot("queued"; "charted_warning_more"),
@@ -1456,10 +1771,34 @@ command_build() {
   [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] \
     || fail "board template does not carry exactly one data slot: $TEMPLATE"
 
+  # The page is derived before the payload goes into it, so the payload is
+  # injected into the live board rather than into a page the transport is
+  # bolted onto afterwards. A home that cannot run the server still gets its
+  # board - built from the same template, painting the same payload - and the
+  # build SAYS the board will not update rather than leaving that to be
+  # discovered at the surface the captain reads.
+  local endpoint="" source_page="$TEMPLATE" derived=""
+  if endpoint=$(live_endpoint); then
+    derived=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-live.XXXXXX") \
+      || fail "cannot stage the live board"
+    if derive_live_board "$endpoint" "$derived" 1; then
+      source_page=$derived
+      printf 'live: %s\n' "$endpoint"
+    else
+      rm -f -- "$derived"
+      derived=""
+      printf 'live: no - the board was built without live updates; see the reason above\n' >&2
+    fi
+  else
+    endpoint=""
+    printf 'live: no - this home has no live board server, so the board will not update between builds (bin/fm-board-live.sh doctor)\n' >&2
+  fi
+
   effective=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-payload.XXXXXX") \
-    || fail "cannot stage the board payload"
+    || { [ -z "$derived" ] || rm -f -- "$derived"; fail "cannot stage the board payload"; }
   if ! effective_payload "$data" "$effective"; then
     rm -f -- "$effective"
+    [ -z "$derived" ] || rm -f -- "$derived"
     fail "cannot reconcile the board payload against landed work"
   fi
   board=$(board_path)
@@ -1474,6 +1813,7 @@ command_build() {
   lock=$(board_lock_path)
   if ! fm_lock_acquire_wait_bounded "$lock" "$REFRESH_TIMEOUT"; then
     rm -f -- "$effective"
+    [ -z "$derived" ] || rm -f -- "$derived"
     fail "another board publication is still under way (holder pid ${FM_LOCK_HELD_PID:-unknown})"
   fi
   BOARD_LOCK=$lock
@@ -1481,10 +1821,12 @@ command_build() {
   trap 'exit 129' HUP
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  if ! inject_board "$effective" "$board"; then
+  if ! inject_board "$effective" "$board" "$source_page"; then
     rm -f -- "$effective"
-    fail "cannot inject the board data into $TEMPLATE"
+    [ -z "$derived" ] || rm -f -- "$derived"
+    fail "cannot inject the board data into $source_page"
   fi
+  [ -z "$derived" ] || rm -f -- "$derived"
   persist_composed_cards "$data" "$effective"
   board_unlock
   trap - EXIT
@@ -1670,17 +2012,40 @@ injected_payload() {  # <board>
 # Inject <payload.json> into a fresh copy of the template and publish it
 # atomically at <board>. Shared by build and refresh so one injection contract,
 # including the </script> escape and the round-trip read-back, serves both.
-inject_board() {  # <payload.json> <board>
-  local data=$1 board=$2 json tmp extracted
-  [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || return 1
-  [ "$(grep -cxF "$PLACEHOLDER" "$TEMPLATE")" -eq 1 ] || return 1
+# Reopen a built board at its data slot, so a refresh can republish THAT page
+# rather than a fresh one. Everything a build put on it that a refresh must not
+# touch - the live transport, its endpoint, the answer token the captain's
+# click is proved by - rides through untouched, because nothing outside the
+# payload is rewritten.
+reslot_board() {  # <board> <destination>
+  local board=$1 dest=$2
+  awk -v open="$LIVE_ANCHOR" -v ph="$PLACEHOLDER" '
+    $0 == open && !seen { print; print ph; inslot = 1; seen = 1; next }
+    inslot && $0 == "</script>" { inslot = 0; print; next }
+    inslot { next }
+    { print }
+  ' "$board" > "$dest" || return 1
+  [ "$(grep -cxF "$PLACEHOLDER" "$dest")" -eq 1 ] || return 1
+}
+
+# The source page is whatever page this publication paints: the shipped
+# template, the live-derived page a build writes, or - for a refresh - the
+# board the captain already has, reopened at its data slot. A refresh takes
+# the last of those on purpose: re-deriving would hand the page a fresh
+# endpoint and a fresh answer token the captain never asked for, and painting
+# the bare template would quietly strip the live transport off a board that
+# had one.
+inject_board() {  # <payload.json> <board> [<source-page>]
+  local data=$1 board=$2 source=${3:-$TEMPLATE} json tmp extracted
+  [ -f "$source" ] && [ ! -L "$source" ] || return 1
+  [ "$(grep -cxF "$PLACEHOLDER" "$source")" -eq 1 ] || return 1
   json=$(jq -c . "$data") || return 1
   # `<` never appears in JSON syntax outside strings, so escaping every
   # occurrence keeps the payload valid JSON while making </script> inert.
   json=${json//</\\u003c}
   (umask 077; mkdir -p "${board%/*}") || return 1
   tmp=$(umask 077; mktemp "${board%/*}/.board.XXXXXX") || return 1
-  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$TEMPLATE" > "$tmp"; then
+  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$source" > "$tmp"; then
     rm -f -- "$tmp"; return 1
   fi
   if grep -qxF "$PLACEHOLDER" "$tmp"; then rm -f -- "$tmp"; return 1; fi
@@ -1741,7 +2106,7 @@ command_refresh() {
 }
 
 refresh_worker() {
-  local board lang lock='' skeleton effective leftover
+  local board lang lock='' skeleton effective leftover source_page
   local -a compose_args=(--deterministic)
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1807,11 +2172,17 @@ refresh_worker() {
     refresh_fail "cannot reconcile the board payload against landed work"
   fi
   rm -f -- "$skeleton"
-  if ! inject_board "$effective" "$board"; then
-    rm -f -- "$effective"
+  source_page=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-reslot.XXXXXX") \
+    || { rm -f -- "$effective"; refresh_fail "cannot stage the page being republished"; }
+  if ! reslot_board "$board" "$source_page"; then
+    rm -f -- "$effective" "$source_page"
+    refresh_fail "cannot reopen the board's data slot at $board"
+  fi
+  if ! inject_board "$effective" "$board" "$source_page"; then
+    rm -f -- "$effective" "$source_page"
     refresh_fail "cannot inject the refreshed board payload"
   fi
-  rm -f -- "$effective"
+  rm -f -- "$effective" "$source_page"
   board_unlock
   trap - EXIT
   printf 'refreshed: %s\n' "$board"
@@ -1842,10 +2213,63 @@ command_open() {
   fi
 }
 
+command_derive() {
+  local data="" out="" endpoint="" derived tmp json
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --out) out=${2-}; shift 2 ;;
+      --endpoint) endpoint=${2-}; shift 2 ;;
+      -*) usage >&2; exit 2 ;;
+      *) [ -z "$data" ] || { usage >&2; exit 2; }; data=$1; shift ;;
+    esac
+  done
+  [ -n "$data" ] || { usage >&2; exit 2; }
+  command -v jq >/dev/null 2>&1 || fail "jq is required"
+  [ -f "$data" ] || fail "board data does not exist: $data"
+  jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
+  validate_payload "$data" || fail "board data does not satisfy $BOARD_SCHEMA: $data"
+  [ -f "$TEMPLATE" ] && [ ! -L "$TEMPLATE" ] || fail "board template is missing: $TEMPLATE"
+  if [ -z "$endpoint" ]; then
+    endpoint=$(live_endpoint) || fail "no live board server in this home (bin/fm-board-live.sh doctor)"
+  fi
+  derived=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-derive.XXXXXX") \
+    || fail "cannot stage the live board"
+  # Only a board being written to a file carries the answer token; see the
+  # slot comment above. Without --out this goes to a terminal.
+  if [ -n "$out" ]; then
+    derive_live_board "$endpoint" "$derived" 1 \
+      || { rm -f -- "$derived"; fail "cannot derive the live board"; }
+  else
+    derive_live_board "$endpoint" "$derived" 0 \
+      || { rm -f -- "$derived"; fail "cannot derive the live board"; }
+    printf 'fm-bearings-board: printed without the answer token, so this copy cannot send the captain'"'"'s answers; use --out for a board he can act on\n' >&2
+  fi
+  json=$(jq -c . "$data") || { rm -f -- "$derived"; fail "cannot compact the board data"; }
+  json=${json//</\\u003c}
+  tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-derived.XXXXXX") \
+    || { rm -f -- "$derived"; fail "cannot stage the derived board"; }
+  if ! BOARD_JSON="$json" perl -pe "s/^\\Q$PLACEHOLDER\\E\$/\$ENV{BOARD_JSON}/" "$derived" > "$tmp"; then
+    rm -f -- "$derived" "$tmp"
+    fail "cannot inject the board data"
+  fi
+  rm -f -- "$derived"
+  if [ -n "$out" ]; then
+    if ! { chmod 0600 "$tmp" && mv -f -- "$tmp" "$out"; }; then
+      rm -f -- "$tmp"
+      fail "cannot write the derived board: $out"
+    fi
+  else
+    cat "$tmp"
+    rm -f -- "$tmp"
+  fi
+}
+
 case "${1-}" in
   compose) shift; command_compose "$@" ;;
   build) shift; command_build "$@" ;;
   refresh) shift; command_refresh "$@" ;;
+  derive) shift; command_derive "$@" ;;
+  ack) shift; command_ack "$@" ;;
   path) board_path ;;
   url) command_url ;;
   open) command_open ;;

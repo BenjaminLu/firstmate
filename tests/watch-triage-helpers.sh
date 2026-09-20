@@ -21,6 +21,19 @@ ack_stopped_cycle() {  # <state>
     --recovery-generation "$generation"
 }
 
+# The cadence every case in these suites used to hard-code as one second each.
+# Neither number was ever about a real second: the poll only had to be short
+# enough that a case did not wait on it, and the grace only had to be long
+# enough for the trailing signals a case writes before the watcher starts. They
+# were seconds because a cycle boundary was observable only through the beacon's
+# mtime, which resolves to whole seconds - so an observer could not see two
+# cycles inside one second however fast the watcher ran. fm-watch.sh now
+# publishes a cycle counter in that beacon, watch_cycle below reads it, and the
+# cadence can be what the assertions actually need. Overridable so a bisect or a
+# loaded machine can restore the old cadence without editing every call site.
+WATCH_POLL=${FM_TRIAGE_POLL:-0.1}
+WATCH_GRACE=${FM_TRIAGE_GRACE:-0.1}
+
 # Common watcher knobs: tight poll/grace, no check or heartbeat cadence unless a
 # test overrides them, so a test only exercises the path it targets. FM_CREW_STATE_BIN
 # points at the case's hermetic fake fm-crew-state.sh (installed by make_case) so the
@@ -30,7 +43,7 @@ watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
   local state=$1 fakebin=$2 out=$3
   shift 3
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
-    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
+    FM_POLL="$WATCH_POLL" FM_SIGNAL_GRACE="$WATCH_GRACE" FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$@" "$WATCH" > "$out" &
 }
 
 # Wait until <pid>'s watcher has completed a whole poll cycle, or exited first.
@@ -40,10 +53,13 @@ watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
 # machine a short fixed budget can reap a round before the cycle it asserts on
 # ever ran - and then every "no wake, no marker" assertion passes vacuously
 # while every "marker written" assertion fails spuriously.
-# The liveness beacon is touched at the TOP of every poll, so this drops any
+# The liveness beacon is written at the TOP of every poll, so this drops any
 # beacon left by an earlier round, waits for THIS watcher to write a fresh one
 # (some poll's top), then waits for that one to advance (the next poll's top) -
 # and the whole cycle in between is what the caller's assertions describe.
+# It reads the beacon's published cycle counter rather than its mtime: an mtime
+# is whole seconds, so the same wait used to cost a second per cycle observed
+# however fast the watcher was actually running.
 # 0 if the watcher is still alive after a completed cycle, 1 if it exited.
 wait_poll_cycle() {  # <state> <pid> [limit-ticks]
   local state=$1 pid=$2 limit=${3:-300} beat first now i=0
@@ -52,14 +68,14 @@ wait_poll_cycle() {  # <state> <pid> [limit-ticks]
   first=""
   while [ "$i" -lt "$limit" ]; do
     kill -0 "$pid" 2>/dev/null || return 1
-    first=$(file_mtime "$beat")
+    first=$(watch_cycle "$state")
     [ -n "$first" ] && break
     sleep 0.1
     i=$((i + 1))
   done
   while [ "$i" -lt "$limit" ]; do
     kill -0 "$pid" 2>/dev/null || return 1
-    now=$(file_mtime "$beat")
+    now=$(watch_cycle "$state")
     if [ -n "$now" ] && [ "$now" != "$first" ]; then
       return 0
     fi
@@ -87,6 +103,17 @@ wait_numeric_file() {
     i=$((i + 1))
   done
   return 1
+}
+
+# The watcher's published cycle marker ("<pid> <cycle>"), or nothing when the
+# beacon is absent, empty, or caught mid-write. A caller treats "nothing" as
+# "no cycle observed yet" and keeps waiting, so a torn read costs one tick.
+watch_cycle() {  # <state>
+  local raw
+  raw=$(cat "$1/.last-watcher-beat" 2>/dev/null) || return 0
+  case "$raw" in
+    [0-9]*' '[0-9]*) printf '%s' "$raw" ;;
+  esac
 }
 
 # Portable mtime in epoch seconds. Platform-detected, never the `stat -f || stat -c`
@@ -151,7 +178,7 @@ wedge_threshold_round() {  # <state> <fakebin> <out> <capture> <window> <verdict
     FM_WATCH_HANDLING_SUCCESSOR=1 \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
     FM_PAUSE_RESURFACE_SECS="${FM_TEST_PAUSE_RESURFACE:-999}" FM_STALE_ESCALATE_SECS="${FM_TEST_STALE_ESCALATE:-1}" \
-    FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_POLL="$WATCH_POLL" FM_SIGNAL_GRACE="$WATCH_GRACE" \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
   pid=$!
   if [ "$mode" = exit ]; then

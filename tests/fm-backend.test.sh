@@ -811,12 +811,33 @@ SH
   printf '%s\n' "$fb"
 }
 
-run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> -- <spawn args...>
-  local bin=$1 fb=$2 log=$3 state=$4 data=$5 config=$6 proj=$7; shift 7
+# A spawn or teardown fixture's own Firstmate home.
+#
+# bin/fm-spawn.sh defaults FM_HOME to FM_ROOT_OVERRIDE when FM_HOME is unset, so
+# a fixture that sets only FM_STATE_OVERRIDE silently makes the REPOSITORY
+# CHECKOUT its home. That matters because bin/fm-wake-lib.sh's
+# fm_treehouse_project_lock_path anchors the shared Treehouse project lock at
+# <home>/state and deliberately ignores FM_STATE_OVERRIDE - every home that can
+# reach one pool must derive one path, which a per-process override would break.
+# The helper then requires <repo>/state to exist, and state/ is gitignored: it is
+# present in a checkout Firstmate has already operated in and in no clone. Such a
+# fixture passes only when something ELSE created that directory first - a
+# sibling script earlier in the same CI shard - so it becomes position-dependent
+# and flips on an unrelated shard repack rather than on any change to what it
+# tests. Give every fixture a home of its own and keep its state directory inside
+# that home, so it declares everything it needs.
+make_spawn_home() {  # <dir> -> echoes <dir>, with state/ and config/ created
+  mkdir -p "$1/state" "$1/config" || return 1
+  printf '%s\n' "$1"
+}
+
+run_spawn_case() {  # <bin-root> <fakebin> <log> <home> <data> <proj> -- <spawn args...>
+  local bin=$1 fb=$2 log=$3 home=$4 data=$5 proj=$6; shift 6
   [ "${1:-}" = -- ] && shift
   : > "$log"
   env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$bin" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
-    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_TMUX_LOG="$log" \
     "$bin/bin/fm-spawn.sh" "$@"
@@ -882,7 +903,7 @@ SH
 }
 
 run_spawn_symlink_case() {  # <label> <physical|logical>
-  local label=$1 first_reply=$2 real_root link_root proj wt id fb data state config log out rc proj_phys initial_path
+  local label=$1 first_reply=$2 real_root link_root proj wt id fb data home log out rc proj_phys initial_path
   real_root="$TMP_ROOT/symlink-real-$label"; link_root="$TMP_ROOT/symlink-link-$label"
   mkdir -p "$real_root"
   ln -s "$real_root" "$link_root"
@@ -905,11 +926,10 @@ run_spawn_symlink_case() {  # <label> <physical|logical>
   data="$TMP_ROOT/symlink-data-$label"
   mkdir -p "$data/$id"
   write_spawn_brief "$data/$id/brief.md" "$id"
-  state="$TMP_ROOT/symlink-state-$label"; config="$TMP_ROOT/symlink-config-$label"
-  mkdir -p "$state" "$config"
+  home=$(make_spawn_home "$TMP_ROOT/symlink-home-$label") || fail "could not build the symlink case's firstmate home"
   log="$TMP_ROOT/symlink-spawn-$label.log"
 
-  out=$(run_spawn_case "$ROOT" "$fb" "$log" "$state" "$data" "$config" "$proj" -- "$id" "$proj" claude --mode no-mistakes --yolo off 2>&1)
+  out=$(run_spawn_case "$ROOT" "$fb" "$log" "$home" "$data" "$proj" -- "$id" "$proj" claude --mode no-mistakes --yolo off 2>&1)
   rc=$?
   expect_code 0 "$rc" "fm-spawn.sh should succeed for a project reached through a symlinked prefix when the backend reports $first_reply cwd"$'\n'"$out"
   assert_contains "$out" "worktree=$wt" \
@@ -945,24 +965,31 @@ SH
   printf '%s\n' "$fb"
 }
 
-# run_teardown_case <script> <fm-root-override> <fakebin> <log> <state> <data> <config> <id>
+# run_teardown_case <script> <fm-root-override> <fakebin> <log> <home> <data> <id>
 # FM_ROOT_OVERRIDE is passed separately from <script> so both the old and new
 # runs can point it at the SAME neutral (non-git) shim root - that root's
 # bin/fm-guard.sh is a symlink to the real, unchanged script, so the
 # worktree-tangle check runs identically (and silently) for both, regardless
 # of which fm-teardown.sh (old or new) is actually being invoked.
+#
+# The home is named for the same reason every spawn fixture above names one
+# (see make_spawn_home). fm-teardown.sh reaches fm_treehouse_project_lock_path
+# too, and while its three call sites are gated behind fm_treehouse_pool_slot -
+# which wants a real <pool>/treehouse-state.json this fixture never builds, so
+# the guard is not reached today - an undeclared home is the same latent defect
+# and nothing keeps that gate where it is.
 run_teardown_case() {
-  local script=$1 fmroot=$2 fb=$3 log=$4 state=$5 data=$6 config=$7 id=$8
+  local script=$1 fmroot=$2 fb=$3 log=$4 home=$5 data=$6 id=$7
   : > "$log"
-  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$fmroot" \
-    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
     FM_TMUX_LOG="$log" \
     "$script" "$id"
 }
 
 test_teardown_conformance_old_vs_new() {
   local old_bin fb proj wt id old_tmux_ref saved_base_ref
-  local state_old state_new config_old config_new data log_old log_new out_old out_new rc_old rc_new
+  local state_old state_new home_old home_new data log_old log_new out_old out_new rc_old rc_new
   # Force the post-squash topology inside this case: merge-base with main may
   # equal HEAD on default-branch CI, and that must not make the legacy kill
   # fixture self-referential. build_old_bin still uses BASE_REF for entrypoints;
@@ -984,9 +1011,9 @@ test_teardown_conformance_old_vs_new() {
   mkdir -p "$data/$id"
   printf 'scout findings\n' > "$data/$id/report.md"
 
-  state_old="$TMP_ROOT/teardown-state-old"; state_new="$TMP_ROOT/teardown-state-new"
-  config_old="$TMP_ROOT/teardown-config-old"; config_new="$TMP_ROOT/teardown-config-new"
-  mkdir -p "$state_old" "$state_new" "$config_old" "$config_new"
+  home_old=$(make_spawn_home "$TMP_ROOT/teardown-home-old") || fail "could not build the old teardown run's firstmate home"
+  home_new=$(make_spawn_home "$TMP_ROOT/teardown-home-new") || fail "could not build the new teardown run's firstmate home"
+  state_old="$home_old/state"; state_new="$home_new/state"
 
   fm_write_meta "$state_old/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
@@ -997,9 +1024,9 @@ test_teardown_conformance_old_vs_new() {
   touch "$state_old/.last-watcher-beat" "$state_new/.last-watcher-beat"
 
   log_old="$TMP_ROOT/teardown-old.log"; log_new="$TMP_ROOT/teardown-new.log"
-  out_old=$(run_teardown_case "$old_bin/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_old" "$state_old" "$data" "$config_old" "$id" 2>&1)
+  out_old=$(run_teardown_case "$old_bin/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_old" "$home_old" "$data" "$id" 2>&1)
   rc_old=$?
-  out_new=$(run_teardown_case "$ROOT/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_new" "$state_new" "$data" "$config_new" "$id" 2>&1)
+  out_new=$(run_teardown_case "$ROOT/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_new" "$home_new" "$data" "$id" 2>&1)
   rc_new=$?
 
   expect_code 0 "$rc_old" "old fm-teardown.sh (scout, report present) should succeed"$'\n'"$out_old"
@@ -1024,10 +1051,11 @@ test_teardown_conformance_old_vs_new() {
 # --- backend selection loudly refuses an unknown backend --------------------
 
 test_spawn_refuses_unknown_backend_flag() {
-  local out status
+  local out status home
+  home=$(make_spawn_home "$TMP_ROOT/refuse-bogus-home") || fail "could not build the refuse-bogus case's firstmate home"
   # bogus names a backend with no adapter at all; zellij and orca both
   # graduated to real adapters and have their own spawn tests.
-  out=$(FM_ROOT_OVERRIDE='' FM_HOME='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
     FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" nope-backend-z1 projects/none claude --mode no-mistakes --yolo off --backend bogus 2>&1)
   status=$?
@@ -1037,8 +1065,9 @@ test_spawn_refuses_unknown_backend_flag() {
 }
 
 test_spawn_refuses_codex_app_backend_flag() {
-  local out status
-  out=$(FM_ROOT_OVERRIDE='' FM_HOME='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
+  local out status home
+  home=$(make_spawn_home "$TMP_ROOT/refuse-codex-app-home") || fail "could not build the refuse-codex-app case's firstmate home"
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
     FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" nope-codex-app-z1 projects/none claude --mode no-mistakes --yolo off --backend codex-app 2>&1)
   status=$?
@@ -1048,8 +1077,9 @@ test_spawn_refuses_codex_app_backend_flag() {
 }
 
 test_spawn_refuses_unknown_fm_backend_env() {
-  local out status
-  out=$(FM_ROOT_OVERRIDE='' FM_HOME='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
+  local out status home
+  home=$(make_spawn_home "$TMP_ROOT/refuse-fm-backend-home") || fail "could not build the refuse-fm-backend case's firstmate home"
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
     FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_SPAWN_NO_GUARD=1 FM_BACKEND=bogus \
     "$ROOT/bin/fm-spawn.sh" nope-backend-z2 projects/none claude --mode no-mistakes --yolo off 2>&1)
   status=$?
@@ -1059,17 +1089,18 @@ test_spawn_refuses_unknown_fm_backend_env() {
 }
 
 test_spawn_default_backend_writes_no_meta_field() {
-  local proj wt data id state config out
+  local proj wt data id state config home out
   proj="$TMP_ROOT/nobackend-project"; wt="$TMP_ROOT/nobackend-wt"; data="$TMP_ROOT/nobackend-data"
   id="nobackendz3"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   local fb
   fb=$(make_spawn_fakebin "$TMP_ROOT/nobackend-fake" "$wt")
   mkdir -p "$data/$id"; write_spawn_brief "$data/$id/brief.md" "$id"
-  state="$TMP_ROOT/nobackend-state"; config="$TMP_ROOT/nobackend-config"
-  mkdir -p "$state" "$config"
+  home=$(make_spawn_home "$TMP_ROOT/nobackend-home") || fail "could not build the nobackend case's firstmate home"
+  state="$home/state"; config="$home/config"
 
   out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
+    FM_HOME="$home" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
     FM_TMUX_LOG="$TMP_ROOT/nobackend.log" \
@@ -1082,18 +1113,19 @@ test_spawn_default_backend_writes_no_meta_field() {
 }
 
 test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
-  local proj wt data id state config out fb
+  local proj wt data id state config home out fb
   proj="$TMP_ROOT/explicit-backend-project"; wt="$TMP_ROOT/explicit-backend-wt"; data="$TMP_ROOT/explicit-backend-data"
   id="explicitbackendz4"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   fb=$(make_spawn_fakebin "$TMP_ROOT/explicit-backend-fake" "$wt")
   mkdir -p "$data/$id"; write_spawn_brief "$data/$id/brief.md" "$id"
-  state="$TMP_ROOT/explicit-backend-state"; config="$TMP_ROOT/explicit-backend-config"
-  mkdir -p "$state" "$config"
+  home=$(make_spawn_home "$TMP_ROOT/explicit-backend-home") || fail "could not build the explicit-backend case's firstmate home"
+  state="$home/state"; config="$home/config"
 
   # HERDR_ENV=1 is present (as if firstmate itself were running under herdr),
   # but an explicit --backend tmux flag must still win outright.
   out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
+    FM_HOME="$home" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" HERDR_ENV=1 \
     FM_TMUX_LOG="$TMP_ROOT/explicit-backend.log" \
@@ -1106,14 +1138,14 @@ test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
 }
 
 test_spawn_autodetect_nesting_resolves_tmux_silently() {
-  local proj wt data id state config out fb
+  local proj wt data id state config home out fb
   proj="$TMP_ROOT/nest-project"; wt="$TMP_ROOT/nest-wt"; data="$TMP_ROOT/nest-data"
   id="nestbackendz5"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   fb=$(make_spawn_fakebin "$TMP_ROOT/nest-fake" "$wt")
   mkdir -p "$data/$id"; write_spawn_brief "$data/$id/brief.md" "$id"
-  state="$TMP_ROOT/nest-state"; config="$TMP_ROOT/nest-config"
-  mkdir -p "$state" "$config"
+  home=$(make_spawn_home "$TMP_ROOT/nest-home") || fail "could not build the nest case's firstmate home"
+  state="$home/state"; config="$home/config"
 
   # No --backend, no FM_BACKEND, no config/backend: nothing is explicitly
   # configured, so auto-detect runs. $TMUX and HERDR_ENV=1 are both present
@@ -1121,6 +1153,7 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   # fm_backend_name, must resolve this to tmux and stay completely silent about
   # it (today's default path, byte-identical).
   out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
+    FM_HOME="$home" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" HERDR_ENV=1 \
     FM_TMUX_LOG="$TMP_ROOT/nest.log" \

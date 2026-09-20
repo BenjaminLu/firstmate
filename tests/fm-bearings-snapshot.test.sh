@@ -1186,6 +1186,44 @@ EOF
   pass "captain-held tasks of any kind reach Captain's Call, deferral is honored, and landed excludes answered calls"
 }
 
+# The board's acknowledgement carrier keys a record by the bare board key, with
+# no surface in it, so one `ack <key>` must never name two rows. That rests
+# entirely on this partition: a captain-actionable task is a Captain's Call and
+# is NOT also a gate. The rule is recorded in bin/fm-bearings-board.sh's header
+# and pinned here, so surfacing a held task as a gate fails a test instead of
+# quietly making one pill paint two rows and one --clear wipe both.
+test_a_captain_call_and_a_gate_never_share_an_id() {
+  local home fakebin json
+  home=$(make_home call-gate-partition)
+  mkdir -p "$home/data"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] due-now - Captain call due now (repo: firstmate) (kind: captain) (hold: pick a route) (hold-kind: captain)
+- [ ] held-ship - Captain-gated ship work (repo: firstmate) (kind: ship) (hold: captain go needed) (hold-kind: captain)
+- [ ] dated-later - Deferred captain call (repo: firstmate) (kind: captain) (hold: revisit) (hold-kind: captain) (hold-until: 2026-08-01)
+- [ ] outside-hold - Externally held work (repo: firstmate) (kind: ship) (hold: upstream release pending) (hold-kind: external)
+- [ ] plain-work - Ordinary queued work (repo: firstmate) (kind: ship)
+
+## Done
+EOF
+  fakebin=$(make_fakebin "$home")
+  json=$(run "$home" "$fakebin" --json)
+  # Stated as the property, not as a list of ids: every id on one surface is
+  # absent from the other, in both directions, whatever the fixture holds.
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[].id] - [.gates[].id]) == [.decisions_open[].id]
+      and ([.gates[].id] - [.decisions_open[].id]) == [.gates[].id]
+  ' >/dev/null || fail "a captain call and a gate shared an id: $json"
+  # And the fixture genuinely populates both surfaces, so the disjointness
+  # above is not passing on two empty lists.
+  printf '%s' "$json" | jq -e '
+    ([.decisions_open[]] | length) > 0 and ([.gates[]] | length) > 0
+  ' >/dev/null || fail "the partition fixture left one surface empty: $json"
+  pass "no id reaches Captain's Call and Charted Next at once, so one key names one row"
+}
+
 test_undated_hold_phrasing_and_aging_projection() {
   local home mate fakebin json
   home=$(make_home undated-aging-proj)
@@ -3367,3 +3405,4 @@ test_revealed_deferred_holds_show_their_deferral_reason
 test_pr_repository_cap_and_expansion
 test_per_repository_pr_cap_is_disclosed
 test_projection_and_toon_fail_closed
+test_a_captain_call_and_a_gate_never_share_an_id

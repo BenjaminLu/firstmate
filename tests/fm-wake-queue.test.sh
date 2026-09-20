@@ -797,7 +797,12 @@ test_enrichment_preserves_all_unread_lines_and_status_file_failures() {
   raw_count=$(awk -F '\t' 'NF == 5 { count++ } END { print count + 0 }' "$out")
   [ "$raw_count" -eq 13 ] || fail "missing, unreadable, malformed, empty, or oversized status input hid a raw row"
 
-  expected="wake annotation: latest wake-EVENT observed at drain, not current state: huge.status: $(cat "$state/huge.status")"
+  # These fixtures are status keys with no task record, so each annotated line
+  # whose verb makes a state claim also reports that there was no crew to ask -
+  # never silence, which would imply the states agree. `huge` says `done:`;
+  # `many-N` says `working-N:`, which is no verb the status protocol knows, so it
+  # makes no state claim and gains no clause.
+  expected="wake annotation: latest wake-EVENT observed at drain, not current state: huge.status: $(cat "$state/huge.status") (current state could not be read: no task record)"
   grep -Fx "$expected" "$out" >/dev/null \
     || fail "the oversized unread status line was truncated or omitted"
   i=1

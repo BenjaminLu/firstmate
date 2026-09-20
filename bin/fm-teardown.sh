@@ -3574,7 +3574,15 @@ rm -f "$STATE/$ID.turn-ended" "$STATE/$ID.progress" \
   "$STATE/$ID.control-relaunch" "$STATE/$ID.control-relaunch.meta-prior" \
   "$STATE/$ID.control-relaunch.brief-prior" "$STATE/$ID.control-relaunch.note" \
   "$STATE/$ID.reconcile-nudged" "$STATE/$ID.gemini-settings.json" \
-  "$STATE/.$ID.branch-outcome-index"
+  "$STATE/.$ID.branch-outcome-index" "$STATE/.pr-head-reported-$ID"
+# A board acknowledgement is settled by the handler, and one left behind is a
+# defect rather than untidiness (.agents/skills/bearings/SKILL.md). This is the
+# backstop for the case that contract already calls a defect: without it an
+# unsettled record outlives the task that earned it and reports "still waiting"
+# for days on work that shipped, any time that id reaches a board again. Both
+# shapes a task's key can take are named here - the bare id a decision card and
+# a Charted Next row use, and the merge card's prefixed form.
+rm -f "$STATE/board-acks/$ID.json" "$STATE/board-acks/merge.$ID.json"
 # The steering inbox (bin/fm-task-inbox-lib.sh) is runtime state for the
 # retired endpoint; teardown only runs after landing is confirmed, so any
 # leftover unhandled steer here is moot rather than unlanded work.
@@ -3622,6 +3630,15 @@ if [ -d "$STATE" ]; then
   # Same fleet event, same detached best-effort republication of the board.
   "$SCRIPT_DIR/fm-bearings-board.sh" refresh --best-effort </dev/null >/dev/null 2>&1 &
 fi
+# Cleanup is the moment the work is known to have landed, so it is the moment
+# the captain's board should stop showing it underway. Guarded like the refresh
+# above and for the same reason: a secondmate retirement may have removed this
+# very home, and a board event is not worth resurrecting it for. One append;
+# see bin/fm-board-live.sh for why this can never fail a teardown.
+if [ -d "$STATE" ]; then
+  "$SCRIPT_DIR/fm-board-live.sh" event landed "$ID" --repo "$PROJ" --owner "$KIND" || true
+fi
+
 if [ "$TEARDOWN_LEGACY_ACCEPTED" = 1 ]; then
   echo "teardown $ID complete (window $T, worktree $WT, legacy record accepted without spawn_gen: endpoint $TEARDOWN_LEGACY_ENDPOINT, incarnation $TEARDOWN_META_SPAWN_GEN)"
 elif teardown_owns_worktree; then

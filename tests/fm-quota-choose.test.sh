@@ -644,4 +644,22 @@ ok "invalid availability status fails closed"
 [ "$(wc -l < "$CALLS" | tr -d '[:space:]')" = 1 ] || fail "helper took an additional quota snapshot"
 ok "helper reuses the captured quota snapshot"
 
+# A snapshot the reader rejects at its very first token, followed by enough text
+# that the writer is still going when the reader leaves. Fed through a pipe that
+# was how "printf: write error: Broken pipe" reached stderr and failed the exact
+# comparisons above - intermittently, only where SIGPIPE is already ignored, so
+# it passed here and failed in CI. Both conditions are forced, so this case is
+# deterministic rather than a race retried until it behaves.
+BIG_MALFORMED="$LAB/big-malformed.toon"
+{ printf '%%\n'; seq 1 400000; } > "$BIG_MALFORMED"
+trap '' PIPE
+if err=$(call_choose --snapshot "$BIG_MALFORMED" --candidate claude:default 2>&1); then
+  trap - PIPE
+  fail "a large malformed snapshot unexpectedly dispatched"
+fi
+trap - PIPE
+[ "$err" = "error: invalid quota-axi snapshot" ] \
+  || fail "a large malformed snapshot leaked a diagnostic beside its refusal: $err"
+ok "a large malformed snapshot refuses with exactly one line and no write error"
+
 printf '# all fm-quota-choose tests passed\n'

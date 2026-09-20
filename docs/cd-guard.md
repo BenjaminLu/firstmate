@@ -7,6 +7,7 @@ The tracked harness adapters forward command text without classifying it.
 
 It is the third member of a family of primary-session guards that share the same cross-harness hook machinery:
 the watcher-arm PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`) and the turn-end supervision guard (`bin/fm-turnend-guard.sh`, `docs/turnend-guard.md`).
+The upstream-write seatbelt (`bin/fm-upstream-pretool-check.sh`, `docs/upstream-guard.md`) shares the same transport and output contract but is deliberately not scoped to the primary session.
 
 ## Purpose and boundary
 

@@ -142,10 +142,13 @@ Never run `lavish-axi poll` for the board yourself: the armed source's supervise
 
 ### The board stays fresh by itself
 
-After a build, the board republishes on every fleet event this home already republishes its structured summary on - a locked session start, a watcher-observed status change, a spawn, a teardown, and the watcher's recurring cadence - through `bin/fm-bearings-board.sh refresh`, detached and best effort.
-That refresh recomposes deterministically and injects in place: it never re-establishes, rebinds, or re-arms anything, so the session URL, the armed source, and the answer binding all survive it, and the page follows the fleet within a supervision poll whenever the refresh completes. One that runs out of its deadline publishes nothing and leaves the previous page, whose own timestamp then says how old it is.
+The board `build` publishes keeps itself fresh between rebuilds in two ways, and neither is a step to remember.
+It subscribes to this home's fleet events and repaints as they land, and `build` starts that server itself; what a repaint can show is what the fleet can express without new words - a worker's state, a row that went underway or landed, a call that was answered.
+Underneath that, the page itself republishes on every fleet event this home already republishes its structured summary on - a locked session start, a watcher-observed status change, a spawn, a teardown, and the watcher's recurring cadence - through `bin/fm-bearings-board.sh refresh`, detached and best effort.
+That refresh recomposes deterministically and injects in place: it republishes the page the captain already has rather than a fresh one, and never re-establishes, rebinds, or re-arms anything, so the session URL, the live transport, the armed source, and the answer binding all survive it. The page follows the fleet within a supervision poll whenever the refresh completes; one that runs out of its deadline publishes nothing and leaves the previous page, whose own timestamp then says how old it is.
 Your build and that refresh take the same home-local publication lock, so a fleet event can never land on top of the board you are publishing; a build waits for a refresh already under way rather than racing it.
-Do not run it yourself as part of a digest, and do not treat a refreshed board as a rebuild: a captain hold whose copy has never been written shows as a degraded card (its durable title, the held row's own snapshot summary as the question, reconcile and free-form answers) until the next `/bearings lavish` writes that copy once.
+Do not run the refresh yourself as part of a digest, and do not treat a refreshed board as a rebuild: a captain hold whose copy has never been written shows as a degraded card (its durable title, the held row's own snapshot summary as the question, reconcile and free-form answers) until the next `/bearings lavish` writes that copy once.
+So a board that says a rebuild is owed - a call nobody has worded yet, or a pull request on work still listed as underway - is a `/bearings lavish` worth running, not a board with nothing on it.
 A refresh also states no `charted_more` or `charted_warning_more` at all - only you can divide that one omitted total by kind - and carries the omission as a single warning row naming the total instead.
 It never discovers pull requests - that is the opt-in you pass - so it carries forward the merge cards your last build published instead of dropping the captain's Merge now control. A stored merge card retires only on proof its pull request landed - the PR or its task reaching the payload's landed rows - never because a PR view came back without it, since a failed, capped or narrowed query returns the same nothing as a PR that stopped being merge-ready. A card whose PR was closed unmerged therefore lingers until a merge answer verifies it and retires it (below).
 Each Underway row also carries its own progress - the phase, the validation step it is on with the steps already passed, how long that step has run, its last activity and age, and the row's own refreshed-at time - from `bin/fm-task-progress.sh`, which reads structured state only.
@@ -153,7 +156,13 @@ A refresh also takes no language of its own: it reads the language back out of t
 
 ### Handling a board wake
 
-A board answer arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake. Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, regardless of which answer kinds the result contains; then load `process-event-sources` and follow its contract for the result read, adapter classification, and the handled acknowledgement.
+A click on the live board arrives as a `check: the captain answered <key> on the board` wake, one per key he answered.
+It is already done when you read it: the answer is recorded, the call is closed or released, and the row he clicked is already acknowledged, all before the wake was appended.
+So there is nothing here to route - what remains is whatever his answer now asks for, which is ordinary work under the rules that already govern it.
+A wake saying part of it did NOT land names `state/board-inbound.jsonl`, where his exact answer is; reconcile that key by hand with a direct `answer` rather than asking him again.
+`dispatch.charted` is the one key that names no task: its wake carries the ids he ticked, and starting them is the ordinary dispatch decision.
+
+A board answer captured by the older review channel instead arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake. Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, regardless of which answer kinds the result contains; then load `process-event-sources` and follow its contract for the result read, adapter classification, and the handled acknowledgement.
 Decision answers need no routing from you: the runner feeds the board's binding into `bin/fm-captain-hold.sh`'s one keyed-answer intake, which closes or releases each answered captain-held task at answer time; reconcile any `skipped:` key yourself with a direct `answer`, and when the captain's answer is "later", record it as a deferral with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` instead of a closure.
 A current structured Reconcile selection closes nothing: the versioned board context carries its exact selected option separately from any typed note, and the adapter routes that selection only into a durable re-check request while preserving the note as provenance.
 The rollout-compatible old context still feeds ordinary non-reconcile answers, but its bare or separator-annotated reconcile values and every structurally uncertain choice feed neither intake and remain announced for deliberate handling.
@@ -164,8 +173,13 @@ A remote-secondmate card whose task is absent from the main backlog remains on t
 Route the non-decision keys yourself:
 
 - `merge.<task-id>` is the captain's explicit merge order; follow the merge ruling below.
-- `dispatch.charted` carries comma-separated task ids the captain picked to start now; the skeleton offers a row for dispatch only when its real backlog id is already a routable key, so an id the intake could not resolve arrives non-dispatchable rather than rewritten; verify each id against the current backlog - still queued, blocker and time gate actually clear - then dispatch through the normal lifecycle, and report any id that no longer qualifies instead of forcing it.
+- `dispatch.charted` carries comma-separated task ids the captain picked to start now; the skeleton offers a row for dispatch only when its real backlog id is already a routable key, so an id the intake could not resolve arrives non-dispatchable rather than rewritten; verify each id against the current backlog - still queued, blocker and time gate actually clear - then dispatch through the normal lifecycle, and report any id that no longer qualifies - on its own row as a refusal, and in chat - instead of forcing it.
 
+Every key that answer named is already acknowledged on its own row, recorded at capture, so the board says the answer was heard before you have acted on it. The whole acknowledgement lifecycle - when a record is born, which of two acknowledgements wins, what ages one and what retires one - is stated once in `bin/fm-bearings-board.sh`'s header, which owns it; this paragraph is only your part in it.
+Your part is settling, and it is part of handling the wake rather than an optional courtesy: EVERY key the answer named is settled before you finish, whatever kind of key it was - a decision card key, a `merge.<task-id>`, or each id inside a `dispatch.charted` - and there are exactly two outcomes that settle one.
+Clear it (`ack <key> --clear`) when you acted on that key: dispatched it, merged it, closed or released the call it answered, or recorded the deferral the captain asked for.
+Record a refusal with its reason (`ack <key> --refused --why-file <file>`) when you verified that key and did NOT set it in motion, so an id that no longer qualifies says so where the captain clicked instead of only in chat.
+A key you leave unsettled keeps reporting itself as still waiting, which on work you already acted on is a false alarm on the one signal the captain asked for; leaving a record behind is a defect, not untidiness.
 After handling, rebuild the board from a fresh snapshot so acted-on items leave Captain's Call, and echo every action taken in chat so the board and chat never diverge silently.
 
 ### The merge-click ruling (captain-decided)
@@ -173,6 +187,26 @@ After handling, rebuild the board from a fresh snapshot so acted-on items leave 
 A board "Merge now" answer IS the captain's explicit merge word for that one exact PR; ask no second confirmation.
 The safeguards are mandatory, not optional: resolve the PR from the task's own `state/<task-id>.meta` `pr=` record, never from board bytes; re-verify at wake time that the PR is still open and CI-green; refuse and report a red or changed PR rather than merging it, and when that verification finds the PR TERMINAL rather than open - merged elsewhere, or closed unmerged - retire its card with `bin/fm-captain-hold.sh card merge.<task-id> --retire` so the control the captain just pressed does not come back on the next refresh, while a verification that could not complete retires nothing; record the exact `merge` answer through `bin/fm-captain-hold.sh answer <task-id> --decision-file <file> --release` before invoking the merge; proceed only when that release succeeds; merge only through `bin/fm-pr-merge.sh`; and echo every merge in chat with the full PR URL.
 Only the exact answer value `merge` authorizes a merge; an answer carrying a freeform note is the captain's instruction text to read and act on with judgment, never an auto-merge.
+
+## Captain-facing surface rules
+
+These hold for every surface the captain reads or acts on - the board, a card, a packet page, a report - not only for a `/bearings` invocation.
+
+- The board is the captain's one surface, so render a packet, report, or decision inside its card rather than sending them somewhere else to look.
+  The card carries the packet itself, drawings included, as the composing step above states, so there is no second address to hand over and `bin/fm-packet.sh serve` is not the way to show a packet.
+  Never hand the captain a one-shot session URL whose content is lost when the tab closes; where a surface genuinely must live outside the board, reopening the same URL has to bring the content back.
+  One bounded exception is authorized: a live scout may host its own review session while it iterates with the captain on a visual deliverable, because the iteration needs the scout's own context.
+  It holds only while that scout is alive; the durable record stays the report and the board card, and nothing the captain needs after the scout ends may live only in that session.
+  Revisit this exception once the redesigned board can host that iteration itself, which is already in flight.
+- Every captain-facing string carries 繁體 beside its English; 简体 is optional, and where it is absent the board shows the 繁體 text in its place rather than an empty cell.
+  That is what the tooling requires and what the composing instruction above says, so the rule is stated at what is actually guaranteed rather than at a stricter promise nothing keeps.
+  The only place a check enforces it is a packet figure, and only where a brief asked for a packet at all: `bin/fm-packet.sh verify` then requires `data-en`, `data-hant` and `data-hans` on every `<text>` in a drawing.
+  The board is not: its `{TRANSLATE: ...}` slots carry the `hant` translation, `hans` is added beside them by hand, and `bin/fm-bearings-board.sh`'s payload validator requires only `en` and `hant` - it accepts a copy object with no `hans`, and a plain English string with no translation at all.
+  So on every captain-facing surface except a packet figure this rule rests on the composer following it, and saying that is the point: a check that cannot verify something reports that rather than passing by silence.
+  `bin/fm-packet.sh`'s header owns the one decided exception: packet prose and a figure's heading and caption stay in the single language the worker wrote, because the packet renders inside its card.
+- Build a captain-facing prototype from the shipped surface, never as a fresh mock.
+  `AGENTS.md` section 7 owns the gate that holds a task queued until the prototype is approved; what belongs here is how to build one: copy the shipped template and a live payload, apply the proposed change to that copy, and show that.
+  A hand-drawn mock cannot tell the captain whether the direction is right, because they cannot recognize it as the surface they actually use - which is the whole reason the gate exists.
 
 ## Chat-response contract
 

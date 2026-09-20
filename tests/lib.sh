@@ -7,7 +7,8 @@
 #
 # It provides the boilerplate every test file used to re-roll: ok/not-ok
 # reporters, a self-cleaning temp root, fakebin/PATH-shim helpers, deterministic
-# git identity and fixture builders, state/<id>.meta writers, and the common
+# git identity and fixture builders, state/<id>.meta writers, the settled-
+# viewport wait every terminal end-to-end test needs, and the common
 # string/exit-code/file assertions. Shared fake-toolchain and spawn-world
 # builders live in tests/fixtures.sh; wake-queue mocks in wake-helpers.sh;
 # secondmate-lifecycle mocks in secondmate-helpers.sh. Suite-specific fakes
@@ -332,6 +333,22 @@ fm_live_gate() {
   return 0
 }
 
+# --- hermetic worker-harness state ------------------------------------------
+# Bootstrap reports an absent diagram-design skill, and resolves it under the
+# Claude config dir - which defaults to the DEVELOPER'S own $HOME. A machine with
+# that skill installed sees silence where a CI runner sees a MISSING_MANUAL line,
+# so any suite asserting bootstrap's exact output passes locally and fails on a
+# runner. Ambient user state leaking into a verdict is the same class as the
+# ambient runtime markers individual suites already unset; it is pinned here so
+# every suite gets it once rather than each one remembering.
+# A case that exercises the absent-skill path sets its own CLAUDE_CONFIG_DIR.
+if [ -z "${FM_TEST_KEEP_CLAUDE_CONFIG:-}" ]; then
+  FM_TEST_CLAUDE_CONFIG="${TMPDIR:-/tmp}/fm-test-claude-config.$$"
+  mkdir -p "$FM_TEST_CLAUDE_CONFIG/skills/diagram-design" 2>/dev/null || true
+  : > "$FM_TEST_CLAUDE_CONFIG/skills/diagram-design/SKILL.md" 2>/dev/null || true
+  export CLAUDE_CONFIG_DIR="$FM_TEST_CLAUDE_CONFIG"
+fi
+
 # --- fakebin / PATH shims ---------------------------------------------------
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
@@ -441,6 +458,37 @@ SH
   chmod +x "$fakebin/$tool"
 }
 
+# fm_fake_lavish_axi <fakebin> [version-override-var] [default-version]
+# A lavish-axi stub that answers BOTH --version and --help.
+#
+# Bootstrap asks the --name capability question SEPARATELY from the version
+# floor, because the published package does not carry that flag and reports a
+# higher version than the build that does. A stub answering only --version
+# therefore makes bootstrap report an unverifiable board URL in every suite that
+# runs it - which is a defect in the stub, not in the check.
+# Set FM_FAKE_LAVISH_AXI_NAME_HELP=0 for a build that answers --help WITHOUT
+# advertising --name, which is the published-release shape.
+fm_fake_lavish_axi() {
+  local fakebin=$1 override=${2:-FM_FAKE_LAVISH_AXI_VERSION} default=${3:-0.1.46}
+  cat > "$fakebin/lavish-axi" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = --version ]; then
+  printf '%s\n' "\${$override:-$default}"
+  exit 0
+fi
+if [ "\${1:-}" = --help ]; then
+  if [ "\${FM_FAKE_LAVISH_AXI_NAME_HELP:-1}" = 1 ]; then
+    printf '%s\n' "usage: lavish-axi <file> [--name <slug>] [--reopen]"
+  else
+    printf '%s\n' "usage: lavish-axi <file> [--reopen]"
+  fi
+  exit 0
+fi
+exit 0
+SH
+  chmod +x "$fakebin/lavish-axi"
+}
+
 # --- portable file timestamps -----------------------------------------------
 
 # fm_touch_epoch <epoch> <path> [path...]: set each path's modification time to
@@ -464,6 +512,34 @@ fm_touch_epoch() {
     || fail "fm_touch_epoch: date(1) accepted neither -d @<epoch> nor -r <epoch>"
   TZ=UTC0 touch -t "$stamp" "$@" \
     || fail "fm_touch_epoch: touch -t $stamp failed for $*"
+}
+
+# The wake library and everything it sources unconditionally. Many fixtures
+# build a deliberately small bin/ by hand, some by copying and some by linking;
+# without one owner for this set, splitting a library off fm-wake-lib.sh breaks
+# each of them separately and only at RUN time, with a "No such file or
+# directory" printed from inside the sourced file. Extend this list when you
+# split another library off fm-wake-lib.sh.
+fm_wake_lib_files() {
+  printf '%s\n' fm-wake-lib.sh fm-clock-lib.sh
+}
+
+# fm_install_wake_lib <bin-dir>: copy that set into a fixture's bin/.
+fm_install_wake_lib() {  # <bin-dir>
+  local bindir=$1 f
+  while IFS= read -r f; do
+    cp "$ROOT/bin/$f" "$bindir/$f" || fail "fm_install_wake_lib: could not install $f"
+  done < <(fm_wake_lib_files)
+}
+
+# fm_link_wake_lib <bin-dir>: symlink that set into a fixture's bin/, for
+# fixtures that deliberately track the repo copy rather than snapshot it.
+# Idempotent, so a fixture may call it again without guarding.
+fm_link_wake_lib() {  # <bin-dir>
+  local bindir=$1 f
+  while IFS= read -r f; do
+    ln -sf "$ROOT/bin/$f" "$bindir/$f" || fail "fm_link_wake_lib: could not link $f"
+  done < <(fm_wake_lib_files)
 }
 
 # --- deterministic git identity and fixtures --------------------------------
@@ -539,6 +615,183 @@ fm_write_secondmate_meta() {
     "yolo=off" \
     "home=$home" \
     "projects=$projects"
+}
+
+# --- waiting for a terminal viewport to settle ------------------------------
+
+# fm_capture_match <file> <tail-lines> <fixed|regex> <pattern>
+#
+# The one matcher fm_wait_capture_settled tests every pattern through, so a
+# pattern is matched the same way wherever it came from. The SCOPE is not
+# shared, and this function is not where that is decided: the caller passes
+# --tail's value for the settle conditions and passes nothing for an --abort
+# text, for the reason recorded at the abort scan below. <tail-lines> empty
+# means the whole capture.
+fm_capture_match() {
+  local file=$1 tail_lines=$2 mode=$3 pattern=$4 flag=-F
+  [ "$mode" = regex ] && flag=-E
+  if [ -n "$tail_lines" ]; then
+    tail -n "$tail_lines" "$file" 2>/dev/null | grep -q "$flag" -- "$pattern"
+  else
+    grep -q "$flag" -- "$pattern" "$file" 2>/dev/null
+  fi
+}
+
+# fm_wait_capture_settled <capture-fn> <file> <max-attempts> [--tail N] \
+#                         [--present TEXT]... [--absent TEXT]... \
+#                         [--absent-re ERE]... [--abort TEXT]...
+#
+# Re-runs <capture-fn> "<file>" until the captured viewport has SETTLED into
+# the end state a completed transition leaves behind: every --present text on
+# screen and every --absent text and --absent-re pattern gone, all in the same
+# capture. Returns 0 then, 2 as soon as any --abort text appears - text by
+# which the program under test reports its own failure - and 1 once
+# <max-attempts> captures have gone by with neither. At least one --present,
+# --absent or --absent-re is required, and every flag but --tail may repeat.
+# Matching is fixed-string except for --absent-re, and --tail N restricts the
+# settle conditions - every --present, --absent and --absent-re - to the last N
+# lines of the capture; N must be a whole number of at least 1, because a slice
+# of nothing satisfies every absence. --abort texts are never scoped: see the
+# note at the abort scan below.
+#
+# Wait on the end state, never on the intermediate one. Captures are discrete
+# samples, so a state the program passes through can appear and vanish
+# entirely between two of them, and a loaded runner widens that window without
+# bound. A wait that requires SEEING the intermediate frame is therefore a coin
+# flip that turns a healthy run red - it is what made the Calm /reload check
+# fail pull requests that touched nothing near it - and it is the weaker
+# assertion besides, because the intermediate frame only proves the transition
+# STARTED. An end state cannot be missed: once true it stays true, so the poll
+# either observes it or the transition really did not finish.
+#
+# Name every text the assertions after the wait depend on, not just the one
+# that proves the transition finished. The capture this call leaves behind is
+# what those assertions read, and they get one shot at it with no retry behind
+# them; a text they need but the wait did not require is a timing dependence
+# moved rather than removed.
+#
+# WHY --tail AND --absent-re EXIST, WHICH IS A WARNING ABOUT --absent
+#
+# An absence is satisfied by every frame that does NOT match, so broadening one
+# is not the conservative direction it looks like: it makes fewer frames settle
+# in a wait whose exhaustion ends the test. Converting a loop that fell through
+# in silence into one that fails is exactly when a condition must NOT also grow,
+# because the widening now has a way to red a healthy run that it did not have
+# before. These two flags exist so a scoped or boundary-bounded condition can be
+# made loud without being widened on the way: --tail keeps a match that only
+# ever meant the editor chrome out of the transcript above it, and --absent-re
+# keeps a token bounded so a longer word containing it cannot hold the wait out.
+# There is deliberately no --present-re: a present-text match has the opposite
+# risk profile, and no call site needs one.
+#
+# The bound is an attempt count, not a wall-clock budget, per CONTRIBUTING.md:
+# each attempt costs more on a loaded machine, so the count stretches with the
+# load it exists to tolerate, where a clock would expire on work that was still
+# legitimately in progress. Budget a count against THIS cadence - the 0.05s
+# below plus one capture, so roughly 0.08s per attempt at a loaded runner's
+# measured ~0.03s per capture - rather than carrying a count over from a loop
+# that slept for something else.
+#
+# Both failures print the last capture to stderr. A check that cannot confirm
+# what it was watching for has to say what it saw instead, or the next reader
+# pays for the diagnosis all over again.
+fm_wait_capture_settled() {
+  local capture_fn=$1 file=$2 max_attempts=$3
+  shift 3
+  local present=() absent=() absent_mode=() aborts=() tail_lines='' index
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --tail|--present|--absent|--absent-re|--abort)
+        # Every flag takes a value, and a flag given without one has to be
+        # refused here. Reading $2 for it under set -u kills the shell at that
+        # line instead: no named failure, nothing on stdout, just a non-zero
+        # exit for the runner to attribute to whichever case was running. This
+        # helper's header requires that a check unable to do its job says what
+        # it saw, and being called wrong is the first thing that applies to.
+        [ "$#" -ge 2 ] || fail "fm_wait_capture_settled: $1 needs a value"
+        ;;
+      *) fail "fm_wait_capture_settled: unknown argument '$1'" ;;
+    esac
+    # --tail's value goes to `tail -n`, which discards its own stderr, so an
+    # unusable count yields an empty slice in silence - and every --absent is
+    # then satisfied by looking at nothing. That is the one path in this helper
+    # that can return success without reading a viewport, which is exactly what
+    # its header forbids, so the count is checked here rather than left to
+    # tail. 0 is refused on the same ground: a legal argument that matches
+    # against nothing is the same vacuous pass with no error to notice.
+    if [ "$1" = --tail ]; then
+      case $2 in
+        ''|*[!0-9]*)
+          fail "fm_wait_capture_settled: --tail needs a whole number of lines, got '$2'" ;;
+      esac
+      [ "$2" -ge 1 ] || fail "fm_wait_capture_settled: --tail needs at least 1 line, got '$2'"
+    fi
+    case $1 in
+      --tail) tail_lines=$2 ;;
+      --present) present+=("$2") ;;
+      --absent) absent+=("$2"); absent_mode+=(fixed) ;;
+      --absent-re) absent+=("$2"); absent_mode+=(regex) ;;
+      --abort) aborts+=("$2") ;;
+    esac
+    shift 2
+  done
+  [ "${#present[@]}" -gt 0 ] || [ "${#absent[@]}" -gt 0 ] \
+    || fail "fm_wait_capture_settled: needs at least one --present, --absent or --absent-re pattern"
+
+  local attempt=0 settled reason rc text
+  while :; do
+    "$capture_fn" "$file" || true
+    attempt=$((attempt + 1))
+    for text in ${aborts[@]+"${aborts[@]}"}; do
+      # Aborts read the whole capture, never --tail's scope. A --tail exists to
+      # keep a settle condition off the transcript above the chrome; an abort
+      # is the opposite kind of text - the program under test reporting its own
+      # failure - and it lands wherever that program puts it. Scoping one out
+      # buys nothing and costs the full attempt bound spent waiting on work
+      # that was already refused, which is the diagnosis time this helper
+      # exists to remove.
+      if fm_capture_match "$file" '' fixed "$text"; then
+        reason="reported '$text' instead of settling"
+        rc=2
+        break 2
+      fi
+    done
+    settled=1
+    for text in ${present[@]+"${present[@]}"}; do
+      fm_capture_match "$file" "$tail_lines" fixed "$text" || { settled=0; break; }
+    done
+    if [ "$settled" -eq 1 ]; then
+      index=0
+      while [ "$index" -lt "${#absent[@]}" ]; do
+        if fm_capture_match "$file" "$tail_lines" "${absent_mode[$index]}" "${absent[$index]}"; then
+          settled=0
+          break
+        fi
+        index=$((index + 1))
+      done
+    fi
+    [ "$settled" -eq 0 ] || return 0
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      reason="never settled across $max_attempts captures"
+      for text in ${present[@]+"${present[@]}"}; do
+        fm_capture_match "$file" "$tail_lines" fixed "$text" \
+          || reason="$reason; never showed '$text'"
+      done
+      index=0
+      while [ "$index" -lt "${#absent[@]}" ]; do
+        if fm_capture_match "$file" "$tail_lines" "${absent_mode[$index]}" "${absent[$index]}"; then
+          reason="$reason; never cleared '${absent[$index]}'"
+        fi
+        index=$((index + 1))
+      done
+      rc=1
+      break
+    fi
+    sleep 0.05
+  done
+  printf 'fm_wait_capture_settled: the viewport %s; last capture follows:\n' "$reason" >&2
+  tail -n 200 "$file" 2>/dev/null | sed 's/^/  | /' >&2
+  return "$rc"
 }
 
 # --- common assertions ------------------------------------------------------

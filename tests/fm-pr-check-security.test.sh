@@ -17,6 +17,8 @@ WATCH="$ROOT/bin/fm-watch.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 REGISTER="$ROOT/bin/fm-check-register.sh"
 TMP_ROOT=$(fm_test_tmproot fm-pr-check-security)
+# The head the fake gh reports unless a case overrides FM_TEST_GH_HEAD.
+DEFAULT_POLL_HEAD=0123456789abcdef0123456789abcdef01234567
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 REAL_CP=$(command -v cp)
 REAL_MV=$(command -v mv)
@@ -174,6 +176,16 @@ case " $* " in
   *" api repos/"*"/issues/"*"/comments?per_page=100 "*|*" api repos/"*"/pulls/"*"/reviews?per_page=100 "*|*" api repos/"*"/pulls/"*"/comments?per_page=100 "*)
     printf '%s\n' '[[]]'
     ;;
+  # The merge poll's own read: one call selecting the state and the head, which
+  # the real gh answers as one line per selected field through its own --jq.
+  *"--json state,headRefOid"*)
+    [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
+    [ -z "${FM_TEST_GH_STATE_STARTED:-}" ] || : > "$FM_TEST_GH_STATE_STARTED"
+    [ "${FM_TEST_GH_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GH_SLEEP"
+    printf '%s\n' "${FM_TEST_GH_STATE:-OPEN}"
+    [ "${FM_TEST_GH_HEAD_UNREADABLE:-0}" = 1 ] \
+      || printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}"
+    ;;
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
   *" state "*)
     [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
@@ -231,6 +243,8 @@ write_poll_meta() {
     "window=fm-$id" \
     "$@" \
     "pr=$url"
+  # An armed task's record is private, exactly as bin/fm-pr-check.sh leaves it.
+  chmod 0600 "$state/$id.meta"
 }
 
 
@@ -515,6 +529,50 @@ test_invalid_entrypoints_have_zero_side_effects() {
   pass "PR and teardown entrypoints reject invalid arguments before every side effect"
 }
 
+test_arm_only_arms_without_announcing_ready() {
+  local dir parent expected child_status
+  dir=$(make_case arm-only-split)
+  write_task_meta "$dir"
+  expected=0123456789abcdef0123456789abcdef01234567
+
+  # Make this home a seeded secondmate bound to a local parent, so the
+  # PR-ready line the default path publishes is observable as a file append.
+  parent="$dir/parent"
+  mkdir -p "$parent/state"
+  printf 'child-home\n' > "$dir/home/.fm-secondmate-home"
+  printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+    > "$dir/home/.fm-secondmate-parent"
+  child_status="$parent/state/child-home.status"
+
+  # --arm-only records and arms, and announces nothing.
+  FM_TEST_GH_HEAD=$expected run_check_entry "$dir" task-a \
+    https://github.com/my-org/repo/pull/37 --arm-only \
+    > "$dir/arm.out" 2> "$dir/arm.err" || fail "--arm-only check failed"
+  grep -qxF 'pr=https://github.com/my-org/repo/pull/37' "$dir/home/state/task-a.meta" \
+    || fail "--arm-only did not record the canonical PR"
+  cmp -s "$POLL" "$dir/home/state/task-a.check.sh" || fail "--arm-only did not arm the static poll"
+  assert_grep 'armed: state/task-a.check.sh' "$dir/arm.out" "--arm-only did not report arming"
+  [ ! -e "$child_status" ] \
+    || fail "--arm-only announced a PR-ready line to the parent channel"
+
+  # The default form announces, so the two acts are genuinely separable.
+  FM_TEST_GH_HEAD=$expected run_check_entry "$dir" task-a \
+    https://github.com/my-org/repo/pull/37 \
+    > "$dir/ready.out" 2> "$dir/ready.err" || fail "default check failed"
+  [ -e "$child_status" ] || fail "the default form published no PR-ready line"
+  assert_grep 'PR ready: https://github.com/my-org/repo/pull/37' "$child_status" \
+    "the published ready line did not name the canonical PR"
+
+  # A third argument that is not --arm-only is refused rather than ignored,
+  # so a typo cannot silently fall through to the announcing path.
+  if FM_TEST_GH_HEAD=$expected run_check_entry "$dir" task-a \
+    https://github.com/my-org/repo/pull/37 --arm-onyl >/dev/null 2>&1; then
+    fail "an unrecognized third argument was accepted"
+  fi
+
+  pass "fm-pr-check.sh: --arm-only arms the merge poll without announcing the work ready"
+}
+
 test_valid_recording_and_merge_derivation() {
   local dir expected sidecar count rc
   dir=$(make_case valid-recording)
@@ -728,10 +786,27 @@ test_static_poll_contract() {
       *) value=$state ;;
     esac
     out=$(FM_TEST_GH_STATE="$value" run_poll "$dir")
-    [ -z "$out" ] || fail "static poll emitted for non-merged state"
+    [ "$out" = "head $DEFAULT_POLL_HEAD" ] \
+      || fail "static poll did not report the live head for non-merged state $state: $out"
+    out=$(FM_TEST_GH_STATE="$value" FM_TEST_GH_HEAD_UNREADABLE=1 run_poll "$dir")
+    [ -z "$out" ] || fail "static poll emitted for non-merged state with no readable head"
   done
   out=$(FM_TEST_GH_STATE=MERGED run_poll "$dir")
-  [ "$out" = merged ] || fail "static poll did not emit exactly one merged line"
+  [ "$out" = "merged $DEFAULT_POLL_HEAD" ] \
+    || fail "static poll did not emit exactly one merged line carrying the merged pull request's head: $out"
+  # Losing the merge is worse than losing its attribution, so an unreadable head
+  # still reports the merge - and reports it with no head rather than any other.
+  out=$(FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD_UNREADABLE=1 run_poll "$dir")
+  [ "$out" = merged ] || fail "static poll did not fall back to a bare merged line: $out"
+  # A head that is not a commit id is no head, however the forge produced it.
+  for head in not-a-sha 0123456789abcdef0123456789abcdef0123456 \
+    0123456789abcdef0123456789abcdef012345678 \
+    0123456789ABCDEF0123456789ABCDEF01234567; do
+    out=$(FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD="$head" run_poll "$dir")
+    [ -z "$out" ] || fail "static poll reported a head that is not a commit id: $out"
+    out=$(FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD="$head" run_poll "$dir")
+    [ "$out" = merged ] || fail "static poll attached a head that is not a commit id: $out"
+  done
   out=$(FM_TEST_GH_FAIL=1 run_poll "$dir")
   [ -z "$out" ] || fail "static poll emitted after gh failure"
 
@@ -767,7 +842,508 @@ test_static_poll_contract() {
   set -e
   [ "$rc" -eq 0 ] || fail "watcher did not surface merged poll"
   [ "$(grep -c '^check: .*: merged$' "$dir/watch.out")" -eq 1 ] || fail "watcher did not convert merged output into exactly one wake"
-  pass "static poll is silent except for one merged line and remains watcher-bounded"
+  grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$dir/home/state/task-a.meta" \
+    || fail "watcher did not record the merged pull request's head"
+  pass "static poll reports the live head, reports a merge once, and remains watcher-bounded"
+}
+
+# The head a pull request is open at moves with every push, rebase and
+# force-push. Arming records one; these prove the poll puts the recorded value
+# back on the live commit every cycle, silently, and that nothing but a head the
+# forge just returned can ever become that recorded value.
+test_poll_rebinds_the_recorded_head() {
+  local dir state rc moved
+  moved=cafebabecafebabecafebabecafebabecafebabe
+  dir=$(make_case poll-rebind-head)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1 \
+    'worktree=/nonexistent' 'kind=ship' 'mode=direct-PR'
+  printf 'pr_head=%s\n' 0000000000000000000000000000000000000000 >> "$state/task-a.meta"
+  fm_pr_poll_prepare "$state" task-a github https://github.com/o/r/pull/1 github.com o/r 1 "$POLL" \
+    || fail "could not prepare the re-bind poll"
+  fm_pr_poll_publish_prepared || fail "could not publish the re-bind poll"
+  rm -f "$state/.last-check"
+
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD="$moved" FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  # A moved head is the normal life of an open pull request, so the cycle keeps
+  # waiting: this watcher runs out its bound rather than reporting anything.
+  case "$rc" in
+    0|124) ;;
+    *) fail "re-bind watcher failed (rc=$rc): $(cat "$dir/watch.err")" ;;
+  esac
+  grep -F -- "--json state,headRefOid" "$dir/gh.log" >/dev/null \
+    || fail "the poll never read the pull request's live head"
+  grep -qxF "pr_head=$moved" "$state/task-a.meta" \
+    || fail "watcher did not re-bind the recorded head to the live one"
+  [ "$(grep -c '^pr_head=' "$state/task-a.meta")" -eq 1 ] \
+    || fail "re-binding left more than one recorded head"
+  grep -qxF 'pr=https://github.com/o/r/pull/1' "$state/task-a.meta" \
+    || fail "re-binding lost the recorded pull request"
+  grep -qxF 'mode=direct-PR' "$state/task-a.meta" \
+    || fail "re-binding dropped an unrelated metadata line"
+  [ "$(file_mode "$state/task-a.meta")" = 600 ] || fail "re-bound metadata is not private"
+  ! grep -F 'check:' "$dir/watch.out" >/dev/null \
+    || fail "a moved head woke the supervisor: $(cat "$dir/watch.out")"
+  ! grep -F 'check' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "a moved head queued a durable wake: $(cat "$state/.wake-queue")"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "re-binding disturbed the armed poll"
+  pass "an open pull request's moved head is re-bound every cycle without waking the supervisor"
+}
+
+# A re-bind runs inside the supervision loop, and the task record it writes is
+# also held by bin/fm-spawn.sh for the whole length of a relaunch. Waiting there
+# would stop every remaining check in the cycle, so the acquire is bounded: this
+# proves the cycle still finishes, with the record untouched and the wait named.
+test_rebind_never_waits_on_a_held_task_record() {
+  local dir state rc armed_head started elapsed
+  armed_head=0000000000000000000000000000000000000000
+  dir=$(make_case rebind-bounded-lock)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  start_lock_holder "$dir" "$state/.meta-task-a.lock"
+
+  started=$(date +%s)
+  set +e
+  # The inactive-outcome scan takes this same task record, under its own bounded
+  # wrapper - the house pattern this finding asks the re-bind to join. Hold it to
+  # its shortest budget so what this case measures is the re-bind, not that scan.
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD=cafebabecafebabecafebabecafebabecafebabe \
+    FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_PR_META_LOCK_TIMEOUT=1 \
+    FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  elapsed=$(( $(date +%s) - started ))
+  release_lock_holder
+
+  [ "$rc" -eq 0 ] || fail "held task record stopped the watcher cycle (rc=$rc): $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in
+    check:*z-stop.check.sh:*stop-cycle) ;;
+    *) fail "held task record starved the rest of the cycle: $(cat "$dir/watch.out")" ;;
+  esac
+  [ "$elapsed" -lt 8 ] || fail "the cycle waited ${elapsed}s on a held task record"
+  grep -qxF "pr_head=$armed_head" "$state/task-a.meta" \
+    || fail "a refused re-bind changed the task record anyway"
+  grep -F "deferred re-binding the recorded head of task-a" "$state/.watch-triage.log" >/dev/null \
+    || fail "a refused re-bind left no record of the wait"
+  ! find "$state" -name '.fm-pr-meta.*' -print | grep . >/dev/null \
+    || fail "a refused re-bind left a temporary behind"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "a refused re-bind disturbed the armed poll"
+  pass "a task record held by another owner defers the re-bind instead of stalling the cycle"
+}
+
+# The bound expiring is not one condition. fm_lock_acquire_wait_bounded returns
+# 124 only after confirming the owner process ALIVE, and 1 for a lock nothing
+# will reclaim - a stale directory whose steal lock is itself held. The first is
+# ordinary and self-correcting; the second is permanent, and every later poll
+# meets it again. Reporting the second as the first is how a head that will
+# never re-bind becomes a line in a log nothing reads.
+#
+# A live holder is the 124 case and test_rebind_never_waits_on_a_held_task_record
+# covers it. This constructs the other one: an owner that is gone, and a steal
+# lock held by a live process so recovery declines to reclaim it.
+test_a_permanent_lock_failure_is_not_reported_as_contention() {
+  local dir state rc armed_head
+  armed_head=0000000000000000000000000000000000000000
+  dir=$(make_case rebind-permanent-lock-failure)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+
+  strand_record_lock "$dir" "$state" task-a
+
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  case "$rc" in
+    0|124) ;;
+    *) fail "permanent-lock-failure watcher failed (rc=$rc): $(cat "$dir/watch.err")" ;;
+  esac
+
+  grep -qxF "pr_head=$armed_head" "$state/task-a.meta" \
+    || fail "a refused re-bind changed the task record anyway"
+  grep -F "pr-head-task-a" "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "a permanent lock failure queued nothing: $(cat "$state/.wake-queue" 2>/dev/null)"
+  ! grep -F 'deferred re-binding' "$state/.watch-triage.log" >/dev/null 2>&1 \
+    || fail "a permanent lock failure was reported as ordinary contention"
+  pass "a lock failure that is not live contention is reported as the permanent failure it is"
+}
+
+# A re-bind that cannot complete leaves the record naming a head the pull request
+# is no longer on - the exact failure this branch exists to end. On the merged
+# path nothing will ever correct it: the outcome publishes and the poll retires
+# in the same cycle, so there is no later poll to try again. That is why the
+# contention this cycle otherwise treats as ordinary must still be reported
+# there, and reported to the durable queue rather than to the absorbed-wake
+# debug log AGENTS.md calls never relied on and safe to delete.
+#
+# Both directions are proven, because the silent half is the half that rots:
+# it says so when the write could not happen, and says nothing when it did.
+test_a_failed_rebind_is_never_silent() {
+  local dir state rc row armed_head
+  armed_head=0000000000000000000000000000000000000000
+  dir=$(make_case rebind-failure-reported)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  # A relaunch owning the record while the merge lands: the one way this write
+  # is refused that leaves the poll itself entirely valid.
+  start_lock_holder "$dir" "$state/.meta-task-a.lock"
+
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  [ "$rc" -eq 0 ] || fail "merged cycle with a held record failed: $(cat "$dir/watch.err")"
+
+  grep -qxF "pr_head=$armed_head" "$state/task-a.meta" \
+    || fail "the held record was written anyway"
+  row=$(grep -F "pr-head-task-a" "$state/.wake-queue" 2>/dev/null || true)
+  [ -n "$row" ] || fail "a merged poll that could not record its head queued nothing: $(cat "$state/.wake-queue" 2>/dev/null)"
+  # Both facts, because they are different: the head the forge returned, and the
+  # head the record is left holding. Neither may be inferred from the other.
+  case "$row" in
+    *"merged at $DEFAULT_POLL_HEAD"*"still names $armed_head"*"https://github.com/o/r/pull/1"*) ;;
+    *) fail "the queued row does not carry both the forge's head and the record's: $row" ;;
+  esac
+  # The merge itself is never lost to a failed re-bind, and the poll still
+  # retires - so the row is the only thing that will ever say the head is wrong.
+  grep -F 'merge landed: task-a' "$state/.wake-queue" >/dev/null \
+    || fail "a failed re-bind swallowed the merge outcome"
+  assert_poll_absent "$state" task-a
+
+  # The other direction: the same merged cycle with nothing holding the record
+  # takes the head and says nothing at all about it.
+  dir=$(make_case rebind-success-silent)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "merged cycle with a free record failed: $(cat "$dir/watch.err")"
+  grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
+    || fail "the free record did not take the head"
+  ! grep -F "pr-head-task-a" "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "a re-bind that succeeded reported a failure anyway"
+  pass "a merged poll that cannot record its head reaches the durable queue, and one that can stays quiet"
+}
+
+# A head the forge DID give up, which simply could not be written, must not be
+# reported as a head that could not be read: that sends a supervisor after the
+# forge instead of after the record. The two explanations belong to different
+# facts, and each row states the one it actually established.
+test_a_merged_row_distinguishes_unread_from_unrecorded() {
+  local dir state rc
+  dir=$(make_case merged-row-unrecorded)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  # No pr_head= recorded at all, and the record stranded so the re-bind of a
+  # perfectly readable head cannot be written.
+  strand_record_lock "$dir" "$state" task-a
+
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  [ "$rc" -eq 0 ] || fail "merged unrecorded cycle failed: $(cat "$dir/watch.err")"
+
+  grep -F "merged at $DEFAULT_POLL_HEAD" "$state/.wake-queue" >/dev/null \
+    || fail "the row does not name the head the forge did return: $(cat "$state/.wake-queue")"
+  ! grep -F 'head could not be read' "$state/.wake-queue" >/dev/null \
+    || fail "a head that was read was reported as unreadable"
+  pass "a head that could not be written is not reported as one that could not be read"
+}
+
+# The report-once record is a tidiness aid, not a safety record: the row it
+# gates is already appended before it is written. Taking the supervision cycle
+# down because that write failed trades the whole fleet's watcher for one
+# duplicate row - and every other marker write in bin/fm-watch.sh, including the
+# .dead-reported-* sibling this was modelled on, writes unguarded.
+test_an_unwritable_report_once_record_does_not_kill_the_watcher() {
+  local dir state rc
+  dir=$(make_case rebind-marker-unwritable)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  strand_record_lock "$dir" "$state" task-a
+  # A directory where the record wants to be: the write cannot succeed.
+  mkdir "$state/.pr-head-reported-task-a"
+
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  case "$rc" in
+    0|124) ;;
+    *) fail "an unwritable report-once record took the watcher down (rc=$rc): $(cat "$dir/watch.err")" ;;
+  esac
+  # The row it gates still reached the queue, which is the part that matters.
+  grep -F 'pr-head-task-a' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "the actionable row was lost with the record write: $(cat "$state/.wake-queue" 2>/dev/null)"
+  grep -F 'could not write the report-once record for task-a' "$state/.watch-triage.log" >/dev/null \
+    || fail "the failed record write left no trace"
+  rmdir "$state/.pr-head-reported-task-a"
+  pass "a report-once record that cannot be written costs a duplicate row, not the watcher"
+}
+
+# The report-once record is dropped when a head is recorded, so the next failure
+# is news again. A sweep where the poll printed NOTHING - an unreachable forge, a
+# gh failure, an unparseable head - records nothing and must not count as one:
+# `rebind_rc` starts at 0 and stays 0 there, so reading it alone as "recorded"
+# would re-queue an already-reported condition on every forge hiccup.
+test_a_sweep_that_recorded_nothing_keeps_the_report_once_record() {
+  local dir state rc marker
+  dir=$(make_case rebind-marker-silent-sweep)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  marker="$state/.pr-head-reported-task-a"
+  printf '%s 1\n' 0123456789abcdef0123456789abcdef01234567 > "$marker"
+
+  # The poll prints nothing at all: not merged, and no readable head.
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD_UNREADABLE=1 FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  case "$rc" in 0|124) ;; *) fail "silent-poll sweep failed (rc=$rc): $(cat "$dir/watch.err")" ;; esac
+  grep -F -- '--json state,headRefOid' "$dir/gh.log" >/dev/null \
+    || fail "the sweep never reached the poll"
+  [ -f "$marker" ] \
+    || fail "a sweep that recorded nothing dropped the report-once record"
+
+  # And the other direction stays true: a sweep that DOES record a head drops it.
+  # Acknowledge first, or this sweep resurfaces the previous one's queued row
+  # instead of reaching the poll at all.
+  ack_watcher_cycle "$state" || fail "silent-poll sweep acknowledgement failed"
+  rm -f "$state/.last-check"
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch2.out" 2> "$dir/watch2.err"
+  rc=$?
+  set -e
+  case "$rc" in 0|124) ;; *) fail "recording sweep failed (rc=$rc): $(cat "$dir/watch2.err")" ;; esac
+  grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
+    || fail "the recording sweep did not record a head"
+  [ ! -f "$marker" ] || fail "a sweep that recorded a head kept the report-once record"
+  pass "only a sweep that actually recorded a head clears the report-once record"
+}
+
+# When the drop itself fails, the arming-time head survives - and the poll
+# retires in the same cycle, so it survives forever. A row saying "no head is
+# recorded" then points a supervisor at an empty record when what is actually
+# recorded is the superseded commit this branch exists to stop anyone trusting.
+# Every row here is built from what the record holds when it is read, not from
+# what the path that failed assumed it had left behind.
+test_a_merged_row_names_what_the_record_actually_holds() {
+  local dir state rc stale
+  stale=1111111111111111111111111111111111111111
+  dir=$(make_case merged-row-truthful)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$stale" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  # Strand the record so the drop cannot happen, exactly as a spawn holding it
+  # across a relaunch would.
+  strand_record_lock "$dir" "$state" task-a
+
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD_UNREADABLE=1 FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  [ "$rc" -eq 0 ] || fail "merged cycle with a stranded record failed: $(cat "$dir/watch.err")"
+
+  # The stale head did survive - that is the premise, not the bug.
+  grep -qxF "pr_head=$stale" "$state/task-a.meta" \
+    || fail "the fixture did not actually strand the drop"
+  # So the row must say so, and must not claim the record is empty.
+  grep -F "still names $stale" "$state/.wake-queue" >/dev/null \
+    || fail "the row does not name the head the record actually holds: $(cat "$state/.wake-queue")"
+  ! grep -F 'no head is recorded for what landed' "$state/.wake-queue" >/dev/null \
+    || fail "the row claimed an empty record while a superseded head was recorded"
+  # The poll's retirement has not run when this row is written, and it can fail,
+  # so the row must not predict that nothing will correct the record.
+  ! grep -F 'nothing will correct it' "$state/.wake-queue" >/dev/null \
+    || fail "the row predicted the outcome of a retirement that had not run"
+  assert_poll_absent "$state" task-a
+  pass "a merged row names the head the record actually holds, not the one the path assumed"
+}
+
+# The non-terminal failure path repeats: the poll stays armed, so a persistent
+# cause is met again on every sweep. The durable queue is the supervisor's first
+# work list and each row needs acknowledging, so one row per sweep would crowd
+# it out. Report each distinct condition once - and, just as important, report
+# again once something changes, or the marker becomes its own silence.
+test_a_repeating_rebind_failure_is_reported_once_per_condition() {
+  local dir state rc rows
+  dir=$(make_case rebind-failure-dedupe)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  strand_record_lock "$dir" "$state" task-a
+
+  # Run one sweep and report how many re-bind rows it queued. Every sweep is
+  # acknowledged, because an unacknowledged row makes the NEXT sweep resurface
+  # it instead of reaching the poll at all - which would make a silent absorb
+  # and a sweep that never ran look identical.
+  dedupe_sweep() {  # <label> [head]
+    local label=$1 head=${2:-0123456789abcdef0123456789abcdef01234567}
+    rm -f "$state/.last-check"
+    set +e
+    FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD="$head" \
+      FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_PR_META_LOCK_TIMEOUT=1 \
+      FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+      run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/$label.out" 2> "$dir/$label.err"
+    rc=$?
+    set -e
+    case "$rc" in 0|124) ;; *) fail "$label sweep failed (rc=$rc): $(cat "$dir/$label.err")" ;; esac
+    rows=$(grep -c 'pr-head-task-a' "$state/.wake-queue" 2>/dev/null || true)
+    rows=${rows:-0}
+    ack_watcher_cycle "$state" || fail "$label sweep acknowledgement failed"
+  }
+  reached_poll() {  # <label>: the sweep actually ran the poll, rather than
+    # resurfacing a queued row before ever getting to the check loop.
+    grep -qF 'check: rearm-resurface' "$dir/$1.out" && return 1
+    return 0
+  }
+
+  # First sighting: it reaches the queue.
+  dedupe_sweep first
+  reached_poll first || fail "the first sweep never reached the poll"
+  [ "$rows" -eq 1 ] || fail "the first re-bind failure did not reach the queue (rows=$rows)"
+
+  # The same condition again. Handled already, so nothing new is owed.
+  dedupe_sweep second
+  reached_poll second || fail "the second sweep never reached the poll"
+  [ "$rows" -eq 0 ] || fail "an unchanged repeating failure queued another row (rows=$rows)"
+  grep -F 'absorbed a repeat re-bind failure for task-a' "$state/.watch-triage.log" >/dev/null \
+    || fail "the repeat was not absorbed: $(cat "$state/.watch-triage.log")"
+  [ -f "$state/.pr-head-reported-task-a" ] || fail "no report-once record was kept"
+
+  # Something changed - same task, different head - so it is news again, and the
+  # marker has not become its own silence.
+  dedupe_sweep changed cafebabecafebabecafebabecafebabecafebabe
+  release_lock_holder
+  reached_poll changed || fail "the changed-head sweep never reached the poll"
+  [ "$rows" -eq 1 ] || fail "a failure against a new head was absorbed as a repeat (rows=$rows)"
+  pass "a repeating re-bind failure is queued once per condition and again when it changes"
+}
+
+# The poll's third output line: merged, with no head the forge would give up.
+# Nothing re-binds then, and the poll retires in the same cycle, so what the
+# record keeps is the arming-time head - the superseded value this whole branch
+# exists to stop anyone trusting - now standing as the head the merge landed at.
+# Both halves are required: say so, AND stop the record asserting something
+# nobody confirmed. Reporting while leaving the false value fixes the half
+# nobody reads.
+test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so() {
+  local dir state rc armed_head
+  armed_head=1111111111111111111111111111111111111111
+  dir=$(make_case merged-head-unreadable)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD_UNREADABLE=1 FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "merged cycle with an unreadable head failed: $(cat "$dir/watch.err")"
+
+  # The arming-time head must not survive as the head the merge landed at.
+  assert_no_grep "pr_head=" "$state/task-a.meta" \
+    "an unconfirmable merge kept its arming-time head as the landed one"
+  assert_grep 'pr=https://github.com/o/r/pull/1' "$state/task-a.meta" \
+    "dropping the head lost the recorded pull request"
+  # And the supervisor is told, because nothing will revisit this.
+  grep -F 'pr-head-task-a' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "an unconfirmable merge queued nothing: $(cat "$state/.wake-queue" 2>/dev/null)"
+  grep -F 'head could not be read' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "the queued row does not say the head could not be read"
+  # The merge is never lost to any of this, and the poll still retires.
+  grep -F 'merge landed: task-a' "$state/.wake-queue" >/dev/null \
+    || fail "an unconfirmable head swallowed the merge outcome"
+  assert_poll_absent "$state" task-a
+  pass "a merge whose head cannot be read drops the unconfirmable record and reports it"
+}
+
+# fm_pr_meta_rebind_head is what writes that value, so the refusals that keep a
+# head nobody saw out of the record are proven on it directly.
+test_recorded_head_refuses_what_the_forge_did_not_return() {
+  local dir state good bad
+  good=cafebabecafebabecafebabecafebabecafebabe
+  dir=$(make_case rebind-head-refusals)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+
+  for bad in '' not-a-sha 0123456789ABCDEF0123456789ABCDEF01234567 \
+    0123456789abcdef0123456789abcdef0123456; do
+    fm_pr_meta_rebind_head "$state" task-a github github.com o/r 1 "$bad" \
+      && fail "a head that is not a commit id was recorded: '$bad'"
+    assert_no_grep 'pr_head=' "$state/task-a.meta" "a refused head reached metadata"
+  done
+
+  # A poll that read one pull request must never overwrite the head of another:
+  # the identity it validated against has to still be the recorded one.
+  fm_pr_meta_rebind_head "$state" task-a github github.com o/r 2 "$good" \
+    && fail "a head was recorded against a different pull request number"
+  fm_pr_meta_rebind_head "$state" task-a github github.com o/other 1 "$good" \
+    && fail "a head was recorded against a different project"
+  fm_pr_meta_rebind_head "$state" task-a gitlab github.com o/r 1 "$good" \
+    && fail "a head was recorded against a different forge"
+  assert_no_grep 'pr_head=' "$state/task-a.meta" "a mismatched identity reached metadata"
+
+  fm_pr_meta_rebind_head "$state" task-a github github.com o/r 1 "$good" \
+    || fail "a matching identity could not record the forge's head"
+  grep -qxF "pr_head=$good" "$state/task-a.meta" || fail "the forge's head was not recorded"
+  fm_pr_meta_rebind_head "$state" task-a github github.com o/r 1 "$good" \
+    || fail "re-recording the same head was not a no-op"
+  [ "$(grep -c '^pr_head=' "$state/task-a.meta")" -eq 1 ] \
+    || fail "re-recording the same head duplicated it"
+
+  # A task with no pull request recorded at all has no identity to match.
+  fm_write_meta "$state/task-b.meta" 'window=fm-task-b'
+  fm_pr_meta_rebind_head "$state" task-b github github.com o/r 1 "$good" \
+    && fail "a head was recorded for a task with no pull request"
+  assert_no_grep 'pr_head=' "$state/task-b.meta" "a head reached a task with no pull request"
+  pass "only a commit id read for the recorded pull request becomes its recorded head"
 }
 
 test_atomic_interruption_leaves_no_partial_artifact() {
@@ -794,7 +1370,35 @@ SH
   ! find "$dir/home/state" -name '.fm-pr-poll-*' -print | grep . >/dev/null \
     || fail "interrupted publication left temporary files"
   assert_no_grep 'pr=' "$dir/home/state/task-a.meta" "interrupted preparation changed metadata"
-  pass "interrupted atomic preparation cleans private temporaries and publishes nothing"
+
+  # The later half: a signal DURING the record's own write. One owner stages that
+  # file (bin/fm-pr-lib.sh's fm_pr_meta_write_pr) and names it while it exists, so
+  # the cleanup trap can remove it; a name taken only after the call returned
+  # could not. Interrupt inside the staged write by hooking the chmod it makes on
+  # its own temporary, which no earlier step touches.
+  dir=$(make_case interrupted-meta-write)
+  write_task_meta "$dir"
+  cat > "$dir/fakebin/chmod" <<SH
+#!/usr/bin/env bash
+case " \$* " in
+  *.fm-pr-meta.*)
+    '$REAL_CHMOD' "\$@" || exit 1
+    kill -TERM "\$PPID"
+    exit 0
+    ;;
+esac
+exec '$REAL_CHMOD' "\$@"
+SH
+  chmod +x "$dir/fakebin/chmod"
+  set +e
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "interrupted record write unexpectedly succeeded"
+  ! find "$dir/home/state" -name '.fm-pr-meta.*' -print | grep . >/dev/null \
+    || fail "interrupted record write left its staged file behind"
+  assert_no_grep 'pr=' "$dir/home/state/task-a.meta" "interrupted record write published a partial record"
+  pass "interrupted atomic preparation and record writes clean their temporaries and publish nothing"
 }
 
 test_concurrent_watcher_sees_only_complete_publication() {
@@ -1460,6 +2064,10 @@ assert_poll_absent() {
   done
 }
 
+# The armed poll and the canonical record it points at, compared whole - every
+# byte of the record included. A case that expects the poll to have re-bound the
+# head says so itself and then calls take_recorded_head, rather than this helper
+# being widened to stop noticing: what it can detect is shared by every caller.
 poll_artifact_snapshot() {
   local state=$1 id=$2 suffix path
   for suffix in check.sh pr-poll pr-poll-registration pr-poll-retirement meta; do
@@ -1474,6 +2082,18 @@ poll_artifact_snapshot() {
       printf 'other %s\n' "$suffix"
     fi
   done
+}
+
+# Assert the record now carries exactly <head>, then remove that line, returning
+# the record to what it was before the re-bind. A caller pairs this with
+# poll_artifact_snapshot to say "the head moved, and nothing else did".
+take_recorded_head() {  # <state> <id> <head> <what>
+  local state=$1 id=$2 head=$3 what=$4 rest
+  local meta="$state/$id.meta"
+  grep -qxF "pr_head=$head" "$meta" || fail "$what did not record the head the forge returned"
+  [ "$(grep -c '^pr_head=' "$meta")" -eq 1 ] || fail "$what left more than one recorded head"
+  rest=$(grep -v '^pr_head=' "$meta")
+  printf '%s\n' "$rest" > "$meta"
 }
 
 test_merged_poll_retires_once() {
@@ -1494,7 +2114,13 @@ test_merged_poll_retires_once() {
   case "$first" in check:*task-a.check.sh:*merged) ;; *) fail "first merged notification was not preserved: $first" ;; esac
   ack_watcher_cycle "$state" || fail "first merged notification handling acknowledgement failed"
   assert_poll_absent "$state" task-a
-  [ "$(cat "$state/task-a.meta")" = "$meta_before" ] || fail "merged retirement changed canonical metadata"
+  # Retirement still changes nothing about the canonical identity, and now adds
+  # exactly one thing: the pull request's head as the poll that saw the merge
+  # read it. That is the branch head, not the commit created on the base.
+  [ "$(grep -v '^pr_head=' "$state/task-a.meta")" = "$meta_before" ] \
+    || fail "merged retirement changed canonical metadata"
+  grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
+    || fail "merged retirement did not record the merged pull request's head"
 
   rm -f "$state/.last-check"
   set +e
@@ -1981,6 +2607,19 @@ test_external_merge_transition_retires_only_terminal_poll() {
     set -e
     [ "$rc" -eq 0 ] || fail "$label watcher cycle failed: $(cat "$dir/$label.err")"
     case "$(cat "$dir/$label.out")" in check:*z-stop.check.sh:*stop-cycle) ;; *) fail "$label did not reach the control check" ;; esac
+    case "$label" in
+      open-green|open-red|closed-unmerged|malformed)
+        # The forge answered, so the recorded head is now the one it returned.
+        # Taking it back also leaves the next label proving its own read rather
+        # than inheriting this one's.
+        take_recorded_head "$state" task-a "$DEFAULT_POLL_HEAD" "$label"
+        ;;
+      *)
+        # It did not, so nothing may be recorded from a read that never landed.
+        assert_no_grep 'pr_head=' "$state/task-a.meta" \
+          "$label recorded a head from a read that did not succeed"
+        ;;
+    esac
     [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "$label changed the armed poll"
     ack_watcher_cycle "$state" || fail "$label control wake acknowledgement failed"
   done
@@ -2108,6 +2747,10 @@ test_retirement_queue_failure_and_receipt_tampering() {
   set -e
   [ "$rc" -ne 0 ] || fail "watcher retired despite queue publication failure"
   [ -s "$dir/gh.log" ] || fail "queue failure fixture did not reach the authenticated poll"
+  # The poll read the head before the outcome failed to publish, so recording it
+  # is correct and expected - name it, then hold everything else to being byte
+  # identical, which is what this case is here to prove.
+  take_recorded_head "$state" task-a "$DEFAULT_POLL_HEAD" "queue failure"
   [ "$(poll_artifact_snapshot "$state" task-a)" = "$before" ] || fail "queue failure changed poll artifacts"
   [ ! -e "$state/task-a.pr-poll-retirement" ] || fail "queue failure published a receipt"
 
@@ -2158,7 +2801,16 @@ test_gitlab_merged_poll_retires() {
   case "$(cat "$dir/watch.out")" in check:*task-a.check.sh:*merged) ;; *) fail "GitLab merged wake was missing" ;; esac
   assert_poll_absent "$state" task-a
   grep -qxF "pr=$url" "$state/task-a.meta" || fail "GitLab retirement removed canonical metadata"
-  pass "GitHub and GitLab exact merged results share one retirement path"
+  # A bare merged is GitLab's DOCUMENTED output - plain glab exposes the head
+  # only inside JSON, so nothing was degraded and nothing is owed beyond the
+  # merge itself. This case asserted the wake and the retirement but never the
+  # queue's contents, which is why a durable row describing an incident that did
+  # not happen could be added on every GitLab merge without failing anything.
+  ! grep -F 'pr-head-task-a' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "a GitLab merge queued a head row for a provider that reports no head: $(cat "$state/.wake-queue")"
+  assert_no_grep 'pr_head=' "$state/task-a.meta" \
+    "a GitLab task recorded a head it never had"
+  pass "GitHub and GitLab exact merged results share one retirement path, and GitLab owes no head row"
 }
 
 # --- poll-path merge authority ----------------------------------------------
@@ -2628,11 +3280,16 @@ SH
   pass "a renumbered registration is never re-recorded around a tampered artifact:$exercised, or a pending retirement"
 }
 
-start_poll_publish_holder() {  # <dir> <state> <id>
-  local dir=$1 state=$2 id=$3 i
+# Hold <lock-path> in a live, unrelated process until release_lock_holder, so a
+# case can prove what another owner's lock actually does to the code under test.
+# The holder must be a real live process: the lock's own stale-owner recovery
+# reclaims a record whose pid is gone, which would silently un-hold it.
+start_lock_holder() {  # <dir> <lock-path>
+  local dir=$1 i
   PR_POLL_HOLDER_ACQUIRED="$dir/poll-publish-holder-acquired"
   PR_POLL_HOLDER_RELEASE="$dir/poll-publish-holder-release"
-  PR_POLL_HOLDER_LOCK="$state/.pr-poll-publish-$id.lock"
+  PR_POLL_HOLDER_LOCK=$2
+  rm -f "$PR_POLL_HOLDER_ACQUIRED" "$PR_POLL_HOLDER_RELEASE"
   cat > "$dir/poll-publish-holder.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -2653,12 +3310,53 @@ SH
   done
   kill "$PR_POLL_HOLDER_PID" 2>/dev/null || true
   wait "$PR_POLL_HOLDER_PID" 2>/dev/null || true
-  fail "poll publication holder did not acquire its lock"
+  fail "lock holder did not acquire $PR_POLL_HOLDER_LOCK"
+}
+
+release_lock_holder() {
+  : > "$PR_POLL_HOLDER_RELEASE"
+  wait "$PR_POLL_HOLDER_PID" || fail "lock holder did not release $PR_POLL_HOLDER_LOCK"
+}
+
+# strand_record_lock <dir> <state> <id>: leave <id>'s record lock permanently
+# unacquirable - owner process gone, steal lock held by a live process so
+# stale-owner recovery declines to reclaim it. That is the shape that makes
+# fm_lock_acquire_wait_bounded return 1 rather than 124: not contention with a
+# live holder, but a lock nothing will ever release. Caller ends it with
+# release_lock_holder.
+strand_record_lock() {  # <dir> <state> <id>
+  local dir=$1 state=$2 id=$3 dead_pid
+  cat > "$dir/dead-holder.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+. "$FM_TEST_ROOT/bin/fm-wake-lib.sh"
+fm_lock_acquire_wait "$FM_TEST_LOCK"
+: > "$FM_TEST_ACQUIRED"
+sleep 600
+SH
+  chmod +x "$dir/dead-holder.sh"
+  FM_TEST_ROOT="$ROOT" FM_TEST_LOCK="$state/.meta-$id.lock" \
+    FM_TEST_ACQUIRED="$dir/dead-acquired" "$dir/dead-holder.sh" &
+  dead_pid=$!
+  for _ in $(seq 1 200); do
+    [ -e "$dir/dead-acquired" ] && break
+    sleep 0.02
+  done
+  [ -e "$dir/dead-acquired" ] || fail "the stale-lock fixture never acquired the record"
+  kill -9 "$dead_pid" 2>/dev/null || true
+  wait "$dead_pid" 2>/dev/null || true
+  [ -e "$state/.meta-$id.lock" ] || fail "killing the holder released the record lock"
+  start_lock_holder "$dir" "$state/.meta-$id.lock.steal"
+  # Past FM_LOCK_STALE_AFTER, so the dead owner is not read as mid-acquire.
+  sleep 3
+}
+
+start_poll_publish_holder() {  # <dir> <state> <id>
+  start_lock_holder "$1" "$2/.pr-poll-publish-$3.lock"
 }
 
 release_poll_publish_holder() {
-  : > "$PR_POLL_HOLDER_RELEASE"
-  wait "$PR_POLL_HOLDER_PID" || fail "poll publication holder did not release its lock"
+  release_lock_holder
 }
 
 test_device_rerecord_serializes_direct_rearm() {
@@ -2771,8 +3469,20 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
+test_arm_only_arms_without_announcing_ready
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
+test_poll_rebinds_the_recorded_head
+test_rebind_never_waits_on_a_held_task_record
+test_a_permanent_lock_failure_is_not_reported_as_contention
+test_a_failed_rebind_is_never_silent
+test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so
+test_a_merged_row_names_what_the_record_actually_holds
+test_a_merged_row_distinguishes_unread_from_unrecorded
+test_a_sweep_that_recorded_nothing_keeps_the_report_once_record
+test_an_unwritable_report_once_record_does_not_kill_the_watcher
+test_a_repeating_rebind_failure_is_reported_once_per_condition
+test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication
 test_poll_publication_refuses_unsafe_destinations

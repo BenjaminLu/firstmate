@@ -10,6 +10,11 @@
 # retirement; docs/watcher-continuity.md owns the recovery contract.
 # FM_STATUS_PRESENTATION_LOCK_TIMEOUT sets the positive whole-second wait for
 # presentation-path locks (default 10); queue mutation locks remain blocking.
+# The annotation phase reads each crew's CURRENT state while that lock is held,
+# so both of its bounds must stay under that wait: FM_WAKE_CURRENT_STATE_TIMEOUT
+# bounds one status key's read (default 3) and FM_WAKE_CURRENT_STATE_BUDGET bounds
+# the whole phase across every key (default 5). A spent bound prints "current state
+# could not be read" rather than delaying the drain further.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

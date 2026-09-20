@@ -246,4 +246,18 @@ write_record "$GEN" $((OLD_SEQ + 1)) || {
 }
 lock_release
 umask "$old_umask"
+# This is the fleet's only writer of a worker's semantic state, so it is where
+# the captain's board learns a worker started or stopped working - at the turn
+# boundary that changed it, not at the next rebuild. Only the state word is
+# published: this script does not know WHAT the worker is doing, and a board
+# that replaced a composed "review 2/3" with "waiting" would be fresher and
+# less useful. One append; it cannot fail this writer (bin/fm-board-live.sh).
+# $STATE is the state directory this writer was given, so the event is
+# published into the SAME home rather than whichever one this process's
+# environment would otherwise resolve.
+case $NEW_STATE in
+  busy) FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-board-live.sh" event step "$ID" --state working >/dev/null 2>&1 || true ;;
+  idle) FM_STATE_OVERRIDE="$STATE" "$SCRIPT_DIR/fm-board-live.sh" event step "$ID" --state waiting >/dev/null 2>&1 || true ;;
+  *) : ;;
+esac
 exit 0

@@ -273,3 +273,7 @@ It is optional by design, and the other consumers already treat it that way: `bi
 The merge path does not record one either, and deliberately does not depend on one.
 A rebase moves the head and leaves any recorded value stale, so a merge decided from metadata can verify a commit that no longer exists.
 Reading the head live at merge time, reporting a recorded value that disagrees, and binding the merge to what was actually verified is what closes that gap.
+
+A GitHub task's recorded head no longer sits still between those reads: its armed merge poll selects the head on the same call that reads the state and re-binds `pr_head=` to it every cycle (`bin/fm-pr-poll.sh`).
+That keeps the recorded value on the current commit for the consumers that read it, and changes nothing here.
+A GitLab merge request is the exception: plain `glab` exposes the head only inside its JSON, so its poll reads no head, a GitLab task records none to re-bind, and the live read above stays its only current head.

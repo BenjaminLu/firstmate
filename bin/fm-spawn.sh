@@ -4848,6 +4848,12 @@ fi
 fm_lock_release "$SPAWN_META_LOCK"
 SPAWN_META_LOCK_HELD=0
 
+# The captain's board learns a task went underway from the dispatch that put
+# it there, not from the next time anyone rebuilds the board. Publishing is one
+# append and cannot fail this script; bin/fm-board-live.sh owns that guarantee.
+"$SCRIPT_DIR/fm-board-live.sh" event dispatched "$ID" \
+  --name "$ID" --repo "$PROJ" --state working --detail launching --kind-of-task "$KIND" || true
+
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
 echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"

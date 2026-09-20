@@ -105,6 +105,22 @@ Your own rulings are your own words, and you say which is which.
 
 The same rule the captain's chat follows applies to the pull request: never put "captain" or any other direct address into it.
 
+## Record the ruling
+
+A ruling you posted is still invisible to anything but that pull request's comment thread.
+Record each one after it is posted, so the half of firstmate's judgement the captain never saw is durable:
+
+```
+bin/fm-gate-call.sh record --site review-finding --task <id> --verdict <verdict> \
+  --what '<R<n>: the finding, in one line>' --grounds '<the ruling, in your own words>' \
+  --link '<the pull request url>' --key 'R<n>'
+```
+
+The four rulings map onto three verdicts: **Fix** and **Not a defect** are `decided`, **Won't fix** is `refused`, and **Captain's call** needs no command because `bin/fm-captain-hold.sh hold` already recorded it as `escalated`.
+**Won't fix** is `refused` and not `deferred` because it is a decline, not a postponement: `deferred` tells a reader firstmate means to come back to it, so recording a permanent decline there pads the list of what is still owed with things that will never be done.
+Use `deferred` only when you genuinely mean later, and say when in the grounds.
+`bin/fm-gate-calls-lib.sh` owns the record and what happens when a call cannot be written; recording never changes the ruling it observes.
+
 ## Land the fixes
 
 Steer the same worker that opened the pull request (`bin/fm-send.sh`), naming the finding ids it is to act on and the ruling for each.
