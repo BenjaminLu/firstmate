@@ -1018,9 +1018,11 @@ test_a_failed_rebind_is_never_silent() {
     || fail "the held record was written anyway"
   row=$(grep -F "pr-head-task-a" "$state/.wake-queue" 2>/dev/null || true)
   [ -n "$row" ] || fail "a merged poll that could not record its head queued nothing: $(cat "$state/.wake-queue" 2>/dev/null)"
+  # Both facts, because they are different: the head the forge returned, and the
+  # head the record is left holding. Neither may be inferred from the other.
   case "$row" in
-    *"merged at $DEFAULT_POLL_HEAD"*stale*"https://github.com/o/r/pull/1"*) ;;
-    *) fail "the queued row does not say what is stale or which pull request: $row" ;;
+    *"merged at $DEFAULT_POLL_HEAD"*"still names $armed_head"*"https://github.com/o/r/pull/1"*) ;;
+    *) fail "the queued row does not carry both the forge's head and the record's: $row" ;;
   esac
   # The merge itself is never lost to a failed re-bind, and the poll still
   # retires - so the row is the only thing that will ever say the head is wrong.
@@ -1046,6 +1048,36 @@ test_a_failed_rebind_is_never_silent() {
   ! grep -F "pr-head-task-a" "$state/.wake-queue" >/dev/null 2>&1 \
     || fail "a re-bind that succeeded reported a failure anyway"
   pass "a merged poll that cannot record its head reaches the durable queue, and one that can stays quiet"
+}
+
+# A head the forge DID give up, which simply could not be written, must not be
+# reported as a head that could not be read: that sends a supervisor after the
+# forge instead of after the record. The two explanations belong to different
+# facts, and each row states the one it actually established.
+test_a_merged_row_distinguishes_unread_from_unrecorded() {
+  local dir state rc
+  dir=$(make_case merged-row-unrecorded)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  # No pr_head= recorded at all, and the record stranded so the re-bind of a
+  # perfectly readable head cannot be written.
+  strand_record_lock "$dir" "$state" task-a
+
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  [ "$rc" -eq 0 ] || fail "merged unrecorded cycle failed: $(cat "$dir/watch.err")"
+
+  grep -F "merged at $DEFAULT_POLL_HEAD" "$state/.wake-queue" >/dev/null \
+    || fail "the row does not name the head the forge did return: $(cat "$state/.wake-queue")"
+  ! grep -F 'head could not be read' "$state/.wake-queue" >/dev/null \
+    || fail "a head that was read was reported as unreadable"
+  pass "a head that could not be written is not reported as one that could not be read"
 }
 
 # The report-once record is a tidiness aid, not a safety record: the row it
@@ -1163,6 +1195,10 @@ test_a_merged_row_names_what_the_record_actually_holds() {
     || fail "the row does not name the head the record actually holds: $(cat "$state/.wake-queue")"
   ! grep -F 'no head is recorded for what landed' "$state/.wake-queue" >/dev/null \
     || fail "the row claimed an empty record while a superseded head was recorded"
+  # The poll's retirement has not run when this row is written, and it can fail,
+  # so the row must not predict that nothing will correct the record.
+  ! grep -F 'nothing will correct it' "$state/.wake-queue" >/dev/null \
+    || fail "the row predicted the outcome of a retirement that had not run"
   assert_poll_absent "$state" task-a
   pass "a merged row names the head the record actually holds, not the one the path assumed"
 }
@@ -3442,6 +3478,7 @@ test_a_permanent_lock_failure_is_not_reported_as_contention
 test_a_failed_rebind_is_never_silent
 test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so
 test_a_merged_row_names_what_the_record_actually_holds
+test_a_merged_row_distinguishes_unread_from_unrecorded
 test_a_sweep_that_recorded_nothing_keeps_the_report_once_record
 test_an_unwritable_report_once_record_does_not_kill_the_watcher
 test_a_repeating_rebind_failure_is_reported_once_per_condition

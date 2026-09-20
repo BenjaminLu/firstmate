@@ -2366,18 +2366,29 @@ while :; do
               # standing, and telling a supervisor "no head is recorded" while a
               # superseded one is exactly what is recorded points them away from
               # the problem instead of at it.
+              # Both facts are read rather than inferred: what the record
+              # holds now, and whether the forge gave a head at all. Neither
+              # branch may borrow the other's explanation, and none of them
+              # predicts what a retirement that has not run yet will do.
+              # Two independent facts, each read rather than inferred: whether
+              # the forge gave a head at all, and what the record holds now.
+              # The row carries both, because "the head is X" and "the record
+              # says Y" are different things and a supervisor needs each.
               left=$(recorded_pr_head "$id")
-              if [ -n "$left" ]; then
-                triage_log "merged poll for $id left its record naming $left (rc=$rebind_rc)"
-                fm_wake_append check "pr-head-$id" \
-                  "check: $id merged, but its record still names $left, which is not confirmed to be what landed, and nothing will correct it: $url" \
-                  || exit 1
+              if [ -n "$poll_head" ]; then
+                merged_note="merged at $poll_head, but its record could not be updated"
               else
-                triage_log "merged poll for $id recorded no head (rc=$rebind_rc)"
-                fm_wake_append check "pr-head-$id" \
-                  "check: $id merged but its pull request head could not be read, so no head is recorded for what landed: $url" \
-                  || exit 1
+                merged_note="merged, but its pull request head could not be read"
               fi
+              if [ -n "$left" ]; then
+                merged_note="$merged_note and still names $left, which is not confirmed to be the commit that landed"
+              elif [ -n "$poll_head" ]; then
+                merged_note="$merged_note and now names no head at all"
+              else
+                merged_note="$merged_note, so no head is recorded for what landed"
+              fi
+              triage_log "merged poll for $id: $merged_note (rc=$rebind_rc)"
+              fm_wake_append check "pr-head-$id" "check: $id $merged_note: $url" || exit 1
             elif [ "$rebind_rc" -eq 2 ]; then
               triage_log "deferred re-binding the recorded head of $id to $poll_head; the task record was locked"
             else
