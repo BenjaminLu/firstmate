@@ -161,6 +161,21 @@ EOF
   out=$(run_spawn "$home" "$fakebin" delivery-legacy-b3 "$proj" claude --mode local-only --yolo off)
   assert_contains "$out" "records no delivery contract line" "a legacy brief did not warn about its missing contract"
   assert_not_contains "$out" "delivery mismatch" "a legacy brief was treated as a mismatch"
+
+  # A brief that HAS a contract no reader can reach is not that legacy brief, and
+  # excusing it launches a worker whose instructions and the task record disagree
+  # exactly where this check exists to keep them together. 2877225d added this
+  # guard and claimed a test pinned it; nothing did.
+  write_brief "$home" delivery-unreachable-b4
+  printf '%s\n' '# Done' 'Delivery contract: mode=no-mistakes' \
+    >> "$home/data/delivery-unreachable-b4/brief.md"
+  out=$(run_spawn "$home" "$fakebin" delivery-unreachable-b4 "$proj" claude --mode direct-PR --yolo off)
+  status=$?
+  [ "$status" -ne 0 ] || fail "a brief whose contract no reader can reach should refuse: $out"
+  assert_contains "$out" "no reader can reach" "the spawn excused an unreachable contract as an absent one"
+  assert_not_contains "$out" "records no delivery contract line" \
+    "the spawn reported an unreachable contract with the legacy-brief warning"
+  assert_absent "$home/state/delivery-unreachable-b4.meta" "a refused spawn wrote task metadata"
   pass "fm-spawn: the brief's recorded mode and the spawn's explicit mode must agree"
 }
 

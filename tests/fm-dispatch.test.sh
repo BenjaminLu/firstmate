@@ -953,6 +953,30 @@ test_unreachable_delivery_contract_is_refused_not_read_as_absent() {
   assert_no_grep "$id" "$case_dir/home/data/backlog.md" \
     "the item was filed before the hidden contract was noticed"
 
+  # The `# Task` exclusion, seeded with a brief so the dispatch reuses it and the
+  # exclusion is what decides the call rather than the scaffold. 2877225d claimed
+  # a test pinned this; the case below it dispatched with no brief on disk, so
+  # fm-brief.sh rebuilt one and the quoted line never reached the check.
+  case_dir=$(make_case unreachable-excluded)
+  id=dispatch-unreachable-excluded
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  printf '%s\n' 'You are a crewmate.' '' \
+    '# Task' "## Captain's intent" 'Work out why briefs record the wrong mode.' \
+    'The brief carries this line:' 'Delivery contract: mode=no-mistakes' \
+    'and the spawn reads it.' '' \
+    '## Firstmate spec' 'Report what you find.' '' \
+    '# Definition of done' 'Write your findings to report.md.' > "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a contract line inside the captain's own words should not refuse: $out"
+  assert_contains "$out" "brief: reused" \
+    "the brief was rebuilt, so the seeded captain's words never reached the check"
+  assert_not_contains "$out" "no reader can reach" \
+    "the captain's own quoted words were reported as an unreachable contract"
+
   # And the case bounding the read was FOR must still dispatch: a scout brief
   # whose captain's ask quotes the contract line records no contract of its own.
   case_dir=$(make_case unreachable-quoted-scout)
