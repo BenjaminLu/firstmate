@@ -45,6 +45,20 @@ A reviewer likewise never rules on its own finding; `bin/fm-brief.sh`'s reviewer
    - destructive, irreversible, and genuinely security-sensitive choices, which always escalate under the stronger existing captain boundary
 6. Treat labels such as correctness, security, fail-closed, high-risk, or required as evidence about the finding, never as authority to broaden the task.
 
+## Record the call
+
+A finding you decide is firstmate's judgement exercised without the captain ever seeing it, and until it is written down nothing but backlog prose holds it.
+Record it after you have sent the decision, never before:
+
+```
+bin/fm-gate-call.sh record --site ask-user --task <id> --verdict decided \
+  --what '<the finding, in one line>' --grounds '<why it was yours to decide>' \
+  --link '<the pull request or gate report, where one exists>' --key '<the decision key>'
+```
+
+An escalation needs no second command: `bin/fm-captain-hold.sh hold` records it.
+`bin/fm-gate-calls-lib.sh` owns the record, the four verdicts, and what happens when a call cannot be written; recording never changes the decision it observes.
+
 ## Captain-facing escalation
 
 State all five of these elements in one concise, evidence-first escalation:
