@@ -189,12 +189,15 @@ Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one
 Both portable parallel lanes carry the same isolation proof and were given `--jobs 2` together; one kept it and one did not, and the difference is entirely which of those two shapes the lane has.
 Measured on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) against the three green baseline runs cited above:
 
-| lane | bound | serial wall (3 runs) | `--jobs 2` wall | script sum | longest script |
-|---|---|---|---:|---:|---:|
-| portable parallel 1 | packing: 550 s over 11 scripts, longest 191 s | 347-546 s, median 546 s | **356 s** | 546 -> 592 s (+8%) | 191 -> 218 s |
-| portable parallel 2 | one script: `fm-captain-hold-lifecycle` is two thirds of it | 347-415 s, median 396 s | **393 s** | 396 -> 538 s (+36%) | 281 -> 360 s |
+Every cell is that lane's own measurement: the serial columns are the three baseline runs, the `jobs=2` columns are run 35484461648, and the script-sum and longest-script columns carry the serial median against that one run.
 
-Lane 1 is a real win. Lane 2 saved nothing measurable - its wall landed inside its own serial spread - because packing cannot shorten a lane whose makespan is one script, while the contention the extra worker adds makes that script longer. The two effects cancel, and what is left is 36% more runner-seconds.
+| lane | bound | serial wall, 3 runs (median) | `jobs=2` wall | script sum, median -> jobs=2 | longest script, median -> jobs=2 |
+|---|---|---|---:|---:|---:|
+| portable parallel 1 | packing: 11 scripts, longest 191 s against a 546 s sum | 472-551 s (546 s) | **356 s** | 546 -> 592 s (+8%) | 191 -> 218 s |
+| portable parallel 2 | one script: `fm-captain-hold-lifecycle` is two thirds of the lane | 347-415 s (396 s) | **393 s** | 396 -> 538 s (+36%) | 281 -> 360 s |
+
+Read the `jobs=2` wall against its own row's serial range, which is the whole test.
+Lane 1's 356 s is 116 s below the fastest of its three serial runs, so the gain is outside the run-to-run spread rather than inside it. Lane 2's 393 s sits between its own minimum and maximum, so nothing measurable was saved - packing cannot shorten a lane whose makespan is one script, while the contention the extra worker adds makes that script longer. The two effects cancel, and what is left is 36% more runner-seconds.
 Under the twenty-job ceiling above, spending runner-seconds for no wall-clock is strictly worse rather than neutral, so lane 2 runs serial and lane 1 does not.
 Before adding `--jobs` to any lane, compare its longest script against its script sum divided by the worker count: if the longest script is the larger of the two, the lane is already at its floor and concurrency can only cost.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
