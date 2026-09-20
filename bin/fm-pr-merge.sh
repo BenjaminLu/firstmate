@@ -618,7 +618,8 @@ APPROVALS
 # Every GitHub check that is not green in the given live pull-request JSON, one
 # per line as "<STATE> <name>", where the state is the check's own status or
 # conclusion so a refusal can say whether it failed, is still running, never
-# started, or was cancelled. An entry is green when it is a status context whose state is
+# started, or was cancelled.
+# An entry is green when it is a status context whose state is
 # SUCCESS, or a check run that completed with SUCCESS, NEUTRAL, or SKIPPED (so
 # a pending check is not green either). Exits nonzero when the rollup cannot be
 # read, so a malformed answer is a failed read and never an empty red set.

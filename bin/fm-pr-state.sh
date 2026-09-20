@@ -19,7 +19,8 @@
 # So the approval is read the same way the merge path reads it, from the same
 # owner - bin/fm-review-verdict-lib.sh for the line, and the same rules for
 # which review counts: submitted, standing, at the current head, and written by
-# an account this repository granted standing. reviewDecision still owns
+# an account this repository granted standing.
+# reviewDecision still owns
 # CHANGES_REQUESTED, whose review history is printed to explain it, naming each
 # reviewer whose latest verdict still requests changes and marking it STALE when
 # it was left at a superseded head.
