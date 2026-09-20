@@ -151,7 +151,12 @@ fm_brief_task_placeholders_present() {  # <file>
 # at the same or a higher level as <heading> anywhere in the input, the line
 # that would end <heading>'s body, or the opening line of a fence still open
 # at end of input, which would swallow every heading after it; it fails when
-# there is neither.
+# there is neither. Mark mode prints EVERY input line prefixed with `1` when it
+# is inside <heading>'s body and `0` otherwise, which is what lets a caller
+# rewrite one section of a file without deciding for itself what a heading or a
+# fenced block is. That second decision is the thing this mode exists to
+# prevent: a shell loop tracking `##` by hand and this awk will agree on the
+# easy shapes and disagree on a fenced block, and the disagreement is silent.
 fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
@@ -192,6 +197,21 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
         }
       }
 
+      if (mode == "mark") {
+        if (!found && !was_fenced && line == heading) {
+          found = 1
+          grab = 1
+          printf "0%s\n", line
+          next
+        }
+        if (grab && !is_fence && !was_fenced) {
+          level = 0
+          while (substr(scan, level + 1, 1) == "#") level++
+          if (level > 0 && level <= target_level && substr(scan, level + 1, 1) ~ /^[[:space:]]?$/) grab = 0
+        }
+        printf "%d%s\n", grab, line
+        next
+      }
       if (mode == "terminator") {
         if (is_fence || was_fenced) next
         level = 0
@@ -243,6 +263,29 @@ fm_brief_body_terminator_line_of_text() {  # <heading> < text
 
 fm_brief_heading_body() {  # <file> <heading>
   fm_brief_heading_parse "$1" "$2" body
+}
+
+# Rewrite <file> on stdout with the one placeholder line inside <heading>'s body
+# replaced by whatever <emit-cmd> prints. The section is decided by mark mode
+# above, so this shares the detectors' parser rather than being a second opinion
+# about headings and fences. Returns 1 without writing a usable result when that
+# body holds no such line, so the caller refuses instead of saving a record it
+# never filled.
+fm_brief_replace_placeholder_in_heading() {  # <file> <heading> <placeholder> <emit-cmd> [args...]
+  local file=$1 heading=$2 placeholder=$3
+  shift 3
+  local marked flag line found=0
+  while IFS= read -r marked; do
+    flag=${marked:0:1}
+    line=${marked:1}
+    if [ "$found" -eq 0 ] && [ "$flag" = 1 ] && [ "$line" = "$placeholder" ]; then
+      found=1
+      "$@"
+      continue
+    fi
+    printf '%s\n' "$line"
+  done < <(fm_brief_heading_parse "$file" "$heading" mark)
+  [ "$found" -eq 1 ]
 }
 
 fm_brief_heading_present() {  # <file> <heading>

@@ -332,16 +332,33 @@ emit_file_bytes() {  # <file>
 
 if fm_brief_task_placeholders_present "$BRIEF"; then
   BRIEF_TMP="$DATA/$ID/.brief.md.dispatch.$$"
-  {
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        '{TASK}') emit_file_bytes "$ASK" ;;
-        '{FIRSTMATE_SPEC}') emit_file_bytes "$SPEC" ;;
-        *) printf '%s\n' "$line" ;;
-      esac
-    done < "$BRIEF"
-  } > "$BRIEF_TMP" || { rm -f -- "$BRIEF_TMP"; die "could not fill $BRIEF"; }
-  mv -f -- "$BRIEF_TMP" "$BRIEF" || { rm -f -- "$BRIEF_TMP"; die "could not replace $BRIEF"; }
+  # Each placeholder is replaced inside its own subsection, one pass each, through
+  # the same parser the placeholder checks use. An unbounded line match would
+  # splice the ask into an ask that quotes `{TASK}` on a line of its own, and a
+  # second section-tracking loop written here would disagree with that parser
+  # about a fenced block without saying so.
+  fill_brief_subsection() {  # <heading> <placeholder> <file>
+    fm_brief_replace_placeholder_in_heading "$BRIEF_TMP.in" "$1" "$2" emit_file_bytes "$3"
+  }
+  cp -- "$BRIEF" "$BRIEF_TMP.in" || die "could not stage $BRIEF for filling"
+  for pass in "## Captain's intent|{TASK}|$ASK" "## Firstmate spec|{FIRSTMATE_SPEC}|$SPEC"; do
+    PASS_HEADING=${pass%%|*}
+    PASS_REST=${pass#*|}
+    PASS_PLACEHOLDER=${PASS_REST%%|*}
+    PASS_FILE=${PASS_REST#*|}
+    if fm_brief_task_placeholder_intact "$BRIEF_TMP.in" "$PASS_HEADING" "$PASS_PLACEHOLDER"; then
+      if fill_brief_subsection "$PASS_HEADING" "$PASS_PLACEHOLDER" "$PASS_FILE" > "$BRIEF_TMP"; then
+        mv -f -- "$BRIEF_TMP" "$BRIEF_TMP.in" || {
+          rm -f -- "$BRIEF_TMP" "$BRIEF_TMP.in"
+          die "could not stage the filled $PASS_HEADING for $BRIEF"
+        }
+      else
+        rm -f -- "$BRIEF_TMP" "$BRIEF_TMP.in"
+        die "could not fill $BRIEF: its $PASS_HEADING body holds no $PASS_PLACEHOLDER line to replace"
+      fi
+    fi
+  done
+  mv -f -- "$BRIEF_TMP.in" "$BRIEF" || { rm -f -- "$BRIEF_TMP.in"; die "could not replace $BRIEF"; }
   if fm_brief_task_placeholders_present "$BRIEF"; then
     die "$BRIEF still contains {TASK} or {FIRSTMATE_SPEC} after filling; the scaffold's placeholder lines were not where fm-brief.sh puts them"
   fi
@@ -362,40 +379,27 @@ else
 fi
 if fm_design_placeholder_intact "$DESIGN_RECORD"; then
   DESIGN_TMP="$DATA/$ID/.design.md.dispatch.$$"
-  # Bounded to the `## Decisions` section, the same way fm_design_placeholder_intact
-  # is bounded and for the same reason: a plan about this machinery may show
-  # `{DESIGN}` on a line of its own elsewhere in the record, and an unbounded
-  # replacement would splice the plan into that line too. Detection and
-  # replacement share one assumption and must share one boundary.
-  {
-    in_decisions=0
-    filled=0
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        '## Decisions') in_decisions=1; printf '%s\n' "$line"; continue ;;
-        '#'*)
-          case "$line" in
-            '###'*) : ;;
-            *) in_decisions=0 ;;
-          esac
-          ;;
-      esac
-      if [ "$in_decisions" -eq 1 ] && [ "$line" = "$FM_DESIGN_PLACEHOLDER" ]; then
-        filled=1
-        if [ "$DESIGN_SET" -eq 1 ]; then
-          emit_file_bytes "$DESIGN"
-        else
-          printf '%s\n' \
-            "None recorded at dispatch ($(date -u +%Y-%m-%d)): $NO_DESIGN" \
-            "Firstmate judged this task to carry no design decisions worth recording. A decision made later is appended below as its own dated entry."
-        fi
-        continue
-      fi
-      printf '%s\n' "$line"
-    done < "$DESIGN_RECORD"
-    [ "$filled" -eq 1 ] || exit 1
-  } > "$DESIGN_TMP" || { rm -f -- "$DESIGN_TMP"; die "could not fill $DESIGN_RECORD: its ## Decisions section holds no $FM_DESIGN_PLACEHOLDER line to replace"; }
-  mv -f -- "$DESIGN_TMP" "$DESIGN_RECORD" || { rm -f -- "$DESIGN_TMP"; die "could not replace $DESIGN_RECORD"; }
+  emit_design_fill() {
+    if [ "$DESIGN_SET" -eq 1 ]; then
+      emit_file_bytes "$DESIGN"
+    else
+      printf '%s\n' \
+        "None recorded at dispatch ($(date -u +%Y-%m-%d)): $NO_DESIGN" \
+        "Firstmate judged this task to carry no design decisions worth recording. A decision made later is appended below as its own dated entry."
+    fi
+  }
+  # Bounded to `## Decisions` by the same parser fm_design_placeholder_intact uses,
+  # so the two cannot disagree about a heading, a fenced block, or a placeholder
+  # carrying stray whitespace. The refusal is reachable: the helper RETURNS, where
+  # an `exit` inside a `{ ... } > file` group would unwind past the handler
+  # attached to it and leave firstmate a bare status with nothing said.
+  if fm_brief_replace_placeholder_in_heading \
+    "$DESIGN_RECORD" "## Decisions" "$FM_DESIGN_PLACEHOLDER" emit_design_fill > "$DESIGN_TMP"; then
+    mv -f -- "$DESIGN_TMP" "$DESIGN_RECORD" || { rm -f -- "$DESIGN_TMP"; die "could not replace $DESIGN_RECORD"; }
+  else
+    rm -f -- "$DESIGN_TMP"
+    die "could not fill $DESIGN_RECORD: its ## Decisions section holds no $FM_DESIGN_PLACEHOLDER line to replace"
+  fi
   if fm_design_placeholder_intact "$DESIGN_RECORD"; then
     die "$DESIGN_RECORD's ## Decisions section still holds nothing but $FM_DESIGN_PLACEHOLDER after filling; the scaffold's placeholder line was not where bin/fm-dod-lib.sh puts it"
   fi

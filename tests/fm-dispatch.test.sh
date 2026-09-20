@@ -789,10 +789,14 @@ test_design_record_is_filled_from_the_plan_or_the_declaration() {
 
 # A task briefed before design records existed has none. Re-dispatching it must
 # give it one rather than leaving the call with nothing to fill.
-# Detection and replacement share one assumption, so they share one boundary. A
-# record whose ## Decisions is still the placeholder while a bare {DESIGN} line
-# sits further down - a plan about this scaffold, written before it was filled -
-# must have the plan spliced once, into the section, and not into both.
+# Detection and replacement share one assumption, so they share one boundary, and
+# they share it through one parser rather than two that agree on the easy shapes.
+# The quoted placeholder here sits in a FENCED block, which is how anyone would
+# actually write a plan about this scaffold in Markdown, and which is the shape a
+# section-tracking loop written in shell gets wrong: it is the fence the two
+# parsers disagree about, so pinning the unfenced form would pin the case that
+# works. A heading inside that fence is here for the same reason - it must not end
+# the section the real placeholder lives in either.
 test_design_fill_is_bounded_to_the_decisions_section() {
   local case_dir id record out status hits
   case_dir=$(make_case design-bounded-fill)
@@ -800,11 +804,14 @@ test_design_fill_is_bounded_to_the_decisions_section() {
   mkdir -p "$case_dir/home/data/$id"
   record="$case_dir/home/data/$id/design.md"
   printf '%s\n' '# Design - a record with a worked example below' '' \
-    '## Decisions' '{DESIGN}' '' \
     '## Notes for whoever fills this' \
     'The scaffold writes its placeholder on a line of its own:' '' \
-    '{DESIGN}' '' \
-    'and the dispatch replaces that one line.' > "$record"
+    '```markdown' \
+    '## Decisions' \
+    '{DESIGN}' \
+    '```' '' \
+    'and the dispatch replaces that one line.' '' \
+    '## Decisions' '{DESIGN}' > "$record"
   out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
     --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
     --design "$case_dir/design.md")
@@ -813,8 +820,10 @@ test_design_fill_is_bounded_to_the_decisions_section() {
   hits=$(grep -c 'Render the toggle from the existing view state; no new store.' "$record")
   assert_equals "1" "$hits" "the plan was spliced into every placeholder line, not just the section's"
   grep -qx -- '{DESIGN}' "$record" \
-    || fail "the placeholder outside ## Decisions was consumed; it is the record's own example text"
-  pass "fm-dispatch: the fill replaces the ## Decisions placeholder and leaves a quoted one alone"
+    || fail "the placeholder inside the fenced example was consumed; it is the record's own example text"
+  grep -qx -- '## Decisions' "$record" \
+    || fail "the fenced example's heading was consumed"
+  pass "fm-dispatch: the fill replaces the real ## Decisions placeholder and leaves a fenced example alone"
 }
 
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had() {
