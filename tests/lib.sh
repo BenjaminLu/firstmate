@@ -7,7 +7,8 @@
 #
 # It provides the boilerplate every test file used to re-roll: ok/not-ok
 # reporters, a self-cleaning temp root, fakebin/PATH-shim helpers, deterministic
-# git identity and fixture builders, state/<id>.meta writers, and the common
+# git identity and fixture builders, state/<id>.meta writers, the settled-
+# viewport wait every terminal end-to-end test needs, and the common
 # string/exit-code/file assertions. Shared fake-toolchain and spawn-world
 # builders live in tests/fixtures.sh; wake-queue mocks in wake-helpers.sh;
 # secondmate-lifecycle mocks in secondmate-helpers.sh. Suite-specific fakes
@@ -614,6 +615,71 @@ fm_write_secondmate_meta() {
     "yolo=off" \
     "home=$home" \
     "projects=$projects"
+}
+
+# --- waiting for a terminal viewport to settle ------------------------------
+
+# fm_wait_capture_settled <capture-fn> <file> <max-attempts> \
+#                         <present-text> [<absent-text>] [<abort-text>...]
+#
+# Re-runs <capture-fn> "<file>" until the captured viewport has SETTLED into
+# the end state a completed transition leaves behind: <present-text> is on
+# screen and <absent-text>, when given, is gone. Returns 0 then, 2 as soon as
+# any <abort-text> appears - text by which the program under test reports its
+# own failure - and 1 once <max-attempts> captures have gone by with neither.
+#
+# Wait on the end state, never on the intermediate one. Captures are discrete
+# samples, so a state the program passes through can appear and vanish
+# entirely between two of them, and a loaded runner widens that window without
+# bound. A wait that requires SEEING the intermediate frame is therefore a coin
+# flip that turns a healthy run red - it is what made the Calm /reload check
+# fail pull requests that touched nothing near it - and it is the weaker
+# assertion besides, because the intermediate frame only proves the transition
+# STARTED. An end state cannot be missed: once true it stays true, so the poll
+# either observes it or the transition really did not finish.
+#
+# The bound is an attempt count, not a wall-clock budget, per CONTRIBUTING.md:
+# each attempt costs more on a loaded machine, so the count stretches with the
+# load it exists to tolerate, where a clock would expire on work that was still
+# legitimately in progress.
+#
+# Both failures print the last capture to stderr. A check that cannot confirm
+# what it was watching for has to say what it saw instead, or the next reader
+# pays for the diagnosis all over again.
+fm_wait_capture_settled() {
+  local capture_fn=$1 file=$2 max_attempts=$3 present=$4 absent=${5:-}
+  # Everything past the fixed five is an abort text; with none, clear $@ so the
+  # scan below iterates zero times instead of re-reading the fixed arguments.
+  if [ "$#" -gt 5 ]; then shift 5; else set --; fi
+  local attempt=0 abort reason rc
+  while :; do
+    "$capture_fn" "$file" || true
+    attempt=$((attempt + 1))
+    for abort in "$@"; do
+      if grep -Fq -- "$abort" "$file" 2>/dev/null; then
+        reason="reported '$abort' instead of settling on '$present'"
+        rc=2
+        break 2
+      fi
+    done
+    if grep -Fq -- "$present" "$file" 2>/dev/null &&
+      { [ -z "$absent" ] || ! grep -Fq -- "$absent" "$file" 2>/dev/null; }; then
+      return 0
+    fi
+    if [ "$attempt" -ge "$max_attempts" ]; then
+      if grep -Fq -- "$present" "$file" 2>/dev/null; then
+        reason="showed '$present' but never cleared '$absent' across $max_attempts captures"
+      else
+        reason="never showed '$present' across $max_attempts captures"
+      fi
+      rc=1
+      break
+    fi
+    sleep 0.05
+  done
+  printf 'fm_wait_capture_settled: the viewport %s; last capture follows:\n' "$reason" >&2
+  tail -n 200 "$file" 2>/dev/null | sed 's/^/  | /' >&2
+  return "$rc"
 }
 
 # --- common assertions ------------------------------------------------------

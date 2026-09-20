@@ -2137,7 +2137,7 @@ JS
 
 test_hidden_block_geometry_e2e() {
   local project home config sessions session_file snapshot expanded_snapshot calm_off_snapshot restarted_snapshot
-  local version skill_line final_line gap i
+  local version skill_line final_line gap i reload_done reload_running
   if ! command -v pi >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     echo "skip: pi or tmux not found for Pi Calm hidden-block geometry E2E"
     return 0
@@ -2263,21 +2263,6 @@ TS
     return 1
   }
 
-  wait_for_geometry_transition() {
-    local file=$1 transient_text=$2 final_text=$3 attempt=0 saw_transient=0
-    while [ "$attempt" -lt 600 ]; do
-      capture_geometry_viewport "$file" || true
-      if grep -Fq "$transient_text" "$file" 2>/dev/null; then
-        saw_transient=1
-      elif [ "$saw_transient" -eq 1 ] && grep -Fq "$final_text" "$file" 2>/dev/null; then
-        return 0
-      fi
-      sleep 0.01
-      attempt=$((attempt + 1))
-    done
-    return 1
-  }
-
   assert_geometry_gap() {
     local file=$1 label=$2
     skill_line=$(grep -n -m1 '\[skill\] ahoy' "$file" | cut -d: -f1)
@@ -2322,12 +2307,24 @@ TS
   grep -Fq 'tool result one' "$session_file" \
     || fail "Calm removed hidden tool results from persisted history"
 
+  # Pi's own words for a finished reload, verified present in every Pi this
+  # suite has recorded evidence against (0.81.1 through 0.86.0). It is a status
+  # row appended to the rebuilt transcript, so it is durable: it arrives only
+  # after session.reload() and the chat rebuild have both succeeded, and it
+  # stays. Waiting instead for the "Reloading..." box Pi shows WHILE it works
+  # is what used to red unrelated pull requests - that box is a frame two
+  # captures can straddle, and missing it failed a reload that had in fact
+  # completed. The box now serves as the must-be-gone half of the end state,
+  # which is the one thing it can prove without being caught in the act.
+  reload_done='Reloaded keybindings, extensions, skills, prompts, themes, and context files'
+  reload_running='Reloading keybindings, extensions, skills, prompts, themes, and context files...'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/reload'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
-  wait_for_geometry_transition \
-    "$snapshot" \
-    "Reloading keybindings, extensions, skills, prompts, themes, and context files..." \
-    "CALM_GEOMETRY_FINAL" \
+  fm_wait_capture_settled capture_geometry_viewport "$snapshot" 600 \
+    "$reload_done" "$reload_running" \
+    'Reload failed:' \
+    'Wait for the current response to finish before reloading.' \
+    'Wait for compaction to finish before reloading.' \
     || fail "Pi Calm hidden-block geometry E2E did not complete the /reload viewport transition"
   assert_geometry_gap "$snapshot" "reloaded native Calm transcript"
 
