@@ -2297,11 +2297,86 @@ fm_wake_latest_event() {  # <validated-status-path> <tail-byte-cap>
   fm_wake_unread_events "$1" "$2" 0
 }
 
+# Read a task's CURRENT state verb from bin/fm-crew-state.sh, the fleet's owner of
+# current-state truth, so a stale annotation can print the fresh answer beside the
+# line it is annotating.
+#
+# The incident (2026-09-20): a forty-minute-old `working:` line was reported to the
+# captain as outstanding work while the crew had already finished. That line was
+# correctly labelled `not current state`; the label says what the line is NOT and
+# gives nothing to compare it against, so it was read past. A louder label would
+# have been read past too.
+#
+# Three outcomes, because they need three different sentences:
+#   0 + verb   the current state was read
+#   1          the task exists but its current state could not be read - the caller
+#              must SAY that, never stay silent, or the drain reports agreement it
+#              never verified. `unknown` is fm-crew-state.sh's own way of saying it
+#              could not determine a state, so it lands here rather than being
+#              printed as a state that disagrees.
+#   2          the task record is gone, so there is no crew to ask - a torn-down
+#              task (bin/fm-teardown.sh removes the record and leaves the status
+#              log), or a key that never had one. The caller still says so: a
+#              stale `working:` line beside no answer at all is the 2026-09-20
+#              shape exactly, and a missing clause would imply agreement by
+#              omission. It is a DIFFERENT fact from 1 - nobody to ask, rather
+#              than asked and no answer - because a reader acts differently on
+#              it, and it costs no subprocess to report.
+#
+# Bounded through fm-timeout-lib.sh, and with the forge fallback off: the forge
+# read only enriches a terminal run's DETAIL, never the verb this reads, so the
+# drain buys nothing by waiting on the network. A bound that fires reads as 1 -
+# could not be read - which is the honest answer.
+#
+# TWO bounds, because one is not enough. This runs on the blocking path of every
+# supervision turn, while the status presentation lock is held, and that lock's
+# own contention budget is FM_STATUS_PRESENTATION_LOCK_TIMEOUT (default 10s in
+# bin/fm-wake-drain.sh). A per-key bound alone says nothing about N keys: reads
+# are strictly serial, so N slow keys cost N bounds and starve every concurrent
+# drain of its whole status presentation.
+#   FM_WAKE_CURRENT_STATE_TIMEOUT  per key, default 3s - deliberately below that
+#                                  lock budget, so one slow key cannot exhaust it
+#   FM_WAKE_CURRENT_STATE_BUDGET   the whole annotation phase, default 5s - the
+#                                  aggregate deadline bin/fm-inactive-reconcile.sh's
+#                                  scan_pass already carries across its own loop
+# <deadline-epoch> is that whole-phase deadline; the caller owns it so every key
+# in one drain shares it. A spent budget reads as "could not be read", which is
+# exactly what it is: this drain did not read that crew's state.
+fm_wake_current_state_verb() {  # <task-id> [<deadline-epoch>] -> state verb on stdout
+  local task=$1 deadline=${2:-} bin line rc=0 now remaining
+  local timeout=${FM_WAKE_CURRENT_STATE_TIMEOUT:-3}
+  [ -n "$task" ] || return 2
+  [ -f "$STATE/$task.meta" ] || return 2
+  case "$timeout" in ''|*[!0-9]*|0) timeout=3 ;; esac
+  if [ -n "$deadline" ]; then
+    fm_now now || return 1
+    remaining=$((deadline - now))
+    [ "$remaining" -gt 0 ] || return 1
+    [ "$remaining" -ge "$timeout" ] || timeout=$remaining
+  fi
+  bin=${FM_WAKE_CREW_STATE_BIN:-$FM_WAKE_LIB_DIR/fm-crew-state.sh}
+  [ -x "$bin" ] || return 1
+  _fm_wake_require_timeout || return 1
+  line=$(fm_run_timed "$timeout" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    FM_CREW_STATE_NO_FORGE=1 "$bin" "$task" 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  line=$(printf '%s\n' "$line" | tail -1)
+  case "$line" in
+    'state: '*) line=${line#state: } ;;
+    *) return 1 ;;
+  esac
+  line=${line%% *}
+  case "$line" in ''|unknown) return 1 ;; esac
+  printf '%s\n' "$line"
+}
+
 # Print supplemental drain-time context only after the caller has committed the
 # raw queue consumption and released the append lock.
 fm_wake_print_annotations() {  # <deduped-raw-rows> [<presentation-snapshot>]
   local rows=$1 snapshot=${2:-} manifest status_key mode path prefix line task endpoint
   local snapshot_task snapshot_endpoint _snapshot_ident offset last_event event_line
+  local cur_state_read cur_state_verb cur_state_rc event_state
+  local cur_state_deadline cur_state_budget=${FM_WAKE_CURRENT_STATE_BUDGET:-5} cur_state_now
   local LC_ALL=C
 
   manifest=$(fm_wake_annotation_manifest "$rows" | awk -F '\t' '
@@ -2328,9 +2403,24 @@ fm_wake_print_annotations() {  # <deduped-raw-rows> [<presentation-snapshot>]
     *) sleep "$FM_WAKE_ENRICH_TEST_DELAY" ;;
   esac
 
+  _fm_wake_require_classify || return 1
+  # One deadline for the whole annotation phase, shared by every status key, so
+  # N slow keys cost one budget rather than N bounds while the presentation lock
+  # is held. An unreadable clock leaves the per-key bound as the only bound.
+  case "$cur_state_budget" in ''|*[!0-9]*|0) cur_state_budget=5 ;; esac
+  cur_state_deadline=
+  if fm_now cur_state_now; then
+    cur_state_deadline=$((cur_state_now + cur_state_budget))
+  fi
   while IFS=$(printf '\t') read -r status_key mode; do
     [ -n "$status_key" ] || continue
     path="$STATE/$status_key"
+    task=${status_key%.status}
+    # Reset per STATUS KEY, never per event line: the read below happens at most
+    # once for this key no matter how many unread lines it carries.
+    cur_state_read=
+    cur_state_verb=
+    cur_state_rc=2
     # A turn-ended-only (historical) row's annotation would show unread status
     # lines even when those bytes are fully covered by the seen marker - already
     # surfaced to firstmate or deliberately absorbed by the signal triage.
@@ -2347,7 +2437,6 @@ fm_wake_print_annotations() {  # <deduped-raw-rows> [<presentation-snapshot>]
     offset=$(fm_wake_status_cursor_offset "$path") || return 1
     endpoint=
     if [ -n "$snapshot" ]; then
-      task=${status_key%.status}
       while IFS=$(printf '\t') read -r snapshot_task snapshot_endpoint _snapshot_ident; do
         if [ "$snapshot_task" = "$task" ]; then endpoint=$snapshot_endpoint; break; fi
       done <<EOF
@@ -2375,6 +2464,30 @@ EOF
         prefix="$prefix; historical / not necessarily the triggering event"
       fi
       line="$prefix: $status_key: $event_line"
+      # A label saying what this line is NOT is what failed on 2026-09-20. Print
+      # the fresh answer beside it, from the fleet's owner of current-state truth.
+      # status_line_current_state maps the status protocol's verb into the SAME
+      # vocabulary fm-crew-state.sh answers in, so a `needs-decision:` line and a
+      # `parked` crew are not reported as contradicting each other; `unknown` means
+      # the line makes no state claim of its own (a `resolved:`, prose), and there
+      # is then nothing for a current state to contradict.
+      event_state=$(status_line_current_state "$event_line")
+      if [ "$event_state" != unknown ]; then
+        # One read per status key, not per event line: a status log can carry
+        # many unread lines and this must not fan out into N current-state reads.
+        if [ -z "$cur_state_read" ]; then
+          cur_state_read=1
+          cur_state_rc=0
+          cur_state_verb=$(fm_wake_current_state_verb "$task" "$cur_state_deadline") \
+            || cur_state_rc=$?
+        fi
+        case "$cur_state_rc" in
+          0) [ "$cur_state_verb" = "$event_state" ] \
+               || line="$line (current state disagrees: $cur_state_verb)" ;;
+          1) line="$line (current state could not be read)" ;;
+          *) line="$line (current state could not be read: no task record)" ;;
+        esac
+      fi
       printf '%s\n' "$line" || return 1
     done <<EOF
 $FM_WAKE_UNREAD_LINES
