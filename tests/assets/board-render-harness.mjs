@@ -65,6 +65,19 @@ class Node {
   }
   set textContent(v) { this._text = String(v); this.children = []; }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
+  removeChild(n) {
+    const i = this.children.indexOf(n);
+    if (i >= 0) this.children.splice(i, 1);
+    if (n.parentNode === this) n.parentNode = null;
+    return n;
+  }
+  /* The SVG text measurement the board asks for. A real browser returns the
+     rendered advance width; this shim cannot lay out glyphs, so it returns the
+     same per-character approximation the board falls back to, which keeps the
+     suite exercising the MEASURING path rather than a second code path of its
+     own. It is deliberately not exact - what the tests hold is that a name is
+     judged by its own width rather than by a fixed box. */
+  getComputedTextLength() { return this.textContent.length * 6.3; }
   setAttribute(k, v) {
     this.attributes[k] = v;
     /* A real SVGElement has no writable className, so the page sets its class

@@ -718,7 +718,7 @@ test_a_bubble_sitting_on_another_is_left_unnamed() {
     || fail "an unlabelled bubble also lost its spoken name: $out"
   # And the caption says where the names are, rather than leaving him at a
   # cluster of nameless marks.
-  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "the list underneath names every call" \
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "list underneath names every call" \
     "the caption left him at an unnamed cluster with no route to the names: $out"
   pass "a bubble sitting on another is left unnamed, and the caption says where to look"
 }
@@ -745,8 +745,12 @@ bad = []
 for b in d["map"]:
     if not b["label"]:
         continue
+    # The width of this very name, the same measurement the board places it
+    # by. A fixed box here would check the placement against the false model
+    # that the placement was just taken off.
+    half = len(b["label"]) * 6.3 / 2
     lx, ly = b["cx"], b["label_y"]
-    l, r, t, bo = lx - 29, lx + 29, ly - 8, ly + 3
+    l, r, t, bo = lx - half, lx + half, ly - 8, ly + 3
     for (ox, oy, orad, okey) in marks:
         if okey == b["key"]:
             continue
@@ -762,7 +766,8 @@ for b in d["map"]:
     # Sharing a PLACE means the boxes overlap. Two names at the same height in
     # different columns share nothing, and keying on height alone would have
     # this test claim more than it can see.
-    box = (b["cx"] - 29, b["cx"] + 29, b["label_y"] - 8, b["label_y"] + 3)
+    half2 = len(b["label"]) * 6.3 / 2
+    box = (b["cx"] - half2, b["cx"] + half2, b["label_y"] - 8, b["label_y"] + 3)
     for (pb, pk) in placed:
         if box[0] < pb[1] and box[1] > pb[0] and box[2] < pb[3] and box[3] > pb[2]:
             bad.append(b["key"] + " shares a place with " + pk)
@@ -796,6 +801,33 @@ test_every_name_on_the_plot_belongs_to_the_mark_beside_it() {
   home=$(make_home map-label-fourteen)
   out=$(render_payload "$home" "$(crowded_uncosted_payload 14)")
   assert_every_label_belongs_where_it_is "$out" "a name was drawn where it does not belong, at fourteen coincident calls"
+
+  # TWO open calls, which is where the reviewer found two names written
+  # through each other. The marks do not overlap - they are in neighbouring
+  # columns of the same row - so the only thing standing between these two
+  # names is whether the placement knows how wide they really are. Under a
+  # fixed 58px box both were drawn and they collided.
+  home=$(make_home map-label-two-wide)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"a", type:"decision", repo:"r", title:"Retire the charted next region",
+       risk:"low", reversible:"yes", weighed_by:"fleet", blocks:1, allow_freeform:true,
+       options:[{value:"x",label:"X"},{value:"y",label:"Y"}]},
+      {key:"b", type:"decision", repo:"r", title:"Rebuild the gatekeeping ledger",
+       risk:"medium", reversible:"yes", weighed_by:"fleet", blocks:1, allow_freeform:true,
+       options:[{value:"x",label:"X"},{value:"y",label:"Y"}]}]}')")
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.dashed)] | length')" = "0" ] \
+    || fail "the two-call fixture has overlapping marks, so this proves nothing: $out"
+  assert_every_label_belongs_where_it_is "$out" "two names were written through each other at two open calls"
+  # Exactly one name is withheld here, and the caption must account for it. A
+  # picture that silently drops a name has told the reader there is nothing
+  # there - and this is the ordinary-density case, not a crowded board.
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.label == "")] | length')" = "1" ] \
+    || fail "the two-call fixture no longer withholds a name, so this proves nothing: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "left unnamed" \
+    "a name was withheld at two open calls and the caption said nothing: $out"
 
   # And a mixed board, which is what the fleet actually produces.
   home=$(make_home map-label-mixed)
