@@ -977,6 +977,32 @@ test_unreachable_delivery_contract_is_refused_not_read_as_absent() {
   assert_not_contains "$out" "no reader can reach" \
     "the captain's own quoted words were reported as an unreachable contract"
 
+  # A contract line quoted in a CLOSED fence outside `# Task` is a quotation like
+  # any other. The parser is fence-aware precisely so quoted text is not read as
+  # structure; reading this one as a contract nothing can reach is the class this
+  # branch exists to close. Nil from any scaffold - all six generated shapes were
+  # driven and none produces it - and reachable only through a hand-edited section,
+  # which bin/fm-brief.sh's own help sanctions.
+  case_dir=$(make_case unreachable-fenced-quote)
+  id=dispatch-unreachable-fenced
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  printf '%s\n' 'You are a crewmate.' '' \
+    '# Task' "## Captain's intent" 'Investigate the contract line.' '' \
+    '## Firstmate spec' 'Report what you find.' '' \
+    '# Notes firstmate added by hand' 'The generated block opens with:' \
+    '```' 'Delivery contract: mode=no-mistakes' '```' '' \
+    '# Definition of done' 'Write your findings to report.md.' > "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a contract line quoted in a closed fence should not refuse: $out"
+  assert_contains "$out" "brief: reused" \
+    "the brief was rebuilt, so the hand-edited fenced section never reached the check"
+  assert_not_contains "$out" "no reader can reach" \
+    "a fenced quotation outside # Task was read as an unreachable contract"
+
   # And the case bounding the read was FOR must still dispatch: a scout brief
   # whose captain's ask quotes the contract line records no contract of its own.
   case_dir=$(make_case unreachable-quoted-scout)

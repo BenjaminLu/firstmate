@@ -157,6 +157,9 @@ fm_brief_task_placeholders_present() {  # <file>
 # fenced block is. That second decision is the thing this mode exists to
 # prevent: a shell loop tracking `##` by hand and this awk will agree on the
 # easy shapes and disagree on a fenced block, and the disagreement is silent.
+# Mark-fence mode prints that same membership flag followed by a second flag that
+# is `1` when the line is inside or delimiting a code fence, for a caller that
+# must tell quoted text from structure as well as in from out.
 # First-body-line mode prints the first non-blank line under EVERY unfenced
 # occurrence of <heading>. Every occurrence, because a promoted scout brief
 # carries two `# Definition of done` sections - its own, and the superseding one
@@ -167,7 +170,7 @@ fm_brief_task_placeholders_present() {  # <file>
 # whole input: is a code fence still open at the end of it, and where did it
 # start. A brief that leaves one open hides every heading below it from every
 # mode above, so a reader that returns nothing there is not reporting absence.
-fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator|mark|first-body-line|open-fence>
+fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator|mark|mark-fence|first-body-line|open-fence>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
     input=/dev/stdin
@@ -231,11 +234,12 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator|mark|f
         }
         next
       }
-      if (mode == "mark") {
+      if (mode == "mark" || mode == "mark-fence") {
         if (!found && !was_fenced && line == heading) {
           found = 1
           grab = 1
-          printf "0%s\n", line
+          if (mode == "mark-fence") printf "00%s\n", line
+          else printf "0%s\n", line
           next
         }
         if (grab && !is_fence && !was_fenced) {
@@ -243,7 +247,8 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator|mark|f
           while (substr(scan, level + 1, 1) == "#") level++
           if (level > 0 && level <= target_level && substr(scan, level + 1, 1) ~ /^[[:space:]]?$/) grab = 0
         }
-        printf "%d%s\n", grab, line
+        if (mode == "mark-fence") printf "%d%d%s\n", grab, (is_fence || was_fenced) ? 1 : 0, line
+        else printf "%d%s\n", grab, line
         next
       }
       if (mode == "terminator") {
@@ -441,9 +446,14 @@ fm_brief_delivery_contract_unreachable() {  # <file>
     printf '%s\n' "$hit"
     return 0
   fi
-  hit=$(fm_brief_heading_parse "$file" "# Task" mark |
-    awk 'substr($0, 1, 1) == "0" && substr($0, 2) ~ /^Delivery contract: mode=/ {
-      printf "%d:%s\n", NR, substr($0, 2)
+  # Outside `# Task` AND outside any fence. fm_brief_heading_parse is fence-aware
+  # precisely so a quotation is not mistaken for structure, and a contract line
+  # quoted in a closed fence somewhere other than `# Task` is a quotation like any
+  # other; reading it as a contract nothing can reach is this branch's own class,
+  # one more time.
+  hit=$(fm_brief_heading_parse "$file" "# Task" mark-fence |
+    awk 'substr($0, 1, 2) == "00" && substr($0, 3) ~ /^Delivery contract: mode=/ {
+      printf "%d:%s\n", NR, substr($0, 3)
       exit
     }')
   [ -n "$hit" ] || return 1
