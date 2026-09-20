@@ -420,7 +420,7 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 
 ### PR ready, landing, and teardown
 
-For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
+For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` opens its pull request at its first commit, reports that URL in a nonterminal line, and reports `done: PR <url>` once the work on it is finished.
 Run `bin/fm-pr-check.sh <id> <PR url> --arm-only` as soon as a PR URL exists for a live task - the worker's pr step opening one, or a listing that shows one - rather than waiting for the worker to finish: it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll without announcing the work as ready.
 Run the same command without `--arm-only` once the task's own ready signal has arrived, which additionally publishes the child's PR-ready line to a parent channel.
 Both forms are idempotent, and arming is not a one-time cost: the armed poll runs on every `*.check.sh` sweep for as long as it stays armed, so arming at the PR rather than at the ready signal buys forge polls across the whole validation phase.

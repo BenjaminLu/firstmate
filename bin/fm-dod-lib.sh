@@ -10,6 +10,10 @@
 # mode is refused rather than silently rendered as the pipeline contract.
 # The block opens with the fixed machine-readable "Delivery contract: mode=<mode>"
 # line that bin/fm-spawn.sh checks a ship brief against.
+# The direct-PR block is the one owner of that mode's open-the-PR-early default:
+# the worker pushes and opens the pull request at its first commit and reports the
+# URL in a nonterminal status line, so review and implementation run in parallel
+# and the work is visible from its first commit rather than only when it is done.
 # It is likewise the one owner of the fix-round technique a no-mistakes worker
 # applies to its own commit, to how it answers a Fix gate, and to the
 # third-round refusal that returns a narrow-remedy instruction to firstmate,
@@ -340,8 +344,14 @@ fm_dod_block() {  # <mode> <task-id>
 # Definition of done
 Delivery contract: mode=direct-PR
 This task ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
-The task is complete only when committed on your branch.
-When it is implemented and committed, push your branch and open a PR with \`gh-axi\`, then append \`done: PR {url}\` to the status file and stop.
+
+**Open the pull request early, not at the end.** As soon as your first commit is on \`fm/$id\`, push the branch and open the PR with \`gh-axi\`, then append \`working: PR {url} open, work continuing\` to the status file and carry straight on - that line is nonterminal under rule 4, and it is what lets firstmate and the captain follow this work from its first commit instead of seeing it only once it is finished. Firstmate dispatches a reviewer against the open PR, so the review runs beside the rest of your implementation.
+Push each later commit to that same PR as you make it; never hold work back to make the PR look finished, and say in the PR body that the work is still in progress.
+Do not open it as a draft: the reviewer and the merge path both act on an ordinary open pull request.
+
+The task is complete only when the work is implemented, committed, and pushed to that PR.
+Then append \`done: PR {url}\` to the status file and stop.
+If no PR is open by then - your first commit was also your last, or an early push failed and you recovered - open it now and append the same \`done:\` line.
 Do NOT run /no-mistakes. The configured merge authority decides whether to merge the PR; firstmate relays the outcome.
 EOF
       ;;

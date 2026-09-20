@@ -1343,6 +1343,40 @@ test_design_record_is_never_rewritten() {
 }
 
 
+# direct-PR is the mode whose review the captain watches, so its worker opens the
+# pull request at its first commit and reports the URL in a line rule 4 already
+# defines as nonterminal. The other two modes must not acquire the instruction:
+# no-mistakes has the pipeline open its PR, and local-only opens none at all.
+test_direct_pr_opens_the_pull_request_early() {
+  local home brief
+  home="$TMP_ROOT/design-earlypr-home"
+  mkdir -p "$home/data"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-earlypr-d1 alpha --mode direct-PR >/dev/null 2>&1 \
+    || fail "direct-PR scaffold exited non-zero"
+  brief="$home/data/brief-earlypr-d1/brief.md"
+  assert_grep "Open the pull request early, not at the end." "$brief" \
+    "direct-PR brief does not make the early pull request its default"
+  assert_grep "As soon as your first commit is on \`fm/brief-earlypr-d1\`" "$brief" \
+    "direct-PR brief does not tie the pull request to the first commit"
+  assert_grep "working: PR {url} open, work continuing" "$brief" \
+    "direct-PR brief does not give the worker the line that reports the early URL"
+  assert_grep "that line is nonterminal under rule 4" "$brief" \
+    "direct-PR brief does not protect the early report from ending the turn"
+  assert_grep "Do not open it as a draft" "$brief" \
+    "direct-PR brief leaves the draft turn open, which the reviewer and merge path cannot act on"
+  assert_grep "done: PR {url}" "$brief" "direct-PR brief lost its terminal done line"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-earlypr-n1 alpha --mode no-mistakes >/dev/null 2>&1 \
+    || fail "no-mistakes scaffold exited non-zero"
+  assert_no_grep "Open the pull request early" "$home/data/brief-earlypr-n1/brief.md" \
+    "no-mistakes brief took the direct-PR early-pull-request instruction, which its pipeline owns"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-earlypr-l1 alpha --mode local-only >/dev/null 2>&1 \
+    || fail "local-only scaffold exited non-zero"
+  assert_no_grep "Open the pull request early" "$home/data/brief-earlypr-l1/brief.md" \
+    "local-only brief was told to open a pull request it must never open"
+  pass "fm-brief.sh: direct-PR opens its pull request at the first commit and no other mode does"
+}
+
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
@@ -1377,3 +1411,4 @@ test_review_refuses_what_it_cannot_post_to
 test_ship_and_scout_carry_the_machine_boundary_rules
 test_design_record_is_scaffolded_beside_every_task_brief
 test_design_record_is_never_rewritten
+test_direct_pr_opens_the_pull_request_early
