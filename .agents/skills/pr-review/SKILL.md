@@ -46,7 +46,7 @@ Nothing merges red - section 7 owns that rule and the single named waiver.
 
 A round is not a stage and not a phase: it is what happens when a review does not approve and a fix lands.
 A round is also what happens when the review at the head stops standing - withdrawn, or never submitted - because the pull request is then unapproved with no fix landed and no commit moved.
-Either way the next reviewer reads a range and posts a verdict, and that is the whole mechanism.
+Either way the next reviewer reads a range and either approves the head or declines it, and that is the whole mechanism.
 There is no round record, no per-round gate, and no transition table, because a path that needs those to describe it is the pipeline this one exists to replace.
 Firstmate knows which round it is because it dispatched them and the pull request shows them, not because anything keeps a count.
 
@@ -128,17 +128,17 @@ The reviewer's local record at `data/<review-task-id>/report.md` is a pointer to
 A reviewer that reported `done:` without a review actually posted has failed its contract.
 Verify the review is on the pull request before relaying anything to the captain, and steer the reviewer to post it rather than relaying findings that exist only in a session.
 
-## The verdict that ends the rounds
+## The approval that ends the rounds
 
-A review ends with an explicit verdict that either approves the pull request at the exact commit it reviewed, in those words, or does not approve it.
-Nothing else is that statement: blocking, non-blocking, clean, a severity table, or a summary of what is left all describe the findings rather than approve a commit.
-Require the verdict in the `--spec` and read it back off the posted review, because a review that names no commit has approved nothing whatever else it says.
+A review ends by explicitly approving the pull request at the exact commit it reviewed, in those words, or explicitly declining to.
+Nothing else is that approval: blocking, non-blocking, clean, a severity table, or a summary of what is left all describe the findings rather than approve a commit.
+Require that approval in the `--spec` and read it back off the posted review, because a review that names no commit has approved nothing whatever else it says.
 
 An approval binds to that commit and to no later one.
 A fix pushed after it leaves the pull request unapproved again, which is what makes the next pass a round rather than a formality.
 
 The worker who wrote the change never approves it, on any round.
-Nothing on the forge will show you that it did not: one fleet account opens and reviews these pull requests, so the author field names that account whoever did the work - which is also why the verdict is text in the review body rather than GitHub's own approve button, since GitHub refuses a self-approval outright.
+Nothing on the forge will show you that it did not: one fleet account opens and reviews these pull requests, so the author field names that account whoever did the work - which is also why the approval is text in the review body rather than GitHub's own approve button, since GitHub refuses a self-approval outright.
 The rule holds because you dispatched a reviewer that is not the worker, which makes it your obligation rather than a fact a reader can check off the pull request.
 
 ## Rule on each finding
