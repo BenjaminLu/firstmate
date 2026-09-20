@@ -18,6 +18,7 @@
 //   old-seq      a state message older than the one already applied arrives
 //   older-base   a merge whose base predates the page arrives, having lost rows
 //   behind-empty-desk  a board with no calls, behind on one it cannot word
+//   behind-partial-desk  a board with one call, behind on one it cannot word
 //   dropped      the socket closes, and reopens with the current state
 //   went-quiet   a message lands and then the page stops receiving
 //   lang         the board's own language switch is used
@@ -401,6 +402,15 @@ switch (scenario) {
   /* A board with no calls of its own, behind on a change it cannot word: the
      one shape in which both "nothing needs you" sentences are shown while the
      board knows its list is incomplete. Handed in from a real server run. */
+  /* The same rule at a count that is not zero: one call listed, and a change
+     the board cannot word, so the list is partial rather than empty. */
+  case "behind-partial-desk": {
+    socket().open();
+    const servedPartial = JSON.parse(process.env.FM_PAGE_STATE || "null");
+    if (!servedPartial) throw new Error("behind-partial-desk needs FM_PAGE_STATE from a real server run");
+    socket().deliver({ type: "state", schema: "fm-board-live.v1", seq: 6, ...servedPartial });
+    break;
+  }
   case "behind-empty-desk": {
     socket().open();
     const served = JSON.parse(process.env.FM_PAGE_STATE || "null");

@@ -2060,16 +2060,23 @@ reslot_board() {  # <board> <destination>
 # endpoint and a fresh answer token the captain never asked for, and painting
 # the bare template would quietly strip the live transport off a board that
 # had one.
+# THE ONE WRITER OF `published`, AND EVERY PATH THAT WRITES A PAGE GOES THROUGH
+# IT. `published` is stamped at the moment a page is written, so it moves on
+# EVERY publication by construction - which is what the supersession rule needs
+# and precisely what `composed` must not do (see the block above `composed` in
+# the validator for why one field could not carry both). A publication path that
+# wrote a page without it would leave the live merge ordering against a field
+# that is not there, so the invariant would have a hole whatever the guard does:
+# this function exists so there is nowhere for that hole to open.
+published_payload() {  # <payload.json> -> compact JSON carrying a fresh stamp
+  jq -c --arg published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.published = $published' "$1"
+}
+
 inject_board() {  # <payload.json> <board> [<source-page>]
   local data=$1 board=$2 source=${3:-$TEMPLATE} json tmp extracted
   [ -f "$source" ] && [ ! -L "$source" ] || return 1
   [ "$(grep -cxF "$PLACEHOLDER" "$source")" -eq 1 ] || return 1
-  # TWO PROPERTIES, TWO FIELDS, AND THIS IS THE SECOND ONE'S ONLY WRITER.
-  # `published` is stamped here, at the moment a page is written, so it moves on
-  # EVERY republication by construction - which is what the supersession rule
-  # needs and precisely what `composed` must not do. See the block above
-  # `composed` in the validator for why one field could not carry both.
-  json=$(jq -c --arg published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.published = $published' "$data") || return 1
+  json=$(published_payload "$data") || return 1
   # `<` never appears in JSON syntax outside strings, so escaping every
   # occurrence keeps the payload valid JSON while making </script> inert.
   json=${json//</\\u003c}
@@ -2207,9 +2214,13 @@ refresh_worker() {
   # on a board whose content never changed - and `composed` is the field the
   # page and the live merge both order against, so moving it for nothing would
   # make a board look newer than the content it carries and break the
-  # byte-identical republication this refresh promises. When everything else
-  # matches what is already published, the published stamp is carried forward;
-  # when anything differs, the fresh stamp stands because the content is new.
+  # backwards guard this stamp exists for. When everything else matches what is
+  # already published, the published stamp is carried forward; when anything
+  # differs, the fresh stamp stands because the content is new.
+  # A republication is NOT byte-identical and is not claimed to be: `published`
+  # moves on every one by design, and `generated` is the snapshot's own clock,
+  # which the template renders as the page's provenance line. What holds is that
+  # `composed` does not move while the content does not.
   # The comparison drops every stamp that moves on its own, not just this one.
   # `generated` is a live wall clock on the real path - refresh is invoked with
   # no --snapshot everywhere it is invoked for real, so each run composes a fresh
@@ -2301,7 +2312,7 @@ command_derive() {
       || { rm -f -- "$derived"; fail "cannot derive the live board"; }
     printf 'fm-bearings-board: printed without the answer token, so this copy cannot send the captain'"'"'s answers; use --out for a board he can act on\n' >&2
   fi
-  json=$(jq -c . "$data") || { rm -f -- "$derived"; fail "cannot compact the board data"; }
+  json=$(published_payload "$data") || { rm -f -- "$derived"; fail "cannot compact the board data"; }
   json=${json//</\\u003c}
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-derived.XXXXXX") \
     || { rm -f -- "$derived"; fail "cannot stage the derived board"; }

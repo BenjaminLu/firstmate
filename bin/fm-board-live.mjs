@@ -69,10 +69,13 @@
 // file. Events published while it is down are therefore not lost; they are
 // read at the next start. bin/fm-board-live.sh owns the publishing side.
 //
-// A REBUILD SUPERSEDES EVERY EVENT OLDER THAN IT. The base state is the
+// A REBUILD SUPERSEDES EVERY EVENT PUBLISHED BEFORE IT. The base state is the
 // payload inside the board page firstmate builds, and building it recomposes
-// everything. Events are applied only when they are newer than the page they
-// would be applied to, so a rebuild cannot be undone by a stale overlay.
+// everything. Events are applied only when they are newer than the PUBLICATION
+// they would be applied to - `published`, which every publication stamps afresh
+// - so a rebuild cannot be undone by a stale overlay. Not `composed`, which
+// stands still across a republication of unchanged content and would therefore
+// make a rebuild supersede nothing; see the two-fields block below.
 //
 // docs/configuration.md owns the port and the file locations.
 
@@ -143,7 +146,11 @@ const EVENT_RING = 2000;
 //   stopped updating; the rule lives in the transport beside `builtWith`,
 //   because only the page knows what it was built with.
 //
-//   A BOARD THAT IS BEHIND MAY NOT REPORT AN EMPTY DESK. When this merge could
+//   A BOARD THAT IS BEHIND MAY NOT PRESENT ITS CALL COUNT AS COMPLETE, at any
+//   count and in every place that count is rendered - the section caption, the
+//   empty deck's body, and the headline tile. That is the page's half and it
+//   lives in the transport; the server's half below is about the rows
+//   themselves. When this merge could
 //   not account for every change it saw, a Captain's Call that lost rows is not
 //   news about the captain's desk - it is the absence of news. The merge falls
 //   back to what the board was built with and lets the banner say it is behind,

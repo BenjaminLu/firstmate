@@ -64,6 +64,16 @@ refresh() {  # <home> [extra args]
   run_board "$home" refresh --snapshot "$SNAPSHOT_FIXTURE" "$@"
 }
 
+# AS PRODUCTION INVOKES IT: no --snapshot. Every real call site composes a fresh
+# snapshot, so `generated` is a live wall clock rather than a pinned fixture
+# value. A case about what a refresh does to unchanged state has to be driven
+# this way or it is a case about the pin.
+refresh_unpinned() {  # <home> [extra args]
+  local home=$1
+  shift
+  run_board "$home" refresh "$@"
+}
+
 # The board page's data block IS the published payload - the one artifact a
 # publication writes - so every assertion below reads it back out of the page.
 injected_payload() {  # <home>
@@ -104,35 +114,39 @@ test_refresh_publishes_the_board_in_place() {
   pass "refresh injects a board payload into the page in place"
 }
 
-# WHAT A REFRESH OVER UNCHANGED STATE PROMISES, STATED AS WHAT IT IS. It
-# republishes the same CONTENT, not the same bytes, and the difference is not a
-# weakening - it is the publication stamp doing its job. `published` moves on
-# every republication by design, because the live merge orders events against it
-# and a stamp that stood still would be a rebuild that stopped superseding what
-# came before it. So the page necessarily differs by that field and by nothing
-# else. `composed` is the field that must hold still here, and this case asserts
-# it does: that is the property the board's backwards guard rests on.
+# WHAT A REFRESH OVER UNCHANGED STATE ACTUALLY PROMISES, DRIVEN THE WAY
+# PRODUCTION DRIVES IT. Not byte-identical, and not "the same page": every real
+# call site composes a fresh snapshot, so `generated` moves on every refresh and
+# the template renders it as the page's provenance line - so what the captain
+# reads does change, and a claim of "the same content" is true of the rows and
+# false of the page. Two stamps move by design and neither is content:
+# `published` because the supersession rule orders against it and a stamp that
+# stood still would be a rebuild that stopped superseding earlier events, and
+# `generated` because it is the snapshot's own clock.
+# What must hold is the part the board's backwards guard rests on: `composed`
+# does not move while the content is unchanged, and nothing but those two stamps
+# differs. This case is driven without --snapshot, because pinning it froze
+# `generated` and made the assertion pass on a path production never takes.
 test_refresh_is_idempotent() {
   local home first second
   home=$(make_home idempotent)
   seed_board "$home"
-  refresh "$home" >/dev/null || fail "the first refresh failed"
-  cp "$home/.lavish/bearings-board.html" "$home/first.html"
+  refresh_unpinned "$home" >/dev/null || fail "the first refresh failed"
   first=$(injected_payload "$home")
-  refresh "$home" >/dev/null || fail "the second refresh failed"
+  sleep 1
+  refresh_unpinned "$home" >/dev/null || fail "the second refresh failed"
   second=$(injected_payload "$home")
-  [ "$(printf '%s' "$first" | jq -S 'del(.published)')" \
-    = "$(printf '%s' "$second" | jq -S 'del(.published)')" ] \
-    || fail "a second refresh over unchanged state changed more than its publication stamp"
-  [ "$(printf '%s' "$first" | jq -r .composed)" = "$(printf '%s' "$second" | jq -r .composed)" ] \
-    || fail "a second refresh over unchanged content moved the composition stamp"
+  [ -n "$first" ] && [ -n "$second" ] || fail "a refresh published no payload"
+  [ "$(printf '%s' "$first" | jq -S 'del(.published, .generated)')" \
+    = "$(printf '%s' "$second" | jq -S 'del(.published, .generated)')" ] \
+    || fail "a second refresh over unchanged state changed more than the two stamps that move by design"
+  assert_equals "$(printf '%s' "$first" | jq -r .composed)" \
+    "$(printf '%s' "$second" | jq -r .composed)" \
+    "a second refresh over unchanged content moved the composition stamp the backwards guard rests on"
   [ "$(printf '%s' "$first" | jq -r .published)" \
     != "$(printf '%s' "$second" | jq -r .published)" ] \
     || fail "a republication did not move its publication stamp, so it would stop superseding earlier events"
-  diff <(sed '/^ *{"schema"/d' "$home/first.html") \
-       <(sed '/^ *{"schema"/d' "$home/.lavish/bearings-board.html") >/dev/null \
-    || fail "a second refresh over unchanged state changed the page outside its payload"
-  pass "refresh over unchanged state republishes a byte-identical page"
+  pass "a refresh over unchanged state holds its composition stamp and moves only the two that must"
 }
 
 test_refresh_never_touches_the_session_or_its_armed_source() {

@@ -309,12 +309,20 @@
       return;
     }
     if (!payload || !Array.isArray(payload.captains_call)) return;
-    if (payload.captains_call.length > 0) return;
+    var n = payload.captains_call.length;
+    /* THE RULE IS ABOUT THE COUNT, AT EVERY COUNT. A list of one presented as
+       the whole of what needs him is the same assertion as a list of none - the
+       board cannot vouch for either while it is behind. So the caption says the
+       list is partial whatever the count is, rather than only when it would
+       otherwise have read "nothing needs you". */
     var sub = document.getElementById("bb-call-sub");
     if (sub) sub.textContent = say(SAY.call_sub_behind);
-    var deck = document.getElementById("bb-call");
-    var empty = deck ? deck.querySelector(".bb-empty") : null;
-    if (empty) empty.textContent = say(SAY.call_empty_behind);
+    /* The empty deck's body only exists when there is nothing to list. */
+    if (n === 0) {
+      var deck = document.getElementById("bb-call");
+      var empty = deck ? deck.querySelector(".bb-empty") : null;
+      if (empty) empty.textContent = say(SAY.call_empty_behind);
+    }
     /* THE THIRD RENDERING, AND THE ONE IN THE LARGEST TYPE ON THE PAGE. The
        stat strip derives its NEED YOU tile from the same captains_call.length,
        so a board that is behind headlines a bare 0 directly above the two
@@ -322,9 +330,12 @@
        moment, presented as complete. The rule is about the COUNT wherever it is
        rendered, not about the sentences that were quoted, so the tile stops
        asserting a number the board cannot vouch for. */
+    /* `n+` rather than a bare `n` or a dash: it keeps the number the captain
+       does have and says the list is partial, and it reads the same in all
+       three languages, which is why it is not written into the copy table. */
     var strip = document.getElementById("bb-stats");
     var tile = strip ? strip.querySelector(".bb-stat--call .bb-stat__num") : null;
-    if (tile) tile.textContent = "—";
+    if (tile) tile.textContent = String(n) + "+";
   }
 
   function paintStatus() {

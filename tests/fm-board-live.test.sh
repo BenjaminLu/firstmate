@@ -57,9 +57,13 @@ make_home() {  # <name> ; prints the home path
   printf '%s\n' "$home"
 }
 
-injected_composed() {  # <home> ; the composition stamp the page carries
+injected_field() {  # <home> <field> ; one stamp the published page carries
   sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' \
-    "$1/.lavish/bearings-board.html" | sed '1d;$d' | jq -r '.composed // empty'
+    "$1/.lavish/bearings-board.html" | sed '1d;$d' | jq -r --arg f "$2" '.[$f] // empty'
+}
+
+injected_composed() {  # <home> ; the composition stamp the page carries
+  injected_field "$1" composed
 }
 
 served_state() {  # <home>
@@ -113,10 +117,13 @@ test_a_board_that_is_behind_never_reports_an_empty_desk() {
 # superseding anything: an older answer re-applies, the desk loses a card, and
 # `stale` is 0, so nothing on the page suggests looking again.
 test_a_republication_supersedes_earlier_events_even_carrying_its_stamp() {
-  local home composed_before composed_after state
+  local home composed_before composed_after state published_at_build published_before
   home=$(make_home supersede-carried-stamp) || fail "could not build a home"
   composed_before=$(injected_composed "$home")
   [ -n "$composed_before" ] || fail "the board carries no composition stamp"
+  published_at_build=$(injected_field "$home" published)
+  [ -n "$published_at_build" ] \
+    || fail "the built board carries no publication stamp, so nothing orders the merge"
   FM_HOME="$home" "$LIVE" event answered pick-one --key pick-one >/dev/null 2>&1 \
     || fail "could not publish the answer"
   assert_equals 0 "$(served_state "$home" | jq -r '.payload.captains_call | length')" \
@@ -130,12 +137,47 @@ test_a_republication_supersedes_earlier_events_even_carrying_its_stamp() {
   composed_after=$(injected_composed "$home")
   assert_equals "$composed_before" "$composed_after" \
     "the fixture moved the composition stamp, so it is not the case under test"
+  # The field the whole invariant now rests on, asserted rather than assumed: a
+  # page published without it would leave the merge ordering against nothing,
+  # and a republication that did not move it would supersede nothing.
+  published_before=$(injected_field "$home" published)
+  [ -n "$published_before" ] \
+    || fail "the republished page carries no publication stamp, so the ordering has nothing to rest on"
+  [ "$published_before" != "$published_at_build" ] \
+    || fail "the republication did not move its publication stamp"
   state=$(served_state "$home")
   assert_equals 1 "$(printf '%s' "$state" | jq -r '.payload.captains_call | length')" \
     "a republication carrying its composition stamp stopped superseding the events before it"
   assert_equals 0 "$(printf '%s' "$state" | jq -r '.stale | length')" \
     "the board also reported itself behind, which would at least have shown a banner"
   pass "a republication outranks earlier events even when it carries its composition stamp"
+}
+
+# THE SAME RULE WHERE THE COUNT IS NOT ZERO, which is where it closed last. A
+# list of one presented as the whole of what needs the captain is the same
+# assertion as a list of none: the board cannot vouch for either while it is
+# behind. The headline keeps the number - it is one he does have - and says the
+# list is partial.
+test_a_behind_board_never_presents_a_nonzero_count_as_complete() {
+  local home served out need sub
+  home=$(make_home page-behind-partial) || fail "could not build a home"
+  FM_HOME="$home" "$LIVE" event call needs-wording >/dev/null 2>&1 \
+    || fail "could not publish the unwordable call"
+  served=$(served_state "$home") || fail "the server produced no state"
+  printf '%s' "$served" | jq -e '(.payload.captains_call | length) == 1 and (.stale | length) > 0' \
+    >/dev/null || fail "the fixture did not reach a behind board with one call listed"
+  out=$(FM_PAGE_STATE="$served" node "$PAGE" "$home/.lavish/bearings-board.html" behind-partial-desk)
+  need=$(printf '%s' "$out" | jq -r '.callDesk.need // ""')
+  sub=$(printf '%s' "$out" | jq -r '.callDesk.sub // ""')
+  [ -n "$need" ] \
+    || fail "the headline count was not found at all, so this case would prove nothing about it"
+  assert_equals "1+" "$need" \
+    "a board that is behind headlined a bare count as the whole of what needs the captain"
+  case "$sub" in
+    *"waits on you"*|*"等你"*)
+      fail "the section caption still presents the count as complete while the board is behind: $sub" ;;
+  esac
+  pass "a board that is behind keeps its count and says the list is partial"
 }
 
 # THE PAGE HALF of the same rule the server half enforces. The board derives
@@ -1123,3 +1165,4 @@ test_a_board_older_than_the_page_cannot_take_its_rows_away
 test_a_board_that_is_behind_withholds_a_partial_loss_too
 test_a_behind_board_never_tells_the_captain_his_desk_is_empty
 test_a_republication_supersedes_earlier_events_even_carrying_its_stamp
+test_a_behind_board_never_presents_a_nonzero_count_as_complete
