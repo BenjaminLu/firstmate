@@ -436,7 +436,7 @@ test_no_internal_token_reaches_the_captains_rows() {
   local home out
   home=$(make_home tokens-rows)
   out=$(render_payload "$home" "$(fleet_payload '[
-    {"id":"a","repo":"r","name":"Alpha","state":"parked","kind":"ship","doing":"at a gate","lane":"waiting"},
+    {"id":"a","repo":"r","name":"Alpha","state":"parked","kind":"ship","doing":"round two","lane":"waiting"},
     {"id":"b","repo":"r","name":"Bravo","state":"unknown","kind":"scout","doing":"silent","lane":"unreported"}]')")
 
   [ "$(printf '%s' "$out" | jq -r '[.lanes[].workers[]] | length')" = "2" ] \
@@ -447,8 +447,12 @@ test_no_internal_token_reaches_the_captains_rows() {
     [ "$(printf '%s' "$rows" | grep -c "$token")" = "0" ] \
       || fail "the internal token '$token' reached a captain-facing row: $rows"
   done
-  assert_contains "$rows" "waiting at a gate" \
+  # "gate" is itself on the forbidden list the translation is obeying, so the
+  # replacement has to be the concrete wait rather than another term from it.
+  assert_contains "$rows" "waiting for a review" \
     "the run state was not said in the captain's words: $rows"
+  [ "$(printf '%s' "$rows" | grep -c "gate")" = "0" ] \
+    || fail "one internal term was translated into another: $rows"
   assert_contains "$rows" "investigation" \
     "the task kind was not said in the captain's words: $rows"
   pass "no internal run state or task kind reaches the captain's rows"
