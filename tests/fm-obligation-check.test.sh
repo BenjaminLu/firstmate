@@ -64,7 +64,11 @@ while [ "$i" -lt "${#args[@]}" ]; do
 done
 [ -z "${GH_FIXTURE_HANG:-}" ] || sleep "$GH_FIXTURE_HANG"
 [ -z "${GH_FIXTURE_FAIL:-}" ] || { printf 'the forge said no\n' >&2; exit 1; }
-file="$GH_FORGE/${repo//\//__}.json"
+# GitHub owner and repository names are case-insensitive, so the fixture
+# resolves them that way too; a fixture that did not would make a
+# case-varied record look like a missing repository rather than the same one.
+lc=$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')
+file="$GH_FORGE/${lc//\//__}.json"
 [ -f "$file" ] || { printf 'no such repository\n' >&2; exit 1; }
 if [ "$mode" = list ]; then
   jq -c '[.[] | select(.state == "OPEN")]' "$file" | jq -r "$program"
@@ -78,7 +82,9 @@ SH
 # forge_pr <home> <slug> <number> <state> <head> <reviews> <comments>
 forge_pr() {
   local home=$1 slug=$2 number=$3 state=$4 head=$5 reviews=$6 comments=$7 file tmp
-  file="$home/forge/${slug//\//__}.json"
+  local lc
+  lc=$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')
+  file="$home/forge/${lc//\//__}.json"
   [ -f "$file" ] || printf '[]\n' > "$file"
   tmp="$file.tmp"
   jq --argjson n "$number" --arg s "$state" --arg h "$head" \
@@ -613,6 +619,86 @@ test_the_forge_is_not_read_between_intervals() {
   pass "the forge is not read again until the probe interval has passed"
 }
 
+# --- an input that cannot be read or resolved is never "met" ----------------
+
+test_a_record_spelled_in_another_case_still_reports() {
+  local home out
+  # GitHub owner and repository names are case-insensitive and gh answers in
+  # its own canonical spelling, so a locally recorded URL that differs only in
+  # case names the same pull request. Matching on the raw string made that
+  # record read successfully at the forge and then match nothing, and fall
+  # through to "met" - silence while the obligation was owed.
+  home=$(make_home case-card)
+  forge_pr "$home" "$SLUG" 11 MERGED "$(commit 5)" 1 1
+  board "$home" "delta=https://github.com/FmTest/Repo/pull/11"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "the board still shows delta as an open call" \
+    "a board card recorded in another case was read as met"
+
+  local task_home
+  task_home=$(make_home case-task)
+  forge_pr "$task_home" "$SLUG" 7 OPEN "$(commit 7)" 0 0
+  task "$task_home" alpha "kind=ship" "pr=https://github.com/FmTest/Repo/pull/7"
+  out="$task_home/out.txt"
+  run "$task_home" "$out"
+  assert_contains "$(cat "$out")" "nothing posted on" \
+    "a task pull request recorded in another case was read as met"
+  pass "a record spelled in another case names the same pull request, not a met obligation"
+}
+
+test_one_pull_request_spelled_two_ways_is_one_read() {
+  local home out calls
+  home=$(make_home case-dedupe)
+  forge_pr "$home" "$SLUG" 11 MERGED "$(commit 5)" 1 1
+  task "$home" alpha "kind=ship" "pr=https://github.com/FmTest/Repo/pull/11"
+  board "$home" "delta=$PR_BASE/11"
+  out="$home/out.txt"
+  run "$home" "$out"
+  calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 1 ] \
+    || fail "one pull request spelled two ways cost $calls forge calls, so the dedupe is still keyed on the raw string"
+  pass "one pull request spelled two ways is one canonical identity and one read"
+}
+
+test_an_unreadable_task_record_is_unknown_not_clean() {
+  local home out report
+  # A task record this home cannot read starts obligations 1, 2 and 4. Dropping
+  # it removes that whole task from the report in silence.
+  home=$(make_home meta-unreadable)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 3
+  chmod 000 "$home/state/epsilon.meta"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  chmod 644 "$home/state/epsilon.meta"
+  [ -s "$out" ] || fail "an unreadable task record produced silence, which means all four obligations are met"
+  assert_contains "$report" "the task record for epsilon cannot be read" \
+    "an unreadable task record was dropped instead of reported as undeterminable"
+  assert_contains "$report" "unknown:" "an unreadable task record did not produce an unknown answer"
+  pass "a task record that cannot be read is unknown, never met"
+}
+
+test_a_forge_answer_with_no_content_is_unknown_not_clean() {
+  local home out report
+  # gh exiting 0 with nothing on stdout resolves nothing. Treating that as a
+  # completed read leaves the pull request silently unaccounted for.
+  home=$(make_home empty-answer)
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  # The repository fixture exists but holds no such pull request, so the
+  # fixture's own select produces an empty answer at exit status 0.
+  forge_pr "$home" "$SLUG" 99 OPEN "$(commit 1)" 0 0
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a forge answer with no content produced silence"
+  assert_contains "$report" "the forge answered with nothing" \
+    "an empty forge answer was not named as the reason the pull request is undeterminable"
+  assert_not_contains "$report" "owed:" "an empty forge answer was turned into an owed obligation"
+  pass "a forge answer with no content is unknown, never met"
+}
+
 # --- the forge is asked once per distinct pull request ----------------------
 
 test_one_read_covers_a_pull_request_every_obligation_names() {
@@ -812,6 +898,10 @@ test_a_new_finding_is_news
 test_an_undischarged_obligation_is_reported_again
 test_a_silent_sweep_does_not_push_the_repeat_horizon_out
 test_the_forge_is_not_read_between_intervals
+test_a_record_spelled_in_another_case_still_reports
+test_one_pull_request_spelled_two_ways_is_one_read
+test_an_unreadable_task_record_is_unknown_not_clean
+test_a_forge_answer_with_no_content_is_unknown_not_clean
 test_one_read_covers_a_pull_request_every_obligation_names
 test_the_forge_is_asked_only_about_this_home_s_own_work
 test_an_overlong_report_says_how_much_is_not_shown

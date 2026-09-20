@@ -361,15 +361,36 @@ meta_value() {
 # it live: bin/fm-teardown.sh removes it. Secondmates are excluded because a
 # secondmate is a persistent direct report rather than a work item, so none of
 # the four obligations is about one.
-live_tasks() {
+# A task record this home cannot read is an input whose obligations cannot be
+# established - obligations 1, 2 and 4 all start from it - so it is reported as
+# undeterminable rather than dropped. Dropping it would delete that whole task
+# from the report in silence, which is the one thing this check may never do.
+#
+# The list is built ONCE into a global rather than produced by a function each
+# caller reads through `< <(...)`. A process substitution runs in a subshell, so
+# a finding recorded from inside one is assigned to a copy of the finding list
+# that dies with it - the report would come out clean while the record was
+# unreadable. Callers iterate the global with a here-string, which runs in the
+# caller's own shell.
+LIVE_TASKS=
+
+collect_live_tasks() {
   local meta id
+  LIVE_TASKS=
   for meta in "$STATE"/*.meta; do
-    [ -e "$meta" ] || continue
-    readable_file "$meta" || continue
+    [ -e "$meta" ] || [ -L "$meta" ] || continue
     id=$(basename "$meta" .meta)
-    fm_pr_task_id_valid "$id" || continue
+    if ! fm_pr_task_id_valid "$id"; then
+      unknown "a task record at $meta does not carry a usable task id, so its obligations were not checked"
+      continue
+    fi
+    if ! readable_file "$meta"; then
+      unknown "the task record for $id cannot be read, so its obligations were not checked"
+      continue
+    fi
     [ "$(meta_value "$meta" kind)" = secondmate ] && continue
-    printf '%s\n' "$id"
+    LIVE_TASKS="$LIVE_TASKS$id
+"
   done
 }
 
@@ -398,25 +419,40 @@ check_design_records() {
     [ -e "$DATA/$id/design.md" ] && continue
     [ -e "$DATA/$id/report.md" ] && continue
     owed "$id has been steered $steers times with no design record at data/$id/design.md"
-  done < <(live_tasks)
+  done <<< "$LIVE_TASKS"
 }
 
 # --- what has to be asked of the forge --------------------------------------
 
 # One line per thing that needs a pull request's live state:
-#   <url> <TAB> <slug|-> <TAB> <number|-> <TAB> <role> <TAB> <owner> <TAB> <extra>
+#   <key|-> <TAB> <url> <TAB> <slug|-> <TAB> <number|-> <TAB> <role> <TAB> <owner> <TAB> <extra>
 # role is taskpr (obligation 1), poll (obligation 2, extra is the recorded
 # head), or card (obligation 3, owner is the board card key).
+#
+# The key is the pull request's CANONICAL identity - the lowercased owner and
+# repository plus the number - and never the raw URL a local record happens to
+# hold. GitHub owner and repository names are case-insensitive and gh answers in
+# its own canonical spelling, so a record written in another case names the same
+# pull request while matching no raw string the forge returns. Keying on the raw
+# string made such a record read successfully at the forge and then match
+# nothing, which fell through to "met" - silence while the obligation was owed.
+# It is also what makes the dedupe real: one pull request spelled two ways is
+# one key, and so one forge read.
 TARGETS=
+
+pr_key() {
+  printf '%s#%s\n' "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" "$2"
+}
 
 add_target() {
   local url=$1 role=$2 owner=$3 extra=${4:-}
-  local slug=- number=-
+  local slug=- number=- key=-
   if fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ]; then
     slug="$FM_PR_OWNER/$FM_PR_REPO"
     number=$FM_PR_NUMBER
+    key=$(pr_key "$slug" "$number")
   fi
-  TARGETS="$TARGETS$(printf '%s\t%s\t%s\t%s\t%s\t%s' "$url" "$slug" "$number" "$role" "$owner" "$extra")
+  TARGETS="$TARGETS$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$key" "$url" "$slug" "$number" "$role" "$owner" "$extra")
 "
 }
 
@@ -438,7 +474,7 @@ collect_task_targets() {
     [ -n "$url" ] || continue
     head=$(meta_value "$meta" pr_head)
     add_target "$url" poll "$id" "$head"
-  done < <(live_tasks)
+  done <<< "$LIVE_TASKS"
 }
 
 # The board's Captain's Call cards, read out of the injected payload in the
@@ -471,16 +507,33 @@ collect_board_targets() {
 
 # --- forge resolution -------------------------------------------------------
 
-# One line per resolved pull request:
-#   <url> <TAB> <state> <TAB> <head> <TAB> <reviews> <TAB> <comments>
+# One line per resolved pull request, keyed by the canonical identity rather
+# than by any URL string:
+#   <key> <TAB> <state> <TAB> <head> <TAB> <reviews> <TAB> <comments>
 RESOLVED=
+# Every key resolve_targets already reported a reason for, so evaluate_targets
+# does not report a second, vaguer line for the same pull request.
+UNRESOLVED_REPORTED=
 
 resolved_line() {
-  printf '%s' "$RESOLVED" | awk -F'\t' -v u="$1" '$1 == u { print; exit }'
+  printf '%s' "$RESOLVED" | awk -F'\t' -v k="$1" '$1 == k { print; exit }'
 }
 
-target_urls() {
-  printf '%s' "$TARGETS" | awk -F'\t' 'NF >= 4 { print $1 "\t" $2 "\t" $3 }' | sort -u
+reason_already_reported() {
+  printf '%s' "$UNRESOLVED_REPORTED" | grep -qxF "$1"
+}
+
+note_unresolved() {
+  UNRESOLVED_REPORTED="$UNRESOLVED_REPORTED$1
+"
+}
+
+# The distinct pull requests to ask about: <key> <TAB> <url> <TAB> <slug> <TAB>
+# <number>, one line per canonical identity.
+target_reads() {
+  printf '%s' "$TARGETS" \
+    | awk -F'\t' 'NF >= 5 && $1 != "-" { print $1 "\t" $2 "\t" $3 "\t" $4 }' \
+    | sort -u -t"$(printf '\t')" -k1,1
 }
 
 GH_MISSING=0
@@ -522,11 +575,17 @@ run_gh() {
 # proportional to this home's own work, and it is also exact: a listing needs a
 # --limit, and past that limit absence stops being proof of anything.
 view_pull_request() {
-  local slug=$1 number=$2 out
+  local key=$1 slug=$2 number=$3 out
   out=$(run_gh pr view "$number" --repo "$slug" \
-    --json state,headRefOid,url,reviews,comments \
-    --jq '[.url, .state, (.headRefOid // "-"), ((.reviews // []) | length | tostring), ((.comments // []) | length | tostring)] | @tsv') || return 1
-  [ -z "$out" ] || RESOLVED="$RESOLVED$out
+    --json state,headRefOid,reviews,comments \
+    --jq '[.state, (.headRefOid // "-"), ((.reviews // []) | length | tostring), ((.comments // []) | length | tostring)] | @tsv') || return 1
+  # An exit status of 0 with nothing on stdout resolves nothing, and treating it
+  # as a completed read would leave the pull request silently unaccounted for.
+  if [ -z "$out" ]; then
+    FORGE_ERROR="the forge answered with nothing"
+    return 1
+  fi
+  RESOLVED="$RESOLVED$key	$out
 "
   return 0
 }
@@ -538,27 +597,29 @@ budget_note() {
 }
 
 resolve_targets() {
-  local url slug number
+  local key url slug number
 
-  [ -n "$(target_urls)" ] || return 0
+  [ -n "$(target_reads)" ] || return 0
 
   if ! command -v gh >/dev/null 2>&1; then
     GH_MISSING=1
     return 0
   fi
 
-  # The list is already unique by URL, so a task whose pull request is also an
-  # armed poll and a board card costs one read, not three.
-  while IFS=$'\t' read -r url slug number; do
-    [ -n "$url" ] || continue
-    [ "$slug" != - ] || continue
+  # The list is unique by canonical identity, so a pull request that is a task's
+  # own, an armed poll's, and a board card's - however each record spells it -
+  # costs one read, not three.
+  while IFS=$'\t' read -r key url slug number; do
+    [ -n "$key" ] || continue
     if ! budget_allows; then
       budget_note
       break
     fi
-    view_pull_request "$slug" "$number" \
-      || unknown "$url could not be read: $FORGE_ERROR"
-  done < <(target_urls)
+    if ! view_pull_request "$key" "$slug" "$number"; then
+      unknown "$url could not be read: $FORGE_ERROR"
+      note_unresolved "$key"
+    fi
+  done < <(target_reads)
 }
 
 # --- obligations 1, 2 and 3 -------------------------------------------------
@@ -571,11 +632,11 @@ short_sha() {
 }
 
 evaluate_targets() {
-  local url slug number role owner extra line pr_state head reviews comments
+  local key url slug number role owner extra line pr_state head reviews comments
 
-  while IFS=$'\t' read -r url slug number role owner extra; do
+  while IFS=$'\t' read -r key url slug number role owner extra; do
     [ -n "$url" ] || continue
-    if [ "$slug" = - ]; then
+    if [ "$key" = - ]; then
       unknown "$url is not a GitHub pull request, and this check reads GitHub only"
       continue
     fi
@@ -583,9 +644,14 @@ evaluate_targets() {
       unknown "gh is not installed, so $url could not be read"
       continue
     fi
-    line=$(resolved_line "$url")
+    line=$(resolved_line "$key")
     if [ -z "$line" ]; then
-      # resolve_targets already named why this one is unresolved.
+      # A target with no live state is undeterminable, never met. When
+      # resolve_targets already said why, that stands; when it did not - the
+      # budget broke out of the loop before reaching this one - the pull
+      # request is named here so it is not swallowed by the aggregate.
+      reason_already_reported "$key" \
+        || unknown "$url was not read, so its obligations could not be established"
       continue
     fi
     IFS=$'\t' read -r _ pr_state head reviews comments <<< "$line"
@@ -740,6 +806,7 @@ action_check() {
   [ -z "$BUDGET_CUT_FROM" ] \
     || unknown "the sweep budget ${BUDGET_CUT_FROM}s was cut to ${BUDGET_SECS}s to stay inside the watcher check timeout of ${CHECK_TIMEOUT}s"
 
+  collect_live_tasks
   check_design_records
   collect_task_targets
   collect_board_targets
