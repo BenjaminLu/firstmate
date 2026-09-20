@@ -621,9 +621,12 @@ fm_write_secondmate_meta() {
 
 # fm_capture_match <file> <tail-lines> <fixed|regex> <pattern>
 #
-# The one matcher fm_wait_capture_settled tests every pattern through, so the
-# scope and the matching mode reach --present, --absent and --abort alike.
-# <tail-lines> empty means the whole capture.
+# The one matcher fm_wait_capture_settled tests every pattern through, so a
+# pattern is matched the same way wherever it came from. The SCOPE is not
+# shared, and this function is not where that is decided: the caller passes
+# --tail's value for the settle conditions and passes nothing for an --abort
+# text, for the reason recorded at the abort scan below. <tail-lines> empty
+# means the whole capture.
 fm_capture_match() {
   local file=$1 tail_lines=$2 mode=$3 pattern=$4 flag=-F
   [ "$mode" = regex ] && flag=-E
