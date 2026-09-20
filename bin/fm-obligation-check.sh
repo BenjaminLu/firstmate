@@ -1050,7 +1050,7 @@ RECORD_UNKNOWN_FORGE=
 RECORD_UNUSABLE=
 
 record_read() {
-  local line first=1
+  local line first=1 saw_epoch=0
   RECORD_EPOCH=0
   RECORD_REPORTED_AT=0
   RECORD_OWED_LOCAL=
@@ -1077,6 +1077,7 @@ record_read() {
     fi
     case "$line" in
       epoch=*)
+        saw_epoch=1
         line=${line#epoch=}
         case "$line" in
           ''|*[!0-9]*) RECORD_EPOCH=0 ;;
@@ -1100,8 +1101,11 @@ record_read() {
 " ;;
     esac
   done < "$RECORD"
-  # An empty file has no schema line at all, which is not a readable record.
-  [ "$first" = 0 ] || RECORD_UNUSABLE="the record at $RECORD is empty"
+  # A record is a READING, not a header. Accepting any file whose first line is
+  # the schema meant a file carrying only that line read as "all four met" - so
+  # the epoch line record_write always writes is what makes it a reading. This
+  # covers the empty file too, which has no lines at all.
+  [ "$saw_epoch" = 1 ] || RECORD_UNUSABLE="the record at $RECORD carries no reading"
   return 0
 }
 

@@ -1590,7 +1590,13 @@ test_report_declines_a_record_it_cannot_use() {
   chmod 644 "$home/state/.fleet-obligations"
 
   : > "$home/state/.fleet-obligations"
-  assert_report_declines "$home" "is empty" "empty record"
+  assert_report_declines "$home" "carries no reading" "empty record"
+
+  # A record is a reading, not a header. A file carrying exactly the schema
+  # line used to read as "all four met" because any consumed line counted as
+  # readable - the same class one shape further in.
+  printf 'fm-fleet-obligations-v2\n' > "$home/state/.fleet-obligations"
+  assert_report_declines "$home" "carries no reading" "schema line only"
 
   rm -f "$home/state/.fleet-obligations"
   assert_report_declines "$home" "no check has recorded a reading" "absent record"
