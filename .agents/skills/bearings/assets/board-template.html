@@ -10,7 +10,18 @@
    Tokens copied verbatim from myfirstmate priv/static/assets/app.css
    (the compiled adoption of .agents/skills/firstmate-design).
    ============================================================ */
-@import url("https://fonts.googleapis.com/css2?family=Chango&family=Jost:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+/* This sheet deliberately pulls in no webfont, and nothing else on this page
+   fetches anything either. The board is served to a captain who may be offline,
+   behind a firewall that blocks a font host, or on a clone configured with
+   nothing, and a page whose stated principle is that it has no remote
+   dependency must not have one. A remote font is the quiet kind of dependency:
+   the page still renders, so nothing reports a failure, and the board simply
+   looks like a different product to whoever cannot reach the host.
+   The families below are still named first in every stack, so a machine that
+   has them installed uses them; everyone else gets the system stack, which is
+   the same for every clone rather than depending on where it is opened.
+   tests/fm-bearings-board.test.sh holds the built page to this, by scanning it
+   for the fetch shapes rather than trusting this comment. */
 
 :root {
   --rust-700: #8f2f17; --rust-600: #a93a1f; --rust-500: #c0452a;

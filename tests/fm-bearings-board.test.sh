@@ -491,6 +491,31 @@ test_path_is_stable_and_home_scoped() {
   pass "path prints the stable home-scoped board location"
 }
 
+# The captain may open this board offline, behind a firewall that blocks a font
+# CDN, or on a clone configured with nothing. A page that fetches at load still
+# renders, so nothing reports a failure - it just silently becomes a different
+# product for whoever cannot reach the host. The assertion is on the BUILT page
+# rather than the template, because the built page is what reaches the captain.
+test_the_built_board_fetches_nothing_from_the_network() {
+  local home data board
+  home=$(make_home offline)
+  board="$home/.lavish/bearings-board.html"
+  data="$home/payload.json"
+
+  write_valid_payload "$data"
+  run_board "$home" build "$data" >/dev/null || fail "the board did not build"
+
+  assert_no_grep '@import' "$board" "the board imports a remote stylesheet"
+  assert_no_grep '<link ' "$board" "the board links an external resource"
+  assert_no_grep '<script src=' "$board" "the board loads a remote script"
+  assert_no_grep '<img src="http' "$board" "the board loads a remote image"
+  assert_no_grep 'url(http' "$board" "the board references a remote url() asset"
+  assert_no_grep 'url("http' "$board" "the board references a remote url() asset"
+  assert_no_grep "url('http" "$board" "the board references a remote url() asset"
+
+  pass "the built board fetches nothing from the network"
+}
+
 test_build_refuses_malformed_payloads_before_touching_the_board() {
   local home data board rc out
   home=$(make_home refusal)
@@ -2101,3 +2126,4 @@ test_a_whitespace_only_refusal_reason_is_refused
 test_a_flag_with_no_value_explains_itself
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind
 test_a_captured_board_answer_acknowledges_every_key_it_named
+test_the_built_board_fetches_nothing_from_the_network
