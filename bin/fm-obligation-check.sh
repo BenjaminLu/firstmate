@@ -613,12 +613,12 @@ discovery_other_remotes() {
     "$GIT_READ_OK") ;;
     # No remote at all is not possible here - origin was just read - so a clean
     # refusal means git answered with an empty list, which is the same "none".
-    "$GIT_READ_REFUSED") printf ''; return 0 ;;
+    "$GIT_READ_REFUSED") printf ''; return "$GIT_READ_OK" ;;
     *) return "$status" ;;
   esac
   printf '%s' "$GIT_OUT" | grep -v '^origin$' | grep -v '^[[:space:]]*$' \
     | awk '{ if (out != "") out = out ", "; out = out $0 } END { printf "%s", out }'
-  return 0
+  return "$GIT_READ_OK"
 }
 
 discover_task_pull_request() {
