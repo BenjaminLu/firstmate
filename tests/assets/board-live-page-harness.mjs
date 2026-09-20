@@ -16,6 +16,7 @@
 //   behind       a state message arrives carrying changes needing a rebuild
 //   behind-clear the same, and then one carrying none
 //   old-seq      a state message older than the one already applied arrives
+//   older-base   a merge whose base predates the page arrives, having lost rows
 //   dropped      the socket closes, and reopens with the current state
 //   went-quiet   a message lands and then the page stops receiving
 //   lang         the board's own language switch is used
@@ -369,6 +370,18 @@ switch (scenario) {
     socket().open();
     socket().deliver(next({ stale: [{ kind: "call", task: "beta", why: "x" }] }));
     socket().deliver(next());
+    break;
+  /* The server merges from this home's stable board, not from the page that
+     connected, so a page built from newer state can be handed a merge whose
+     base is older than itself - and that merge has already lost the rows the
+     page still holds. */
+  case "older-base":
+    socket().open();
+    socket().deliver(message({
+      seq: 4,
+      payload: live({ generated: "2020-01-01T00:00Z", captains_call: [] }),
+      stale: [{ kind: "call", task: "beta", why: "a new captain's call needs firstmate to word it" }],
+    }));
     break;
   case "old-seq":
     socket().open();

@@ -67,6 +67,55 @@ free_port() {
 
 # --- the publisher -----------------------------------------------------------
 
+
+# --- what a board that is behind may not say ---------------------------------
+
+# THE ONE THING THIS SURFACE MUST NEVER SAY. Captain's Call is the only section
+# built by removing rows, so it is the only one a feed can empty on its own while
+# the additive sections still look plausible. A board that could not account for
+# every change it saw has no basis for reporting an empty desk, and rendering
+# zero beside its own "this board is behind" banner tells the captain both at
+# once. It shows what it was built with instead and lets the banner speak.
+test_a_board_that_is_behind_never_reports_an_empty_desk() {
+  local home out calls stale
+  home=$(make_home behind-not-empty) || fail "could not build a home"
+  # An answer empties the one call, and a new call the feed cannot word leaves
+  # the board knowingly behind - the exact pair the captain met on his board.
+  FM_HOME="$home" "$LIVE" event answered pick-one --key pick-one >/dev/null 2>&1 \
+    || fail "could not publish the answer"
+  FM_HOME="$home" "$LIVE" event call needs-wording >/dev/null 2>&1 \
+    || fail "could not publish the unwordable call"
+  out=$(served_state "$home")
+  stale=$(printf '%s' "$out" | node -e '
+    let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+      process.stdout.write(String((JSON.parse(s).stale||[]).length));});')
+  calls=$(printf '%s' "$out" | node -e '
+    let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+      const p=JSON.parse(s).payload||{};
+      process.stdout.write(String((p.captains_call||[]).length));});')
+  [ "$stale" -gt 0 ] \
+    || fail "the fixture did not leave the board behind, so this case proves nothing"
+  [ "$calls" -gt 0 ] \
+    || fail "a board reporting $stale unaccounted change(s) still sent an empty Captain's Call - it would tell the captain nothing needs him while saying it is behind"
+  pass "a board that is behind shows what it was built with rather than an empty desk"
+}
+
+# The converse, so the case above cannot be satisfied by never removing anything:
+# with nothing outstanding, an answer still clears its card.
+test_a_board_that_is_current_still_clears_an_answered_call() {
+  local home calls
+  home=$(make_home current-clears) || fail "could not build a home"
+  FM_HOME="$home" "$LIVE" event answered pick-one --key pick-one >/dev/null 2>&1 \
+    || fail "could not publish the answer"
+  calls=$(served_state "$home" | node -e '
+    let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+      const p=JSON.parse(s).payload||{};
+      process.stdout.write(String((p.captains_call||[]).length));});')
+  [ "$calls" = "0" ] \
+    || fail "a board with nothing outstanding kept an answered call: $calls"
+  pass "a board that is current still clears a call its answer settled"
+}
+
 # --- the click coming back ---------------------------------------------------
 #
 # Every case here speaks real websocket to a real server, so what is asserted
@@ -816,6 +865,26 @@ test_the_page_says_when_a_rebuild_is_owed() {
   pass "a change the fleet cannot paint is named on the page, and cleared when it is not"
 }
 
+# The server merges from this home's stable board, never from the page that
+# connected. A page built from newer state can therefore be handed a merge whose
+# base predates it - and that merge has ALREADY lost the rows the page still
+# holds, because Captain's Call is built by removing rows while the additive
+# sections survive and keep the result looking plausible. This is what the
+# captain met: twenty calls on the page, zero the moment the socket connected.
+test_a_board_older_than_the_page_cannot_take_its_rows_away() {
+  local home out
+  home=$(make_home page-older-base) || fail "could not build a home"
+  out=$(page_says "$home" older-base)
+  # The page's own stamp is the sound signal here: a count would also be 1 when
+  # the section renders its "nothing needs you" placeholder, which is the very
+  # thing this case exists to catch.
+  assert_contains "$(printf '%s' "$out" | jq -r '.provenance')" "2026-01-01" \
+    "the page redrew from a board older than the one it was built with"
+  assert_contains "$(printf '%s' "$out" | jq -r '.link.text')" "built into this page" \
+    "the page drew an older board without saying it had stopped updating"
+  pass "a board older than the page keeps its rows rather than losing them"
+}
+
 test_a_late_board_cannot_take_the_page_backwards() {
   local home out
   home=$(make_home page-seq) || fail "could not build a home"
@@ -912,3 +981,6 @@ test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked
 test_a_malformed_message_is_refused_rather_than_guessed_at
 test_reading_the_board_needs_no_token_which_is_exposure_not_a_guarantee
 test_the_page_carries_the_answer_and_shows_what_came_back
+test_a_board_that_is_behind_never_reports_an_empty_desk
+test_a_board_that_is_current_still_clears_an_answered_call
+test_a_board_older_than_the_page_cannot_take_its_rows_away

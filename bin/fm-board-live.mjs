@@ -129,7 +129,28 @@ const MAX_ANSWERS = 64;
 // what a merge is recomputed from, so it only has to outlast one build.
 const EVENT_RING = 2000;
 
-/* ---- the board state ----------------------------------------------------
+/* ---- the board state ----------------------------------------------------// WHOSE BOARD THE SERVER IS SERVING, AND THE TWO RULES THAT FOLLOW FROM IT.
+// The state this server pushes is merged from the board at THIS HOME'S STABLE
+// PATH, never from the page that connected. That is deliberate - one home, one
+// board - but it has two consequences a page cannot be left to discover.
+//
+//   A MERGE MAY BE OLDER THAN THE PAGE RECEIVING IT. A page built from newer
+//   state connects and is handed a merge whose base predates it, and that merge
+//   has already lost rows the page still holds. Captain's Call is the section
+//   built by REMOVING rows, so it is the one that empties, while the additive
+//   sections survive and keep the result looking plausible. The page refuses
+//   any payload stamped older than the one it was built with and says it has
+//   stopped updating; the rule lives in the transport beside `builtWith`,
+//   because only the page knows what it was built with.
+//
+//   A BOARD THAT IS BEHIND MAY NOT REPORT AN EMPTY DESK. When this merge could
+//   not account for every change it saw, an emptied Captain's Call is not the
+//   news that nothing needs the captain - it is the absence of news. The merge
+//   falls back to what the board was built with and lets the banner say it is
+//   behind, rather than showing zero beside its own "this board is behind"
+//   line. See `merge` below.
+//
+
  * base      the payload firstmate last built, read out of the board page
  * baseAt    when that page was written; an event at or after it is live, an
  *           event before it was already composed into the page
@@ -291,12 +312,40 @@ function merge(base, events) {
   // toward re-applying an event the build already composed rather than
   // dropping one it did not - and re-applying is harmless, because every case
   // below writes a value rather than making a change relative to one.
+  // KNOWN GAP, deliberately left as it is rather than changed under this fix.
+  // The boundary is the page's mtime, not the payload's own `generated` stamp,
+  // and the two are not the same instant: a page rewritten after it was composed
+  // carries an mtime newer than its contents, and every event in between is
+  // skipped - neither applied nor reported. Observed on the captain's own board,
+  // whose payload read 2026-09-20T01:12:33Z against a 09:14:24Z mtime, an
+  // eight-hour hole. Moving the boundary to `generated` closes that hole and
+  // opens another: a page republished from an OLDER payload would re-apply the
+  // removals a newer build had undone, which is the card-deleting failure this
+  // file's rebuild-supersedes invariant exists to prevent. Neither timestamp is
+  // the state's true age, so which one orders a REMOVAL is a design question
+  // with evidence on both sides, recorded here rather than settled in passing.
   const boundary = Math.floor(base.at / 1000) * 1000;
+  const openedWith = Array.isArray(state.captains_call) ? state.captains_call.length : 0;
   for (const ev of events) {
     if (ev.at_ms < boundary) continue;
     const before = stale.length;
     if (applyEvent(state, ev, stale)) applied += 1;
     if (applied > 0 || stale.length !== before) newest = ev.at || newest;
+  }
+  // A BOARD THAT IS BEHIND MUST NOT REPORT AN EMPTY DESK. Captain's Call is the
+  // one section built by REMOVING rows, so it is the one section a feed can
+  // empty on its own while the additive sections go on looking plausible. When
+  // this merge could not account for every change it saw, an emptied Captain's
+  // Call is not the news that nothing needs the captain - it is the absence of
+  // news, and rendering it as zero beside a banner saying the board is behind
+  // tells him his desk is clear and that the board is stale in the same breath.
+  // So the section falls back to what the board was built with and lets the
+  // banner say it is behind. A card that outlived its answer costs the captain
+  // a click and an honest refusal; a desk wrongly reported empty costs him the
+  // decision itself, with nothing on the page to suggest he look again.
+  if (stale.length > 0 && openedWith > 0
+      && Array.isArray(state.captains_call) && state.captains_call.length === 0) {
+    state.captains_call = copyOf(base.payload).captains_call;
   }
   if (newest) state.generated = newest;
   return { payload: state, stale, applied, generated: newest };

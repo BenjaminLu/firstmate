@@ -368,7 +368,48 @@
       document.querySelector(".bb-pick:checked"));
   }
 
+  /* WHAT THE PAGE WAS BUILT WITH, AND THE RULE THAT PROTECTS IT. The server
+     merges from the board at this home's stable path, not from the page that
+     connected, so a page built from newer state can be sent a merge whose base
+     is OLDER than itself. That is not a stale update to be drawn: it is this
+     page being taken backwards by a board it has already superseded, and the
+     section built by REMOVING rows - the Captain's Call - is the one it
+     empties, because the additive sections survive the merge and go on looking
+     plausible. So a payload stamped older than the one this page was built with
+     is never applied. The page keeps what it has and says it is not updating,
+     which is the same thing it does when the server has no board at all. */
+  /* Read on first use rather than now: this file is injected ABOVE the data
+     slot so that it can capture the page's markup before the board renders, so
+     at this point the slot does not exist yet. The first use is the first state
+     message, which is after the page has parsed and before anything has
+     repainted the slot, so what it reads is what the page was built with. */
+  var builtAt;
+  function builtWith() {
+    if (builtAt !== undefined) return builtAt;
+    builtAt = NaN;
+    try {
+      var slot = document.getElementById(SLOT_ID);
+      if (slot) builtAt = Date.parse((JSON.parse(slot.textContent) || {}).generated);
+    } catch (e) {
+      builtAt = NaN;
+    }
+    return builtAt;
+  }
+
+  function olderThanThisPage(payload) {
+    var mine = builtWith();
+    if (isNaN(mine) || !payload) return false;
+    var t = Date.parse(payload.generated);
+    return !isNaN(t) && t < mine;
+  }
+
   function accept(message) {
+    if (olderThanThisPage(message.payload)) {
+      /* Keep every row this page was built with; say the link is not carrying
+         us forward rather than drawing a board we are already ahead of. */
+      setLink("offline");
+      return;
+    }
     behindCount = (message.stale && message.stale.length) || 0;
     if (answerInProgress()) {
       held = message;
