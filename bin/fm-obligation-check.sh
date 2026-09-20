@@ -511,8 +511,6 @@ add_target() {
 "
 }
 
-# A bounded read of the task's own worktree. Local, but bounded anyway: a
-# worktree on a stalled mount must not hang the sweep.
 # A bounded read of a task's own worktree, charged to the same sweep budget as
 # a forge call.
 #
