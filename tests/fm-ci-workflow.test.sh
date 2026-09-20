@@ -151,6 +151,40 @@ CAPS
   pass "the already-measured lane bounds are unchanged"
 }
 
+# The two portable parallel lanes carry the same isolation proof, so nothing in
+# the runner or the coverage guard distinguishes them - both would accept
+# --jobs. What separates them is measured shape: lane 1 is packing-bound and
+# gains, lane 2 is bounded by one script that is two thirds of it and gains
+# nothing while costing 36% more runner-seconds. This branch is the
+# demonstration that the distinction is easy to lose: both lanes were given the
+# flag together on one argument, and only the measurement said one was wrong.
+# Pin it here, because no other gate in this repository would catch it coming
+# back.
+test_parallel_lane_concurrency_matches_the_measured_shape() {
+  ruby -ryaml - "$CI_WORKFLOW" <<'RUBY' || fail "parallel lane concurrency contract"
+jobs = YAML.load_file(ARGV[0]).fetch("jobs")
+
+# Comments in these steps quote the measured --jobs 2 numbers, so match the
+# executable lines only; matching the prose would assert on the explanation
+# rather than on what the runner is actually told to do.
+def run_step(job)
+  steps = job.fetch("steps").select { |s| s.is_a?(Hash) && s["name"].to_s.start_with?("Run portable parallel shard") }
+  raise "expected exactly one suite-run step, found #{steps.length}" unless steps.length == 1
+  steps.first.fetch("run").lines.reject { |l| l.strip.start_with?("#") }.join
+end
+
+one = run_step(jobs.fetch("tests-portable-parallel-1"))
+two = run_step(jobs.fetch("tests-portable-parallel-2"))
+
+raise "lane 1 must keep --jobs 2: it is packing-bound and measured 546s -> 356s" \
+  unless one.include?("--jobs 2")
+
+raise "lane 2 must stay serial: it is bounded by one script, measured 393s against a 347-415s serial band, for 36% more runner-seconds. See docs/fm-test-portable-shards.md before changing this." \
+  if two =~ /--jobs(\s|=)/
+RUBY
+  pass "portable parallel lane 1 runs concurrent and lane 2 stays serial"
+}
+
 test_ci_matrices_match_executable_partitions() {
   ruby -ryaml -ropen3 - "$CI_WORKFLOW" "$ROOT" <<'RUBY' || fail "CI partition contract"
 jobs = YAML.load_file(ARGV[0]).fetch("jobs")
@@ -190,6 +224,7 @@ RUBY
 }
 
 test_ci_matrices_match_executable_partitions
+test_parallel_lane_concurrency_matches_the_measured_shape
 test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
