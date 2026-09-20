@@ -146,6 +146,7 @@ state/               runtime records and signals; gitignored
   decision-bindings/ private records marking a captured-answer source as feeding the keyed-answer intake, with a legacy origin on pre-collapse records; written only by bin/fm-captain-hold.sh bind, dropped by unbind and by source retirement (section 13; docs/captain-hold-lifecycle.md)
   reconcile-requests/ private open obligations to re-check a captain call whose board selection was `reconcile`; written only by bin/fm-captain-hold.sh, retired by its verify-then-decide outcomes or a normal answer that settles the call (section 13; docs/captain-hold-lifecycle.md)
   when/              private condition->action watch specs, their trust bindings, and single-fire markers; written only by bin/fm-procevent-when.sh (section 13's process-event-sources trigger)
+  gate-calls.jsonl gate-calls.drops  the append-only record of every gate call firstmate made - what it decided on its own authority, escalated, refused, or deferred, and on what grounds - and the calls that could not be recorded; bin/fm-gate-calls-lib.sh owns both formats
   board-acks/        what the captain clicked on the Bearings board and has not yet seen the consequence of, one record per board key; written only by bin/fm-bearings-board.sh ack, whose header states the whole acknowledgement lifecycle once and owns it
   inbox/             captain notes captured out of band by bin/fm-inbox.sh, including the voice handover's queued requests; each note appends one `check` wake and stays pending until acknowledged with `bin/fm-inbox.sh drain --ack <id>`, which moves it to inbox/handled/ (docs/voice-relay.md)
   x-inbox/           generated Relay pending mention payloads; fmx-respond drains it (section 14)
@@ -384,6 +385,7 @@ Without a current explicit captain instruction that states the concrete merge, t
 Load `ask-user-authority` before deciding any ask-user finding; the implementation worker never answers its own finding.
 Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded and an unproved merge is refused instead of reported as landed, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
+Record every gate call you make on your own authority - a finding you decided, a finding you declined or deferred, a pull request you kept off the captain's desk because its checks are not green - with `bin/fm-gate-call.sh record`, whose header owns the command, its fields, and which calls already record themselves.
 
 ### Validate
 

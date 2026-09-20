@@ -14,7 +14,9 @@
 # is green at the exact current head commit, where github_checks_not_green below
 # owns what makes a check green and judges each one by its current run.
 # Every failing condition is reported, not
-# just the first. The verified head is then passed to gh as
+# just the first, and the same list is recorded as this task's `refused` gate
+# call through bin/fm-gate-calls-lib.sh, which owns that record and never lets
+# it change the merge. The verified head is then passed to gh as
 # --match-head-commit, so a push that lands between that read and the merge
 # fails the merge instead of landing commits nothing verified. Reading that
 # state needs gh and jq, and either one absent stops the merge before any
@@ -116,6 +118,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-gate-calls-lib.sh
+. "$SCRIPT_DIR/fm-gate-calls-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-merge-outcome-lib.sh
@@ -176,6 +180,17 @@ if [ "${#ALLOW_RED[@]}" -gt 0 ] && [ "$PROVIDER" = gitlab ]; then
   echo "error: --allow-red does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
   exit 2
 fi
+
+# A live merge-readiness refusal IS firstmate keeping work off the captain's
+# desk, so it is the `refused` entry in this home's gate-call log, with the
+# conditions that failed as its grounds. bin/fm-gate-calls-lib.sh owns the
+# record; recording it never changes the refusal, which has already been
+# decided and printed, and a call it cannot record says so on stderr.
+record_merge_refusal_gate_call() {  # <what> <refusal-list>
+  local what=$1 refusals=$2
+  fm_gate_call_record "$STATE" pr-merge "$ID" refused \
+    "$what" "${refusals%$'\n'}" "$URL" '' || true
+}
 
 caller_has_merge_method() {
   local arg
@@ -478,6 +493,8 @@ FIELDS
   if [ -n "$refusals" ]; then
     printf 'error: refusing to merge %s\n' "$URL" >&2
     printf '%s' "$refusals" >&2
+    record_merge_refusal_gate_call \
+      "merge merge request $PR_NUMBER in $PR_PATH" "$refusals"
     return 1
   fi
   printf 'verified: %s is open and mergeable, with a successful pipeline at head %s\n' \
@@ -658,6 +675,8 @@ EOF
     printf 'error: refusing to merge %s\n' "$URL" >&2
     printf '%s' "$refusals" >&2
     [ -z "$uncovered" ] || printf 'error: these checks are not green: %s\n' "$uncovered" >&2
+    record_merge_refusal_gate_call \
+      "merge pull request $PR_NUMBER in $PR_OWNER/$PR_REPO" "$refusals"
     return 1
   fi
   printf 'verified: %s is open and mergeable, with every required check green at head %s\n' \

@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# fm-gate-calls-lib.sh - the one owner of firstmate's gate-call record.
+#
+# WHAT THIS RECORDS AND WHY IT EXISTS
+#
+# firstmate's existing machinery records what was escalated to the captain and
+# what he answered. Nothing recorded what was NOT escalated: a finding decided
+# on firstmate's own authority, a finding declined as out of scope, a pull
+# request kept off the captain's desk because its checks were not green. That
+# half of firstmate's judgement was recoverable only by reading backlog prose
+# and status lines by hand, which is what made it a black box.
+#
+# This is the durable half. One append-only log, one line per gate call, so a
+# reader can see what firstmate did with its own authority and on what grounds.
+#
+# CONTRACT (this header is the one owner of the format).
+#
+#   Log: <state>/gate-calls.jsonl, strictly APPEND-ONLY. One JSON object per
+#   line, with a stable key set - every key is always present, empty when the
+#   call had no value for it, so a reader never branches on a missing field:
+#
+#     {"at":"<UTC ISO-8601 seconds>","site":"<where the call was made>",
+#      "task":"<task id>","verdict":"decided|escalated|refused|deferred",
+#      "what":"<what the call was about>","grounds":"<why>",
+#      "link":"<url or empty>","key":"<routing key or empty>",
+#      "truncated":true|false}
+#
+#   The four verdicts are the whole vocabulary:
+#     decided   - firstmate ruled on its own authority and did not escalate.
+#     escalated - firstmate handed the call to the captain.
+#     refused   - firstmate kept something off the captain's desk, or declined
+#                 to perform it, because a standing condition was not met.
+#     deferred  - the call was correct but deliberately not acted on now.
+#
+#   `grounds` is the only field allowed to span lines, because a refusal is
+#   often a list of conditions and flattening it loses which one failed; the
+#   newlines survive as \n inside the one-line record.
+#
+#   Nothing in this library reads the log. Rendering it is a separate surface;
+#   the log is the durable record that surface will read.
+#
+#   The log lives under <state>, captain-private and gitignored with the rest
+#   of the home's state. There is no retention or rotation: one bounded line
+#   per gate call is small, and dropping history from a log whose whole purpose
+#   is completeness would be the defect it exists to prevent. Truncating it is
+#   a captain-approved manual act.
+#
+# OBSERVER, NEVER A GATE
+#
+# Recording a call must never change its outcome. Every entry point here
+# returns a status and never exits, so a caller records with
+# `fm_gate_call_record ... || true` and proceeds exactly as it did before this
+# library existed. A caller that lets a failed record change what it does has
+# turned an observer into a gate and is wrong.
+#
+# A MISSING RECORD IS VISIBLE AS MISSING
+#
+# A gatekeeping log that quietly drops entries is worse than no log, because a
+# reader would believe he is seeing everything. A call that cannot be recorded
+# is therefore reported, never swallowed, in two places:
+#
+#   1. One `actionable:` line on stderr naming the task and the reason. Same
+#      shape bin/fm-captain-hold.sh uses when a durable record lands but its
+#      channel publication does not.
+#   2. A line appended to the drops sidecar <state>/gate-calls.drops: the same
+#      JSON object plus "dropped":"<reason>", so one parser reads both files
+#      and a reader can count what is missing and see what it was.
+#
+#   The residual limit, stated rather than hidden: when <state> itself cannot
+#   be written neither file can be, and the stderr line is the only report.
+#   That is the one case where the log's incompleteness is not itself durable.
+#
+# BOUNDS
+#
+# The assembled line is held under FM_GATE_CALL_MAX_LINE bytes by shortening
+# `grounds`, then `what`, and the record carries "truncated":true whenever that
+# applied - so a long refusal list is shortened visibly rather than silently.
+# The identity fields it must never shorten - site, task, link, key - carry
+# their own caps instead, and an input over one of those is refused rather than
+# cut, because half a task id or half a link points at the wrong thing. Those
+# caps are also what make the shortening loop always terminate on a line that
+# still names the call.
+# The bound exists so each append is a single write() and concurrent appends
+# from two firstmate processes cannot interleave. There is deliberately no
+# lock: taking one would let a contended or stale lock delay the fleet action
+# this library only observes.
+#
+# Sourced, never executed. bin/fm-gate-call.sh is the command-line entry point.
+# No side effects on source. set -u / set -e safe.
+
+# Assembled-line byte bound. Comfortably inside one filesystem block, which is
+# what keeps a single append from being split across two write() calls.
+FM_GATE_CALL_MAX_LINE=3900
+
+# Character caps on the four identity fields (see BOUNDS above).
+FM_GATE_CALL_CAP_SITE=40
+FM_GATE_CALL_CAP_TASK=80
+FM_GATE_CALL_CAP_LINK=500
+FM_GATE_CALL_CAP_KEY=120
+
+FM_GATE_CALL_VERDICTS='decided escalated refused deferred'
+
+fm_gate_calls_path() {  # <state-dir>
+  printf '%s/gate-calls.jsonl\n' "$1"
+}
+
+fm_gate_calls_drops_path() {  # <state-dir>
+  printf '%s/gate-calls.drops\n' "$1"
+}
+
+fm_gate_call_bytes() {  # <text> -> byte length on stdout
+  printf '%s' "$1" | wc -c | tr -d ' '
+}
+
+# JSON string content for one field. Newlines survive as \n; the remaining C0
+# controls are dropped because they would break the line and carry no meaning
+# in a summary.
+fm_gate_call_json_escape() {  # <text>
+  printf '%s' "$1" | awk '
+    BEGIN { ORS = "" }
+    {
+      if (NR > 1) print "\\n"
+      line = $0
+      gsub(/\\/, "\\\\", line)
+      gsub(/"/, "\\\"", line)
+      gsub(/\t/, "\\t", line)
+      gsub(/\r/, "\\r", line)
+      gsub(/[\001-\010\013\014\016-\037]/, "", line)
+      print line
+    }'
+}
+
+fm_gate_call_one_line() {  # <text>
+  case "$1" in
+    *$'\n'* | *$'\r'*) return 1 ;;
+  esac
+  return 0
+}
+
+# Assemble the record line. The log and the drops sidecar both reach the file
+# through this, so they carry byte-identical objects apart from "dropped".
+fm_gate_call_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated> [dropped]
+  local at=$1 site=$2 task=$3 verdict=$4 what=$5 grounds=$6 link=$7 key=$8
+  local truncated=$9 dropped=${10:-} tail=''
+  [ -z "$dropped" ] \
+    || tail=$(printf ',"dropped":"%s"' "$(fm_gate_call_json_escape "$dropped")")
+  printf '{"at":"%s","site":"%s","task":"%s","verdict":"%s","what":"%s","grounds":"%s","link":"%s","key":"%s","truncated":%s%s}' \
+    "$(fm_gate_call_json_escape "$at")" \
+    "$(fm_gate_call_json_escape "$site")" \
+    "$(fm_gate_call_json_escape "$task")" \
+    "$(fm_gate_call_json_escape "$verdict")" \
+    "$(fm_gate_call_json_escape "$what")" \
+    "$(fm_gate_call_json_escape "$grounds")" \
+    "$(fm_gate_call_json_escape "$link")" \
+    "$(fm_gate_call_json_escape "$key")" \
+    "$truncated" \
+    "$tail"
+}
+
+# Hold the assembled line under the byte bound by shortening the two free-text
+# fields, longest first, and declaring in the record that it happened. Halving
+# terminates: each pass strictly shrinks the field, an empty field cannot be
+# shortened again, and the identity fields left behind are capped above, so
+# what remains always fits. Publishes FM_GATE_CALL_BOUNDED_LINE.
+FM_GATE_CALL_BOUNDED_LINE=
+fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated> [dropped]
+  local at=$1 site=$2 task=$3 verdict=$4 what=$5 grounds=$6 link=$7 key=$8
+  local truncated=$9 dropped=${10:-} line
+  line=$(fm_gate_call_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
+    "$link" "$key" "$truncated" "$dropped")
+  while [ "$(fm_gate_call_bytes "$line")" -gt "$FM_GATE_CALL_MAX_LINE" ]; do
+    truncated=true
+    if [ -n "$grounds" ]; then
+      grounds=${grounds:0:$(( ${#grounds} / 2 ))}
+    elif [ -n "$what" ]; then
+      what=${what:0:$(( ${#what} / 2 ))}
+    else
+      break
+    fi
+    line=$(fm_gate_call_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
+      "$link" "$key" "$truncated" "$dropped")
+  done
+  FM_GATE_CALL_BOUNDED_LINE=$line
+}
+
+# Report a call that could not be recorded: the drops sidecar first, then the
+# stderr line either way. Never exits, always returns 1, so a caller's `|| true`
+# keeps the fleet action moving.
+fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated>
+  local state=$1 reason=$2 at=$3 site=$4 task=$5 verdict=$6 what=$7 grounds=$8
+  local link=$9 key=${10} truncated=${11} drops line where='stderr only'
+  drops=$(fm_gate_calls_drops_path "$state")
+  # A call refused for an over-long identity field still has to be written
+  # down, so here - and only here, where the record already says it was
+  # dropped - those fields are cut to their caps rather than refused again.
+  [ "${#site}" -le "$FM_GATE_CALL_CAP_SITE" ] \
+    || { site=${site:0:$FM_GATE_CALL_CAP_SITE}; truncated=true; }
+  [ "${#task}" -le "$FM_GATE_CALL_CAP_TASK" ] \
+    || { task=${task:0:$FM_GATE_CALL_CAP_TASK}; truncated=true; }
+  [ "${#link}" -le "$FM_GATE_CALL_CAP_LINK" ] \
+    || { link=${link:0:$FM_GATE_CALL_CAP_LINK}; truncated=true; }
+  [ "${#key}" -le "$FM_GATE_CALL_CAP_KEY" ] \
+    || { key=${key:0:$FM_GATE_CALL_CAP_KEY}; truncated=true; }
+  fm_gate_call_bounded_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
+    "$link" "$key" "$truncated" "$reason"
+  line=$FM_GATE_CALL_BOUNDED_LINE
+  if [ ! -L "$drops" ] && printf '%s\n' "$line" >> "$drops" 2>/dev/null; then
+    where=$drops
+  fi
+  printf 'actionable: a firstmate gate call was not recorded (%s); the gatekeeping record for task "%s" is incomplete (reported in %s)\n' \
+    "$reason" "${task:-unnamed}" "$where" >&2
+  return 1
+}
+
+# Append one gate call to the log.
+#   fm_gate_call_record <state-dir> <site> <task> <verdict> <what> <grounds> [link] [key]
+# Returns 0 when the line is in the log, 1 when the call was dropped and
+# reported. Never exits, whatever the caller's set -e.
+fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> [link] [key]
+  local state=${1:-} site=${2:-} task=${3:-} verdict=${4:-} what=${5:-} grounds=${6:-}
+  local link=${7:-} key=${8:-}
+  local at log line truncated=false known found=0 link_ok=1
+
+  at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)
+
+  if [ -z "$state" ] || [ ! -d "$state" ]; then
+    printf 'actionable: a firstmate gate call was not recorded (no writable state directory "%s"); the gatekeeping record for task "%s" is incomplete (reported in stderr only)\n' \
+      "$state" "${task:-unnamed}" >&2
+    return 1
+  fi
+
+  # Everything below reports through fm_gate_call_drop, which needs the fields
+  # it is handed to already be presentable, so validate before shortening.
+  if [ -z "$at" ]; then
+    fm_gate_call_drop "$state" 'the clock could not be read' \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  for known in $FM_GATE_CALL_VERDICTS; do
+    [ "$known" = "$verdict" ] && found=1
+  done
+  if [ "$found" -ne 1 ]; then
+    fm_gate_call_drop "$state" "verdict must be one of: $FM_GATE_CALL_VERDICTS" \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  case "$site" in
+    '' | -* | *[!a-z0-9-]*)
+      fm_gate_call_drop "$state" 'site must be a lowercase dashed name' \
+        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      return 1 ;;
+  esac
+  if [ "${#site}" -gt "$FM_GATE_CALL_CAP_SITE" ]; then
+    fm_gate_call_drop "$state" "site must be at most $FM_GATE_CALL_CAP_SITE characters" \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  case "$task" in
+    '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+      fm_gate_call_drop "$state" 'task must be a task id' \
+        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      return 1 ;;
+  esac
+  if [ "${#task}" -gt "$FM_GATE_CALL_CAP_TASK" ]; then
+    fm_gate_call_drop "$state" "task must be at most $FM_GATE_CALL_CAP_TASK characters" \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  if [ -z "$what" ]; then
+    fm_gate_call_drop "$state" 'the call must say what it was about' \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  if [ -z "$grounds" ]; then
+    fm_gate_call_drop "$state" 'the call must state its grounds' \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  if ! fm_gate_call_one_line "$what" || ! fm_gate_call_one_line "$link" \
+    || ! fm_gate_call_one_line "$key"; then
+    fm_gate_call_drop "$state" 'only the grounds may span lines' \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  if [ -n "$link" ]; then
+    link_ok=1
+    case "$link" in
+      http://?* | https://?*)
+        case "$link" in
+          *[[:space:]]*) link_ok=0 ;;
+        esac ;;
+      *) link_ok=0 ;;
+    esac
+    if [ "$link_ok" -ne 1 ]; then
+      fm_gate_call_drop "$state" 'link must be one http or https URL' \
+        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      return 1
+    fi
+    if [ "${#link}" -gt "$FM_GATE_CALL_CAP_LINK" ]; then
+      fm_gate_call_drop "$state" "link must be at most $FM_GATE_CALL_CAP_LINK characters" \
+        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      return 1
+    fi
+  fi
+  if [ -n "$key" ]; then
+    case "$key" in
+      *[!A-Za-z0-9._:-]*)
+        fm_gate_call_drop "$state" 'key must be a routing key' \
+          "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+        return 1 ;;
+    esac
+    if [ "${#key}" -gt "$FM_GATE_CALL_CAP_KEY" ]; then
+      fm_gate_call_drop "$state" "key must be at most $FM_GATE_CALL_CAP_KEY characters" \
+        "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+      return 1
+    fi
+  fi
+
+  fm_gate_call_bounded_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
+    "$link" "$key" "$truncated"
+  line=$FM_GATE_CALL_BOUNDED_LINE
+
+  log=$(fm_gate_calls_path "$state")
+  if [ -L "$log" ]; then
+    fm_gate_call_drop "$state" 'the gate-call log is a symlink, not the append-only file' \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  if ! printf '%s\n' "$line" >> "$log" 2>/dev/null; then
+    fm_gate_call_drop "$state" 'the gate-call log could not be appended to' \
+      "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated"
+    return 1
+  fi
+  return 0
+}

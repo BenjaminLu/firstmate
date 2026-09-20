@@ -1802,6 +1802,114 @@ test_gitlab_missing_tool_refuses_before_recording() {
   pass "fm-pr-merge refuses before recording anything when glab or jq is absent"
 }
 
+# --------------------------------------------------- the gate-call record
+# A live merge-readiness refusal is firstmate keeping work off the captain's
+# desk. bin/fm-gate-calls-lib.sh owns the record these read back; here the only
+# questions are whether the refusal writes one, whether it carries the check
+# state that caused it, and whether an unwritable record can change the merge.
+
+gate_call_field() {  # <log> <line-number> <field>
+  jq -r --argjson n "$2" --arg f "$3" -s '.[$n - 1][$f]' < "$1"
+}
+
+test_a_red_github_check_records_a_refused_gate_call() {
+  local case_dir head log rc
+  head=dededededededededededededededededededede
+  case_dir=$(make_case gate-call-github-red)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_red_json "$case_dir" "$head" 'Lint 2'
+  log="$case_dir/state/gate-calls.jsonl"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/91 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "gate-call-github-red: a red check must still refuse"
+  assert_present "$log" "gate-call-github-red: the refusal recorded no gate call"
+  assert_equals refused "$(gate_call_field "$log" 1 verdict)" \
+    "gate-call-github-red: a merge refusal must be recorded as refused"
+  assert_equals task-x1 "$(gate_call_field "$log" 1 task)" \
+    "gate-call-github-red: the record names the wrong task"
+  assert_equals https://github.com/example/repo/pull/91 \
+    "$(gate_call_field "$log" 1 link)" \
+    "gate-call-github-red: the captain cannot open the pull request from the record"
+  assert_contains "$(gate_call_field "$log" 1 grounds)" "Lint 2" \
+    "gate-call-github-red: the check state that caused the refusal was not the grounds"
+  pass "a GitHub merge refused for a red check is recorded with that check as its grounds"
+}
+
+test_a_green_merge_records_no_gate_call() {
+  local case_dir head
+  head=efefefefefefefefefefefefefefefefefefefef
+  case_dir=$(make_case gate-call-green)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/92 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "gate-call-green: a green pull request should merge"
+
+  assert_absent "$case_dir/state/gate-calls.jsonl" \
+    "gate-call-green: a merge that was never refused invented a gate call"
+  pass "a merge that meets every condition records no refusal"
+}
+
+test_a_refusal_still_refuses_when_its_gate_call_cannot_be_recorded() {
+  local case_dir head log rc
+  head=fafafafafafafafafafafafafafafafafafafafa
+  case_dir=$(make_case gate-call-unwritable)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_red_json "$case_dir" "$head" 'Lint 2'
+  log="$case_dir/state/gate-calls.jsonl"
+  : > "$log"
+  chmod 000 "$log"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/93 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  chmod 644 "$log"
+
+  expect_code 1 "$rc" \
+    "gate-call-unwritable: an unrecordable gate call must not change the refusal"
+  assert_grep "check 'Lint 2' is not green" "$case_dir/stderr" \
+    "gate-call-unwritable: the refusal stopped naming the red check"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "gate-call-unwritable: the merge ran because its record could not be written"
+  assert_grep 'actionable:' "$case_dir/stderr" \
+    "gate-call-unwritable: the unrecorded gate call was silent"
+  assert_present "$case_dir/state/gate-calls.drops" \
+    "gate-call-unwritable: the unrecorded gate call left no durable trace"
+  pass "a merge refusal is unchanged, and says so, when its gate call cannot be recorded"
+}
+
+test_a_refused_gitlab_merge_records_a_refused_gate_call() {
+  local case_dir log rc
+  case_dir=$(make_gitlab_case gate-call-gitlab pipeline_status=failed)
+  log="$case_dir/state/gate-calls.jsonl"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "gate-call-gitlab: a failed head pipeline must refuse"
+  assert_present "$log" "gate-call-gitlab: the refusal recorded no gate call"
+  assert_equals refused "$(gate_call_field "$log" 1 verdict)" \
+    "gate-call-gitlab: a merge refusal must be recorded as refused"
+  assert_equals "$MR_URL" "$(gate_call_field "$log" 1 link)" \
+    "gate-call-gitlab: the record does not point at the merge request"
+  assert_contains "$(gate_call_field "$log" 1 grounds)" 'pipeline' \
+    "gate-call-gitlab: the pipeline state that caused the refusal was not the grounds"
+  pass "a GitLab merge refused for its head pipeline is recorded with that state as its grounds"
+}
+
 test_gitlab_head_override_args_refuse_before_recording() {
   local case_dir rc
   case_dir=$(make_gitlab_case gitlab-head-override)
@@ -3107,3 +3215,7 @@ test_away_record_cannot_change_between_the_authority_read_and_the_merge
 test_a_grant_revoked_before_the_merge_refuses_it
 test_merge_refuses_when_the_away_record_cannot_be_locked
 test_allow_red_refused_on_gitlab
+test_a_red_github_check_records_a_refused_gate_call
+test_a_green_merge_records_no_gate_call
+test_a_refusal_still_refuses_when_its_gate_call_cannot_be_recorded
+test_a_refused_gitlab_merge_records_a_refused_gate_call

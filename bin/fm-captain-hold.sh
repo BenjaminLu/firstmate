@@ -197,6 +197,10 @@
 # The hold or answer is already durable in the backlog, so a channel that
 # cannot be written is reported as `actionable:` on stderr rather than undoing
 # the record; bin/fm-inactive-reconcile.sh's diagnostics name a broken binding.
+#
+# Gate-call log: `hold` also appends this call's `escalated` entry to the
+# home's gate-call log. bin/fm-gate-calls-lib.sh owns that record's format and
+# what it does when it cannot be written; it observes the hold, never gates it.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -220,6 +224,9 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-parent-channel-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-parent-channel-lib.sh"
+# shellcheck source=bin/fm-gate-calls-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-gate-calls-lib.sh"
 
 PARENT_HOLD_PUBLISHED=0
 publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
@@ -231,6 +238,22 @@ publish_parent_hold() {  # <task-id> <occurrence> <verb> <note>
     0|1) PARENT_HOLD_PUBLISHED=1 ;;
     *) printf 'actionable: task %s is held for the captain in this home but that did not reach the parent channel (rc=%s)\n' "$id" "$rc" >&2 ;;
   esac
+}
+
+# A hold IS firstmate handing a call to the captain, so it is the `escalated`
+# entry in this home's gate-call log. bin/fm-gate-calls-lib.sh owns the record;
+# recording it never gates the hold, which is already durable in the backlog,
+# and a call it cannot record says so on stderr rather than going quiet.
+record_hold_gate_call() {  # <task-id> <occurrence> <title> <reason> <origin>
+  local id=$1 occurrence=$2 title=$3 reason=$4 origin=$5 link=''
+  if [ -f "$STATE/$id.meta" ]; then
+    link=$(meta_value "$STATE/$id.meta" pr)
+  fi
+  if [ -z "$link" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
+    link=$(meta_value "$STATE/$origin.meta" pr)
+  fi
+  fm_gate_call_record "$STATE" captain-hold "$id" escalated \
+    "${title:-$id}" "$reason" "$link" "captain-hold-$id-$occurrence" || true
 }
 
 CAPTAIN_META_LOCK=
@@ -895,6 +918,8 @@ command_hold() {
   [ -n "$(body_hold_set_timestamp "$(show_field_value "$show" body)")" ] \
     || fail "task $id lost its hold-set stamp while being held"
   publish_parent_hold "$id" "$occurrence" needs-decision "$reason"
+  record_hold_gate_call "$id" "$occurrence" \
+    "$(show_field_value "$show" title)" "$reason" "$origin"
   printf '%s\n' "$id"
 }
 
