@@ -428,6 +428,29 @@ test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
 }
 
 # Colour repeats the risk, so the plot reads without counting pixels.
+# R19. The harness could still submit a card through a submit button a browser
+# would never have let the captain press. That is how the dispatch bar's silent
+# disable stayed invisible for a whole round, so the hole is treated as a
+# defect rather than as test housekeeping - the next control it hides is the
+# one nobody is looking for.
+test_the_harness_cannot_answer_through_a_button_a_person_cannot_press() {
+  local home out
+  home=$(make_home harness-fidelity)
+  # The card cannot send, so its foot button is disabled and it carries the
+  # render-time refusal. A scripted "answer" must now be a no-op.
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(no_channel_payload)" answer)
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "true" ] \
+    || fail "the fixture card was pressable, so this proves nothing: $out"
+  # The render-time wording survives. If the harness had pressed, it would have
+  # been rewritten into the send-time wording by the press itself.
+  assert_contains "$(printf '%s' "$out" | jq -r '.at_click[0].limit')" "cannot take an answer" \
+    "the harness answered through a disabled button: $out"
+  [ "$(printf '%s' "$out" | jq -r '.at_click[0].is_queued')" = "false" ] \
+    || fail "a card a person could not submit was marked answered: $out"
+  pass "the harness cannot answer through a button a person cannot press"
+}
+
 # R18. Two of the bar's refusals still went to the counter slot - muted
 # uppercase micro-type where the captain's own count normally sits, with
 # nothing announcing it - three lines below a comment saying refusals never go
@@ -2189,3 +2212,4 @@ test_the_per_option_buttons_go_dead_with_the_rest_of_the_card
 test_the_per_option_buttons_stay_live_on_a_working_board
 test_the_card_does_not_call_a_change_reversible_when_nobody_said_so
 test_the_bar_puts_its_length_refusal_where_the_captain_looks
+test_the_harness_cannot_answer_through_a_button_a_person_cannot_press

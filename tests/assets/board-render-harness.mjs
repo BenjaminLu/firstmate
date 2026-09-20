@@ -224,6 +224,12 @@ const nodesWhere = (root, pred) => {
 const answerDealtCard = () => {
   const dealt = nodesWhere(byId.get("bb-call"), (n) => n.tagName === "form")[0];
   if (!dealt) return;
+  /* A browser does not submit a form through a DISABLED submit button, so
+     neither may this. The same rule the Enter path and the dispatch button
+     already follow: a harness that can press what a person cannot will hide
+     the next silent control the way it hid the last one. */
+  const submit = nodesWhere(dealt, (n) => n.tagName === "button" && n.type === "submit")[0];
+  if (submit && submit.disabled === true) return;
   const radio = nodesWhere(dealt, (n) => n.tagName === "input" && n.type === "radio")[0];
   if (radio) radio.checked = true;
   dealt.dispatch("submit", { preventDefault() {} });
@@ -234,6 +240,8 @@ const answerDealtCard = () => {
 const answerDealtCardEmpty = () => {
   const dealt = nodesWhere(byId.get("bb-call"), (n) => n.tagName === "form")[0];
   if (!dealt) return;
+  const submit = nodesWhere(dealt, (n) => n.tagName === "button" && n.type === "submit")[0];
+  if (submit && submit.disabled === true) return;
   dealt.dispatch("submit", { preventDefault() {} });
 };
 /* Ticking rows past the 512-byte limit. The tick the captain just made
