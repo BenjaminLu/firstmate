@@ -225,6 +225,19 @@ jobs:
             exit 1
           }
           tmux -V
+      # The captain's board is asserted in a real browser against a real
+      # server, because every defect that reached him was invisible from
+      # anywhere else. The runner image ships Chrome, so a missing browser here
+      # is a broken lane, not a valid skip - and the run below refuses the skip
+      # by name so it can never quietly become one.
+      - name: Require Chrome for the board end-to-end gate
+        run: |
+          set -eu
+          command -v google-chrome >/dev/null || command -v chromium >/dev/null || {
+            echo "::error::a browser is required for the captain's board end-to-end coverage"
+            exit 1
+          }
+          (google-chrome --version || chromium --version)
       - name: Install tasks-axi for backlog-handoff delegation
         run: |
           set -eu
@@ -252,6 +265,7 @@ jobs:
           # any missing typecheck prerequisite is a broken lane, not a valid skip.
           bin/fm-test-run.sh --lane "$FM_SERIAL_LANE" \
             --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
+            --fail-on-gate-skip 'chrome not found' \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-${FM_SERIAL_SHARD}.json"
       - name: Upload portable serial shard ${{ matrix.shard }} timing artifact
         if: always()

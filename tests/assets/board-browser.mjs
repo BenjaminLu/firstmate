@@ -61,15 +61,6 @@ for (let i = 0; i < argv.length; i += 1) {
   if (argv[i] === "--timeout-ms") { overallTimeout = Number(argv[i + 1]); i += 1; continue; }
   positional.push(argv[i]);
 }
-const [url, stepsArg] = positional;
-if (!url || !stepsArg) {
-  process.stderr.write("board-browser: usage: board-browser.mjs <url> <steps.json|->\n");
-  process.exit(1);
-}
-const steps = JSON.parse(stepsArg === "-"
-  ? readFileSync(0, "utf8")
-  : readFileSync(stepsArg, "utf8"));
-
 const die = (why, code = 1) => {
   process.stderr.write(`board-browser: ${why}\n`);
   process.exit(code);
@@ -104,6 +95,25 @@ function findBrowser() {
   for (const path of bundles) if (existsSync(path)) return path;
   return null;
 }
+
+// Answer only "does this machine have a browser", so a suite can ask once and
+// say so once rather than discovering it inside a case.
+if (positional[0] === "--probe") {
+  const found = findBrowser();
+  if (!found) process.exit(3);
+  process.stdout.write(found + "\n");
+  process.exit(0);
+}
+
+const [url, stepsArg] = positional;
+if (!url || !stepsArg) {
+  process.stderr.write("board-browser: usage: board-browser.mjs <url> <steps.json|->\n");
+  process.exit(1);
+}
+const steps = JSON.parse(stepsArg === "-"
+  ? readFileSync(0, "utf8")
+  : readFileSync(stepsArg, "utf8"));
+
 
 /* ---- RFC 6455, the client half ------------------------------------------ */
 

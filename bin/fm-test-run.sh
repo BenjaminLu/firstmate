@@ -52,7 +52,10 @@
 #                   after each script, fail the run if any output line contains
 #                   "skip: <token>" (e.g. --fail-on-gate-skip 'herdr not found').
 #                   The required Herdr CI lane uses this so a missing pin cannot
-#                   silently pass as a gate skip.
+#                   silently pass as a gate skip. Repeatable, and every token
+#                   given is enforced: a lane that owes two capabilities names
+#                   both, and neither one can be lost by the other being added
+#                   after it.
 #   --jobs N        run the selected scripts with up to N concurrent workers.
 #                   Plain --changed and a plain list of script paths use
 #                   min(4, cpus) workers when multiple selected scripts are
@@ -177,7 +180,7 @@ BASE_REF=origin/main
 JSON_PATH=
 SCRIPTS=()
 EXCLUDE_FAMILIES=()
-FAIL_ON_GATE_SKIP=
+FAIL_ON_GATE_SKIP_TOKENS=()
 JOBS=1
 JOBS_EXPLICIT=0
 JOBS_MAX=8
@@ -404,7 +407,8 @@ family_for_basename() {
     fm-afk-contract.test.sh|fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh)
       printf '%s\n' afk
       ;;
-    fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|fm-contributions.test.sh|\
+    fm-bearings-board-render.test.sh|fm-bearings-snapshot.test.sh|fm-board-clone-e2e.test.sh|\
+    fm-contributions.test.sh|\
     fm-fleet-snapshot-view.test.sh|fm-home-summary-refresh.test.sh)
       printf '%s\n' snapshot-bearings
       ;;
@@ -2200,11 +2204,11 @@ while [ "$#" -gt 0 ]; do
       ;;
     --fail-on-gate-skip)
       [ "$#" -gt 1 ] || die "--fail-on-gate-skip requires a token (e.g. 'herdr not found')"
-      FAIL_ON_GATE_SKIP=$2
+      FAIL_ON_GATE_SKIP_TOKENS+=("$2")
       shift 2
       ;;
     --fail-on-gate-skip=*)
-      FAIL_ON_GATE_SKIP=${1#--fail-on-gate-skip=}
+      FAIL_ON_GATE_SKIP_TOKENS+=("${1#--fail-on-gate-skip=}")
       shift
       ;;
     -h|--help)
@@ -2331,8 +2335,8 @@ apply_exclude_families
 if [ "${#EXCLUDE_FAMILIES[@]}" -gt 0 ]; then
   SELECTION_DESC="${SELECTION_DESC};exclude-family=$(IFS=,; printf '%s' "${EXCLUDE_FAMILIES[*]}")"
 fi
-if [ -n "$FAIL_ON_GATE_SKIP" ]; then
-  SELECTION_DESC="${SELECTION_DESC};fail-on-gate-skip=$FAIL_ON_GATE_SKIP"
+if [ "${#FAIL_ON_GATE_SKIP_TOKENS[@]}" -gt 0 ]; then
+  SELECTION_DESC="${SELECTION_DESC};fail-on-gate-skip=$(IFS=,; printf '%s' "${FAIL_ON_GATE_SKIP_TOKENS[*]}")"
 fi
 if [ "$LIST_ONLY" -eq 1 ] || [ "$LIST_SCHEDULED" -eq 1 ]; then
   if [ "$LIST_SCHEDULED" -eq 1 ]; then
@@ -2556,10 +2560,13 @@ record_script_result() {
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
 
-  if [ -n "$FAIL_ON_GATE_SKIP" ] && detect_gate_skip_token "$out" "$FAIL_ON_GATE_SKIP"; then
-    log "required gate skip token seen in $script: skip: $FAIL_ON_GATE_SKIP"
-    rc=1
-  fi
+  local required
+  for required in ${FAIL_ON_GATE_SKIP_TOKENS[@]+"${FAIL_ON_GATE_SKIP_TOKENS[@]}"}; do
+    if detect_gate_skip_token "$out" "$required"; then
+      log "required gate skip token seen in $script: skip: $required"
+      rc=1
+    fi
+  done
 
   gate_skip=false
   gate_reason=

@@ -230,8 +230,12 @@ It serves exactly the one file the build wrote and nothing else - one route, one
 `bin/fm-bearings-board.sh build --lavish` additionally offers the board as a Lavish session for a home that has `lavish-axi` and wants that surface; without the flag nothing invokes, probes, or needs it, and its absence degrades nothing about the board.
 
 `state/board-live.jsonl` is the append-only event log every publisher writes to, and it is the durability: an event published while the server is down is read at the next start rather than lost.
-`state/board-live.endpoint` records the URL the running server took, `state/board-live.pid` its process, and `state/board-live.log` whatever it said if it could not start.
+`state/board-live.endpoint` records the URL the running server took, `state/board-live.pid` its process, `state/board-live.code` what that process is running, and `state/board-live.log` whatever it said if it could not start.
 The server exits when its home's `state/` directory is gone, so a removed home never leaves one behind.
+
+A server is started once and outlives every later change to its own code, so `bin/fm-board-live.sh status` and `doctor` say whether the running process is on the code now on disk - `current`, `STALE`, or `unknown` for a server this script did not start - and `doctor` exits nonzero for anything but `current`.
+A start that finds a stale server replaces it rather than reporting it as already running, and because every board build starts the server, an update reaches the captain's board at his next build instead of at a restart nobody performs.
+Open boards are not disturbed by that replacement: the page reconnects on its own and the first message on any connection is the whole state.
 
 The port is derived from the home's own path, which keeps it stable across restarts so a board built yesterday still reconnects today, and distinct per home so a secondmate or a second clone never contends for it.
 A derived port already in use falls back to one the system assigns, recorded in the endpoint file.
