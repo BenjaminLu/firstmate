@@ -422,6 +422,60 @@ test_a_worktree_read_that_hits_its_bound_is_unknown_not_clean() {
   pass "a worktree read that hits its bound is unknown, not a task that has not branched"
 }
 
+test_a_branch_with_another_remote_says_only_origin_was_asked() {
+  local home out report
+  # The fork-plus-upstream clone is ordinary in this repository, and in that
+  # flow the branch is on origin while the pull request is on the parent.
+  # Absence proved against origin alone used to be reported as absence
+  # everywhere, which is silence - and silence is what this check sells.
+  home=$(make_home discover-upstream)
+  forge_pr "$home" "$SLUG" 55 OPEN "$(commit 8)" 0 0 fm/elsewhere
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/not-on-origin
+  git -C "$home/wt/omega" remote add upstream git@github.com:fmtest/parent.git 2>/dev/null
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a branch with somewhere else to have gone was reported as having no pull request anywhere"
+  assert_contains "$report" "only origin was asked" \
+    "the report did not say the answer covers origin alone"
+  assert_contains "$report" "upstream" "the report did not name the other remote"
+  assert_contains "$report" "unknown:" "the one-remote gap did not produce an unknown answer"
+  pass "a branch whose worktree has another remote says only origin was asked"
+}
+
+test_a_branch_with_only_origin_stays_a_determinate_none() {
+  local home out
+  # The control for the case above: with nowhere else the branch could have
+  # gone, origin answering "none" IS the whole answer and must stay silent.
+  home=$(make_home discover-onlyorigin)
+  forge_pr "$home" "$SLUG" 55 OPEN "$(commit 8)" 0 0 fm/elsewhere
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/not-on-origin
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a branch whose only remote is origin was reported when origin already answered for all of it"
+  pass "a branch whose only remote is origin keeps its determinate none"
+}
+
+test_a_found_pull_request_needs_no_remote_caveat() {
+  local home out report
+  # When origin does have the pull request there is no absence to qualify, so
+  # the extra remote must not add a caveat to a finding that is already exact.
+  home=$(make_home discover-found-upstream)
+  forge_pr "$home" "$SLUG" 55 OPEN "$(commit 8)" 0 0 fm/found-here
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/found-here
+  git -C "$home/wt/omega" remote add upstream git@github.com:fmtest/parent.git 2>/dev/null
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  assert_contains "$report" "nothing posted on $PR_BASE/55" "the discovered pull request was not reported"
+  assert_not_contains "$report" "only origin was asked" \
+    "a pull request that was found still carried the absence caveat"
+  pass "a pull request found in origin needs no caveat about the other remotes"
+}
+
 test_a_non_github_origin_is_a_named_gap_not_a_pass() {
   local home out report
   home=$(make_home discover-gitlab)
@@ -1272,6 +1326,9 @@ test_a_worktree_that_is_gone_is_unknown_not_clean
 test_a_worktree_that_is_not_a_repository_is_unknown_not_clean
 test_a_worktree_whose_git_cannot_be_read_is_unknown_not_clean
 test_a_worktree_read_that_hits_its_bound_is_unknown_not_clean
+test_a_branch_with_another_remote_says_only_origin_was_asked
+test_a_branch_with_only_origin_stays_a_determinate_none
+test_a_found_pull_request_needs_no_remote_caveat
 test_a_non_github_origin_is_a_named_gap_not_a_pass
 test_a_poll_bound_to_a_superseded_commit_is_reported
 test_a_poll_bound_to_the_live_commit_is_silent

@@ -568,8 +568,27 @@ github_slug_from_remote() {
 # that is not a GitHub one, and a forge read that fails are undeterminable and
 # say so, because each of them hides whether a pull request is sitting there
 # unreviewed.
+# Every remote of the worktree except origin, as a readable list. Local only.
+# Returns git_read's own statuses so the caller can tell "there are none" from
+# "the list could not be read".
+discovery_other_remotes() {
+  local wt=$1 status
+  git_read "$wt" remote
+  status=$?
+  case "$status" in
+    0) ;;
+    # No remote at all is not possible here - origin was just read - so a clean
+    # refusal means git answered with an empty list, which is the same "none".
+    1) printf ''; return 0 ;;
+    *) return "$status" ;;
+  esac
+  printf '%s' "$GIT_OUT" | grep -v '^origin$' | grep -v '^[[:space:]]*$' \
+    | awk '{ if (out != "") out = out ", "; out = out $0 } END { printf "%s", out }'
+  return 0
+}
+
 discover_task_pull_request() {
-  local id=$1 meta=$2 wt branch slug remote
+  local id=$1 meta=$2 wt branch slug remote other_remotes
   wt=$(meta_value "$meta" worktree)
   if [ -z "$wt" ]; then
     unknown "$id records no worktree, so whether it has a pull request of its own could not be established"
@@ -645,10 +664,34 @@ discover_task_pull_request() {
     unknown "the open pull requests for $id's branch $branch could not be read: $FORGE_ERROR"
     return 0
   fi
-  # An empty answer here is the forge saying there is no open pull request on
-  # that branch, which is a determinate none.
-  [ -n "$GH_OUT" ] || return 0
-  add_target "$GH_OUT" discovered "$id"
+  if [ -n "$GH_OUT" ]; then
+    add_target "$GH_OUT" discovered "$id"
+    return 0
+  fi
+  # An empty answer is the forge saying this branch has no open pull request in
+  # ORIGIN. That is absence proved against one repository, and reporting it as
+  # absence everywhere is silence rather than a determinate none whenever the
+  # branch could have been proposed somewhere else.
+  #
+  # The fork-plus-upstream clone is ordinary here - bin/fm-brief.sh and
+  # bin/fm-teardown.sh both say so - and in that flow the branch is on origin
+  # while the pull request is on the parent. Asking the parent too would add a
+  # second forge read per such task, and the cost model is the thing this check
+  # argued hardest for, so it is not asked. What is not acceptable is the gap
+  # being invisible: unlike the GitLab and jq gaps, which each produce an
+  # unknown line, this one produced SILENCE, and silence is the whole product.
+  # So the remotes are listed - a local read, no forge call - and the gap is
+  # reported whenever there is somewhere else this branch could have gone.
+  other_remotes=$(discovery_other_remotes "$wt")
+  case "$?" in
+    3) budget_note; return 0 ;;
+    2)
+      unknown "$id's branch $branch has no open pull request in $slug, and its other remotes could not be listed, so whether it has one elsewhere could not be established"
+      return 0
+      ;;
+  esac
+  [ -n "$other_remotes" ] || return 0
+  unknown "$id's branch $branch has no open pull request in $slug, but the worktree also has $other_remotes, and only origin was asked"
 }
 
 collect_task_targets() {
