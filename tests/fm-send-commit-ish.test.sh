@@ -13,7 +13,10 @@
 #      the 8-character floor keeps 'facade' and 'decade' below the match.
 #   4. A sha ending a sentence is still read, while a UUID - whose dashes sit
 #      on the inside, where nothing strips them - is still left alone.
-#   5. A worktree that cannot answer steps aside rather than blocking a steer
+#   5. A value that resolves in another object database this home can see - the
+#      project clone, firstmate itself - is not refused, and a remote target is
+#      not judged against this host at all.
+#   6. No readable source at all steps aside rather than blocking a steer
 #      it cannot judge.
 set -u
 
@@ -65,18 +68,33 @@ SH
   printf '%s\n' "$fb"
 }
 
-# setup_case <name> -> echoes case dir with home/state, a real git worktree for
-# task-a, and meta recording that worktree.
+# setup_case <name> -> echoes case dir with home/state, a source clone standing
+# in for the project the task was spawned from, a slot worktree cloned from it,
+# and meta recording both the way fm-spawn does.
 setup_case() { # <name>
   local name=$1 dir
   dir="$TMP_ROOT/$name"
   mkdir -p "$dir/home/state"
   make_stubs "$dir" >/dev/null
-  fm_git_init_commit "$dir/worktree"
+  fm_git_init_commit "$dir/project"
+  git clone -q "$dir/project" "$dir/worktree"
   fm_write_meta "$dir/home/state/task-a.meta" \
     "window=sess:fm-task-a" "kind=ship" "harness=claude" \
-    "worktree=$(cd "$dir/worktree" && pwd)"
+    "worktree=$(cd "$dir/worktree" && pwd)" \
+    "project=$(cd "$dir/project" && pwd)"
   printf '%s\n' "$dir"
+}
+
+# commit_only_in_project <case-dir> -> echoes a sha that exists in the project
+# clone and NOT in the slot's worktree, the shape of a commit merged after the
+# slot was created.
+commit_only_in_project() { # <case-dir>
+  local dir=$1
+  printf 'landed after the slot was created\n' >>"$dir/project/README.md"
+  git -C "$dir/project" add README.md
+  git -C "$dir/project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm "landed later"
+  git -C "$dir/project" rev-parse HEAD
 }
 
 run_send() { # <case-dir> <err-file> -- <fm-send args...>
@@ -152,22 +170,62 @@ test_a_commit_ending_a_sentence_is_still_read() {
   pass "fm-send: a sha ending a sentence is read, and a UUID is still left alone"
 }
 
-test_refusal_is_skipped_when_the_worktree_cannot_be_read() {
+test_a_commit_that_resolves_in_another_object_database_is_not_refused() {
+  local dir err rc sha
+  dir=$(setup_case merged-after-spawn)
+  err="$dir/send.err"
+  sha=$(commit_only_in_project "$dir")
+  # The slot's own clone was frozen at spawn, so a sha merged since resolves
+  # only in the project clone. It was read off the forge; it is not the error
+  # this guard exists to catch.
+  run_send "$dir" "$err" -- task-a "main is now at ${sha:0:8}, rebase onto it"
+  rc=$?
+  expect_code 0 "$rc" "a commit that resolves in the project clone must not be refused:"$'\n'"$(cat "$err")"
+  pass "fm-send: a commit the slot has not fetched yet is not refused"
+}
+
+test_a_remote_targets_recorded_paths_are_not_judged_locally() {
+  local dir err
+  dir=$(setup_case remote-target)
+  err="$dir/send.err"
+  # A remote secondmate's worktree= names a path on the OTHER host. Judging a
+  # remote steer against whatever sits at that path locally is judging an
+  # unrelated repository, so the guard steps aside entirely.
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=remote:task-a" "kind=secondmate" "harness=claude" \
+    "worktree=$(cd "$dir/worktree" && pwd)" \
+    "project=$(cd "$dir/project" && pwd)" \
+    "remote_host=remote-mac"
+  run_send "$dir" "$err" -- task-a 'verify against deadbeefdeadbeef'
+  assert_not_contains "$(cat "$err")" 'does not resolve' \
+    "a remote target's steer must not be judged against a local repository"
+  pass "fm-send: a remote target's recorded paths are not judged against this host"
+}
+
+test_refusal_is_skipped_when_no_local_copy_can_answer() {
   local dir err rc
   dir=$(setup_case noworktree)
   err="$dir/send.err"
+  # Every source gone: the slot's worktree deleted and the recorded project a
+  # plain directory. Nothing can answer, so the guard steps aside rather than
+  # blocking a steer it cannot judge.
   rm -rf "$dir/worktree"
-  # Steps aside rather than blocking a steer it cannot judge.
+  mkdir -p "$dir/notarepo"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=sess:fm-task-a" "kind=ship" "harness=claude" \
+    "worktree=$dir/worktree" "project=$dir/notarepo"
   run_send "$dir" "$err" -- task-a 'verify against deadbeefdeadbeef'
   rc=$?
   expect_code 0 "$rc" "an unreadable local copy must not block a steer:"$'\n'"$(cat "$err")"
   assert_grep 'verify against deadbeefdeadbeef' "$dir/home/state/task-a.inbox/001.msg" \
     "the steer should still be recorded when the check cannot judge it"
-  pass "fm-send: the check steps aside when the task's local copy cannot answer"
+  pass "fm-send: the check steps aside when no local copy can answer"
 }
 
 test_refuses_a_message_naming_a_commit_that_does_not_resolve
 test_accepts_a_message_naming_a_commit_that_resolves
 test_ordinary_prose_with_hex_like_words_is_not_treated_as_a_commit
 test_a_commit_ending_a_sentence_is_still_read
-test_refusal_is_skipped_when_the_worktree_cannot_be_read
+test_a_commit_that_resolves_in_another_object_database_is_not_refused
+test_a_remote_targets_recorded_paths_are_not_judged_locally
+test_refusal_is_skipped_when_no_local_copy_can_answer

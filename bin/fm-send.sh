@@ -713,9 +713,20 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # Two boundaries make this safe to put in front of every text steer.
 #
 # It steps aside rather than blocking whenever it cannot judge - no meta, no
-# recorded worktree, a worktree that is gone, not a git repository, or no git on
-# the path. Blocking a legitimate steer because the check could not answer is a
+# readable object database among the task's recorded paths, or no git on the
+# path. Blocking a legitimate steer because the check could not answer is a
 # worse failure than the error it prevents.
+#
+# That is why the lookup is not the slot's own object database alone. A pooled
+# slot is its own clone, frozen at spawn, so a commit merged since - read off
+# the forge, which is the opposite of the error this catches - does not resolve
+# there. The question is whether the value is a real commit anywhere this home
+# can see, so every readable source is asked and any hit accepts: the slot's
+# worktree, the project clone it was spawned from (which fleet sync keeps
+# current), and firstmate's own repository, for a steer naming a firstmate
+# commit to a worker on another project. A remote target is skipped entirely -
+# its recorded worktree= and project= name paths on the OTHER host, and whatever
+# sits at those paths locally is an unrelated repository.
 #
 # It matches only whole WORDS of 8-40 hex characters, so ordinary prose is
 # untouched: the 8-character floor puts every hex-only English word below the
@@ -730,19 +741,38 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # The candidate scan runs before any of that, so the overwhelmingly common
 # steer - one that names no sha at all - pays a text pipeline and no git
 # process on a path every steer in the fleet crosses.
+# fm_send_commit_ish_sources: the readable object databases this home may ask
+# about a value named in a steer to <meta-file>, most specific first, one per
+# line. Empty output means nothing can answer, which is a step-aside.
+fm_send_commit_ish_sources() { # <meta-file>
+  local meta=$1 repo
+  [ -z "$(fm_meta_get "$meta" remote_host)" ] || return 0
+  for repo in "$(fm_meta_get "$meta" worktree)" "$(fm_meta_get "$meta" project)" \
+    "$FM_ROOT"; do
+    [ -n "$repo" ] && [ -d "$repo" ] || continue
+    git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
+    printf '%s\n' "$repo"
+  done
+}
+
 fm_send_refuse_unresolvable_commit_ish() { # <message> <meta-file>
-  local msg=$1 meta=$2 candidates wt sha
+  local msg=$1 meta=$2 candidates sources sha repo resolved
   candidates=$(printf '%s\n' "$msg" | tr -s '[:space:]' '\n' |
     sed -e 's/^[[:punct:]]*//' -e 's/[[:punct:]]*$//' |
     grep -E '^[0-9a-f]{8,40}$' || true)
   [ -n "$candidates" ] || return 0
   [ -n "$meta" ] || return 0
   command -v git >/dev/null 2>&1 || return 0
-  wt=$(fm_meta_get "$meta" worktree)
-  [ -n "$wt" ] && [ -d "$wt" ] || return 0
-  git -C "$wt" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  sources=$(fm_send_commit_ish_sources "$meta")
+  [ -n "$sources" ] || return 0
   for sha in $candidates; do
-    git -C "$wt" cat-file -e "$sha^{commit}" 2>/dev/null && continue
+    resolved=0
+    for repo in $sources; do
+      git -C "$repo" cat-file -e "$sha^{commit}" 2>/dev/null || continue
+      resolved=1
+      break
+    done
+    [ "$resolved" = 1 ] && continue
     echo "fm-send: $sha does not resolve to a commit in this task's local copy; read it before naming it" >&2
     return 1
   done
