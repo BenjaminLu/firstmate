@@ -69,7 +69,25 @@ function flushTimers() {
 function waitMinutes(n) { shift += n * 60000; intervals.forEach((fn) => fn()); }
 
 /* ---- the DOM this page needs, and no more ---- */
+/* Descendant combinators, because the page's own code uses them and a shim that
+   silently matches nothing where production matches something is how a test
+   comes to assert nothing at all. `.a .b` matches a `.b` that has an `.a`
+   somewhere above it; each space-separated part is matched as a compound by
+   matchesCompound below. */
 function matches(node, selector) {
+  const parts = String(selector).trim().split(/\s+(?![^[]*\])/).filter(Boolean);
+  if (parts.length < 2) return matchesCompound(node, selector);
+  if (!matchesCompound(node, parts[parts.length - 1])) return false;
+  let i = parts.length - 2;
+  let up = node.parentNode;
+  while (up && i >= 0) {
+    if (matchesCompound(up, parts[i])) i -= 1;
+    up = up.parentNode;
+  }
+  return i < 0;
+}
+
+function matchesCompound(node, selector) {
   let sel = selector.trim();
   if (sel.endsWith(":checked")) {
     if (!node.checked) return false;
@@ -476,9 +494,14 @@ process.stdout.write(JSON.stringify({
     const sub = findById(body, "bb-call-sub");
     const deck = findById(body, "bb-call");
     const empty = deck ? deck.querySelector(".bb-empty") : null;
+    const strip = findById(body, "bb-stats");
+    const tile = strip ? strip.querySelector(".bb-stat--call .bb-stat__num") : null;
     return {
       sub: sub ? sub.textContent : null,
       empty: empty ? empty.textContent : null,
+      /* The headline count, reported with the two sentences because the rule is
+         about the number wherever it is rendered. */
+      need: tile ? tile.textContent : null,
     };
   })(),
   sent: badge("bb-live-sent"),

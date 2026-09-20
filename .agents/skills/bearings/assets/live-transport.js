@@ -315,6 +315,16 @@
     var deck = document.getElementById("bb-call");
     var empty = deck ? deck.querySelector(".bb-empty") : null;
     if (empty) empty.textContent = say(SAY.call_empty_behind);
+    /* THE THIRD RENDERING, AND THE ONE IN THE LARGEST TYPE ON THE PAGE. The
+       stat strip derives its NEED YOU tile from the same captains_call.length,
+       so a board that is behind headlines a bare 0 directly above the two
+       sentences just corrected - the same number, the same page, the same
+       moment, presented as complete. The rule is about the COUNT wherever it is
+       rendered, not about the sentences that were quoted, so the tile stops
+       asserting a number the board cannot vouch for. */
+    var strip = document.getElementById("bb-stats");
+    var tile = strip ? strip.querySelector(".bb-stat--call .bb-stat__num") : null;
+    if (tile) tile.textContent = "—";
   }
 
   function paintStatus() {

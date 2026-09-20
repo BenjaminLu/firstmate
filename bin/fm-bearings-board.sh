@@ -978,6 +978,22 @@ validate_payload() {  # <data.json>
     and (.schema == $schema)
     and (.home | nonempty_string)
     and (.generated | nonempty_string)
+    # TWO PROPERTIES THAT WANT OPPOSITE THINGS, SO THEY GET TWO FIELDS.
+    #   `composed` is WHEN THIS CONTENT WAS COMPOSED. It must NOT move when a
+    #   republication carries identical content, because it is what a page
+    #   compares itself against to refuse being taken backwards: a stamp that
+    #   moved for an unchanged republish would make a board look newer than the
+    #   content it carries, which is the very confusion this pair replaced.
+    #   `published` is WHEN THIS PAGE WAS WRITTEN, stamped by inject_board on
+    #   every publication without exception. The live merge orders events
+    #   against it, because supersession means "a rebuild outranks what came
+    #   before it" and that is a property of the publication, not the content.
+    # One field cannot hold both: the first is required to stand still across a
+    # republish and the second is required to move on one. Trying to make a
+    # single stamp do both is what produced a rebuild that stopped superseding
+    # the events before it. `generated` is neither - compose carries it through
+    # from the snapshot it read, and the live merge overwrites it with the
+    # newest event it saw.
     # WHEN THIS CONTENT WAS COMPOSED, and nothing else. `generated` cannot
     # answer that: it is carried through from the snapshot this compose read,
     # so a compose from a stored snapshot writes current content under a stale
@@ -1463,7 +1479,7 @@ EOF
     --argjson records "$records" --argjson cards "$cards" --argjson links "$links" \
     --argjson merge_cards "$merge_cards" --argjson acks "$acks" \
     --argjson progress "$progress" --argjson deterministic "$deterministic" \
-    --argjson readable "$readable" --arg composed "${FM_BEARINGS_COMPOSED_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" \
+    --argjson readable "$readable" --arg composed "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     . as $snap |
     # Every captain-facing string goes through this one guard: the validator
@@ -2048,7 +2064,12 @@ inject_board() {  # <payload.json> <board> [<source-page>]
   local data=$1 board=$2 source=${3:-$TEMPLATE} json tmp extracted
   [ -f "$source" ] && [ ! -L "$source" ] || return 1
   [ "$(grep -cxF "$PLACEHOLDER" "$source")" -eq 1 ] || return 1
-  json=$(jq -c . "$data") || return 1
+  # TWO PROPERTIES, TWO FIELDS, AND THIS IS THE SECOND ONE'S ONLY WRITER.
+  # `published` is stamped here, at the moment a page is written, so it moves on
+  # EVERY republication by construction - which is what the supersession rule
+  # needs and precisely what `composed` must not do. See the block above
+  # `composed` in the validator for why one field could not carry both.
+  json=$(jq -c --arg published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.published = $published' "$data") || return 1
   # `<` never appears in JSON syntax outside strings, so escaping every
   # occurrence keeps the payload valid JSON while making </script> inert.
   json=${json//</\\u003c}
@@ -2189,10 +2210,17 @@ refresh_worker() {
   # byte-identical republication this refresh promises. When everything else
   # matches what is already published, the published stamp is carried forward;
   # when anything differs, the fresh stamp stands because the content is new.
+  # The comparison drops every stamp that moves on its own, not just this one.
+  # `generated` is a live wall clock on the real path - refresh is invoked with
+  # no --snapshot everywhere it is invoked for real, so each run composes a fresh
+  # snapshot - and `published` is stamped at every injection by definition. Left
+  # in the comparison they always differ, the carry-forward never fires, and
+  # `composed` silently becomes a when-the-last-refresh-ran clock: the exact
+  # property this field exists not to have. What is compared is the CONTENT.
   carried_composed=$(injected_payload "$board" | jq -r '.composed // empty' 2>/dev/null) || carried_composed=''
   if [ -n "$carried_composed" ] \
-    && [ "$(jq -S 'del(.composed)' "$effective" 2>/dev/null)" \
-       = "$(injected_payload "$board" | jq -S 'del(.composed)' 2>/dev/null)" ]; then
+    && [ "$(jq -S 'del(.composed, .generated, .published)' "$effective" 2>/dev/null)" \
+       = "$(injected_payload "$board" | jq -S 'del(.composed, .generated, .published)' 2>/dev/null)" ]; then
     if tmp=$(mktemp "${TMPDIR:-/tmp}/fm-bearings-composed.XXXXXX"); then
       if jq --arg c "$carried_composed" '.composed = $c' "$effective" > "$tmp" 2>/dev/null; then
         mv -f -- "$tmp" "$effective"

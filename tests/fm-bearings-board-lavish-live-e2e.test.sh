@@ -55,7 +55,7 @@ cat > "$LAB/payload.json" <<'JSON'
 {
   "schema": "fm-bearings-board.v1",
   "home": "lavish-live-guard",
-  "generated": "2026-01-01T00:00Z", "composed": "2026-01-01T00:00Z",
+  "generated": "2026-01-01T00:00Z", "composed": "2026-01-01T00:00:00Z",
   "prs_live": false,
   "captains_call": [
     {

@@ -57,6 +57,11 @@ make_home() {  # <name> ; prints the home path
   printf '%s\n' "$home"
 }
 
+injected_composed() {  # <home> ; the composition stamp the page carries
+  sed -n '/<script id="bearings-data" type="application\/json">/,/<\/script>/p' \
+    "$1/.lavish/bearings-board.html" | sed '1d;$d' | jq -r '.composed // empty'
+}
+
 served_state() {  # <home>
   FM_HOME="$1" node "$SERVER" state
 }
@@ -100,6 +105,39 @@ test_a_board_that_is_behind_never_reports_an_empty_desk() {
   pass "a board that is behind shows what it was built with rather than an empty desk"
 }
 
+# THE SERVER HALF, WHICH THE LAST ROUND LEFT WITH NO TEST OF ITS OWN. Two
+# properties live on two fields here and the reason is only visible in this
+# case: a republication that carries `composed` forward - which is what an
+# unchanged refresh does, deliberately - must STILL outrank the events published
+# before it. Order that supersession against `composed` and the rebuild stops
+# superseding anything: an older answer re-applies, the desk loses a card, and
+# `stale` is 0, so nothing on the page suggests looking again.
+test_a_republication_supersedes_earlier_events_even_carrying_its_stamp() {
+  local home composed_before composed_after state
+  home=$(make_home supersede-carried-stamp) || fail "could not build a home"
+  composed_before=$(injected_composed "$home")
+  [ -n "$composed_before" ] || fail "the board carries no composition stamp"
+  FM_HOME="$home" "$LIVE" event answered pick-one --key pick-one >/dev/null 2>&1 \
+    || fail "could not publish the answer"
+  assert_equals 0 "$(served_state "$home" | jq -r '.payload.captains_call | length')" \
+    "the answer never applied, so this case would prove nothing"
+  sleep 1
+  # Republish the SAME content with the SAME composition stamp - exactly what an
+  # unchanged refresh produces once its carry-forward works.
+  FM_HOME="$home" "$BOARD" derive "$home/payload.json" \
+    --endpoint "ws://127.0.0.1:1/board-live" --out "$home/.lavish/bearings-board.html" \
+    >/dev/null 2>&1 || fail "could not republish the board"
+  composed_after=$(injected_composed "$home")
+  assert_equals "$composed_before" "$composed_after" \
+    "the fixture moved the composition stamp, so it is not the case under test"
+  state=$(served_state "$home")
+  assert_equals 1 "$(printf '%s' "$state" | jq -r '.payload.captains_call | length')" \
+    "a republication carrying its composition stamp stopped superseding the events before it"
+  assert_equals 0 "$(printf '%s' "$state" | jq -r '.stale | length')" \
+    "the board also reported itself behind, which would at least have shown a banner"
+  pass "a republication outranks earlier events even when it carries its composition stamp"
+}
+
 # THE PAGE HALF of the same rule the server half enforces. The board derives
 # BOTH sentences under Captain's Call - the section caption and the empty deck's
 # body - from the number of calls the payload carries, and a change the fleet
@@ -108,7 +146,7 @@ test_a_board_that_is_behind_never_reports_an_empty_desk() {
 # complete. Both sentences are asserted, because correcting only the caption
 # leaves the body saying it and a reader sees the reassuring one.
 test_a_behind_board_never_tells_the_captain_his_desk_is_empty() {
-  local home served out sub empty
+  local home served out sub empty need
   home=$(make_home page-behind-desk) || fail "could not build a home"
   jq '.captains_call = []' "$home/payload.json" > "$home/nocalls.json" \
     || fail "could not build a payload with no calls"
@@ -132,9 +170,17 @@ test_a_behind_board_never_tells_the_captain_his_desk_is_empty() {
     *"Nothing needs your action"*|*"不需要你"*)
       fail "the empty deck still tells the captain nothing needs him while the board says it is behind: $empty" ;;
   esac
-  [ -n "$sub$empty" ] \
-    || fail "neither sentence was rendered, so this case proves nothing about either"
-  pass "a board that is behind never tells the captain his desk is empty, in either sentence"
+  # The third rendering, and the one in the largest type: the headline count.
+  need=$(printf '%s' "$out" | jq -r '.callDesk.need // ""')
+  # Asserted present, not merely not-zero: a lookup that silently finds nothing
+  # would otherwise satisfy this line while the board went on headlining 0.
+  [ -n "$need" ] \
+    || fail "the headline count was not found at all, so this case would prove nothing about it"
+  [ "$need" != "0" ] \
+    || fail "the board still headlines 0 NEED YOU while saying it is behind - the same count, the same page, presented as complete"
+  [ -n "$sub$empty$need" ] \
+    || fail "no rendering was produced, so this case proves nothing about any of them"
+  pass "a board that is behind never presents its call count as complete, in any of the three renderings"
 }
 
 # The partial case, which is the half a "did it empty" condition would miss. A
@@ -1076,3 +1122,4 @@ test_a_board_that_is_current_still_clears_an_answered_call
 test_a_board_older_than_the_page_cannot_take_its_rows_away
 test_a_board_that_is_behind_withholds_a_partial_loss_too
 test_a_behind_board_never_tells_the_captain_his_desk_is_empty
+test_a_republication_supersedes_earlier_events_even_carrying_its_stamp

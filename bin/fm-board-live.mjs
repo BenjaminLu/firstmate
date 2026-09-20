@@ -150,19 +150,26 @@ const EVENT_RING = 2000;
 //   rather than showing a shrunken list beside its own "this board is behind"
 //   line. See `merge` below.
 //
-// AND THE FIELD BOTH OF THOSE HANG ON. `composed` is when a payload's CONTENT
-// was made, stamped once by fm-bearings-board.sh and written by nothing else.
-// `generated` cannot carry that meaning and must not be asked to: compose
-// carries it through from the snapshot it read, and `merge` below overwrites it
-// with the newest event this merge saw. Comparing a composition against it is
-// comparing two different clocks, which is how a page came to be taken
-// backwards by a board older than itself.
+// AND THE TWO FIELDS THOSE HANG ON, WHICH ARE TWO BECAUSE ONE COULD NOT DO IT.
+//   `composed` is when a payload's CONTENT was made. It does not move when a
+//   republication carries identical content, and the page's backwards guard
+//   compares against it: a stamp that moved for an unchanged republish would
+//   make a board look newer than the content it carries.
+//   `published` is when THIS PAGE was written, stamped at every publication
+//   without exception. The merge below orders events against it, because
+//   supersession - a rebuild outranks what came before it - is a property of
+//   the publication and needs a stamp that always moves.
+// The first must stand still across a republish and the second must move on
+// one, so no single field can hold both; hanging the ordering on `composed`
+// produced a rebuild that stopped superseding the events before it, with no
+// banner to suggest looking again. `generated` is neither: compose carries it
+// through from the snapshot it read, and `merge` overwrites it with the newest
+// event this merge saw.
 
 /* ---- the board state ----------------------------------------------------
-
  * base      the payload firstmate last built, read out of the board page
- * baseAt    when that page was written; an event at or after it is live, an
- *           event before it was already composed into the page
+ * baseAt    the page file's mtime, kept only as the fallback ordering key for a
+ *           board published before `published` existed; the rule is `published`
  * events    the recent event ring, in arrival order
  */
 
@@ -321,19 +328,20 @@ function merge(base, events) {
   // toward re-applying an event the build already composed rather than
   // dropping one it did not - and re-applying is harmless, because every case
   // below writes a value rather than making a change relative to one.
-  // Ordered against WHEN THIS CONTENT WAS COMPOSED. That is the only clock an
-  // event can honestly be measured against: an event is newer than the board if
-  // it happened after the board's content was made, and neither the file's
-  // mtime nor `generated` says that. mtime is when the file was last written,
-  // which a republish moves without recomposing anything - on the board that
-  // produced this fix it read 09:14 against content composed at 01:12, an
-  // eight-hour window of events neither applied nor reported. `generated` is
-  // carried through from the snapshot compose read and is overwritten below, so
-  // it is not a composition clock at all.
-  // A board built before `composed` existed has no such stamp; it falls back to
-  // mtime, which is the old behaviour and no worse than it was.
-  const composedAt = Date.parse(base.payload.composed);
-  const boundary = Math.floor((Number.isNaN(composedAt) ? base.at : composedAt) / 1000) * 1000;
+  // ORDERED AGAINST WHEN THIS PAGE WAS PUBLISHED, which is `published` and not
+  // `composed`. Supersession is a property of the publication: a rebuild
+  // outranks everything published before it, so the stamp it is measured by has
+  // to move on every republication. `composed` is deliberately the opposite -
+  // it stands still when a republish carries identical content, because that is
+  // what the page's backwards guard compares itself against - and ordering
+  // against a stamp that can stand still is a rebuild that stops superseding
+  // the events before it, an older `answered` re-applied, and a card gone with
+  // no banner to suggest looking again.
+  // A board published before `published` existed falls back to the file's
+  // mtime, which is what this ordering used before and is the same quantity:
+  // when the page was written.
+  const publishedAt = Date.parse(base.payload.published);
+  const boundary = Math.floor((Number.isNaN(publishedAt) ? base.at : publishedAt) / 1000) * 1000;
   const openedWith = Array.isArray(state.captains_call) ? state.captains_call.length : 0;
   for (const ev of events) {
     if (ev.at_ms < boundary) continue;

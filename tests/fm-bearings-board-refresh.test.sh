@@ -104,15 +104,34 @@ test_refresh_publishes_the_board_in_place() {
   pass "refresh injects a board payload into the page in place"
 }
 
+# WHAT A REFRESH OVER UNCHANGED STATE PROMISES, STATED AS WHAT IT IS. It
+# republishes the same CONTENT, not the same bytes, and the difference is not a
+# weakening - it is the publication stamp doing its job. `published` moves on
+# every republication by design, because the live merge orders events against it
+# and a stamp that stood still would be a rebuild that stopped superseding what
+# came before it. So the page necessarily differs by that field and by nothing
+# else. `composed` is the field that must hold still here, and this case asserts
+# it does: that is the property the board's backwards guard rests on.
 test_refresh_is_idempotent() {
-  local home
+  local home first second
   home=$(make_home idempotent)
   seed_board "$home"
   refresh "$home" >/dev/null || fail "the first refresh failed"
   cp "$home/.lavish/bearings-board.html" "$home/first.html"
+  first=$(injected_payload "$home")
   refresh "$home" >/dev/null || fail "the second refresh failed"
-  cmp -s "$home/first.html" "$home/.lavish/bearings-board.html" \
-    || fail "a second refresh over unchanged state produced a different page"
+  second=$(injected_payload "$home")
+  [ "$(printf '%s' "$first" | jq -S 'del(.published)')" \
+    = "$(printf '%s' "$second" | jq -S 'del(.published)')" ] \
+    || fail "a second refresh over unchanged state changed more than its publication stamp"
+  [ "$(printf '%s' "$first" | jq -r .composed)" = "$(printf '%s' "$second" | jq -r .composed)" ] \
+    || fail "a second refresh over unchanged content moved the composition stamp"
+  [ "$(printf '%s' "$first" | jq -r .published)" \
+    != "$(printf '%s' "$second" | jq -r .published)" ] \
+    || fail "a republication did not move its publication stamp, so it would stop superseding earlier events"
+  diff <(sed '/^ *{"schema"/d' "$home/first.html") \
+       <(sed '/^ *{"schema"/d' "$home/.lavish/bearings-board.html") >/dev/null \
+    || fail "a second refresh over unchanged state changed the page outside its payload"
   pass "refresh over unchanged state republishes a byte-identical page"
 }
 
@@ -246,7 +265,7 @@ test_a_build_waits_for_the_publication_already_under_way() {
   holder=$(FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" hold_refresh_lock "$home") \
     || { echo "skip: could not hold the publication lock in this environment"; return 0; }
   data="$home/payload.json"
-  jq -n '{schema:"fm-bearings-board.v1", home:"build-lock", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
+  jq -n '{schema:"fm-bearings-board.v1", home:"build-lock", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00:00Z",
     prs_live:false, lang:"en", captains_call:[], underway:[], landed:[], charted:[]}' > "$data"
   set +e
   out=$(FM_BEARINGS_REFRESH_TIMEOUT=2 run_board "$home" build "$data" 2>&1)

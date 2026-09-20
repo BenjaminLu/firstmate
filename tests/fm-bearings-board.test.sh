@@ -151,7 +151,7 @@ write_valid_payload() {  # <path>
 {
   "schema": "fm-bearings-board.v1",
   "home": "test-home",
-  "generated": "2026-08-19T00:00Z", "composed": "2026-08-19T00:00Z",
+  "generated": "2026-08-19T00:00Z", "composed": "2026-08-19T00:00:00Z",
   "prs_live": false,
   "captains_call": [
     {
@@ -624,10 +624,15 @@ test_build_injects_binds_then_arms() {
   # data block.
   extract_payload "$board" | jq -S . > "$home/extracted.json" \
     || fail "the built board does not carry parseable payload JSON"
-  jq -S '.captains_call = [.captains_call[]
+  jq -S 'del(.published) | .captains_call = [.captains_call[]
       | .options = [.options[] | select(.value != "reconcile")]]' \
     "$home/extracted.json" > "$home/stripped.json"
-  jq -S '.captains_call = [.captains_call[]
+  # `published` is stamped BY the injection, so it is the one field that cannot
+  # round-trip to the input by definition. It is dropped from both sides rather
+  # than from the page: the assertion is that injection carries the payload
+  # through unchanged, and a stamp the injection itself writes is not part of
+  # what was carried through.
+  jq -S 'del(.published) | .captains_call = [.captains_call[]
       | .options = [.options[] | select(.value != "reconcile")]]' \
     "$data" > "$home/expected.json"
   diff -u "$home/expected.json" "$home/stripped.json" >/dev/null \
