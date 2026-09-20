@@ -32,7 +32,7 @@ Where a task carries a design record, that record owns intent, so the pull reque
 3. **A reviewer reviews it on the pull request.**
    Dispatch the first review on the worker's `done:` line, not on the pull request merely existing: a pull request opened before the work is finished is there to be watched and to arm the merge poll, and a reviewer dispatched against it reviews the first commit of a change still being written.
    Do not wait for the checks: a reviewer reading the diff and a CI run watching the same commit are independent, and serializing them buys nothing.
-4. **Firstmate reads the findings, rules, and posts the ruling on the pull request.**
+4. **Firstmate reads the findings, rules, posts the ruling on the pull request, and records it.**
 5. **Fixes land as commits on the same pull request**, by the same worker, one finding per commit.
 6. **A reviewer reviews again**, and the path from step 4 repeats until a review approves.
 7. **The merge gate is: checks green, every finding ruled, and a reviewer's approval of the exact commit that would merge.**
