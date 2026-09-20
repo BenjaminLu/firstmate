@@ -32,9 +32,19 @@
 #             pr          --pr-url              a pull request changed
 #             answered    --key                 a captain's call was answered
 #             call                              a captain's call was opened
+#             dropped     --owner               a captain's call was retired
+#                                               from an origin's completion
+#                                               inventory as unrecoverable
 #           A `call` carries no words on purpose: the question's prose is
 #           firstmate's to compose, so the event only tells the board it is
 #           behind. bin/fm-board-live.mjs owns what each kind may change.
+#           A `dropped` changes no board row and is not meant to: it exists so
+#           that retiring a captain's unanswered call leaves a durable trace
+#           that outlives the task records and the backlog row alike. Readers
+#           that do not know the kind fall through bin/fm-board-live.mjs's
+#           default and change nothing, which is the intended behavior; see
+#           .agents/skills/captain-hold-lifecycle/SKILL.md for who writes it
+#           and why.
 #
 # start     Start the server if this home has none, and print its endpoint.
 #           Idempotent: a second start prints the running endpoint and exits 0.
@@ -176,7 +186,7 @@ command_event() {
     return 0
   fi
   case $kind in
-    step|dispatched|landed|pr|answered|call) ;;
+    step|dispatched|landed|pr|answered|call|dropped) ;;
     *) printf 'fm-board-live: unknown event kind: %s\n' "$kind" >&2; return 0 ;;
   esac
 

@@ -149,6 +149,129 @@ fm_backlog_file() {  # <data-dir>
   fi
 }
 
+# --- the archive half of a markdown backlog ---------------------------------
+#
+# done_keep retires a closed row out of the active backlog into the archive the
+# backlog itself writes, so the active file is only half the durable store. A
+# reader that consults `tasks-axi show` alone reports a retired row as simply
+# gone, which is why these two exist: they read the other half. tasks-axi has
+# no archive-aware read, so the archive is parsed here, once, rather than in
+# each caller.
+#
+# The archive path follows tasks-axi's own resolution: `[markdown] archive` in
+# the addressing root's `.tasks.toml`, then in `$HOME/.tasks-axi/config.toml`,
+# each relative value resolved against that root; with neither, tasks-axi keeps
+# the archive beside the active backlog file, which this home pins at
+# `<data>/done-archive.md`. Only the markdown backend archives at all - every
+# other adapter keeps its rows in its own workspace - so this returns 1 there.
+
+# The configured markdown archive path. 1 = this backend has no archive.
+fm_backlog_archive_file() {  # <data-dir>
+  local data root backend configured
+  data=$(fm_backlog_data_absolute "$1") || {
+    FM_BACKLOG_TRANSITION_ERROR="data directory cannot be resolved: $1"
+    return 1
+  }
+  root=$(fm_backlog_root "$data") || return 1
+  backend=$(fm_tasks_axi_backend "$root" 2>&1) || {
+    FM_BACKLOG_TRANSITION_ERROR=$backend
+    # Printed as well as stored, for the reason the archive read below states:
+    # every caller reaches this through a command substitution, so the store
+    # dies with the subshell and only what went to stderr survives. Without
+    # it a backend-configuration error - which names .tasks.toml - reaches the
+    # operator as a generic sentence about the archive and the data directory,
+    # neither of which is the broken thing.
+    printf '%s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2
+    return 2
+  }
+  [ "$backend" = markdown ] || return 1
+  configured=$(fm_backlog_markdown_archive_from_toml "$root/.tasks.toml") || configured=''
+  if [ -z "$configured" ] && [ -n "${HOME:-}" ]; then
+    configured=$(fm_backlog_markdown_archive_from_toml "$HOME/.tasks-axi/config.toml") \
+      || configured=''
+  fi
+  if [ -z "$configured" ]; then
+    printf '%s\n' "${data%/}/done-archive.md"
+    return 0
+  fi
+  case "$configured" in
+    /*) printf '%s\n' "$configured" ;;
+    *) printf '%s/%s\n' "${root%/}" "$configured" ;;
+  esac
+}
+
+# `archive = "<path>"` from the [markdown] section of one tasks-axi config.
+fm_backlog_markdown_archive_from_toml() {  # <toml-path>
+  local toml=$1
+  [ -f "$toml" ] || return 1
+  LC_ALL=C awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    BEGIN { inmarkdown = 0; found = 0; single = sprintf("%c", 39) }
+    {
+      line = $0
+      sub(/[[:space:]]*#.*/, "", line)
+      line = trim(line)
+      if (line ~ /^\[[^]]+\]$/) { inmarkdown = (line == "[markdown]"); next }
+      if (!inmarkdown) next
+      if (line ~ /^archive[[:space:]]*=/) {
+        sub(/^archive[[:space:]]*=[[:space:]]*/, "", line)
+        line = trim(line)
+        if ((substr(line, 1, 1) == "\"" && substr(line, length(line), 1) == "\"") ||
+            (substr(line, 1, 1) == single && substr(line, length(line), 1) == single)) {
+          value = substr(line, 2, length(line) - 2)
+          if (value != "") { print value; found = 1; exit }
+        }
+      }
+    }
+    END { if (!found) exit 1 }
+  ' "$toml"
+}
+
+# The body of an archived row, with its continuation indent removed; 1 when the
+# id is not archived here, 2 when the archive exists but cannot be read, which
+# is reported rather than spent as absence. An id may be archived more than once
+# over a home's life, so the newest block - the last one written - is the one
+# printed. The row header is matched on the id FIELD, never as a substring, so a
+# title mentioning another task cannot answer for it.
+fm_backlog_archived_row() {  # <data-dir> <task-id>
+  local data=$1 id=$2 archive status=0
+  # No fallback message here: fm_backlog_archive_file has already named what
+  # it could not read, on stderr. Inventing a second sentence only mislabels
+  # it, because this frame cannot see which of its inputs failed.
+  archive=$(fm_backlog_archive_file "$data") || return $?
+  [ -e "$archive" ] || [ -L "$archive" ] || return 1
+  if [ ! -f "$archive" ] || [ ! -r "$archive" ]; then
+    FM_BACKLOG_TRANSITION_ERROR="backlog archive cannot be read at $archive"
+    # Printed as well as stored, because every caller reaches this through a
+    # command substitution, where an assignment to the error global dies with
+    # the subshell and absence would otherwise be indistinguishable from a
+    # missing row.
+    printf '%s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2
+    return 2
+  fi
+  LC_ALL=C awk -v id="$id" '
+    function flush() { if (found) { printf "%s", buffer } }
+    BEGIN { found = 0; incap = 0; buffer = "" }
+    /^- \[/ {
+      row = ($2 == "[") ? $4 : $3
+      if (row == id) { found = 1; incap = 1; buffer = "" } else { incap = 0 }
+      next
+    }
+    /^[^ \t]/ { incap = 0 }
+    incap {
+      line = $0
+      sub(/^  /, "", line)
+      buffer = buffer line "\n"
+    }
+    END { flush(); if (!found) exit 1 }
+  ' "$archive" || status=$?
+  return "$status"
+}
+
 # The directory a backlog's own `.tasks.toml` is resolved from.
 fm_backlog_root() {  # <data-dir>
   local data parent

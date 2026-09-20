@@ -30,6 +30,8 @@ Only `answer` with the captain's words or an evidence-backed `reconcile close` m
 Never close anything the captain owns without recording what he actually said: `bin/fm-captain-hold.sh answer` writes his exact words into the task and closes a question-shaped call, while `--release` frees a captain-gated work item to proceed.
 A merge approval uses that existing release path because approval permits the merge to proceed; cleanup closes the work only after it lands and records what shipped.
 Closing a held row at merge approval instead records completion before landing, so the backlog claims completion before the work actually ships.
+This is not a merge-only habit: whenever the held row still has a worker on it, cleanup owns that row's completion, so `answer` refuses the close and names `--release`, which records the captain's words just the same.
+A question-shaped call with no worker of its own still closes normally.
 When the answer changes what a task must build, follow `AGENTS.md` section 7's Validate contract to preserve the captain's words in the brief and steer the worker.
 When the captain says "later", that is an answer too: re-hold with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` so the item leaves the live Captain's Call and resurfaces on its date, instead of leaving a live-looking card or fabricating a closure.
 "A keyed answer resolves its matching captain-held task" is one capability with one owner, `bin/fm-captain-hold.sh answers`, and every channel that carries a captain answer feeds it the same task id and answer; a channel never maps keys to tasks, records a decision, or resolves anything itself.
@@ -45,6 +47,12 @@ A retirement failure makes the command fail without reversing the already-durabl
 `reconcile list` names every request still outstanding.
 Never use `answer` for an evidence-only moot call: `answer` records what the captain said, while `reconcile close` records verified evidence.
 A captain-held task closed outside this owner leaves no durable answer, so the completion gate keeps failing until `answer` records the decision the captain actually gave.
+That repair stops working once retention archives the row, because an archived row is read-only to tasks-axi and the answer can never be added to it.
+Nothing repairs that state - manufacturing a record, or letting the gate skip what it cannot find, would clear a call nobody answered - so it ends instead: raise the question again as its own task with `bin/fm-captain-hold.sh hold <new-id> --title "<the question>" --reason "<why the captain owns it>"`, and retire what is stranded deliberately.
+`reconcile close` retires a pending request whose subject is unrecoverable, because a request points at a captain call and is never the call itself.
+`bin/fm-captain-hold.sh complete <origin> --drop-unrecoverable <task-id>` removes an attested key from the completion gate's inventory, refusing unless the row that entry resolves to really is archived with no captain answer.
+A drop is deliberate, narrow, and recorded - in the origin's `decision_dropped=` metadata and as a `dropped` event in the fleet event log, which survives the cleanup it unblocks - while the archived row afterwards retains the closure but not, by itself, the fact that it was retired deliberately.
+Prefer it to `bin/fm-teardown.sh --force`, which needs the captain's explicit discard authority and skips every other entry in the same inventory.
 Resolved findings, recommendations that need no captain choice, and prose that merely sounds decision-like do not create held tasks.
 Bearings reads the resulting structured state and must never compensate by scraping historical reports, visual-review artifacts, terminal output, chat, or other prose.
 
