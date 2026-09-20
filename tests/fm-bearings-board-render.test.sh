@@ -748,7 +748,8 @@ for b in d["map"]:
     # The width of this very name, the same measurement the board places it
     # by. A fixed box here would check the placement against the false model
     # that the placement was just taken off.
-    half = len(b["label"]) * 6.3 / 2
+    wide = sum(1 for ch in b["label"] if "\u3400" <= ch <= "\u9fff")
+    half = (wide * 9.6 + (len(b["label"]) - wide) * 6.3) / 2
     lx, ly = b["cx"], b["label_y"]
     l, r, t, bo = lx - half, lx + half, ly - 8, ly + 3
     for (ox, oy, orad, okey) in marks:
@@ -757,7 +758,7 @@ for b in d["map"]:
         nx = max(l, min(ox, r)); ny = max(t, min(oy, bo))
         if (ox - nx) ** 2 + (oy - ny) ** 2 < orad ** 2:
             bad.append(b["key"] + " sits on " + okey)
-    if ly > 274 or ly < 22:
+    if l < 54 or r > 404 or ly - 10 < 22 or ly + 3 > 274:
         bad.append(b["key"] + " is outside the plot")
 placed = []
 for b in d["map"]:
@@ -766,7 +767,8 @@ for b in d["map"]:
     # Sharing a PLACE means the boxes overlap. Two names at the same height in
     # different columns share nothing, and keying on height alone would have
     # this test claim more than it can see.
-    half2 = len(b["label"]) * 6.3 / 2
+    wide2 = sum(1 for ch in b["label"] if "\u3400" <= ch <= "\u9fff")
+    half2 = (wide2 * 9.6 + (len(b["label"]) - wide2) * 6.3) / 2
     box = (b["cx"] - half2, b["cx"] + half2, b["label_y"] - 8, b["label_y"] + 3)
     for (pb, pk) in placed:
         if box[0] < pb[1] and box[1] > pb[0] and box[2] < pb[3] and box[3] > pb[2]:
@@ -849,7 +851,16 @@ test_every_name_on_the_plot_belongs_to_the_mark_beside_it() {
 test_a_bubble_that_stands_alone_keeps_its_name() {
   local home out
   home=$(make_home map-sparse-named)
-  out=$(render_payload "$home" "$(map_note_payload '[]')")
+  # A SHORT name, because the property being held is that nothing withholds a
+  # name for no reason - not that a name of any length fits. A long name in an
+  # edge column genuinely does not fit inside the picture, and the case below
+  # holds what happens then.
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{key:"short", type:"decision", repo:"r", title:"Ship it",
+      risk:"high", reversible:"no", weighed_by:"fleet", blocks:1,
+      allow_freeform:true, options:[{value:"a",label:"A"},{value:"b",label:"B"}]}]}')")
   [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.label == "")] | length')" = "0" ] \
     || fail "a bubble with nothing on top of it lost its name: $out"
   # Beside its own mark, not stepped away from it.
@@ -858,6 +869,33 @@ test_a_bubble_that_stands_alone_keeps_its_name() {
   [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "list underneath names every call")" = "0" ] \
     || fail "a fully labelled plot still sent him to the list for names: $out"
   pass "a bubble that stands alone keeps its name beside its own mark"
+}
+
+# And a name that cannot fit inside the picture is withheld rather than drawn
+# through the axis caption or off the edge. This is the case that used to
+# escape every rule: the containment check had no horizontal half, so once
+# names were measured at their true width they were simply drawn outside.
+test_a_name_that_does_not_fit_inside_the_picture_is_withheld() {
+  local home out
+  home=$(make_home map-name-overflows)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{key:"wide", type:"decision", repo:"r",
+      title:"Withdraw the mandatory packet obligation",
+      risk:"high", reversible:"no", weighed_by:"fleet", blocks:3,
+      allow_freeform:true, options:[{value:"a",label:"A"},{value:"b",label:"B"}]}]}')")
+
+  # One call, nothing to overlap, nothing to collide with - the only reason to
+  # withhold is that the name does not fit.
+  [ "$(printf '%s' "$out" | jq -r '.map | length')" = "1" ] \
+    || fail "the fixture is not a single call, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[0].label')" = "" ] \
+    || fail "a name too wide for the picture was drawn anyway: $out"
+  # And it is accounted for, or the reader is told there is nothing there.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not fit inside the picture" \
+    "a name was withheld for not fitting and the caption did not say so: $out"
+  pass "a name that does not fit inside the picture is withheld"
 }
 
 # R31. The caption still opened with a flat claim about the number in the
@@ -2762,3 +2800,4 @@ test_a_bubble_sitting_on_another_is_left_unnamed
 test_a_bubble_that_stands_alone_keeps_its_name
 test_every_name_on_the_plot_belongs_to_the_mark_beside_it
 test_every_caption_clause_stands_on_its_own
+test_a_name_that_does_not_fit_inside_the_picture_is_withheld

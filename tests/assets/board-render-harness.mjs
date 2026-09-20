@@ -77,7 +77,23 @@ class Node {
      suite exercising the MEASURING path rather than a second code path of its
      own. It is deliberately not exact - what the tests hold is that a name is
      judged by its own width rather than by a fixed box. */
-  getComputedTextLength() { return this.textContent.length * 6.3; }
+  /* Latin at this font and size measures about 6.3px per character and 繁體
+     and 简体 about 9.6px, both taken in a browser against the board's own
+     label class. Modelling every script at the English width is how the suite
+     could not see that the fallback was 1.5x short in the locale the captain
+     reads, so the shim charges CJK its own rate. */
+  getComputedTextLength() {
+    var wide = (this.textContent.match(/[\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) || []).length;
+    return wide * 9.6 + (this.textContent.length - wide) * 6.3;
+  }
+  /* The em box, which is what a browser reports: a constant of the font size
+     rather than of the string, measured at 9.69 above the baseline and 2.02
+     below it. */
+  getBBox() {
+    const y = this.attributes && this.attributes.y !== undefined
+      ? parseFloat(this.attributes.y) : 0;
+    return { width: this.getComputedTextLength(), height: 11.71, x: 0, y: y - 9.69 };
+  }
   setAttribute(k, v) {
     this.attributes[k] = v;
     /* A real SVGElement has no writable className, so the page sets its class

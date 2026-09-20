@@ -654,7 +654,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_note_colour: "Colour repeats the risk.",
       map_note_colour_grey: "Colour repeats the risk, and grey is not one of them - it marks a call nobody gave a risk.",
       map_note_exact: "The number in a bubble is how many pieces of work stop until you answer.",
-      map_note_stacked: "Some bubbles are left unnamed - where calls land on the same spot, and where a name would have to be written over another bubble or another name to fit. The list underneath names every call, in this order.",
+      map_note_stacked: "Some bubbles are left unnamed - where calls land on the same spot, where a name would have to be written over another bubble or another name, and where it would not fit inside the picture at all. The list underneath names every call, in this order.",
       map_note_measured: "Nothing here is weighted by hand: every position comes from what the fleet already records.",
       map_note_soft: "A broken outline means that bubble is not drawn entirely from what the fleet measured, for one of these reasons.",
       ax_undo_cheap: "cheap to undo", ax_undo_hard: "hard to undo",
@@ -743,7 +743,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_note_colour: "顏色重複風險。",
       map_note_colour_grey: "顏色重複風險，灰色不算 —— 灰色表示沒有人給過這個問題風險。",
       map_note_exact: "泡泡裡的數字就是你不回答就停住的工作數。",
-      map_note_stacked: "有些泡泡沒有標名字 —— 落在同一個位置的，還有名字放不下、只能壓到別的泡泡或別的名字上的。下面的清單會照同樣的順序列出每一個。",
+      map_note_stacked: "有些泡泡沒有標名字 —— 落在同一個位置的，名字只能壓到別的泡泡或別的名字上的，還有名字根本放不進這張圖的。下面的清單會照同樣的順序列出每一個。",
       map_note_measured: "這張圖沒有任何一項是人手調的：每個位置都來自艦隊本來就記錄的東西。",
       map_note_soft: "虛線外框表示那個泡泡不是完全照艦隊量到的東西畫的，原因是下面其中之一。",
       ax_undo_cheap: "容易回頭", ax_undo_hard: "難以回頭",
@@ -832,7 +832,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_note_colour: "颜色重复风险。",
       map_note_colour_grey: "颜色重复风险，灰色不算 —— 灰色表示没有人给过这个问题风险。",
       map_note_exact: "泡泡里的数字就是你不回答就停住的工作数。",
-      map_note_stacked: "有些泡泡没有标名字 —— 落在同一个位置的，还有名字放不下、只能压到别的泡泡或别的名字上的。下面的清单会照同样的顺序列出每一个。",
+      map_note_stacked: "有些泡泡没有标名字 —— 落在同一个位置的，名字只能压到别的泡泡或别的名字上的，还有名字根本放不进这张图的。下面的清单会照同样的顺序列出每一个。",
       map_note_measured: "这张图没有任何一项是人手调的：每个位置都来自舰队本来就记录的东西。",
       map_note_soft: "虚线外框表示那个泡泡不是完全照舰队量到的东西画的，原因是下面其中之一。",
       ax_undo_cheap: "容易回头", ax_undo_hard: "难以回头",
@@ -1939,9 +1939,11 @@ __FM_BEARINGS_BOARD_DATA__
       svgText("bb-quadlabel", { x: x0 + 4, y: y1 + 14 }, t("quad_when"));
 
       /* Bubbles are inset from every edge by the largest radius plus one
-         label, so a mark never clips. That inset accommodates ONE label, which
-         is all it ever has to: a name that would fall outside the plot is not
-         drawn, rather than drawn on the axis furniture below it. */
+         label's HEIGHT, so a mark never clips. It is a vertical allowance and
+         nothing more: half a measured name is 60 to 105px, so this inset
+         accommodates no name horizontally at all, and a name that would fall
+         outside the plot is withheld by the containment rule rather than
+         accommodated here. */
       var INSET = 34;
       var pts = items.map(function (c, i) {
         return { c: c, i: i,
@@ -1999,18 +2001,45 @@ __FM_BEARINGS_BOARD_DATA__
          a guess: it is this label's own font at the size it ships at, from a
          19-character name measured at 119.2px in a browser. Re-measure rather
          than trust it if the label font or size changes. */
-      var LABEL_UP = 8, LABEL_DOWN = 3, LABEL_FALLBACK_PER_CHAR = 6.3;
-      function labelWidth(node, words) {
+      var LABEL_UP = 10, LABEL_DOWN = 3;
+      /* The fallback is per-character and a character is not one width. 6.3px
+         is this font at this size measured on LATIN text; the same class
+         measures 9.6px per character in 繁體 and 简体, which this board ships
+         and the captain reads. Calibrating on English and calling the result
+         conservative made it 1.5x SHORT in the locale that matters most - the
+         unsafe direction, and enough to reinstate the very overlap the
+         measurement removes. So the fallback charges every character the wider
+         rate: too generous for English, honest for Chinese, and wrong only in
+         the direction that withholds a name rather than draws one over
+         another. */
+      var LABEL_FALLBACK_PER_CHAR = 9.6;
+      /* Width AND height from the node itself. Measuring one and modelling the
+         other is what produced this whole class: a predicate fed one true
+         extent and one guess cannot be checked against the picture. getBBox
+         reports the em box, so the height is a constant of the font size
+         rather than of the string - but it is a MEASURED constant. */
+      function labelBoxOf(node, words) {
+        if (node && typeof node.getBBox === "function") {
+          try {
+            var b = node.getBBox();
+            if (b && b.width > 0 && b.height > 0) {
+              return { w: b.width, up: (node.getAttribute("y") !== null)
+                ? (parseFloat(node.getAttribute("y")) - b.y) : LABEL_UP,
+                down: b.height - ((node.getAttribute("y") !== null)
+                ? (parseFloat(node.getAttribute("y")) - b.y) : LABEL_UP) };
+            }
+          } catch (e) { /* not rendered: fall through to the measured width */ }
+        }
         if (node && typeof node.getComputedTextLength === "function") {
           var w = node.getComputedTextLength();
-          if (w > 0) return w;
+          if (w > 0) return { w: w, up: LABEL_UP, down: LABEL_DOWN };
         }
-        return words.length * LABEL_FALLBACK_PER_CHAR;
+        return { w: words.length * LABEL_FALLBACK_PER_CHAR, up: LABEL_UP, down: LABEL_DOWN };
       }
       var taken = [];
-      function labelBox(x, at, w) {
-        var half = w / 2;
-        return { l: x - half, r: x + half, t: at - LABEL_UP, b: at + LABEL_DOWN };
+      function labelBox(x, at, m) {
+        var half = m.w / 2;
+        return { l: x - half, r: x + half, t: at - m.up, b: at + m.down };
       }
       /* Does this label sit on a mark that is not its own? Nearest point of the
          label box to each other circle, compared against that circle's radius. */
@@ -2028,7 +2057,7 @@ __FM_BEARINGS_BOARD_DATA__
           return box.l < b2.r && box.r > b2.l && box.t < b2.b && box.b > b2.t;
         });
       }
-      function labelFor(pt, w) {
+      function labelFor(pt, m) {
         /* Four ways a name can be untrue where it lands, and every one of them
            is a fact about the WHOLE PLOT rather than about this bubble: whose
            mark it is, whether it covers another mark, whether another name is
@@ -2036,30 +2065,44 @@ __FM_BEARINGS_BOARD_DATA__
            from a mark could see none of them, which is why the same lie kept
            reappearing somewhere new each time it was pushed out of one place.
 
-           WHICH ONES ACTUALLY FIRE, re-measured after the width stopped being
-           made up, because the previous answer here was taken against a label
-           half the real size and was wrong:
+           WHAT THIS RULE CONSIDERS, stated because three rounds of findings
+           here were all the same shape - a rule reasoning about a subset of the
+           plot and being read as though it reasoned about the plot. It now
+           considers: whether the mark is distinguishable from its neighbours,
+           the name's own measured width and height, every other mark, every
+           name already placed, and both axes of the picture's bounds.
 
-             two calls, ordinary board .......... every name drawn
-             three calls, ordinary board ........ every name drawn
-             two calls, long names, neighbouring
-               columns .......................... one withheld, by the
-                                                  name-on-name rule
-             twelve calls, ordinary board ....... three withheld, all by the
-                                                  name-on-name rule
-             any number of coincident calls ..... all withheld, by the
-                                                  same-mark rule
+           WHAT IT STILL DOES NOT CONSIDER, so the next gap is named before it
+           is found: the axis captions and quadrant labels drawn inside those
+           bounds - a name may still sit on one of those, because containment
+           is checked against the plot rect and not against the furniture in it.
+           It does not consider the ranked list below, the card, or anything
+           outside this SVG. It does not reconsider an earlier name when a later
+           one cannot be placed: placement is first-come, so a different order
+           would name a different subset. And it does not move anything - not
+           the mark, not the name - so it can only place a name where it belongs
+           or withhold it.
 
-           So two of the four decide real cases. The name-on-mark and
-           inside-the-plot rules did not fire in any of those, and they are kept
-           because the margin that spares them is a few pixels of an accident -
-           where the bubble radius happens to cap - rather than anything
-           designed. Re-measure rather than trust this list if the label font,
-           the radius or the axis mapping changes. */
+           WHICH RULES FIRE, measured on the real geometry at this head, after
+           the width stopped being made up AND the horizontal bound was added:
+
+             one call, ordinary board .......... 0 of 1 named  (containment)
+             two calls ......................... 1 of 2        (containment)
+             three calls ....................... 1 of 3        (containment)
+             eight calls ....................... 3 of 8
+             twelve calls ...................... 3 of 12
+             coincident calls, any count ....... 0 named       (same mark)
+
+           All four now decide real cases. The previous note here said two did,
+           which was drawn from five fixtures that happened not to reach the
+           other two; the name-on-mark rule withholds a name on an ordinary
+           two-call board, and containment fires at ONE. Re-measure rather than
+           trust this list if the label font, the radius, the axis mapping or
+           the plot size changes. */
         if (pt.overlapped) return null;
         var at = pt.y < midY + 20 ? pt.y + pt.r + 12 : pt.y - pt.r - 6;
-        var box = labelBox(pt.x, at, w);
-        if (box.t < y0 || box.b > y1) return null;
+        var box = labelBox(pt.x, at, m);
+        if (box.l < x0 || box.r > x1 || box.t < y0 || box.b > y1) return null;
         if (hitsMark(box, pt)) return null;
         if (hitsLabel(box)) return null;
         taken.push(box);
@@ -2101,7 +2144,7 @@ __FM_BEARINGS_BOARD_DATA__
         lab.setAttribute("class", "bb-bublabel");
         lab.textContent = words;
         g.appendChild(lab);
-        var labelAt = labelFor(pt, labelWidth(lab, words));
+        var labelAt = labelFor(pt, labelBoxOf(lab, words));
         if (labelAt === null) { g.removeChild(lab); unnamed += 1; }
         else lab.setAttribute("y", labelAt.toFixed(1));
         function press() { onPick(pt.i); }
