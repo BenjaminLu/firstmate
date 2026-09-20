@@ -42,7 +42,7 @@ serve() {
     "api /repos/o/r/pulls/7/reviews?per_page=100 --paginate --jq "*)
       printf '%s\n' "${FM_TEST_REVIEWS:-[]}"
       ;;
-    "pr view "*" --json reviews")
+    "pr view "*" --json reviews --jq "*)
       # The approval read, fetched raw because the verdict line reaches jq as
       # data. Defaults to one standing approval at the head, so every fixture
       # that is not about the approval stays silent the way it always did.

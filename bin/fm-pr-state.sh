@@ -23,9 +23,9 @@
 # CHANGES_REQUESTED, whose review history is printed to explain it, naming each
 # reviewer whose latest verdict still requests changes and marking it STALE when
 # it was left at a superseded head.
-# This is a read-only preview of one condition the merge path proves for itself;
-# bin/fm-pr-merge.sh remains the authority, and a disagreement between them is
-# this command being out of date, never permission to merge.
+# Reading it needs nothing this command did not already need: gh does the JSON
+# work through its own --jq and the shell does the string comparisons, so gh
+# remains the single tool requirement.
 # A closed or merged pull request reports that terminal state and nothing else.
 # Unresolved review-thread state is out of this command's scope.
 #
@@ -143,42 +143,57 @@ fi
 # reviewDecision. A review counts when it is submitted and standing, sits at the
 # current head, comes from an account this repository granted standing, and
 # either carries GitHub's own APPROVED state or ends with the approved verdict
-# line. The reviews are fetched raw and evaluated with jq rather than through
-# gh's own --jq, because the verdict line has to reach the program as data and
-# gh accepts no --arg; interpolating it into the program text instead would put
-# a string this repository edits inside an expression it also parses.
-# Any read failure, jq included, prints a blocker rather than staying silent: an
-# approval this cannot see is one it must not report as present.
-APPROVAL=
-if ! command -v jq >/dev/null 2>&1; then
-  printf 'APPROVAL UNREADABLE: jq is required to read the approval on this pull request\n'
-elif ! REVIEWS_JSON=$(gh pr view "$URL" --json reviews 2>/dev/null) || [ -z "$REVIEWS_JSON" ]; then
+# line. A missing, stale, or outside approval is a blocker; a read that cannot
+# complete says so rather than falling silent, because an approval this cannot
+# see is one it must not report as present.
+#
+# The split between the two halves is deliberate. gh's own --jq does the JSON
+# work, so this command still needs nothing but gh, and the shell does every
+# string comparison. That is why neither the verdict line nor the head commit is
+# written into the jq program: gh accepts no --arg, so a value can only reach
+# that program by being pasted into its text, and a string this repository edits
+# does not belong inside an expression it also parses. They are emitted as data
+# and compared here instead - "<commit> A" for GitHub's own approved state, and
+# "<commit> T<last non-empty line>" for a review whose verdict is body text.
+#
+# This is a read-only preview of one condition the merge path proves for itself;
+# bin/fm-pr-merge.sh remains the authority, and a disagreement between them is
+# this command being out of date, never permission to merge.
+# shellcheck disable=SC2016  # gh's jq engine expands $st, $a and $oid, not the shell.
+if ! APPROVAL_ROWS=$(gh pr view "$URL" --json reviews --jq '
+  def tail_line:
+    (.body // "")
+    | split("\n")
+    | map(sub("\r$"; "") | sub("^[ \t]+"; "") | sub("[ \t]+$"; ""))
+    | map(select(. != ""))
+    | last // "";
+  def submitted:
+    (.state // "") as $st
+    | ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] | index($st) != null;
+  def standing:
+    (.authorAssociation // "") as $a
+    | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
+  .reviews[]
+  | select(submitted and standing)
+  | (.commit.oid // "") as $oid
+  | if .state == "APPROVED" then $oid + " A" else $oid + " T" + tail_line end
+  ' 2>/dev/null); then
   printf 'APPROVAL UNREADABLE: could not read the reviews on this pull request\n'
 else
-  # shellcheck disable=SC2016  # jq, not the shell, expands $head and $yes.
-  APPROVAL=$(printf '%s' "$REVIEWS_JSON" | jq -r \
-    --arg head "$HEAD" --arg yes "$FM_REVIEW_VERDICT_APPROVED" '
-      def tail_line:
-        (.body // "")
-        | split("\n")
-        | map(sub("\r$"; "") | sub("^[ \t]+"; "") | sub("[ \t]+$"; ""))
-        | map(select(. != ""))
-        | last // "";
-      def submitted:
-        (.state // "") as $st
-        | ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] | index($st) != null;
-      def standing:
-        (.authorAssociation // "") as $a
-        | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
-      if type != "object" or (.reviews | type) != "array" then error("no reviews") else . end
-      | [ .reviews[]
-          | select(submitted and standing and (.commit.oid // "") == $head)
-          | select(.state == "APPROVED" or tail_line == $yes)
-        ] | length' 2>/dev/null) || APPROVAL=
-  case "$APPROVAL" in
-    0) printf 'NO APPROVAL AT HEAD: %s\n' "$HEAD" ;;
-    ''|*[!0-9]*) printf 'APPROVAL UNREADABLE: could not read the reviews on this pull request\n' ;;
-  esac
+  APPROVED_AT_HEAD=0
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    row_commit=${row%% *}
+    [ "$row_commit" = "$HEAD" ] || continue
+    row_verdict=${row#* }
+    case "$row_verdict" in
+      A) APPROVED_AT_HEAD=1 ;;
+      T*) [ "${row_verdict#T}" != "$FM_REVIEW_VERDICT_APPROVED" ] || APPROVED_AT_HEAD=1 ;;
+    esac
+  done <<APPROVAL_ROWS
+$APPROVAL_ROWS
+APPROVAL_ROWS
+  [ "$APPROVED_AT_HEAD" -eq 1 ] || printf 'NO APPROVAL AT HEAD: %s\n' "$HEAD"
 fi
 
 if [ "$REVIEW_DECISION" = CHANGES_REQUESTED ]; then
