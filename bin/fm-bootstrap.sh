@@ -68,10 +68,11 @@
 #          LAVISH_AXI_MIN below; the per-tool owners point there. An installed
 #          essential build below its floor reports MISSING like no-mistakes.
 #          Missing or incompatible lavish-axi reports PRESENTATION_UNAVAILABLE:
-#          the captain's board is unaffected, because this home's own server
-#          builds, serves and answers it with nothing installed beyond node;
-#          what a Lavish REVIEW session needs is a compatible build at or above
-#          its floor. bin/fm-bearings-board.sh's header owns the board's path.
+#          the captain's board is unaffected and does not use Lavish at all,
+#          because this home's own server builds, serves and answers it with
+#          nothing installed beyond node; what a Lavish REVIEW session needs is
+#          a compatible build at or above its floor.
+#          bin/fm-bearings-board.sh's header owns the board's path.
 #          A compatible build is then asked the separate CAPABILITY question the
 #          floor cannot answer - whether it accepts --name, which is what gives
 #          a Lavish session one stable /s/<slug> address. The published package does not
@@ -1844,7 +1845,7 @@ detect_local_tools() {
     echo "MISSING: gh-axi (install: $(install_cmd gh-axi))"
   fi
   if ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
-    echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - the captain's board is NOT affected: this home's own server builds, serves and answers it (bin/fm-bearings-board.sh url). What needs a compatible build is a Lavish REVIEW session: an annotated review of an HTML artifact, bin/fm-packet.sh serve, and the optional bin/fm-bearings-board.sh build --lavish surface; install or upgrade before using one"
+    echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - the captain's board is NOT affected: this home's own server builds, serves and answers it (bin/fm-bearings-board.sh url). What needs a compatible build is a Lavish REVIEW session: an annotated review of an HTML artifact, bin/fm-packet.sh serve, and a visual scout's review loop; install or upgrade before using one"
   else
     detect_lavish_named_session
   fi
