@@ -2251,10 +2251,15 @@ EOF
   while IFS=$'\t' read -r key _verb _summary; do
     [ -n "$key" ] || continue
     # "re-run complete" names no form that works: complete requires two
-    # arguments and prints its whole usage for one, and `--none` is refused
-    # while a status decision is open - which is the only state this fires
-    # in. So the remedy is the command with its arguments filled in, and it
-    # differs by whether an inventory exists to re-attest yet.
+    # arguments and answers one with its whole usage block. So the remedy is
+    # the command with its arguments filled in, and the two states this fires
+    # in need different ones. With an inventory stored, re-attesting it
+    # records the transfer. With nothing stored there is nothing to transfer
+    # INTO, and the empty-inventory guard above refuses `--none` in exactly
+    # that state, so the only way forward is to hold a call first.
+    # `--none` is not named in either branch: in the empty state it is
+    # refused, and in the stored state it would attest the stored inventory
+    # rather than the one the reader is looking at.
     if [ -n "$keys" ]; then
       fail "open captain decision $origin/$key is not transferred to the captain-held inventory; re-run bin/fm-captain-hold.sh complete $origin $(printf '%s' "$keys" | tr ',' ' ') - the first id names the worker whose inventory is attested and the rest are the captain calls already in it, and re-running records the transfer"
     fi

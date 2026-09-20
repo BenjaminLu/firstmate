@@ -4723,8 +4723,11 @@ test_verify_names_a_complete_that_works() {
     || fail "the remedy verify named did not clear what it was named for"
 
   # The other branch: an origin with nothing attested yet cannot transfer to
-  # an inventory that does not exist, and --none is refused there, so the
-  # refusal must name holding a call first rather than re-running complete.
+  # an inventory that does not exist, and the empty-inventory guard refuses
+  # --none in that state, so the refusal must name holding a call first
+  # rather than re-running complete. The guard is checked here rather than
+  # assumed, because the previous round's comment claimed it applied to both
+  # branches and it applies only to this one.
   origin=sample-verify-empty
   mkdir -p "$home/data/$origin"
   tasks_in "$home" add "$origin" "Investigate with nothing attested" --kind scout \
@@ -4735,7 +4738,11 @@ test_verify_names_a_complete_that_works() {
   out=$(run_captain "$home" verify "$origin" 2>&1) && fail "verify passed with nothing attested: $out"
   assert_contains "$out" "hold <new-id>" "the empty-inventory refusal named no way to create one: $out"
   assert_not_contains "$out" "--none" \
-    "the refusal named --none, which is refused while a status decision is open: $out"
+    "the refusal named --none, which the empty-inventory guard refuses in this very state: $out"
+  out=$(run_captain "$home" complete "$origin" --none 2>&1) \
+    && fail "--none was accepted in the empty-inventory state the refusal fires in: $out"
+  assert_contains "$out" "before attesting" \
+    "the --none refusal in this state was something other than the empty-inventory guard: $out"
   pass "verify names a complete that works, in both states it fires in"
 }
 
