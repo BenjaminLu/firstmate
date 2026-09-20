@@ -177,9 +177,12 @@ The candidate uses fifteen long-lived Linux jobs (nine serial, two parallel, two
 
 **That last clause is now the binding constraint, not a caveat.**
 This repository is public and on a plan whose whole-account ceiling is twenty concurrent jobs: across 180 jobs sampled from ten runs on 2026-09-20, concurrency reached exactly 20 and never 21, and sat pinned at 20 for 12.5% of the window.
-One CI run is already nineteen jobs at this layout - the fifteen long-lived Linux jobs named above plus the coverage guard, the timing aggregate, the repository invariants, and macOS - so a second run in flight queues behind the first, and measured queue waits in that sample reached 3478 s for a single job, several times the execution time the packing saves.
-That leaves one spare slot, which is what decides whether the next shard is free.
+One CI run is nineteen jobs at this layout - the fifteen long-lived Linux jobs named above plus the coverage guard, the timing aggregate, the repository invariants, and macOS - but the count the ceiling reasons against is **concurrent demand, which is eighteen**.
+`tests-timing-aggregate` is `needs:`-gated behind every long-lived lane, so it cannot be in any peak set: on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) it overlapped zero other jobs, and peak concurrency is identical with and without it.
+So a run demands eighteen slots of twenty and a second run in flight queues behind the first; measured queue waits in that sample reached 3478 s for a single job, several times the execution time the packing saves.
+That leaves two spare slots, which is what decides whether the next shard is free - and a job that never overlaps its siblings, like the aggregate, is free of that budget however many there are.
 The consequence for this layout is concrete: splitting work across more runners only shortens the wall clock while the run fits inside that ceiling, and past it a run serialises its own overflow behind its own long jobs.
+Raising `PORTABLE_SERIAL_SHARDS` from 9 to 12 would add three concurrent jobs, taking demand from eighteen to twenty-one - over the ceiling by one slot, not by two.
 Prefer changes that cut runner-seconds without adding a job over changes that buy another runner, and measure the account's concurrent-job ceiling before assuming a shard count is free.
 Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one worker leaves most of that machine idle - but idle cores are not automatically a saving, and the rule for when they are is below.
 **Concurrency inside a lane wins when the lane is packing-bound and does nothing when the lane is bounded by a single long script, and it costs runner-seconds either way.**
