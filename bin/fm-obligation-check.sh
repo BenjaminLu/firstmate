@@ -1044,6 +1044,13 @@ RECORD_UNKNOWN_FORGE=
 # separator a finding could itself contain. The forge lists are kept apart from
 # the local ones so a sweep inside the no-probe interval can carry the forge
 # half forward untouched instead of recomputing or discarding it.
+# Why the record could not be used, empty when it was. `check` treats every one
+# of these the same way - as a home it has no previous reading for, which is
+# correct there because it is about to take a fresh one - but `report` takes no
+# reading of its own, so it has to say which of them happened instead of
+# answering for a record it never read.
+RECORD_UNUSABLE=
+
 record_read() {
   local line first=1
   RECORD_EPOCH=0
@@ -1052,11 +1059,22 @@ record_read() {
   RECORD_UNKNOWN_LOCAL=
   RECORD_OWED_FORGE=
   RECORD_UNKNOWN_FORGE=
-  [ -f "$RECORD" ] || return 0
+  RECORD_UNUSABLE=
+  if [ ! -e "$RECORD" ] && [ ! -L "$RECORD" ]; then
+    RECORD_UNUSABLE="no check has recorded a reading for this home yet"
+    return 0
+  fi
+  if ! readable_file "$RECORD"; then
+    RECORD_UNUSABLE="the record at $RECORD cannot be read"
+    return 0
+  fi
   while IFS= read -r line; do
     if [ "$first" = 1 ]; then
       first=0
-      [ "$line" = "$RECORD_SCHEMA" ] || return 0
+      if [ "$line" != "$RECORD_SCHEMA" ]; then
+        RECORD_UNUSABLE="the record at $RECORD is not a $RECORD_SCHEMA record"
+        return 0
+      fi
       continue
     fi
     case "$line" in
@@ -1084,6 +1102,8 @@ record_read() {
 " ;;
     esac
   done < "$RECORD"
+  # An empty file has no schema line at all, which is not a readable record.
+  [ "$first" = 0 ] || RECORD_UNUSABLE="the record at $RECORD is empty"
   return 0
 }
 
@@ -1244,6 +1264,15 @@ action_check() {
 action_report() {
   local finding printed=0
   record_read
+  # This action exists to show what the one-line cut hid, so answering "all
+  # four met" for a record it could not use inverts the one sentence this
+  # check sells - and every home already running an earlier version holds a
+  # record of the previous schema the moment a new one lands.
+  if [ -n "$RECORD_UNUSABLE" ]; then
+    printf 'no findings could be read: %s\n' "$RECORD_UNUSABLE"
+    printf 'run: bin/fm-obligation-check.sh check\n'
+    return 0
+  fi
   while IFS= read -r finding; do
     [ -n "$finding" ] || continue
     [ "$printed" -eq 1 ] || printf 'owed:\n'

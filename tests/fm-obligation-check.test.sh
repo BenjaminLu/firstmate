@@ -1511,11 +1511,81 @@ test_an_overlong_report_says_how_much_is_not_shown() {
 }
 
 test_report_states_plainly_when_nothing_is_owed() {
-  local home
+  local home out
+  # "All four met" has to come from a record that says so, so the record is
+  # made by a real sweep of a home where they are met.
   home=$(make_home report-clean)
+  forge_pr "$home" "$SLUG" 20 OPEN "$(commit 6)" 1 2 fm/report-clean
+  task "$home" iota "kind=ship" "pr=$PR_BASE/20" "pr_head=$(commit 6)"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "the all-met fixture reported something, so this case cannot prove the report line"
   FM_HOME="$home" "$CHECK" report | grep -q 'all four obligations met' \
     || fail "report did not say plainly that the last check found everything met"
   pass "report says plainly when the last check found all four met"
+}
+
+# report takes no reading of its own, so a record it cannot use is not an
+# answer. Saying "all four obligations met" there inverts the one sentence this
+# check sells, in the action whose whole job is to show what the cut hid.
+assert_report_declines() {
+  local home=$1 why=$2 label=$3 out
+  out=$(FM_HOME="$home" "$CHECK" report 2>&1)
+  case "$out" in
+    *"all four obligations met"*)
+      fail "$label: report claimed all four obligations met from a record it could not use"
+      ;;
+  esac
+  assert_contains "$out" "no findings could be read" "$label: report did not say it read no findings"
+  assert_contains "$out" "$why" "$label: report did not say why the record could not be used"
+}
+
+test_report_declines_a_record_it_cannot_use() {
+  local home out
+  home=$(make_home report-unusable)
+  task "$home" alpha "kind=ship"
+  steer "$home" alpha 1
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "alpha has been steered once" "the fixture did not record an owed obligation"
+  FM_HOME="$home" "$CHECK" report | grep -q 'alpha has been steered once' \
+    || fail "report did not print the owed obligation from a record it could read"
+
+  # Every home already running an earlier version holds a previous-schema
+  # record the moment a new one lands, so this is the first case a live home
+  # meets rather than a hypothetical.
+  cp "$home/state/.fleet-obligations" "$home/state/.fleet-obligations.keep"
+  sed 's/^fm-fleet-obligations-v2$/fm-fleet-obligations-v1/' "$home/state/.fleet-obligations.keep" \
+    > "$home/state/.fleet-obligations"
+  assert_report_declines "$home" "is not a fm-fleet-obligations-v2 record" "previous schema"
+
+  cp "$home/state/.fleet-obligations.keep" "$home/state/.fleet-obligations"
+  chmod 000 "$home/state/.fleet-obligations"
+  assert_report_declines "$home" "cannot be read" "unreadable record"
+  chmod 644 "$home/state/.fleet-obligations"
+
+  : > "$home/state/.fleet-obligations"
+  assert_report_declines "$home" "is empty" "empty record"
+
+  rm -f "$home/state/.fleet-obligations"
+  assert_report_declines "$home" "no check has recorded a reading" "absent record"
+  pass "report declines a record it cannot use instead of answering all four met"
+}
+
+test_report_leaks_no_raw_shell_error() {
+  local home out
+  # The unreadable case used to put a bash redirect error on the operator's
+  # terminal beside the wrong answer.
+  home=$(make_home report-noleak)
+  task "$home" alpha "kind=ship"
+  steer "$home" alpha 1
+  out="$home/out.txt"
+  run "$home" "$out"
+  chmod 000 "$home/state/.fleet-obligations"
+  out=$(FM_HOME="$home" "$CHECK" report 2>&1)
+  chmod 644 "$home/state/.fleet-obligations"
+  assert_not_contains "$out" "Permission denied" "report leaked a raw shell error to the operator"
+  pass "report names the unreadable record rather than leaking a shell error"
 }
 
 # --- refusals and arming ----------------------------------------------------
@@ -1695,6 +1765,8 @@ test_one_read_covers_a_pull_request_every_obligation_names
 test_the_forge_is_asked_only_about_this_home_s_own_work
 test_an_overlong_report_says_how_much_is_not_shown
 test_report_states_plainly_when_nothing_is_owed
+test_report_declines_a_record_it_cannot_use
+test_report_leaks_no_raw_shell_error
 test_invalid_settings_and_actions_refuse
 test_arm_registers_the_check_and_disarm_retires_it
 test_if_needed_arms_only_a_home_with_something_to_report_on
