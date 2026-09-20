@@ -1393,10 +1393,32 @@ fm_pr_lock_helpers() {
 # reported as the self-correcting case. Collapsing them here is what turns a
 # permanent failure into a line in a log AGENTS.md calls safe to delete.
 fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <head>
+  fm_pr_head_valid "${7-}" || return 1
+  _fm_pr_meta_set_head "$@"
+}
+
+# fm_pr_meta_clear_head <state> <id> <provider> <host> <path> <number>
+#
+# Remove the task's pr_head= entirely, under the same lock, the same identity
+# check and the same return codes. For the one case where a head cannot be
+# confirmed and never will be: a merged pull request whose head the forge would
+# not give up. What is recorded then is the arming-time value, which is exactly
+# the superseded head this whole contract exists to stop anyone trusting, and
+# the poll retires in that same cycle so nothing will ever correct it. Every
+# consumer already handles an absent head by resolving one live, so removing it
+# leaves them right where leaving it would leave them wrong.
+fm_pr_meta_clear_head() {  # <state> <id> <provider> <host> <path> <number>
+  _fm_pr_meta_set_head "$1" "$2" "$3" "$4" "$5" "$6" ''
+}
+
+# The locked core of both. <head> empty means remove the line rather than write
+# one; every other rule - identity, lock bound, return codes - is identical, so
+# they are stated once here instead of drifting in two copies.
+_fm_pr_meta_set_head() {  # <state> <id> <provider> <host> <path> <number> <head-or-empty>
   local state=$1 id=$2 provider=$3 host=$4 path=$5 number=$6 head=$7
   local meta lock state_device url status=0 timeout lock_rc
   fm_pr_task_id_valid "$id" || return 1
-  fm_pr_head_valid "$head" || return 1
+  [ -z "$head" ] || fm_pr_head_valid "$head" || return 1
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
   fm_pr_lock_helpers || return 1
   state_device=$(fm_pr_file_device "$state") || return 1
@@ -1426,7 +1448,11 @@ fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <he
   fm_pr_meta_write_pr "$state" "$meta" "$state_device" \
     "$provider" "$host" "$path" "$number" "$url" "$head" || status=1
   if [ "$status" -eq 0 ]; then
-    grep -qxF "pr_head=$head" "$meta" || status=1
+    if [ -n "$head" ]; then
+      grep -qxF "pr_head=$head" "$meta" || status=1
+    else
+      ! grep -q '^pr_head=' "$meta" || status=1
+    fi
   fi
   fm_lock_release "$lock" || status=1
   return "$status"

@@ -1048,6 +1048,46 @@ test_a_failed_rebind_is_never_silent() {
   pass "a merged poll that cannot record its head reaches the durable queue, and one that can stays quiet"
 }
 
+# The poll's third output line: merged, with no head the forge would give up.
+# Nothing re-binds then, and the poll retires in the same cycle, so what the
+# record keeps is the arming-time head - the superseded value this whole branch
+# exists to stop anyone trusting - now standing as the head the merge landed at.
+# Both halves are required: say so, AND stop the record asserting something
+# nobody confirmed. Reporting while leaving the false value fixes the half
+# nobody reads.
+test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so() {
+  local dir state rc armed_head
+  armed_head=1111111111111111111111111111111111111111
+  dir=$(make_case merged-head-unreadable)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD_UNREADABLE=1 FM_TEST_GH_LOG="$dir/gh.log" \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "merged cycle with an unreadable head failed: $(cat "$dir/watch.err")"
+
+  # The arming-time head must not survive as the head the merge landed at.
+  assert_no_grep "pr_head=" "$state/task-a.meta" \
+    "an unconfirmable merge kept its arming-time head as the landed one"
+  assert_grep 'pr=https://github.com/o/r/pull/1' "$state/task-a.meta" \
+    "dropping the head lost the recorded pull request"
+  # And the supervisor is told, because nothing will revisit this.
+  grep -F 'pr-head-task-a' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "an unconfirmable merge queued nothing: $(cat "$state/.wake-queue" 2>/dev/null)"
+  grep -F 'head could not be read' "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "the queued row does not say the head could not be read"
+  # The merge is never lost to any of this, and the poll still retires.
+  grep -F 'merge landed: task-a' "$state/.wake-queue" >/dev/null \
+    || fail "an unconfirmable head swallowed the merge outcome"
+  assert_poll_absent "$state" task-a
+  pass "a merge whose head cannot be read drops the unconfirmable record and reports it"
+}
+
 # fm_pr_meta_rebind_head is what writes that value, so the refusals that keep a
 # head nobody saw out of the record are proven on it directly.
 test_recorded_head_refuses_what_the_forge_did_not_return() {
@@ -3211,6 +3251,7 @@ test_poll_rebinds_the_recorded_head
 test_rebind_never_waits_on_a_held_task_record
 test_a_permanent_lock_failure_is_not_reported_as_contention
 test_a_failed_rebind_is_never_silent
+test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so
 test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication

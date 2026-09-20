@@ -2288,37 +2288,58 @@ while :; do
           # just read reaches metadata, and a line this watcher does not
           # recognise is left alone and still surfaces as an ordinary wake.
           poll_head=
+          unconfirmed_head=0
           case "$out" in
             'merged '*) poll_head=${out#merged }; out=merged ;;
             'head '*) poll_head=${out#head }; out= ;;
           esac
+          rebind_rc=0
           if [ -n "$poll_head" ]; then
-            rebind_rc=0
             fm_pr_meta_rebind_head "$STATE" "$id" \
               "$provider" "$host" "$path" "$number" "$poll_head" || rebind_rc=$?
-          else
-            rebind_rc=0
+          elif [ "$out" = merged ]; then
+            # Merged, and the forge would not give up a head. What the record
+            # still holds is the arming-time value - the superseded head this
+            # whole branch exists to stop anyone trusting - and the poll retires
+            # below, so nothing will ever correct it. Drop it rather than leave
+            # a head nobody has seen standing as the merged one; every consumer
+            # resolves a head live when none is recorded. The row is queued
+            # either way, because reporting while leaving the false record in
+            # place would fix only the half nobody reads.
+            fm_pr_meta_clear_head "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" || rebind_rc=$?
+            unconfirmed_head=1
           fi
           # A re-bind never holds this loop up, and it never fails quietly.
           # This branch exists because a poll bound to a stale head failed
           # silently for hours; reporting its own failure only into the
           # absorbed-wake debug log, which AGENTS.md calls never relied on and
           # safe to delete, would be that same bug one level up. So anything
-          # that leaves the record NOT on the head the forge just returned is
-          # queued as an actionable row, and only one case is exempt.
+          # that leaves the record off the head the forge just returned is
+          # queued as an actionable row.
           #
-          # That case is contention (2): a relaunch owns the task record for as
-          # long as a spawn takes, the record is untouched, and the next poll
-          # re-reads the head. It is ordinary and self-correcting, so it is
-          # logged and the cycle carries on - EXCEPT on the merged path, where
-          # there is no next poll: the outcome publishes and the poll retires in
-          # this same cycle, so whatever the record holds now it holds forever.
-          if [ "$rebind_rc" -ne 0 ]; then
+          # Exactly one case is exempt, and it is narrow: LIVE contention (2)
+          # on a poll that is not terminal. A relaunch owns the task record for
+          # as long as a spawn takes, the record is untouched, and the next poll
+          # re-reads the head, so it corrects itself. Every other lock failure
+          # is 1, because it is permanent - a stale lock nothing will reclaim,
+          # a timeout helper that would not load - and a later poll meets it
+          # again. Nothing on the merged path is exempt at all, contention
+          # included: the outcome publishes and the poll retires in this same
+          # cycle, so whatever the record holds then it holds forever.
+          if [ "$rebind_rc" -ne 0 ] || [ "${unconfirmed_head:-0}" = 1 ]; then
             if [ "$out" = merged ]; then
-              triage_log "could not re-bind the recorded head of $id to $poll_head before retiring its merged poll (rc=$rebind_rc)"
-              fm_wake_append check "pr-head-$id" \
-                "check: $id merged at $poll_head but its record could not be updated, so the head it still names is stale and nothing will correct it: $url" \
-                || exit 1
+              if [ "${unconfirmed_head:-0}" = 1 ]; then
+                triage_log "merged poll for $id returned no usable head (clear rc=$rebind_rc)"
+                fm_wake_append check "pr-head-$id" \
+                  "check: $id merged but its pull request head could not be read, so no head is recorded for what landed: $url" \
+                  || exit 1
+              else
+                triage_log "could not re-bind the recorded head of $id to $poll_head before retiring its merged poll (rc=$rebind_rc)"
+                fm_wake_append check "pr-head-$id" \
+                  "check: $id merged at $poll_head but its record could not be updated, so the head it still names is stale and nothing will correct it: $url" \
+                  || exit 1
+              fi
             elif [ "$rebind_rc" -eq 2 ]; then
               triage_log "deferred re-binding the recorded head of $id to $poll_head; the task record was locked"
             else
