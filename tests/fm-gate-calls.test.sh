@@ -244,6 +244,52 @@ test_concurrent_writers_never_tear_a_record() {
   pass "concurrent writers at the maximum line size never tear a record"
 }
 
+test_every_cut_field_stays_valid_utf8_in_any_locale() {
+  local home target rc=0 locale pad cjk value file
+  command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not found"; return 0; }
+  # The shortening loop is not the only place this library cuts: the drop path
+  # cuts site, task, link and key to their byte caps too, and a mid-character
+  # cut there lands in gate-calls.drops - the file the "visible as missing"
+  # guarantee rests on. A drops line a strict parser rejects makes the gap
+  # invisible again, which is the same loss one level up.
+  cjk=''
+  while [ "${#cjk}" -lt 200 ]; do cjk="${cjk}中"; done
+
+  for locale in en_US.UTF-8 C; do
+    for pad in '' 'x' 'xx'; do
+      for target in task link key; do
+        home=$(make_home "cut-$target-$locale-${#pad}")
+        file="$home/state/gate-calls.drops"
+        rc=0
+        case "$target" in
+          task)
+            LC_ALL="$locale" LANG="$locale" run_gate_call "$home" record \
+              --site review-finding --task "${pad}${cjk}" --verdict refused \
+              --what w --grounds g >/dev/null 2>&1 || rc=$?
+            ;;
+          link)
+            # Over the byte cap and refused, so the drop path cuts it.
+            value="https://x.example/${pad}${cjk}${cjk}${cjk}"
+            LC_ALL="$locale" LANG="$locale" run_gate_call "$home" record \
+              --site review-finding --task 'not a task id' --verdict refused \
+              --what w --grounds g --link "$value" >/dev/null 2>&1 || rc=$?
+            ;;
+          key)
+            LC_ALL="$locale" LANG="$locale" run_gate_call "$home" record \
+              --site review-finding --task 'not a task id' --verdict refused \
+              --what w --grounds g --key "${pad}${cjk}" >/dev/null 2>&1 || rc=$?
+            ;;
+        esac
+        expect_code 1 "$rc" "cut-$target-$locale-${#pad}: this case needs the drop path to run"
+        assert_present "$file" "cut-$target-$locale-${#pad}: nothing was written to the drops record"
+        python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' < "$file" \
+          || fail "cut-$target-$locale-${#pad}: the drops record is not valid UTF-8, so a strict parser loses the very line that reports the gap"
+      done
+    done
+  done
+  pass "every byte cut - in the log and in the drops record - leaves valid UTF-8 in either locale"
+}
+
 test_a_shortened_record_stays_valid_utf8_in_any_locale() {
   local home log locale pad rc=0 cjk grounds
   command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not found"; return 0; }
@@ -588,6 +634,7 @@ test_an_escape_heavy_link_cannot_cross_the_boundary
 test_a_bulky_task_id_keeps_the_drops_record_bounded
 test_concurrent_writers_never_tear_a_record
 test_a_shortened_record_stays_valid_utf8_in_any_locale
+test_every_cut_field_stays_valid_utf8_in_any_locale
 test_an_unwritable_log_is_reported_not_swallowed
 test_an_unwritable_state_directory_still_reports
 test_a_drops_record_reads_with_the_same_parser_as_the_log

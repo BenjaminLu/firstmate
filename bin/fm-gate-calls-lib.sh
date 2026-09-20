@@ -215,13 +215,6 @@ fm_gate_call_bytes() {  # <text> -> byte length on stdout
   printf '%s' "$1" | wc -c | tr -d ' '
 }
 
-# Cut to a BYTE length. A bare slice counts characters under a UTF-8 locale,
-# so it cannot enforce a byte cap; `local LC_ALL=C` makes the slice byte-wise
-# whatever the caller's locale is, and restores on return.
-fm_gate_call_cut_bytes() {  # <text> <max-bytes>
-  local LC_ALL=C
-  printf '%s' "${1:0:$2}"
-}
 
 # JSON string content for one field. Newlines survive as \n; the remaining C0
 # controls are dropped because they would break the line and carry no meaning
@@ -326,6 +319,25 @@ fm_gate_call_trim_partial_utf8() {  # <text>
   else
     printf '%s' "${rest%?}"
   fi
+}
+
+# Cut to a BYTE length, never leaving a half-written character behind.
+#
+# A bare slice counts characters under a UTF-8 locale, so it cannot enforce a
+# byte cap; `local LC_ALL=C` makes the slice byte-wise whatever the caller's
+# locale is, and restores on return. A byte-wise cut then lands mid-character
+# whenever the text is not ASCII, which is the R6 defect - so the repair is
+# part of this function rather than something each call site has to remember.
+# Every byte cut in this file goes through here for that reason: the previous
+# round fixed the one cut a finding pointed at and left three others, and the
+# same defect came back wearing the same clothes one function along.
+fm_gate_call_cut_bytes() {  # <text> <max-bytes>
+  local cut
+  cut=$(
+    local LC_ALL=C
+    printf '%s' "${1:0:$2}"
+  )
+  fm_gate_call_trim_partial_utf8 "$cut"
 }
 
 # Hold the assembled line under the byte bound by shortening the two free-text
