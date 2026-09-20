@@ -4268,3 +4268,60 @@ test_a_real_name_is_never_renamed_to_the_unnamed_sentinel() {
 }
 
 test_a_real_name_is_never_renamed_to_the_unnamed_sentinel
+
+# Both branches are guarded on a count greater than one being possible, and name
+# the last of several, so neither may call it "the only" one.
+test_a_refusal_never_calls_several_reviews_the_only_one() {
+  local case_dir rc head=2424242424242424242424242424242424242424
+
+  # Two approvals from accounts with no standing.
+  case_dir=$(make_case github-two-outside-approvals)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(approving_review "$head" s1 NONE),$(approving_review "$head" s2 NONE)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-two-outside-approvals: it must not merge"
+  assert_grep 'all 2 approvals' "$case_dir/stderr" \
+    "github-two-outside-approvals: the refusal did not say how many there were"
+  assert_no_grep 'the only approval' "$case_dir/stderr" \
+    "github-two-outside-approvals: two approvals were called the only one"
+
+  # Two non-standing reviews at the head, neither approving.
+  case_dir=$(make_case github-two-nonstanding-reviews)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" s1 'Notes.' 2026-09-20T08:00:00Z NONE),$(review_entry COMMENTED "$head" s2 'More notes.' 2026-09-20T09:00:00Z NONE)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-two-nonstanding-reviews: it must not merge"
+  assert_grep 'all 2 reviews' "$case_dir/stderr" \
+    "github-two-nonstanding-reviews: the refusal did not say how many there were"
+  assert_no_grep 'the only review' "$case_dir/stderr" \
+    "github-two-nonstanding-reviews: two reviews were called the only one"
+
+  # One of each keeps the singular wording, which is true for it.
+  case_dir=$(make_case github-one-outside-approval)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" "$(approving_review "$head" s1 NONE)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/97 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-one-outside-approval: it must not merge"
+  assert_grep 'the only approval' "$case_dir/stderr" \
+    "github-one-outside-approval: a single approval lost its singular wording"
+  pass "a refusal says how many reviews it counted instead of calling several the only one"
+}
+
+test_a_refusal_never_calls_several_reviews_the_only_one

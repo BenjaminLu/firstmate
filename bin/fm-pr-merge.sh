@@ -938,8 +938,16 @@ APPROVAL
       refusals="$refusals  - no review has been posted, so nothing has approved this pull request
 "
     elif [ "$outside" -gt 0 ]; then
-      refusals="$refusals  - the only approval at the current head $live_head is by ${outside_approver:-an unnamed account}, whose association with this repository is \"${outside_assoc:-unreadable}\"; an approval counts only from OWNER, MEMBER, or COLLABORATOR
+      # Both branches are guarded on a count greater than zero and name the
+      # last account of several, so neither may call it the only one. The count
+      # is already in hand, so it says how many rather than asserting one.
+      if [ "$outside" -eq 1 ]; then
+        refusals="$refusals  - the only approval at the current head $live_head is by ${outside_approver:-an unnamed account}, whose association with this repository is \"${outside_assoc:-unreadable}\"; an approval counts only from OWNER, MEMBER, or COLLABORATOR
 "
+      else
+        refusals="$refusals  - all $outside approvals at the current head $live_head are from accounts with no standing, the most recent by ${outside_approver:-an unnamed account} as \"${outside_assoc:-unreadable}\"; an approval counts only from OWNER, MEMBER, or COLLABORATOR
+"
+      fi
     elif [ "$at_head_standing" -gt 0 ]; then
       refusals="$refusals  - the review at the current head $live_head states no verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
 "
@@ -947,8 +955,13 @@ APPROVAL
       # A review from an account with no standing, whatever it says. Telling
       # this operator to add a verdict line would be the wrong remedy: adding
       # one produces a different refusal, discovered on the second attempt.
-      refusals="$refusals  - the only review at the current head $live_head is by ${nonstanding_login:-an account} with no standing on this repository; an approval counts only from OWNER, MEMBER, or COLLABORATOR
+      if [ "$nonstanding" -eq 1 ]; then
+        refusals="$refusals  - the only review at the current head $live_head is by ${nonstanding_login:-an account} with no standing on this repository; an approval counts only from OWNER, MEMBER, or COLLABORATOR
 "
+      else
+        refusals="$refusals  - all $nonstanding reviews at the current head $live_head are by accounts with no standing on this repository, the most recent by ${nonstanding_login:-an account}; an approval counts only from OWNER, MEMBER, or COLLABORATOR
+"
+      fi
     elif [ "$at_head_any" -gt 0 ]; then
       # Reviews exist at this head but none of them is one that still stands:
       # every one is dismissed, unsubmitted, or in a state this does not read.
