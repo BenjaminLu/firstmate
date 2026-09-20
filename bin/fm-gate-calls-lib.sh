@@ -41,9 +41,20 @@
 #   often a list of conditions and flattening it loses which one failed; the
 #   newlines survive as \n inside the one-line record.
 #
-#   A field the shortening loop cut ends with FM_GATE_CALL_CUT_MARK, so the
-#   value itself says it was shortened and which field it was, alongside the
-#   record-level `"truncated":true`.
+#   `"truncated":true` means the record is not a verbatim copy of what the
+#   caller passed, and it has THREE causes - a reader that assumes only the
+#   first will misread the other two:
+#     1. the shortening loop cut `grounds` or `what`. That field then ends
+#        with FM_GATE_CALL_CUT_MARK, so the value itself says it was
+#        shortened and which field it was.
+#     2. the loop dropped `link` or `key` whole to reach the line bound. The
+#        name is in `rejected`; no field carries a cut mark, and `what` and
+#        `grounds` are intact.
+#     3. the drop path cut an over-cap `site`, `task`, `link` or `key` to its
+#        byte cap. Those cuts carry no mark either, and they appear only in
+#        the drops record.
+#   So a cut mark implies `truncated`, but `truncated` does not imply a cut
+#   mark, and a record can be flagged with every body intact.
 #
 #   TWO SEVERITIES OF BAD INPUT, because they cost different things.
 #   `site` and `task` say which call this is, and `verdict`, `what` and
@@ -54,7 +65,16 @@
 #   dropped, its name is listed in `rejected`, and the call is still recorded.
 #   A pasted URL with a trailing space must not cost a well-formed ruling its
 #   place in the log; that is the same silent loss arriving by a politer door.
-#   `rejected` is empty when everything was accepted.
+#
+#   `rejected` names a field that is not in the record, and that ALSO has two
+#   causes: the field was malformed, as above, or it was well-formed and the
+#   shortening ladder dropped it to get the line under the bound (see BOUNDS).
+#   The two are told apart by `truncated`, which is false for the first and
+#   true for the second, because dropping a good field departs from what the
+#   caller passed and refusing a bad one does not. A board must not report a
+#   name in `rejected` as a malformed value on its own: that would tell the
+#   captain firstmate pasted a bad link when firstmate pasted a long one.
+#   `rejected` is empty when nothing was dropped for either reason.
 #
 #   Nothing in this library reads the log. Rendering it is a separate surface;
 #   the log is the durable record that surface will read.
@@ -122,8 +142,12 @@
 # BOUNDS
 #
 # The assembled line is held under FM_GATE_CALL_MAX_LINE bytes by shortening
-# `grounds`, then `what`, and the record carries "truncated":true whenever that
-# applied - so a long refusal list is shortened visibly rather than silently.
+# `grounds`, then `what`, and then by dropping `link` and `key` whole when
+# shortening is not enough. The record carries "truncated":true whenever any
+# of that applied - so a long refusal list is shortened visibly rather than
+# silently, and a link dropped purely for length says so too, with its name
+# in `rejected` beside it. A dropped field carries no cut mark, because
+# nothing of it is left to mark; CONTRACT above owns the full list.
 # The four short fields carry byte caps instead of being shortened, and what
 # an over-cap input costs depends on which of them it is - the same split
 # TWO SEVERITIES OF BAD INPUT above states, and that section is where it is
@@ -197,11 +221,16 @@ FM_GATE_CALL_CAP_TASK=80
 FM_GATE_CALL_CAP_LINK=500
 FM_GATE_CALL_CAP_KEY=120
 
-# Appended to whichever field the shortening loop cut, so the VALUE says it
-# was shortened and says which field it was. `"truncated":true` is a sibling
-# field a renderer can forget to consult; a sentence that stops mid-word with
-# nothing after it reads as the whole reason. Plain ASCII so it survives every
-# locale and adds no multi-byte cut point of its own.
+# Appended to whichever of `grounds` or `what` the shortening loop cut, so the
+# VALUE says it was shortened and says which field it was. `"truncated":true`
+# is a sibling field a renderer can forget to consult; a sentence that stops
+# mid-word with nothing after it reads as the whole reason. Plain ASCII so it
+# survives every locale and adds no multi-byte cut point of its own.
+#
+# It marks only that one cause. A dropped `link` or `key`, and an identity
+# field cut to its cap in the drop path, are both flagged by `truncated` and
+# carry no mark - there is nothing left of them to mark. CONTRACT above owns
+# the full list of what sets that flag.
 FM_GATE_CALL_CUT_MARK='...'
 
 # How much of `grounds`/`what` the shortening loop keeps before it starts
@@ -410,6 +439,10 @@ fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what
   # A call refused for an over-long identity field still has to be written
   # down, so here - and only here, where the record already says it was
   # dropped - those fields are cut to their caps rather than refused again.
+  # These cuts set `truncated` and leave no cut mark, because the mark
+  # belongs to `grounds`/`what` and these are identity fields: that is the
+  # third cause CONTRACT lists for the flag, and it exists only in the drops
+  # record.
   [ "$(fm_gate_call_bytes "$site")" -le "$FM_GATE_CALL_CAP_SITE" ] \
     || { site=$(fm_gate_call_cut_bytes "$site" "$FM_GATE_CALL_CAP_SITE"); truncated=true; }
   [ "$(fm_gate_call_bytes "$task")" -le "$FM_GATE_CALL_CAP_TASK" ] \

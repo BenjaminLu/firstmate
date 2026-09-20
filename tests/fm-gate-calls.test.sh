@@ -443,6 +443,47 @@ test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds() {
   pass "an over-cap link is rejected on its byte length, before it can cost the grounds anything"
 }
 
+test_a_dropped_good_link_is_told_apart_from_a_malformed_one() {
+  local home log rc=0 long_link
+  home=$(make_home dropped-vs-malformed)
+  log="$home/state/gate-calls.jsonl"
+  # Well-formed and inside its byte cap. Nothing here is malformed and
+  # nothing needs shortening; the link is dropped only to fit the line.
+  long_link="https://x.example/$(head -c 470 < /dev/zero | tr '\0' 'p')"
+
+  run_gate_call "$home" record --site "$(head -c 40 < /dev/zero | tr '\0' 's')" \
+    --task "$(head -c 80 < /dev/zero | tr '\0' 't')" --verdict refused \
+    --what 'merge pull request 38' \
+    --grounds "$(head -c 100 < /dev/zero | tr '\0' 'g')" \
+    --link "$long_link" --key "$(head -c 120 < /dev/zero | tr '\0' 'k')" \
+    >/dev/null 2>&1 || rc=$?
+
+  expect_code 0 "$rc" "dropped-good-link: the call must record"
+  assert_equals link "$(log_field "$log" 1 rejected)" \
+    "dropped-good-link: the dropped link is invisible in the record"
+  assert_equals true "$(log_field "$log" 1 truncated)" \
+    "dropped-good-link: dropping a well-formed field departs from what the caller passed and must be flagged - it is what tells this apart from a malformed one"
+  assert_equals 'merge pull request 38' "$(log_field "$log" 1 what)" \
+    "dropped-good-link: the subject was altered when only the link should have gone"
+  case "$(log_field "$log" 1 grounds)" in
+    *...) fail "dropped-good-link: the grounds carry a cut mark, but nothing was shortened" ;;
+  esac
+
+  # The other cause of the same `rejected` value, side by side: a malformed
+  # link is refused rather than dropped, so the record is otherwise verbatim.
+  home=$(make_home malformed-for-contrast)
+  log="$home/state/gate-calls.jsonl"
+  run_gate_call "$home" record --site pr-merge --task task-c2 --verdict refused \
+    --what 'merge pull request 38' --grounds 'the checks are not green' \
+    --link 'https://x.example/one two' >/dev/null 2>&1 \
+    || fail "malformed-for-contrast: the call must still record"
+  assert_equals link "$(log_field "$log" 1 rejected)" \
+    "malformed-for-contrast: the malformed link is invisible in the record"
+  assert_equals false "$(log_field "$log" 1 truncated)" \
+    "malformed-for-contrast: refusing a malformed field changes nothing the caller passed, so the two causes of rejected stop being distinguishable"
+  pass "a field dropped to fit the bound and a field refused as malformed are both named in rejected and told apart by truncated"
+}
+
 test_an_escape_heavy_link_cannot_cross_the_boundary() {
   local home log rc=0 quotes
   home=$(make_home escape-link)
@@ -695,6 +736,7 @@ test_an_oversized_call_is_shortened_visibly
 test_a_bulky_link_costs_the_link_and_never_the_ruling
 test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds
 test_an_escape_heavy_link_cannot_cross_the_boundary
+test_a_dropped_good_link_is_told_apart_from_a_malformed_one
 test_a_bulky_task_id_keeps_the_drops_record_bounded
 test_no_emitted_line_can_cross_the_flush_boundary
 test_concurrent_writers_produce_parseable_records
