@@ -2087,9 +2087,14 @@ __FM_BEARINGS_BOARD_DATA__
            name already placed, and both axes of the picture's bounds.
 
            WHAT IT STILL DOES NOT CONSIDER, so the next gap is named before it
-           is found: the axis captions and quadrant labels drawn inside those
-           bounds - a name may still sit on one of those, because containment
-           is checked against the plot rect and not against the furniture in it.
+           is found: the axis captions and the quadrant labels. It checks the
+           plot rect, not the furniture. Measured rather than left as a worry -
+           every one of those sits OUTSIDE the band a name is confined to (the
+           axis captions at y 294-307 and in an x band of 32-45, the quadrant
+           labels at y 6-19 and 278-291, against names held inside x 54-404 and
+           y 22-274), so none of them can be hit today. That is the layout
+           happening to agree with the rule rather than the rule knowing about
+           the layout, and moving any caption inward would end it silently.
            It does not consider the ranked list below, the card, or anything
            outside this SVG. It does not reconsider an earlier name when a later
            one cannot be placed: placement is first-come, so a different order
