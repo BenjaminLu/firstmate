@@ -424,7 +424,15 @@ jobs:
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
           shopt -s nullglob
-          inputs=("$RUNNER_TEMP"/fm-test-aggregate/fm-test-timing-*.json)
+          # Two depths, because merge-multiple preserves each artifact's own
+          # internal shape. A single-path artifact (serial, parallel) drops its
+          # JSON straight into the directory; the Herdr artifact uploads from
+          # fm-test/ and fm-herdr/, so upload-artifact@v4 roots it at their
+          # least common ancestor and its timing JSON arrives one level down.
+          # Matching only the top level silently aggregated every lane except
+          # Herdr, which is the one lane this workflow spends two runners on.
+          inputs=("$RUNNER_TEMP"/fm-test-aggregate/fm-test-timing-*.json \
+                  "$RUNNER_TEMP"/fm-test-aggregate/*/fm-test-timing-*.json)
           if [ "${#inputs[@]}" -eq 0 ]; then
             echo "::warning::no per-lane timing JSON found to aggregate"
             exit 0
