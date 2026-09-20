@@ -4551,7 +4551,7 @@ test_a_drop_judges_the_row_the_gate_judges() {
   # is the branch R1 came through: the covered branch was the one an earlier
   # round had already forced correct.
   out=$(run_to_fixed_point "$home" "$id" "$out" "retire them from the inventory with ") \
-    || fail "the verify branch's printed drop did not converge: $out"
+    || fail "the verify branch's printed drop never resolved: $out"
   assert_contains "$out" "dropped as unrecoverable: $short" \
     "the converged run recorded no drop: $out"
   # The row spelling still resolves to the same entry, which is what makes
@@ -4788,6 +4788,12 @@ test_verify_names_a_complete_that_works() {
 # printed string in ONE state. Both states below print a command that works
 # on the first run and then refuses, so each is driven to a FIXED POINT - run
 # what it prints, then what THAT prints, until the sequence converges.
+#
+# Three failure modes, and each says which it is: named no command, looped,
+# or ran out of iterations. A caller that renders all three as "did not
+# converge" throws that distinction away at the point of use, which is the
+# same defect as never printing it - so callers report what the driver said
+# rather than asserting which mode it was.
 run_to_fixed_point() {  # <home> <origin> <first-output> [<lead>]
   local home=$1 origin=$2 out=$3 lead=${4:-} cmd seen='' i=0
   while [ "$i" -lt 6 ]; do
@@ -4851,7 +4857,7 @@ test_the_drop_remedy_reaches_a_fixed_point() {
     || fail "the raise step the refusal names was refused"
   out=${out//<new-id>/sample-fixpoint-raised}
   out=$(run_to_fixed_point "$home" "$origin" "$out" "retire them from the inventory with ") \
-    || fail "the drop remedy did not converge: $out"
+    || fail "the drop remedy never resolved: $out"
   assert_contains "$out" "dropped as unrecoverable: $call" "the converged run recorded no drop: $out"
   meta=$(cat "$home/state/$origin.meta")
   assert_contains "$meta" "decision_dropped=$call" "the drop left no record"
@@ -4897,7 +4903,7 @@ test_the_drop_remedy_reaches_a_fixed_point() {
   out=$(run_captain "$home" complete "$origin" --drop-unrecoverable "$call" 2>&1) \
     && fail "the documented singular drop passed two unanswered captain calls: $out"
   out=$(run_to_fixed_point "$home" "$origin" "$out" "retire them from the inventory with ") \
-    || fail "the documented singular drop did not converge: $out"
+    || fail "the documented singular drop never resolved: $out"
   assert_contains "$out" "$call" "the converged run did not drop the first entry: $out"
   assert_contains "$out" "$second" "the converged run did not drop the second entry: $out"
   run_captain "$home" verify "$origin" >/dev/null \
