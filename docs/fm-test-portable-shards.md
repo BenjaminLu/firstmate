@@ -176,8 +176,20 @@ The candidate uses fifteen long-lived Linux jobs (nine serial, two parallel, two
 This repository is public and on a plan whose whole-account ceiling is twenty concurrent jobs: across 180 jobs sampled from ten runs on 2026-09-20, concurrency reached exactly 20 and never 21, and sat pinned at 20 for 12.5% of the window.
 One CI run is already eighteen jobs, so a second run in flight queues behind the first, and measured queue waits in that sample reached 3478 s for a single job - several times the execution time the packing saves.
 The consequence for this layout is concrete: splitting work across more runners only shortens the wall clock while the run fits inside that ceiling, and past it a run serialises its own overflow behind its own long jobs.
-Prefer changes that cut runner-seconds without adding a job - concurrency inside a lane that already has an isolation proof, as the portable parallel lanes now use - over changes that buy another runner, and measure the account's concurrent-job ceiling before assuming a shard count is free.
-Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one worker leaves most of that machine idle.
+Prefer changes that cut runner-seconds without adding a job over changes that buy another runner, and measure the account's concurrent-job ceiling before assuming a shard count is free.
+Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one worker leaves most of that machine idle - but idle cores are not automatically a saving, and the rule for when they are is below.
+**Concurrency inside a lane wins when the lane is packing-bound and does nothing when the lane is bounded by a single long script, and it costs runner-seconds either way.**
+Both portable parallel lanes carry the same isolation proof and were given `--jobs 2` together; one kept it and one did not, and the difference is entirely which of those two shapes the lane has.
+Measured on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) against the three green baseline runs cited above:
+
+| lane | bound | serial wall (3 runs) | `--jobs 2` wall | script sum | longest script |
+|---|---|---|---:|---:|---:|
+| portable parallel 1 | packing: 550 s over 11 scripts, longest 191 s | 347-546 s, median 546 s | **356 s** | 546 -> 592 s (+8%) | 191 -> 218 s |
+| portable parallel 2 | one script: `fm-captain-hold-lifecycle` is two thirds of it | 347-415 s, median 396 s | **393 s** | 396 -> 538 s (+36%) | 281 -> 360 s |
+
+Lane 1 is a real win. Lane 2 saved nothing measurable - its wall landed inside its own serial spread - because packing cannot shorten a lane whose makespan is one script, while the contention the extra worker adds makes that script longer. The two effects cancel, and what is left is 36% more runner-seconds.
+Under the twenty-job ceiling above, spending runner-seconds for no wall-clock is strictly worse rather than neutral, so lane 2 runs serial and lane 1 does not.
+Before adding `--jobs` to any lane, compare its longest script against its script sum divided by the worker count: if the longest script is the larger of the two, the lane is already at its floor and concurrency can only cost.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.
 

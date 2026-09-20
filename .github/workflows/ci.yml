@@ -161,8 +161,15 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          # Same proof-admitted concurrency as shard 1 above.
-          bin/fm-test-run.sh --lane portable-parallel-2 --jobs 2 \
+          # Deliberately serial, unlike shard 1. This lane is bounded by one
+          # long script - tests/fm-captain-hold-lifecycle.test.sh is about
+          # two thirds of it - so extra workers cannot shorten it, while the
+          # contention they add makes that script longer. Measured on run
+          # 35484461648: with --jobs 2 the lane wall was 393s against a
+          # 347-415s serial band, its script sum rose 36% and the
+          # makespan-setting script rose 79s above its slowest serial
+          # sample. See docs/fm-test-portable-shards.md for the rule.
+          bin/fm-test-run.sh --lane portable-parallel-2 \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json"
       - name: Upload shard 2 timing artifact
         if: always()
