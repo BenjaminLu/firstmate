@@ -944,6 +944,10 @@ test_the_bar_tells_him_both_reasons_when_both_hold() {
     "the bar dropped the refusal he just earned: $out"
   assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
     "the bar dropped the reason the button is dead: $out"
+  # R37. The two statements are joined with one space now, so the strings must
+  # not still carry the trailing space the old concatenation needed.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit' | grep -c '  ')" = "0" ] \
+    || fail "the joined refusal reads with a double space: $out"
   pass "the bar tells him both reasons when both hold"
 }
 

@@ -703,7 +703,7 @@ __FM_BEARINGS_BOARD_DATA__
       more_warn_many: "+{n} more repair warnings - ask firstmate for the full chart",
       needs_repair: "needs repair", waiting: "waiting", pick_aria: "Pick {id} for dispatch",
       pick_none: "pick queued work to dispatch", pick_n: "{n} picked for dispatch",
-      pick_limit: "Selection limit reached (512 bytes maximum). ", pick_too_long: "Selection is too long to queue (512 bytes maximum). ",
+      pick_limit: "Selection limit reached (512 bytes maximum).", pick_too_long: "Selection is too long to queue (512 bytes maximum).",
       dispatch: "Queue dispatch order",
       ack_acting: "acting on it", ack_refused: "not started", ack_late: "still waiting · {t}",
       err_title: "This board could not load", err_ask: " - ask firstmate to rebuild the board."
@@ -2340,14 +2340,6 @@ __FM_BEARINGS_BOARD_DATA__
          which he can no longer reach. */
       paintBarRefusal();
     }
-    /* A refusal the captain has EARNED and not yet resolved. Kept rather than
-       repainted from scratch, because refreshBar runs immediately after some
-       of them and used to overwrite what had just been written - so ticking
-       past the length limit on a board with no answer channel took his ticks
-       away and then told him only that the board cannot dispatch, never that
-       there is a limit. A guard that steps aside is the worse direction of
-       failure, and this is the surface whose whole job is to be the one place
-       he looks. */
     /* What the captain's LAST ACTION ran into. Tied to the action rather than
        stored as standing state: the length guard un-ticks the row it refused,
        so the moment he touches the selection again he is no longer over any
