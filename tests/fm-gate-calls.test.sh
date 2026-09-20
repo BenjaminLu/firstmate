@@ -201,6 +201,13 @@ test_an_oversized_call_is_shortened_visibly() {
   expect_code 1 "$(log_lines "$log")" "oversized: the record must stay one line"
   assert_equals true "$(log_field "$log" 1 truncated)" \
     "oversized: shortening was not declared in the record"
+  case "$(log_field "$log" 1 grounds)" in
+    *...) : ;;
+    *) fail "oversized: the cut value does not say it was cut, so a surface that renders grounds without consulting truncated shows a sentence stopping mid-word as the whole reason" ;;
+  esac
+  case "$(log_field "$log" 1 what)" in
+    *...) fail "oversized: a field that was never shortened claims it was" ;;
+  esac
   [ "$(wc -c < "$log" | tr -d ' ')" -le 1024 ] \
     || fail "oversized: the record line crossed the 1024-byte flush boundary, where concurrent appends tear"
   pass "an overlong call is shortened visibly rather than silently"

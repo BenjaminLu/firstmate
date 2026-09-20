@@ -41,6 +41,10 @@
 #   often a list of conditions and flattening it loses which one failed; the
 #   newlines survive as \n inside the one-line record.
 #
+#   A field the shortening loop cut ends with FM_GATE_CALL_CUT_MARK, so the
+#   value itself says it was shortened and which field it was, alongside the
+#   record-level `"truncated":true`.
+#
 #   TWO SEVERITIES OF BAD INPUT, because they cost different things.
 #   `site` and `task` say which call this is, and `verdict`, `what` and
 #   `grounds` are the call itself: a bad one of those refuses the whole
@@ -171,6 +175,13 @@ FM_GATE_CALL_CAP_TASK=80
 FM_GATE_CALL_CAP_LINK=500
 FM_GATE_CALL_CAP_KEY=120
 
+# Appended to whichever field the shortening loop cut, so the VALUE says it
+# was shortened and says which field it was. `"truncated":true` is a sibling
+# field a renderer can forget to consult; a sentence that stops mid-word with
+# nothing after it reads as the whole reason. Plain ASCII so it survives every
+# locale and adds no multi-byte cut point of its own.
+FM_GATE_CALL_CUT_MARK='...'
+
 FM_GATE_CALL_VERDICTS='decided escalated refused deferred'
 
 fm_gate_calls_path() {  # <state-dir>
@@ -299,14 +310,21 @@ FM_GATE_CALL_BOUNDED_LINE=
 fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <key> <truncated> <rejected> [dropped]
   local at=$1 site=$2 task=$3 verdict=$4 what=$5 grounds=$6 link=$7 key=$8
   local truncated=$9 rejected=${10} dropped=${11:-} line
+  local grounds_body=$grounds what_body=$what
   line=$(fm_gate_call_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
     "$link" "$key" "$truncated" "$rejected" "$dropped")
   while [ "$(fm_gate_call_bytes "$line")" -gt "$FM_GATE_CALL_MAX_LINE" ]; do
     truncated=true
-    if [ -n "$grounds" ]; then
-      grounds=$(fm_gate_call_trim_partial_utf8 "${grounds:0:$(( ${#grounds} / 2 ))}")
-    elif [ -n "$what" ]; then
-      what=$(fm_gate_call_trim_partial_utf8 "${what:0:$(( ${#what} / 2 ))}")
+    # Halve the BODY and re-apply the marker, rather than halving a value
+    # that already carries one, so the marker never accumulates.
+    if [ -n "$grounds_body" ]; then
+      grounds_body=$(fm_gate_call_trim_partial_utf8 \
+        "${grounds_body:0:$(( ${#grounds_body} / 2 ))}")
+      grounds="$grounds_body$FM_GATE_CALL_CUT_MARK"
+    elif [ -n "$what_body" ]; then
+      what_body=$(fm_gate_call_trim_partial_utf8 \
+        "${what_body:0:$(( ${#what_body} / 2 ))}")
+      what="$what_body$FM_GATE_CALL_CUT_MARK"
     else
       break
     fi
