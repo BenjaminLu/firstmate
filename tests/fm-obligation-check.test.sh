@@ -193,6 +193,31 @@ SH
   chmod 0755 "$home/bin/git"
 }
 
+# make_selective_git <home> <exact git arguments>: a git that answers every
+# invocation normally and stalls on exactly one. It matches the WHOLE argument
+# list after `-C <path>`, not its first word, because `remote get-url origin`
+# and a bare `remote` are two different reads that both begin with "remote" and
+# happen at different points in the discovery path.
+#
+# It is how a failure is driven at a read that only happens once the earlier
+# reads have already succeeded.
+make_selective_git() {
+  local home=$1 real
+  shift
+  real=$(command -v git)
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'want=%s\n' "$(printf '%q' "$*")"
+    printf 'args=("$@")\n'
+    # shellcheck disable=SC2016  # single quotes are deliberate: these expansions belong to the generated stub, not to this shell.
+    printf 'if [ "${args[0]:-}" = -C ]; then args=("${args[@]:2}"); fi\n'
+    # shellcheck disable=SC2016  # as above.
+    printf 'if [ "${args[*]}" = "$want" ]; then sleep "${GIT_STALL_SECS:-20}"; exit 0; fi\n'
+    printf 'exec %s "$@"\n' "$(printf '%q' "$real")"
+  } > "$home/bin/git"
+  chmod 0755 "$home/bin/git"
+}
+
 # run <home> <out> [env assignments...]: one sweep with the cadence gate open, so
 # a case exercises the obligations rather than the no-nag interval.
 run() {
@@ -444,6 +469,47 @@ test_a_worktree_read_that_hits_its_bound_is_unknown_not_clean() {
     "a read that hit its bound was not distinguished from a task that has not branched"
   assert_contains "$report" "unknown:" "a read that hit its bound did not produce an unknown answer"
   pass "a worktree read that hits its bound is unknown, not a task that has not branched"
+}
+
+test_a_branch_read_that_cannot_be_established_is_unknown_not_clean() {
+  local home out report
+  # The repository answers rev-parse and then the branch read itself cannot be
+  # established. Distinct from the case where the repository never answered at
+  # all, and reachable only once that first probe has succeeded.
+  home=$(make_home branch-read-stall)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0 fm/branch-stall
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/branch-stall
+  assert_discovery_control_is_owed "$home"
+  make_selective_git "$home" symbolic-ref --quiet --short HEAD
+  out="$home/out.txt"
+  run "$home" "$out" GIT_STALL_SECS=20
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a branch read that could not be established produced silence"
+  assert_contains "$report" "the branch of omega's worktree" \
+    "the branch read that could not be established was not named"
+  assert_contains "$report" "unknown:" "a branch read that could not be established did not produce an unknown answer"
+  pass "a branch read that cannot be established is unknown, not a task that has not branched"
+}
+
+test_a_remote_list_that_cannot_be_read_is_unknown_not_clean() {
+  local home out report
+  # Everything answers except the bare remote list, which is only reached once
+  # origin has already been read and the forge has said this branch has no
+  # open pull request there.
+  home=$(make_home remote-list-stall)
+  forge_pr "$home" "$SLUG" 55 OPEN "$(commit 8)" 0 0 fm/somewhere-else
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/no-pr-here
+  make_selective_git "$home" remote
+  out="$home/out.txt"
+  run "$home" "$out" GIT_STALL_SECS=20
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a remote list that could not be read produced silence about where else the branch could have gone"
+  assert_contains "$report" "its other remotes could not be listed" \
+    "the unreadable remote list was not named"
+  assert_contains "$report" "unknown:" "an unreadable remote list did not produce an unknown answer"
+  pass "a remote list that cannot be read is unknown, not a determinate none"
 }
 
 test_a_branch_with_another_remote_says_only_origin_was_asked() {
@@ -1491,6 +1557,8 @@ test_a_worktree_that_is_gone_is_unknown_not_clean
 test_a_worktree_that_is_not_a_repository_is_unknown_not_clean
 test_a_worktree_whose_git_cannot_be_read_is_unknown_not_clean
 test_a_worktree_read_that_hits_its_bound_is_unknown_not_clean
+test_a_branch_read_that_cannot_be_established_is_unknown_not_clean
+test_a_remote_list_that_cannot_be_read_is_unknown_not_clean
 test_a_branch_with_another_remote_says_only_origin_was_asked
 test_a_branch_with_only_origin_stays_a_determinate_none
 test_a_found_pull_request_needs_no_remote_caveat
