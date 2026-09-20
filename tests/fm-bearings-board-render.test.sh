@@ -776,6 +776,16 @@ test_a_floor_count_reads_as_a_floor_not_a_total() {
   # nothing.
   [ "$(printf '%s' "$out" | jq -r '.call_list[] | select(.key == "whole") | .text' | grep -c "at least")" = "0" ] \
     || fail "an exact count was hedged as a floor: $out"
+
+  # R21. The count drives the bubble's height and radius too, and the picture
+  # is what he reads first. Geometry drawn from a floor must not read as a
+  # measurement while the words beside it say "at least".
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "cut") | .dashed')" = "true" ] \
+    || fail "a bubble drawn from a floor count was drawn as a measurement: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "whole") | .dashed')" = "false" ] \
+    || fail "a bubble drawn from an exact count was marked as uncertain: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "cut off" \
+    "the note did not say why a bubble is drawn no higher than it is: $out"
   pass "a count the fleet could only floor reads as a floor, not a total"
 }
 

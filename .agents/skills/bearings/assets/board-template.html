@@ -660,6 +660,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_unassessed: "nobody assessed what a wrong answer costs",
       map_note_unassessed: "A bubble with a broken outline has no position the fleet recorded: something it needs is missing, so it sits at the left edge because the cost is unknown, not because it is cheap.",
       map_note_byhand: "Where a bubble is marked as your first mate's assessment, that is his judgement written when the card was composed, not a measurement the fleet made.",
+      map_note_floor: "Where a bubble says \"at least\", the list of what is waiting on it was cut off, so it is drawn no higher and no larger than the part that could be read.",
       map_norev: "risk {r}, but nobody said whether it can be undone, so how costly it is was never worked out",
       map_byhand: "That risk is your first mate's assessment, not something the fleet recorded",
       t_merge: "Merges",
@@ -741,6 +742,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_unassessed: "沒有人評估過答錯的代價",
       map_note_unassessed: "虛線外框的泡泡沒有艦隊記錄下來的位置：它需要的東西少了一項，所以它靠在最左邊是因為代價不明，不是因為代價低。",
       map_note_byhand: "標示為大副評估的泡泡，是組卡片的時候大副自己的判斷，不是艦隊量出來的。",
+      map_note_floor: "寫「至少」的泡泡，是因為在等它的清單被截斷了，所以它畫得不會比讀得到的那一部分更高、更大。",
       map_norev: "風險 {r}，但沒有人說過能不能回頭，所以代價有多高從來沒有算出來",
       map_byhand: "這個風險是大副評估的，不是艦隊記錄的",
       t_merge: "合併",
@@ -822,6 +824,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_unassessed: "没有人评估过答错的代价",
       map_note_unassessed: "虚线外框的泡泡没有舰队记录下来的位置：它需要的东西少了一项，所以它靠在最左边是因为代价不明，不是因为代价低。",
       map_note_byhand: "标示为大副评估的泡泡，是组卡片的时候大副自己的判断，不是舰队量出来的。",
+      map_note_floor: "写「至少」的泡泡，是因为在等它的清单被截断了，所以它画得不会比读得到的那一部分更高、更大。",
       map_norev: "风险 {r}，但没有人说过能不能回头，所以代价有多高从来没有算出来",
       map_byhand: "这个风险是大副评估的，不是舰队记录的",
       t_merge: "合并",
@@ -1793,6 +1796,13 @@ __FM_BEARINGS_BOARD_DATA__
     /* One rule for the broken outline: do not read this position as something
        the fleet measured. It covers both reasons, and the words say which. */
     function positionSoft(c) { return !costDerived(c) || weighedByHand(c); }
+    /* The stalled count drives the bubble's HEIGHT and its RADIUS, and a
+       truncated blocker list makes that count a floor. The words already hedge
+       it; the geometry did not, so a call whose list was cut off was drawn
+       lower and smaller than the truth with no mark on it. The picture is what
+       the captain reads first, and the note under it claims both positions
+       come from what the fleet records. */
+    function countSoft(c) { return c.blocks_partial === true; }
     function wrongCost(c) {
       if (!costDerived(c)) return 0;
       return Math.min(1, (RISKW[c.risk] + REVW[c.reversible]) / 4);
@@ -1865,6 +1875,7 @@ __FM_BEARINGS_BOARD_DATA__
       var caveats = [];
       if (items.some(function (c) { return !costDerived(c); })) caveats.push(t("map_note_unassessed"));
       if (items.some(weighedByHand)) caveats.push(t("map_note_byhand"));
+      if (items.some(countSoft)) caveats.push(t("map_note_floor"));
       note.textContent = !items.length ? ""
         : [t("map_note")].concat(caveats).join(" ");
       if (!items.length) {
@@ -1950,7 +1961,7 @@ __FM_BEARINGS_BOARD_DATA__
         /* A broken outline is the second half of saying "not measured": the
            colour says it and the edge says it, so neither has to be noticed
            on its own. */
-        if (positionSoft(c)) circle.setAttribute("stroke-dasharray", "3 3");
+        if (positionSoft(c) || countSoft(c)) circle.setAttribute("stroke-dasharray", "3 3");
         g.appendChild(circle);
         pt.g = g; pt.circle = circle;
         if (c.blocks) {
