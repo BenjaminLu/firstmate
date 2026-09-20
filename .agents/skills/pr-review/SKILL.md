@@ -46,7 +46,7 @@ The approval is the reviewer's own posted review, read back off the forge by `bi
 Three consequences are yours:
 
 - **You dispatch every reviewer, and you dispatch one again after fixes land.**
-  The approval is bound to the commit that was reviewed, so pushing a fix leaves the pull request unapproved by construction.
+  `AGENTS.md` section 7 owns that mandate; what it means in practice is that the approval is bound to the commit that was reviewed, so pushing a fix leaves the pull request unapproved by construction.
   This is not a round counter - nothing here counts attempts - it is the same single question asked of the head that would actually merge.
 - **The worker never approves, and never reviews its own pull request.**
   A worker that reports its own work approved has not been reviewed.
@@ -79,8 +79,8 @@ A second review after fixes is the same call with a new task id, because that sc
 Give its `--spec` what changed - the finding ids that were fixed and the commits that fixed them - so it re-reads that surface first rather than starting the whole diff over from nothing.
 Its `--ask` does not change: the captain's intent behind the pull request did not move because a fix landed.
 
-`AGENTS.md` section 7 is where that requirement is stated, for every mode including `no-mistakes`; this skill does not restate it.
-What is worth knowing here is why a `no-mistakes` pull request is not already covered: its pipeline's own review is not a review on the forge, so `bin/fm-pr-merge.sh` cannot see it.
+A `no-mistakes` pull request needs a dispatched reviewer and an approval at its head before it merges, exactly as a `direct-PR` one does.
+`AGENTS.md` section 7 owns that rule for every mode and is where its scope and wording are settled; what belongs here is why that mode is not already covered by its own pipeline: the pipeline's review is not a review on the forge, so `bin/fm-pr-merge.sh` cannot see it.
 Everything above applies unchanged there; only the rest of this skill - the findings, the rulings, the fixes - belongs to the `direct-PR` path, because that pipeline owns its own.
 
 ## Read the findings
