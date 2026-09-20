@@ -36,6 +36,12 @@
 #      and what was clicked is recoverable afterwards.
 #   5. The board is never taken backwards.
 #   6. A board that is behind never tells the captain his desk is empty.
+#      THIS CASE IS EXPECTED TO FAIL until PR 32 lands. It names a live defect
+#      on the captain's own surface rather than a gap in this suite, and the
+#      fix belongs to the branch already under a ruling that owns the same rule
+#      for the server half. A branch that both asserts a behaviour and fixes it
+#      can quietly make the test match the code; this one deliberately does
+#      not.
 #
 # HOW THE FIXTURES ARE MADE, because two of the three defects above hid behind
 # fixtures that could not happen. Every state here is produced by running the
@@ -513,6 +519,11 @@ test_a_board_that_is_behind_never_tells_the_captain_his_desk_is_empty() {
   assert_contains "$(printf '%s' "$behind" | tr '[:upper:]' '[:lower:]')" "rebuild" \
     "the behind badge does not say what is owed: $behind"
 
+  # THE WHOLE RENDERED TEXT, not one element. The board says this in two
+  # places - the section's caption and the empty deck's body - and a first
+  # attempt at the fix corrected the caption while the body went on saying it.
+  # This case caught that only because it reads everything the captain would
+  # read, which is the reason not to narrow it to a selector later.
   text=$(printf '%s' "$got" | jq -r '.steps[5].value' | tr '[:upper:]' '[:lower:]')
   case $text in
     *"nothing needs you"*)
