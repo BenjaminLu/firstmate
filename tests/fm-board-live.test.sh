@@ -371,8 +371,19 @@ test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked() {
     || fail "the send button acknowledged itself instead of the rows he ticked"
   assert_contains "$(cat "$home/state/.wake-queue")" "alpha,beta" \
     "firstmate was not told which queued items to start"
+  # The ids are the one field carrying identifiers that cannot arrive as an
+  # option value, so they get the same check here as every sibling field
+  # rather than being refused downstream as "this did not land".
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 20000 --count-type inbound \
+    --send "$(inbound_message "$token" badorder \
+      '[{"key":"dispatch.charted","note":"alpha,../../etc/passwd"}]')") \
+    || fail "the server never answered a dispatch order naming an unaddressable row"
+  assert_equals refused "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].status')" \
+    "a dispatch order naming a row this board cannot address was accepted"
+  assert_equals malformed "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].reason')" \
+    "the refusal does not say the message itself was wrong"
   FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
-  pass "the dispatch bar acknowledges each row the captain ticked and tells firstmate which they were"
+  pass "the dispatch bar acknowledges each row the captain ticked, tells firstmate which they were, and its ids are checked here"
 }
 
 test_a_malformed_message_is_refused_rather_than_guessed_at() {

@@ -552,6 +552,8 @@ const KEY_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const CORRELATION_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const LOOPBACK_ORIGIN_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/;
 const RECONCILE_VALUE = "reconcile";
+// The dispatch bar's pseudo-key; bin/fm-board-answer.sh owns what it means.
+const DISPATCH_KEY = "dispatch.charted";
 const MAX_NOTE = 512;
 const MAX_LABEL = 512;
 
@@ -647,6 +649,26 @@ function answerRows(message) {
     if (close !== "" && close !== "done" && close !== "release") {
       return refusal("malformed", `${key} declares a close this board does not have`);
     }
+    const value = selection !== "" ? selection : note;
+    // THE DISPATCH BAR'S VALUE IS A LIST OF IDS, so it is the one field
+    // carrying identifiers that does not arrive as `selection` - a comma list
+    // cannot, since an option value may not contain one. Riding in `note` is
+    // not a reason to skip the check every sibling field gets at the boundary
+    // that calls itself the sanitising one. The ack owner downstream refuses a
+    // bad id anyway, but it refuses it as "this did not land" on a message
+    // that looked well-formed here; checking it here makes the refusal say
+    // what is actually wrong.
+    if (key === DISPATCH_KEY) {
+      const ids = value.split(",");
+      if (ids.length > MAX_ANSWERS) {
+        return refusal("malformed", `at most ${MAX_ANSWERS} rows in one dispatch order`);
+      }
+      for (const one of ids) {
+        if (!KEY_RE.test(one)) {
+          return refusal("malformed", "a dispatch order names a row this board cannot address");
+        }
+      }
+    }
     keys.push(key);
     // `reconcile` is the board's standard "go re-check reality" choice and is
     // never an answer. It is separated here only so it reaches its own intake;
@@ -658,7 +680,7 @@ function answerRows(message) {
       rows.push([
         "answer",
         key,
-        oneLine(selection !== "" ? selection : note, MAX_NOTE),
+        oneLine(value, MAX_NOTE),
         oneLine(label, MAX_LABEL),
         close,
       ].join("\t"));
