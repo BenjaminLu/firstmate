@@ -167,7 +167,7 @@ fm_brief_task_placeholders_present() {  # <file>
 # whole input: is a code fence still open at the end of it, and where did it
 # start. A brief that leaves one open hides every heading below it from every
 # mode above, so a reader that returns nothing there is not reporting absence.
-fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
+fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator|mark|first-body-line|open-fence>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
     input=/dev/stdin
