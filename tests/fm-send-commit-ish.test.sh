@@ -224,6 +224,28 @@ test_a_firstmate_commit_named_to_another_projects_worker_is_accepted() {
   pass "fm-send: firstmate's own repository accepts a real firstmate commit and nothing else"
 }
 
+test_a_copy_whose_path_contains_whitespace_is_actually_asked() {
+  local dir err rc head
+  dir=$(setup_case whitespace-path)
+  err="$dir/send.err"
+  mkdir -p "$dir/My Projects"
+  mv "$dir/worktree" "$dir/My Projects/projx"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=sess:fm-task-a" "kind=ship" "harness=claude" \
+    "worktree=$dir/My Projects/projx" \
+    "project=$(cd "$dir/project" && pwd)"
+  # A commit ONLY that copy has, so the project clone cannot mask the split.
+  printf 'work in the slot\n' >>"$dir/My Projects/projx/README.md"
+  git -C "$dir/My Projects/projx" add README.md
+  git -C "$dir/My Projects/projx" -c user.name='Firstmate Tests' \
+    -c user.email='tests@example.invalid' commit -qm "slot-only work"
+  head=$(git -C "$dir/My Projects/projx" rev-parse HEAD)
+  run_send "$dir" "$err" -- task-a "verify against ${head:0:12}"
+  rc=$?
+  expect_code 0 "$rc" "a copy whose path contains a space must actually be asked:"$'\n'"$(cat "$err")"
+  pass "fm-send: a local copy whose path contains whitespace is asked, not split into non-paths"
+}
+
 test_a_remote_targets_recorded_paths_are_not_judged_locally() {
   local dir err
   dir=$(setup_case remote-target)
@@ -383,6 +405,7 @@ test_ordinary_prose_with_hex_like_words_is_not_treated_as_a_commit
 test_a_commit_ending_a_sentence_is_still_read
 test_a_commit_that_resolves_in_another_object_database_is_not_refused
 test_a_firstmate_commit_named_to_another_projects_worker_is_accepted
+test_a_copy_whose_path_contains_whitespace_is_actually_asked
 test_a_remote_targets_recorded_paths_are_not_judged_locally
 test_a_plain_number_is_not_a_commit_ish
 test_the_typed_planes_are_not_guarded

@@ -837,16 +837,24 @@ $FM_ROOT"
   fi
   for sha in $candidates; do
     resolved=0
-    for repo in $sources; do
+    # Read the source list line by line rather than word-splitting it: a copy
+    # whose path contains a space would otherwise be split into fragments, so
+    # git -C is never called on the real path and the refusal then names a path
+    # it never actually asked. The heredoc keeps the loop in this shell, so
+    # `resolved` survives it.
+    while IFS= read -r repo; do
+      [ -n "$repo" ] || continue
       git -C "$repo" cat-file -e "$sha^{commit}" 2>/dev/null || continue
       resolved=1
       break
-    done
+    done <<EOF
+$sources
+EOF
     [ "$resolved" = 1 ] && continue
     # State the observation, not a cause: the value may have been read
     # somewhere this home cannot see. Naming what WAS looked in is what lets
     # the reader tell a typo from a copy that has not fetched yet.
-    echo "fm-send: $sha resolves to no commit in any local copy this home can read; looked in: $(printf '%s' "$sources" | tr '\n' ' '). Nothing was sent - check the value rather than resending the same text" >&2
+    echo "fm-send: $sha resolves to no commit in any local copy this home can read; looked in: $(printf '%s' "$sources" | sed -e "s/^/'/" -e "s/\$/'/" | tr '\n' ' '). Nothing was sent - check the value rather than resending the same text" >&2
     return 1
   done
   return 0
