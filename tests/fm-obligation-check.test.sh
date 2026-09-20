@@ -337,7 +337,7 @@ test_discovery_is_skipped_for_a_task_that_already_records_its_pull_request() {
   pass "a task that already records its pull request is not discovered again"
 }
 
-test_a_worktree_that_cannot_be_read_is_unknown_not_clean() {
+test_a_worktree_that_is_gone_is_unknown_not_clean() {
   local home out report
   home=$(make_home discover-noworktree)
   task "$home" omega "kind=ship"
@@ -349,7 +349,77 @@ test_a_worktree_that_cannot_be_read_is_unknown_not_clean() {
   assert_contains "$report" "is not there, so whether it has a pull request of its own could not be established" \
     "a missing worktree was not named as the reason obligation 1 could not be established"
   assert_contains "$report" "unknown:" "a missing worktree did not produce an unknown answer"
-  pass "a task whose worktree cannot be read is unknown, not clean"
+  pass "a task whose worktree is gone is unknown, not clean"
+}
+
+# The three states where the worktree PATH is there and the repository cannot
+# be read. Each used to refuse the branch read exactly as a detached HEAD does,
+# and so was reported as "this task has not branched, it can have no pull
+# request" - an input the check could not read, announced as an obligation met.
+# The control below proves the same fixture is genuinely owed.
+assert_discovery_control_is_owed() {
+  local home=$1 out
+  out="$home/control.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "nothing posted on $PR_BASE/7" \
+    "the control did not report, so this case cannot prove anything about silence"
+  rm -f "$home/state/.fleet-obligations"
+}
+
+test_a_worktree_that_is_not_a_repository_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home discover-nogit)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0 fm/nogit
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/nogit
+  assert_discovery_control_is_owed "$home"
+  rm -rf "$home/wt/omega/.git"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a worktree that is no longer a repository produced silence while a pull request sat unreviewed"
+  assert_contains "$report" "is not a readable git repository" \
+    "a worktree that is not a repository was reported as a task that has not branched"
+  assert_contains "$report" "unknown:" "a worktree that is not a repository did not produce an unknown answer"
+  pass "a worktree that is not a readable repository is unknown, not a task that has not branched"
+}
+
+test_a_worktree_whose_git_cannot_be_read_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home discover-gitperm)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0 fm/gitperm
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/gitperm
+  assert_discovery_control_is_owed "$home"
+  chmod 000 "$home/wt/omega/.git"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  chmod 755 "$home/wt/omega/.git"
+  [ -s "$out" ] || fail "a worktree whose .git cannot be read produced silence while a pull request sat unreviewed"
+  assert_contains "$report" "unknown:" "an unreadable .git did not produce an unknown answer"
+  assert_not_contains "$report" "owed:" "an unreadable .git was turned into an owed obligation"
+  pass "a worktree whose .git cannot be read is unknown, not a task that has not branched"
+}
+
+test_a_worktree_read_that_hits_its_bound_is_unknown_not_clean() {
+  local home out report
+  # The case LOCAL_READ_SECS was introduced for. It does not hang the sweep,
+  # and it must not report the stall as "no pull request exists" either.
+  home=$(make_home discover-stall)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0 fm/stall
+  task "$home" omega "kind=ship"
+  task_branch "$home" omega fm/stall
+  assert_discovery_control_is_owed "$home"
+  make_stalled_git "$home"
+  out="$home/out.txt"
+  run "$home" "$out" GIT_STALL_SECS=20
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a worktree read that hit its bound produced silence while a pull request sat unreviewed"
+  assert_contains "$report" "did not answer in time" \
+    "a read that hit its bound was not distinguished from a task that has not branched"
+  assert_contains "$report" "unknown:" "a read that hit its bound did not produce an unknown answer"
+  pass "a worktree read that hits its bound is unknown, not a task that has not branched"
 }
 
 test_a_non_github_origin_is_a_named_gap_not_a_pass() {
@@ -1198,7 +1268,10 @@ test_a_discovered_pull_request_that_is_reviewed_is_silent
 test_a_branch_with_no_pull_request_is_silent
 test_a_task_that_has_not_branched_yet_is_silent_and_costs_nothing
 test_discovery_is_skipped_for_a_task_that_already_records_its_pull_request
-test_a_worktree_that_cannot_be_read_is_unknown_not_clean
+test_a_worktree_that_is_gone_is_unknown_not_clean
+test_a_worktree_that_is_not_a_repository_is_unknown_not_clean
+test_a_worktree_whose_git_cannot_be_read_is_unknown_not_clean
+test_a_worktree_read_that_hits_its_bound_is_unknown_not_clean
 test_a_non_github_origin_is_a_named_gap_not_a_pass
 test_a_poll_bound_to_a_superseded_commit_is_reported
 test_a_poll_bound_to_the_live_commit_is_silent

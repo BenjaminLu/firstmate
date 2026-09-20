@@ -561,9 +561,13 @@ github_slug_from_remote() {
 #
 # A worktree still on a detached HEAD has no branch, so no pull request of this
 # task's work can exist yet: that is a determinate "none", not an unknown, and
-# it stays silent. A recorded worktree that cannot be read, a remote that is not
-# a GitHub one, and a forge read that fails are each undeterminable and say so,
-# because each of them hides whether a pull request is sitting there unreviewed.
+# it stays silent - but only once the repository itself has answered, because a
+# directory that is not a repository, a repository whose .git cannot be read,
+# and a read that hits its bound all refuse the branch read the same way a
+# detached HEAD does. Each of those, a recorded worktree that is gone, a remote
+# that is not a GitHub one, and a forge read that fails are undeterminable and
+# say so, because each of them hides whether a pull request is sitting there
+# unreviewed.
 discover_task_pull_request() {
   local id=$1 meta=$2 wt branch slug remote
   wt=$(meta_value "$meta" worktree)
@@ -575,6 +579,29 @@ discover_task_pull_request() {
     unknown "$id's worktree $wt is not there, so whether it has a pull request of its own could not be established"
     return 0
   fi
+  # Establish that the worktree is a readable repository BEFORE reading its
+  # branch, because otherwise the two answers arrive down one channel.
+  # symbolic-ref refuses identically for a detached HEAD, for a directory that
+  # is not a repository, and for a repository whose .git cannot be read, and
+  # only the first of those means "this task has not branched, so it can have
+  # no pull request". Reading the other two that way reported an input this
+  # check could not read as an obligation met - including a worktree on a
+  # stalled mount, which is the case LOCAL_READ_SECS exists for: it did not
+  # hang the sweep, it reported the stall as "no pull request exists", which is
+  # worse.
+  git_read "$wt" rev-parse --git-dir
+  case "$?" in
+    0) ;;
+    3) budget_note; return 0 ;;
+    2)
+      unknown "$id's worktree $wt did not answer in time, so whether it has a pull request of its own could not be established"
+      return 0
+      ;;
+    *)
+      unknown "$id's worktree $wt is not a readable git repository, so whether it has a pull request of its own could not be established"
+      return 0
+      ;;
+  esac
   git_read "$wt" symbolic-ref --quiet --short HEAD
   case "$?" in
     0) branch=$GIT_OUT ;;
