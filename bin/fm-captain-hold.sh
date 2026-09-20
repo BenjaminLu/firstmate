@@ -52,8 +52,15 @@
 # bin/fm-teardown.sh owns that row's completion transition and a row closed
 # ahead of it strands the worker outside the ordinary lifecycle; the refusal
 # names `--release`, which records the same answer, lifts the hold, and leaves
-# the row for cleanup. `reconcile close` is held to the same rule, and so is
-# every channel, because `answers` resolves through this same command.
+# the row for cleanup; `reconcile close` is held to the same rule but has no
+# second mode, so its refusal names standing the worker down first. Both guard
+# only a NEW close: an interrupted one always finishes, or it could be neither
+# completed nor unblocked. Every channel inherits the rule, because `answers`
+# resolves through this same command.
+# When done_keep has already retired the row, `answer` resolves it out of the
+# archive and replays the recorded answer idempotently, since tasks-axi cannot
+# reopen or update an archived row and reading the active file alone reported
+# a landed answer as absent.
 # It requires a non-empty captain decision file of at most 8192 bytes and
 # writes a resolution block while preserving the leading hold-set stamp until
 # the close succeeds (the previous body is preserved and archived through
@@ -1131,6 +1138,38 @@ remove_interrupted_answer_stamp() {  # <task-id>
   rm -f -- "$tmp"
 }
 
+# An answer whose row done_keep already retired. The close landed and the
+# record is durable in the archive, so the honest reply is the very same
+# idempotent replay the active-row branch gives - and only for the same
+# decision and the same close. tasks-axi cannot reopen or update an archived
+# row, so nothing else is offered here. Reading the active file alone instead
+# reported a landed answer as absent from the backlog, which is the exact
+# shape of the bug this whole change is about.
+replay_archived_answer() {  # <task-id> <release-0-or-1>
+  local id=$1 release=$2 archived status=0 recorded_mode occurrence
+  archived=$(archived_row_body "$id") || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "the backlog archive could not be read while resolving captain-held task $id"
+  [ "$status" -eq 0 ] \
+    || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+  body_has_resolution_record "$archived" \
+    || fail "task $id is closed and archived with no recorded captain answer; an archived row cannot be answered"
+  [ "$(recorded_decision_digest "$archived" || true)" = "$DECISION_DIGEST" ] \
+    || fail "archived task $id records a different captain decision"
+  recorded_mode=$(recorded_resolution_mode "$archived" || true)
+  closed_answer_replay_mode_compatible "$recorded_mode" "$archived" \
+    || fail "archived task $id records this resolution with mode ${recorded_mode:-unknown}; it is not a captain-answer replay"
+  [ "$release" = 0 ] \
+    || fail "archived task $id is already closed; --release cannot reopen it"
+  occurrence=$(resolution_record_count "$archived")
+  if [ "$recorded_mode" = repaired ]; then
+    publish_parent_resolution_then_retire "$id" "$occurrence" "answered (repaired)"
+  else
+    publish_parent_resolution_then_retire "$id" "$occurrence" answered
+  fi
+  printf 'answered: %s\n' "$id"
+}
+
 command_answer() {
   local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
@@ -1147,7 +1186,10 @@ command_answer() {
   load_decision "$decision_file"
   acquire_task_control_lock "$id"
   require_tasks_axi
-  task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  if ! task_show "$id"; then
+    replay_archived_answer "$id" "$release"
+    return $?
+  fi
   show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
@@ -1348,6 +1390,7 @@ sanitize_reconcile_provenance() {
 command_answers() {
   local origin='' source='' row rest key answer label mode id show state hold_kind body digest legacy_digest legacy_key
   local recorded_digest recorded_mode occurrence tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
+  local archived_status
   local resolve_rc
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1434,11 +1477,28 @@ command_answers() {
     if [ -n "$legacy_key" ]; then
       legacy_digest=$(sha256_text "$(legacy_keyed_decision_text "$source" "$legacy_key" "$answer" "$label")")
     fi
-    task_show "$id" || { printf 'skipped: %s (absent)\n' "$id"; skipped=$((skipped + 1)); continue; }
-    show=$TASK_SHOW_OUTPUT
-    state=$(show_field "$show" state)
-    hold_kind=$(show_field_value "$show" hold_kind)
-    body=$(show_field "$show" body)
+    if task_show "$id"; then
+      show=$TASK_SHOW_OUTPUT
+      state=$(show_field "$show" state)
+      hold_kind=$(show_field_value "$show" hold_kind)
+      body=$(show_field "$show" body)
+    else
+      # Retention already retired this row. Its recorded body is the durable
+      # one, and reading it here is what makes a re-delivered answer the
+      # idempotent `closed:` it is on any other home instead of a skipped
+      # count for work that is already recorded.
+      archived_status=0
+      body=$(archived_row_body "$id") || archived_status=$?
+      [ "$archived_status" -ne 2 ] \
+        || fail "the backlog archive could not be read while resolving $id"
+      if [ "$archived_status" -ne 0 ]; then
+        printf 'skipped: %s (absent)\n' "$id"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      state='done'
+      hold_kind=''
+    fi
     recorded_digest=$(recorded_decision_digest "$body" || true)
     recorded_mode=$(recorded_resolution_mode "$body" || true)
     if body_has_resolution_record "$body" \

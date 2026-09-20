@@ -4120,6 +4120,69 @@ test_archive_follows_its_configuration_and_reports_an_unreadable_store() {
   pass "the archive follows its configuration, survives zero retention, and reports an unreadable store"
 }
 
+# A replayed answer is documented as an idempotent no-op, and a board that
+# re-delivers one must get `closed:`, not a skipped count for work already
+# recorded. On a home that keeps no Done entries the row is in the archive by
+# then, so both commands have to read it there or they report the captain's
+# landed answer as absent from the backlog - the very shape of the bug this
+# change is about.
+test_a_replayed_answer_stays_idempotent_after_retention() {
+  local home call board out show
+  home=$(make_home replay-after-retention)
+  call=sample-zero-replay
+  board=sample-zero-board
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$call" "Choose the zero-retention option" --repo sample >/dev/null \
+    || fail "could not create the replay fixture"
+  tasks_in "$home" add "$board" "Choose the zero-retention board option" --repo sample >/dev/null \
+    || fail "could not create the board replay fixture"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the replay fixture"
+  run_captain "$home" hold "$board" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the board replay fixture"
+  printf 'Fund the clock seam.\n' > "$home/replay-decision.txt"
+
+  run_captain "$home" answer "$call" --decision-file "$home/replay-decision.txt" >/dev/null \
+    || fail "could not answer the replay fixture"
+  out=$(run_captain "$home" answer "$call" --decision-file "$home/replay-decision.txt" 2>&1) \
+    || fail "a replayed answer reported failure once retention retired the row: $out"
+  assert_contains "$out" "answered: $call" "the replay did not report the recorded answer: $out"
+  printf 'A different answer entirely.\n' > "$home/drifted.txt"
+  out=$(run_captain "$home" answer "$call" --decision-file "$home/drifted.txt" 2>&1) \
+    && fail "a drifted answer replayed against an archived record: $out"
+  assert_contains "$out" "different captain decision" \
+    "the archived replay accepted drift instead of naming it: $out"
+  out=$(run_captain "$home" answer "$call" --release \
+    --decision-file "$home/replay-decision.txt" 2>&1) \
+    && fail "--release reopened an archived closed task: $out"
+
+  out=$(printf '%s\tgo\tFund it\tdone\n' "$board" \
+    | run_captain "$home" answers --source "board fixture" 2>&1) \
+    || fail "the keyed intake could not answer the board replay fixture: $out"
+  assert_contains "$out" "closed: $board" "the first keyed answer was not recorded: $out"
+  out=$(printf '%s\tgo\tFund it\tdone\n' "$board" \
+    | run_captain "$home" answers --source "board fixture" 2>&1) \
+    || fail "a re-delivered keyed answer reported failure after retention: $out"
+  assert_contains "$out" "closed: $board" "the re-delivered keyed answer was not the idempotent replay: $out"
+  assert_contains "$out" "skipped=0" "the re-delivered keyed answer was counted as skipped: $out"
+
+  # An archived row with no recorded captain answer is still not answerable.
+  tasks_in "$home" add sample-zero-plain "Ordinary finished work" --repo sample >/dev/null \
+    || fail "could not create the plain zero-retention fixture"
+  tasks_in "$home" "done" sample-zero-plain >/dev/null \
+    || fail "could not close the plain zero-retention fixture"
+  out=$(run_captain "$home" answer sample-zero-plain \
+    --decision-file "$home/replay-decision.txt" 2>&1) \
+    && fail "an archived ordinary close was dressed up as an answered captain call: $out"
+  assert_contains "$out" "no recorded captain answer" \
+    "the archived ordinary close was refused for some other reason: $out"
+  show=$(cat "$home/data/done-archive.md")
+  assert_contains "$show" "Fund the clock seam." "the archive lost the captain's recorded words"
+  pass "a replayed answer stays idempotent once retention has archived the row"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4286,6 +4349,7 @@ test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
 test_completion_gate_reads_an_answered_call_out_of_the_archive
 test_archive_follows_its_configuration_and_reports_an_unreadable_store
+test_a_replayed_answer_stays_idempotent_after_retention
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
 test_an_interrupted_close_still_finishes_when_a_worker_appears
