@@ -646,6 +646,16 @@ if [ -n "$PARTITION" ]; then
       }
     }
   ' | LC_ALL=C sort -t "$TAB" -k1,1n)
+  # More partitions than roots leaves the tail bins empty, and an empty bin is
+  # the one outcome this whole contract exists to prevent: the partition would
+  # lint nothing and report success, on the runner whose job it was to check
+  # its share. Refuse it here rather than at the awk, because only this point
+  # knows how many roots the packing actually had to spread.
+  if [ "${#PARTITION_ROOTS[@]}" -eq 0 ]; then
+    printf 'fm-lint.sh: --partition %s selected no roots; the canonical inventory has %s roots to spread over %s partitions.\n' \
+      "$PARTITION" "${#ROOTS[@]}" "$PARTITION_COUNT" >&2
+    exit 2
+  fi
   ROOTS=("${PARTITION_ROOTS[@]}")
 fi
 ROOT_COUNT=${#ROOTS[@]}

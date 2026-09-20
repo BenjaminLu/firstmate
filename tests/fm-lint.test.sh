@@ -259,6 +259,41 @@ test_partition_count_generalises_past_two() {
   pass "lint partitions stay complete and disjoint at any count, not just two"
 }
 
+# More partitions than roots leaves the tail bins empty. An empty partition is
+# the one outcome the contract exists to prevent: it lints nothing and reports
+# success, on the runner whose job it was to check its share. The index is
+# in range, so only a check on the produced root set can catch it.
+test_a_partition_that_would_lint_nothing_is_refused() {
+  local tmp roots over rc out
+  tmp=$(fm_test_tmproot fm-lint-empty-partition)
+  roots=$(CI=true "$LINT" --list-files | grep -c .)
+  [ "$roots" -gt 0 ] || fail "canonical inventory is empty"
+  over=$((roots + 1))
+
+  # Listing must refuse rather than print an empty set and exit clean.
+  rc=0
+  out=$("$LINT" --partition "${over}of${over}" --list-files 2>&1) || rc=$?
+  [ "$rc" = 2 ] || fail "an empty partition listing must refuse (exit 2), got $rc"
+  printf '%s\n' "$out" | grep -q "selected no roots" \
+    || fail "refusal must say the partition selected no roots: $out"
+  printf '%s\n' "$out" | grep -q "$roots roots" \
+    || fail "refusal must name how many roots there were to spread: $out"
+
+  # And the real lint must refuse the same way rather than fail internally.
+  rc=0
+  out=$("$LINT" --partition "${over}of${over}" 2>&1) || rc=$?
+  [ "$rc" = 2 ] || fail "an empty partition lint must refuse (exit 2), got $rc"
+  printf '%s\n' "$out" | grep -q "selected no roots" \
+    || fail "empty partition lint must refuse by name, not fail internally: $out"
+
+  # The last partition that still has a root is not refused, so the bound is
+  # the empty set itself rather than an arbitrary cap on the count.
+  "$LINT" --partition "1of${roots}" --list-files > "$tmp/ok" 2>&1 \
+    || fail "a partition that still holds a root must not be refused"
+  [ "$(grep -c . "$tmp/ok")" -ge 1 ] || fail "expected at least one root"
+  pass "a lint partition that would check nothing is refused instead of passing empty"
+}
+
 # fm_lint_stub_git <fakebin-dir>: install a git stub for the changed-file mode
 # tests below. Its answers are driven by env vars the caller sets before
 # invoking fm-lint.sh, so those tests can steer git state without depending on
@@ -1616,6 +1651,7 @@ test_help_reports_the_complete_interface
 test_list_files_reports_the_shell_inventory
 test_canonical_partitions_preserve_full_lint
 test_partition_count_generalises_past_two
+test_a_partition_that_would_lint_nothing_is_refused
 test_fast_mode_disables_extended_analysis
 test_ci_defaults_to_full_analysis
 test_ci_rejects_explicit_fast_mode
