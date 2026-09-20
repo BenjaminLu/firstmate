@@ -148,6 +148,9 @@ So a test asserts what a script REFUSES, MUTATES, or PRODUCES, never the text an
 - Assert a machine-read field by its key and value; the surrounding report wording is presentation and evolves with it.
 - Never assert a contract line in `AGENTS.md`, a skill, or a document, in any form.
 
+When the two are hard to tell apart, the practical test is function words: an English sentence has them, a machine-readable line does not.
+`ready pf-restart req-restart discord` and `done [key=child-pr-task-x1]: ...` are structure a reader takes apart by shape; `the brief says mode=no-mistakes but this spawn passed --mode direct-PR` is a sentence, however many identifiers it contains.
+
 When a guarantee genuinely lives in generated instructions - a brief that must carry its safety contract - assert it structurally, by the presence of the required section, not by the sentences inside it.
 The measured inventory behind this rule, including what deleting the pinned-text tests costs, is [`docs/test-suite-inventory.md`](../../../docs/test-suite-inventory.md).
 
