@@ -174,7 +174,8 @@ The candidate uses fifteen long-lived Linux jobs (nine serial, two parallel, two
 
 **That last clause is now the binding constraint, not a caveat.**
 This repository is public and on a plan whose whole-account ceiling is twenty concurrent jobs: across 180 jobs sampled from ten runs on 2026-09-20, concurrency reached exactly 20 and never 21, and sat pinned at 20 for 12.5% of the window.
-One CI run is already eighteen jobs, so a second run in flight queues behind the first, and measured queue waits in that sample reached 3478 s for a single job - several times the execution time the packing saves.
+One CI run is already nineteen jobs at this layout - the fifteen long-lived Linux jobs named above plus the coverage guard, the timing aggregate, the repository invariants, and macOS - so a second run in flight queues behind the first, and measured queue waits in that sample reached 3478 s for a single job, several times the execution time the packing saves.
+That leaves one spare slot, which is what decides whether the next shard is free.
 The consequence for this layout is concrete: splitting work across more runners only shortens the wall clock while the run fits inside that ceiling, and past it a run serialises its own overflow behind its own long jobs.
 Prefer changes that cut runner-seconds without adding a job over changes that buy another runner, and measure the account's concurrent-job ceiling before assuming a shard count is free.
 Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one worker leaves most of that machine idle - but idle cores are not automatically a saving, and the rule for when they are is below.
