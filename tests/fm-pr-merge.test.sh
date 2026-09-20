@@ -65,21 +65,23 @@ make_case() {
 # Args: state commit_oid author_login [body] [submittedAt]
 review_entry() {
   local state=$1 oid=$2 login=$3 body=${4:-} submitted=${5:-2026-09-20T09:00:00Z}
+  local assoc=${6:-COLLABORATOR}
   # shellcheck disable=SC2016  # jq, not the shell, expands these --arg names.
   "$JQ_BIN" -nc \
     --arg state "$state" --arg oid "$oid" --arg login "$login" \
-    --arg body "$body" --arg at "$submitted" \
-    '{state: $state, commit: {oid: $oid}, author: {login: $login}, submittedAt: $at, body: $body}'
+    --arg body "$body" --arg at "$submitted" --arg assoc "$assoc" \
+    '{state: $state, commit: {oid: $oid}, author: {login: $login}, authorAssociation: $assoc, submittedAt: $at, body: $body}'
 }
 
 # The review the fleet actually posts today: GitHub refuses --approve from the
 # one account that opened the pull request, so the verdict is the last line of
-# a COMMENTED review body. Args: oid [login]
+# a COMMENTED review body. Args: oid [login] [authorAssociation]
 approving_review() {
   review_entry COMMENTED "$1" "${2:-reviewer}" \
     'R1 naming, preference, low.
 
-Review verdict: APPROVED'
+Review verdict: APPROVED' \
+    2026-09-20T09:00:00Z "${3:-COLLABORATOR}"
 }
 
 # Live GitHub JSON for the pre-merge verify, plus gh-axi for the
@@ -3565,3 +3567,95 @@ test_unreadable_reviews_refuse_the_merge
 test_gitlab_merge_refuses_without_an_approval
 test_gitlab_merge_refuses_when_approvals_cannot_be_read
 test_gitlab_merge_discloses_that_an_approval_is_not_head_bound
+
+# The gate must authenticate the speaker, not only the statement: on a public
+# repository any account with read access can post a COMMENTED review.
+test_a_stranger_cannot_supply_the_approval() {
+  local case_dir rc head=cccccccccccccccccccccccccccccccccccccccc
+  case_dir=$(make_case github-stranger-approval)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(approving_review "$head" random-stranger NONE)"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-stranger-approval: an outside account must not approve"
+  assert_grep 'random-stranger' "$case_dir/stderr" \
+    "github-stranger-approval: the refusal did not name the account"
+  assert_grep 'OWNER, MEMBER, or COLLABORATOR' "$case_dir/stderr" \
+    "github-stranger-approval: the refusal did not say which associations count"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "github-stranger-approval: gh pr merge ran on a stranger's approval"
+  pass "fm-pr-merge refuses an approval from an account this repository granted no standing"
+}
+
+test_each_granted_association_may_approve() {
+  local case_dir assoc n=200 head=dddddddddddddddddddddddddddddddddddddddd
+  for assoc in OWNER MEMBER COLLABORATOR; do
+    n=$((n + 1))
+    case_dir=$(make_case "github-assoc-$assoc")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" "$head"
+    write_github_reviews "$case_dir" "$head" \
+      "$(approving_review "$head" reviewer "$assoc")"
+    run_pr_merge "$case_dir" task-x1 "https://github.com/example/repo/pull/$n" \
+      > "$case_dir/stdout" 2> "$case_dir/stderr" \
+      || fail "github-assoc-$assoc: $assoc should be able to approve"$'\n'"$(cat "$case_dir/stderr")"
+    assert_grep "approved by reviewer ($assoc)" "$case_dir/stderr" \
+      "github-assoc-$assoc: the merge did not record the approver's association"
+  done
+
+  # CONTRIBUTOR has commits here but no standing the repository granted, which
+  # is the boundary of the trusted set rather than an arbitrary omission.
+  case_dir=$(make_case github-assoc-contributor)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(approving_review "$head" past-contributor CONTRIBUTOR)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/205 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-assoc-contributor: CONTRIBUTOR must not approve"
+  assert_grep 'CONTRIBUTOR' "$case_dir/stderr" \
+    "github-assoc-contributor: the refusal did not name the association it read"
+  pass "fm-pr-merge accepts an approval from OWNER, MEMBER, or COLLABORATOR and no one else"
+}
+
+# The disclosure has to speak in the case it used to be silent about: an
+# approver that is not the account which opened the pull request.
+test_the_disclosure_speaks_in_both_cases() {
+  local case_dir head=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  case_dir=$(make_case github-disclosure-other-account)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(approving_review "$head" reviewer MEMBER)" worker
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-disclosure-other-account: the merge should proceed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'not the account that opened the pull request' "$case_dir/stderr" \
+    "github-disclosure-other-account: a different-account approval passed with no disclosure"
+  assert_grep 'cannot establish' "$case_dir/stderr" \
+    "github-disclosure-other-account: the notice implied a dispatch it cannot check"
+
+  case_dir=$(make_case github-disclosure-same-account)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" "$(approving_review "$head" solo OWNER)" solo
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-disclosure-same-account: the merge should proceed"$'\n'"$(cat "$case_dir/stderr")"
+  assert_grep 'cannot separate the two here' "$case_dir/stderr" \
+    "github-disclosure-same-account: the same-account case lost its disclosure"
+  pass "fm-pr-merge discloses who approved in both cases, never silently in one"
+}
+
+test_a_stranger_cannot_supply_the_approval
+test_each_granted_association_may_approve
+test_the_disclosure_speaks_in_both_cases

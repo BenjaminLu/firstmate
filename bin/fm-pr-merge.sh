@@ -14,7 +14,8 @@
 # current head commit, and every unwaived check is green at that same commit,
 # where github_checks_not_green below owns what makes a check green and judges
 # each one by its current run, and github_approval_state below owns what counts
-# as an approval. Every failing condition is reported, not
+# as an approval, including which accounts may give one and the one class of
+# approver it cannot tell apart. Every failing condition is reported, not
 # just the first, and the same list is recorded as this task's `refused` gate
 # call through bin/fm-gate-calls-lib.sh, which owns that record and never lets
 # it change the merge. The verified head is then passed to gh as
@@ -659,6 +660,23 @@ github_checks_not_green() {
 # a superseded commit is not an approval of what would merge, so a push after a
 # review leaves the pull request unapproved again and the refusal names the
 # commit that was reviewed.
+#
+# WHO may approve is checked as well as what they wrote, because on a public
+# repository any account with read access can submit a COMMENTED review, and a
+# gate that reads only the text would be satisfied by a stranger typing one
+# line. authorAssociation comes back in the same view already, so an approving
+# review counts only from OWNER, MEMBER, or COLLABORATOR: the associations the
+# repository itself grants. Every other association, CONTRIBUTOR and NONE
+# included, is reported by name rather than silently ignored, because an
+# approval that was written and then refused is the case an operator most needs
+# to see.
+#
+# What this cannot distinguish, stated plainly because the merge line must not
+# imply otherwise: among accounts that DO hold one of those associations, this
+# has no way to tell a reviewer firstmate dispatched from any other. GitHub
+# records standing, not who was asked. That half of the captain's separation
+# rests on firstmate dispatching the reviewer and the reviewer not being the
+# worker, and the merge line says which of the two cases it is looking at.
 github_approval_state() {
   local json=$1 head=$2
   printf '%s' "$json" | jq -r --arg head "$head" '
@@ -670,16 +688,26 @@ github_approval_state() {
       | last // "";
     def approves: .state == "APPROVED" or (tail_line == "Review verdict: APPROVED");
     def refuses: .state == "CHANGES_REQUESTED" or (tail_line == "Review verdict: NOT APPROVED");
+    def standing:
+      (.authorAssociation // "") as $a
+      | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
     if type != "object" or (.reviews | type) != "array" then error("no reviews") else . end
     | (.reviews | sort_by(.submittedAt // "")) as $all
     | ($all | map(select((.commit.oid // "") == $head))) as $at
+    | ($at | map(select(approves and standing))) as $ok
+    | ($at | map(select(approves and (standing | not)))) as $outside
+    | ($at | map(select(refuses))) as $no
     | "pr_author=" + ((.author.login // "") | tostring),
       "reviews_total=" + (($all | length) | tostring),
       "at_head=" + (($at | length) | tostring),
-      "approving=" + (($at | map(select(approves)) | length) | tostring),
-      "refusing=" + (($at | map(select(refuses)) | length) | tostring),
-      "approver=" + (($at | map(select(approves)) | last | .author.login // "") | tostring),
-      "refuser=" + (($at | map(select(refuses)) | last | .author.login // "") | tostring),
+      "approving=" + (($ok | length) | tostring),
+      "outside=" + (($outside | length) | tostring),
+      "refusing=" + (($no | length) | tostring),
+      "approver=" + (($ok | last | .author.login // "") | tostring),
+      "approver_assoc=" + (($ok | last | .authorAssociation // "") | tostring),
+      "outside_approver=" + (($outside | last | .author.login // "") | tostring),
+      "outside_assoc=" + (($outside | last | .authorAssociation // "") | tostring),
+      "refuser=" + (($no | last | .author.login // "") | tostring),
       "newest_reviewed=" + (($all | last | .commit.oid // "") | tostring)
   ' 2>/dev/null || return 1
 }
@@ -691,8 +719,9 @@ github_verify_mergeable() {
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
   local approval_total=0 approval_named=0
-  local pr_author='' reviews_total='' at_head='' approving='' refusing=''
-  local approver='' refuser='' newest_reviewed=''
+  local pr_author='' reviews_total='' at_head='' approving='' outside='' refusing=''
+  local approver='' approver_assoc='' outside_approver='' outside_assoc=''
+  local refuser='' newest_reviewed=''
 
   if ! json=$(gh pr view "$URL" --json state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup,reviews,author 2>/dev/null) \
     || [ -z "$json" ]; then
@@ -752,8 +781,12 @@ FIELDS
       reviews_total=*) reviews_total=${line#reviews_total=} ;;
       at_head=*) at_head=${line#at_head=} ;;
       approving=*) approving=${line#approving=} ;;
+      outside=*) outside=${line#outside=} ;;
       refusing=*) refusing=${line#refusing=} ;;
       approver=*) approver=${line#approver=} ;;
+      approver_assoc=*) approver_assoc=${line#approver_assoc=} ;;
+      outside_approver=*) outside_approver=${line#outside_approver=} ;;
+      outside_assoc=*) outside_assoc=${line#outside_assoc=} ;;
       refuser=*) refuser=${line#refuser=} ;;
       newest_reviewed=*) newest_reviewed=${line#newest_reviewed=} ;;
       *) continue ;;
@@ -763,9 +796,9 @@ FIELDS
 $approval
 APPROVAL
   # A login or commit carrying a newline would split into a line no name
-  # matches, so a payload that does not read as exactly these eight fields is a
-  # failed read rather than one an approval count could be taken from.
-  if [ "$approval_named" -ne 8 ] || [ "$approval_total" -ne 8 ]; then
+  # matches, so a payload that does not read as exactly these twelve fields is
+  # a failed read rather than one an approval count could be taken from.
+  if [ "$approval_named" -ne 12 ] || [ "$approval_total" -ne 12 ]; then
     echo "error: could not read the GitHub pull request reviews before merging" >&2
     return 1
   fi
@@ -798,6 +831,9 @@ APPROVAL
   elif [ "$approving" -eq 0 ]; then
     if [ "$reviews_total" -eq 0 ]; then
       refusals="$refusals  - no review has been posted, so nothing has approved this pull request
+"
+    elif [ "$outside" -gt 0 ]; then
+      refusals="$refusals  - the only approval at the current head $live_head is by ${outside_approver:-an unnamed account}, whose association with this repository is \"${outside_assoc:-unreadable}\"; an approval counts only from OWNER, MEMBER, or COLLABORATOR
 "
     elif [ "$at_head" -eq 0 ]; then
       refusals="$refusals  - the newest review is of commit ${newest_reviewed:-unreadable}, not the current head $live_head, so nothing has approved what would merge
@@ -834,16 +870,19 @@ EOF
       "merge pull request $PR_NUMBER in $PR_OWNER/$PR_REPO" "$refusals"
     return 1
   fi
-  # Naming the approver is the whole audit trail this gate leaves behind. When
-  # the approver is the pull request's own author, GitHub has no second account
-  # to tell the two apart, so say that rather than let the merge line imply a
-  # separation the forge never checked.
+  # Naming the approver is the whole audit trail this gate leaves behind, and
+  # both cases get a line, because saying nothing in one of them is what makes
+  # the other one read as a guarantee. Neither case is checkable here: GitHub
+  # records an account's standing, never who firstmate asked to review.
   if [ -n "$pr_author" ] && [ "$approver" = "$pr_author" ]; then
     printf 'notice: %s approved at head %s, which is also the account that opened the pull request; GitHub cannot separate the two here, so the reviewer being someone other than the worker rests on how firstmate dispatched it, not on this check\n' \
       "$approver" "$live_head" >&2
+  else
+    printf 'notice: %s approved at head %s as %s, and is not the account that opened the pull request; that association is standing on this repository, not evidence that firstmate dispatched this reviewer, which this check cannot establish\n' \
+      "${approver:-an unnamed reviewer}" "$live_head" "${approver_assoc:-an unreadable association}" >&2
   fi
-  printf 'verified: %s is open and mergeable, approved by %s, with every required check green at head %s\n' \
-    "$URL" "${approver:-an unnamed reviewer}" "$live_head" >&2
+  printf 'verified: %s is open and mergeable, approved by %s (%s), with every required check green at head %s\n' \
+    "$URL" "${approver:-an unnamed reviewer}" "${approver_assoc:-unreadable}" "$live_head" >&2
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITHUB_BASE=$base
 }
