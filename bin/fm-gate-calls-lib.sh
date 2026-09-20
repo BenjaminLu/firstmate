@@ -48,13 +48,17 @@
 #        with FM_GATE_CALL_CUT_MARK, so the value itself says it was
 #        shortened and which field it was.
 #     2. the loop dropped `link` or `key` whole to reach the line bound. The
-#        name is in `rejected`; no field carries a cut mark, and `what` and
-#        `grounds` are intact.
+#        name is in `rejected`. This cause leaves no mark of its own, but it
+#        does not exclude cause 1 - a record can have a dropped link AND a
+#        cut `grounds` carrying its mark, because a long ruling and a long
+#        link are both reasons to be over the bound.
 #     3. the drop path cut an over-cap `site`, `task`, `link` or `key` to its
 #        byte cap. Those cuts carry no mark either, and they appear only in
 #        the drops record.
+#   The causes are not exclusive and the flag does not say which one fired.
 #   So a cut mark implies `truncated`, but `truncated` does not imply a cut
-#   mark, and a record can be flagged with every body intact.
+#   mark, does not imply that the bodies are intact, and does not identify
+#   what changed.
 #
 #   TWO SEVERITIES OF BAD INPUT, because they cost different things.
 #   `site` and `task` say which call this is, and `verdict`, `what` and
@@ -69,11 +73,28 @@
 #   `rejected` names a field that is not in the record, and that ALSO has two
 #   causes: the field was malformed, as above, or it was well-formed and the
 #   shortening ladder dropped it to get the line under the bound (see BOUNDS).
-#   The two are told apart by `truncated`, which is false for the first and
-#   true for the second, because dropping a good field departs from what the
-#   caller passed and refusing a bad one does not. A board must not report a
-#   name in `rejected` as a malformed value on its own: that would tell the
-#   captain firstmate pasted a bad link when firstmate pasted a long one.
+#   `truncated` separates them in ONE direction only, and reading it as if it
+#   separated them in both is the mistake to avoid. `truncated:false` proves
+#   every name listed was malformed, because dropping a good field always
+#   sets the flag. `truncated:true` proves nothing about any particular name:
+#   some other cause above may have set it, so a malformed link in a record
+#   whose `grounds` were also shortened looks exactly like a good link
+#   dropped for length. And when `rejected` lists more than one name the
+#   record does not say which cause belongs to which - a malformed `key`
+#   beside a dropped `link` is recorded as `key,link` under one flag.
+#
+#   So state "the value was malformed" only when `truncated` is false;
+#   otherwise say the field is not in the record and stop. Who that costs is
+#   worth being exact about, because it is not a rendering problem: both
+#   causes leave `link` empty, so anything keying on presence or absence is
+#   unaffected either way. It costs whoever reads this log to ask an
+#   operational question - is some call site pasting malformed links? A
+#   malformed link is a bug where the call was made; a dropped one is the
+#   bound working as designed, and in a composite record the two cannot be
+#   told apart. That is a diagnostic cost carried by a person reading the
+#   log. Attributing each name to its own cause would take a per-field
+#   record this format deliberately does not carry, and it is not worth
+#   adding until someone actually hits that question and cannot answer it.
 #   `rejected` is empty when nothing was dropped for either reason.
 #
 #   Nothing in this library reads the log. Rendering it is a separate surface;

@@ -443,12 +443,13 @@ test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds() {
   pass "an over-cap link is rejected on its byte length, before it can cost the grounds anything"
 }
 
-test_a_dropped_good_link_is_told_apart_from_a_malformed_one() {
-  local home log rc=0 long_link
-  home=$(make_home dropped-vs-malformed)
+test_truncated_false_proves_malformed_and_true_proves_nothing() {
+  local home log rc=0 long_link quotes
+  # `truncated` separates the two causes of a name in `rejected` in ONE
+  # direction. This case pins both halves, because reading it as if it
+  # separated them in both directions is what the contract now warns against.
+  home=$(make_home dropped-good-link)
   log="$home/state/gate-calls.jsonl"
-  # Well-formed and inside its byte cap. Nothing here is malformed and
-  # nothing needs shortening; the link is dropped only to fit the line.
   long_link="https://x.example/$(head -c 470 < /dev/zero | tr '\0' 'p')"
 
   run_gate_call "$home" record --site "$(head -c 40 < /dev/zero | tr '\0' 's')" \
@@ -462,26 +463,53 @@ test_a_dropped_good_link_is_told_apart_from_a_malformed_one() {
   assert_equals link "$(log_field "$log" 1 rejected)" \
     "dropped-good-link: the dropped link is invisible in the record"
   assert_equals true "$(log_field "$log" 1 truncated)" \
-    "dropped-good-link: dropping a well-formed field departs from what the caller passed and must be flagged - it is what tells this apart from a malformed one"
+    "dropped-good-link: dropping a well-formed field departs from what the caller passed and must be flagged"
   assert_equals 'merge pull request 38' "$(log_field "$log" 1 what)" \
     "dropped-good-link: the subject was altered when only the link should have gone"
-  case "$(log_field "$log" 1 grounds)" in
-    *...) fail "dropped-good-link: the grounds carry a cut mark, but nothing was shortened" ;;
-  esac
 
-  # The other cause of the same `rejected` value, side by side: a malformed
-  # link is refused rather than dropped, so the record is otherwise verbatim.
-  home=$(make_home malformed-for-contrast)
+  # The sound direction: nothing was dropped for length, so the flag is false
+  # and every name in `rejected` is provably a malformed value.
+  home=$(make_home malformed-only)
   log="$home/state/gate-calls.jsonl"
   run_gate_call "$home" record --site pr-merge --task task-c2 --verdict refused \
     --what 'merge pull request 38' --grounds 'the checks are not green' \
     --link 'https://x.example/one two' >/dev/null 2>&1 \
-    || fail "malformed-for-contrast: the call must still record"
+    || fail "malformed-only: the call must still record"
   assert_equals link "$(log_field "$log" 1 rejected)" \
-    "malformed-for-contrast: the malformed link is invisible in the record"
+    "malformed-only: the malformed link is invisible in the record"
   assert_equals false "$(log_field "$log" 1 truncated)" \
-    "malformed-for-contrast: refusing a malformed field changes nothing the caller passed, so the two causes of rejected stop being distinguishable"
-  pass "a field dropped to fit the bound and a field refused as malformed are both named in rejected and told apart by truncated"
+    "malformed-only: with nothing dropped for length the flag must stay false, which is what makes it proof of a malformed value"
+
+  # The unsound direction: the SAME malformed link, with grounds long enough
+  # to shorten, produces the same pairing as the dropped-good-link record
+  # above. Nothing rendered depends on telling them apart - both leave
+  # `link` empty - but a person reading this log to ask whether some call
+  # site is pasting bad URLs cannot answer it from a composite record.
+  home=$(make_home malformed-and-shortened)
+  log="$home/state/gate-calls.jsonl"
+  run_gate_call "$home" record --site pr-merge --task task-c3 --verdict refused \
+    --what 'merge pull request 38' \
+    --grounds "$(head -c 3000 < /dev/zero | tr '\0' 'g')" \
+    --link 'https://x.example/one two' >/dev/null 2>&1 \
+    || fail "malformed-and-shortened: the call must still record"
+  assert_equals link "$(log_field "$log" 1 rejected)" \
+    "malformed-and-shortened: the malformed link is invisible in the record"
+  assert_equals true "$(log_field "$log" 1 truncated)" \
+    "malformed-and-shortened: another cause set the flag, which is exactly why truncated:true cannot attribute a rejected name to either cause"
+
+  # And with two names the record does not say which cause belongs to which.
+  home=$(make_home two-causes)
+  log="$home/state/gate-calls.jsonl"
+  quotes=$(head -c 460 < /dev/zero | tr '\0' '"')
+  run_gate_call "$home" record --site pr-merge --task task-c4 --verdict refused \
+    --what 'merge pull request 38' --grounds 'the checks are not green' \
+    --link "https://x.example/$quotes" --key 'R1 (bad)' >/dev/null 2>&1 \
+    || fail "two-causes: the call must still record"
+  assert_equals 'key,link' "$(log_field "$log" 1 rejected)" \
+    "two-causes: a malformed key beside a dropped link must still name both fields"
+  assert_equals true "$(log_field "$log" 1 truncated)" \
+    "two-causes: one flag covers both names, which is why it cannot attribute either"
+  pass "truncated:false proves every rejected name was malformed, and truncated:true attributes nothing"
 }
 
 test_an_escape_heavy_link_cannot_cross_the_boundary() {
@@ -736,7 +764,7 @@ test_an_oversized_call_is_shortened_visibly
 test_a_bulky_link_costs_the_link_and_never_the_ruling
 test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds
 test_an_escape_heavy_link_cannot_cross_the_boundary
-test_a_dropped_good_link_is_told_apart_from_a_malformed_one
+test_truncated_false_proves_malformed_and_true_proves_nothing
 test_a_bulky_task_id_keeps_the_drops_record_bounded
 test_no_emitted_line_can_cross_the_flush_boundary
 test_concurrent_writers_produce_parseable_records
