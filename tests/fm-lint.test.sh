@@ -213,7 +213,7 @@ test_canonical_partitions_preserve_full_lint() {
     [ "$(LC_ALL=C sort -u "$mode")" = on ] || fail "partition $part disabled full analysis"
   done
   [ "$(LC_ALL=C sort "$tmp/union")" = "$all" ] || fail "lint partitions lose or duplicate canonical roots"
-  for option in 0of2 3of2 1of3; do
+  for option in 0of2 3of2 1of0 2of0 bogus 1of 'of2' -1of2; do
     rc=0
     "$LINT" --partition "$option" --list-files > "$tmp/refused" 2>&1 || rc=$?
     [ "$rc" = 2 ] || fail "invalid partition $option was not refused"
@@ -225,6 +225,73 @@ test_canonical_partitions_preserve_full_lint() {
   "$LINT" --partition 1of2 bin/fm-lint.sh > "$tmp/refused" 2>&1 || rc=$?
   [ "$rc" = 2 ] || fail "partition accepted an explicit subset"
   pass "two canonical lint partitions preserve complete source-aware coverage and reject weakened modes"
+}
+
+# The partition count is the caller's, so the split has to stay complete and
+# disjoint at every count rather than only at the two CI happens to run today.
+# A count that silently dropped roots would report a clean lint having checked
+# nothing on the runner whose job it was to check them, which is the failure
+# the whole partition contract exists to prevent.
+test_partition_count_generalises_past_two() {
+  local tmp all count k part selected first
+  tmp=$(fm_test_tmproot fm-lint-partition-counts)
+  all=$(CI=true "$LINT" --list-files | LC_ALL=C sort)
+  for count in 1 3 4 7; do
+    : > "$tmp/union.$count"
+    k=1
+    while [ "$k" -le "$count" ]; do
+      part="${k}of${count}"
+      selected=$(CI=false GITHUB_ACTIONS=false "$LINT" --partition "$part" --list-files) \
+        || fail "partition $part must select canonical roots"
+      [ -n "$selected" ] || fail "partition $part selected no roots"
+      first=$(printf '%s\n' "$selected" | LC_ALL=C sort)
+      [ "$first" = "$("$LINT" --partition "$part" --list-files | LC_ALL=C sort)" ] \
+        || fail "partition $part is nondeterministic"
+      printf '%s\n' "$selected" >> "$tmp/union.$count"
+      k=$((k + 1))
+    done
+    [ "$(LC_ALL=C sort "$tmp/union.$count")" = "$all" ] \
+      || fail "the $count-way lint split loses or duplicates canonical roots"
+    [ "$(LC_ALL=C sort -u "$tmp/union.$count" | wc -l | tr -d ' ')" \
+      = "$(wc -l < "$tmp/union.$count" | tr -d ' ')" ] \
+      || fail "the $count-way lint split assigns a root to more than one partition"
+  done
+  pass "lint partitions stay complete and disjoint at any count, not just two"
+}
+
+# More partitions than roots leaves the tail bins empty. An empty partition is
+# the one outcome the contract exists to prevent: it lints nothing and reports
+# success, on the runner whose job it was to check its share. The index is
+# in range, so only a check on the produced root set can catch it.
+test_a_partition_that_would_lint_nothing_is_refused() {
+  local tmp roots over rc out
+  tmp=$(fm_test_tmproot fm-lint-empty-partition)
+  roots=$(CI=true "$LINT" --list-files | grep -c .)
+  [ "$roots" -gt 0 ] || fail "canonical inventory is empty"
+  over=$((roots + 1))
+
+  # Listing must refuse rather than print an empty set and exit clean.
+  rc=0
+  out=$("$LINT" --partition "${over}of${over}" --list-files 2>&1) || rc=$?
+  [ "$rc" = 2 ] || fail "an empty partition listing must refuse (exit 2), got $rc"
+  printf '%s\n' "$out" | grep -q "selected no roots" \
+    || fail "refusal must say the partition selected no roots: $out"
+  printf '%s\n' "$out" | grep -q "$roots roots" \
+    || fail "refusal must name how many roots there were to spread: $out"
+
+  # And the real lint must refuse the same way rather than fail internally.
+  rc=0
+  out=$("$LINT" --partition "${over}of${over}" 2>&1) || rc=$?
+  [ "$rc" = 2 ] || fail "an empty partition lint must refuse (exit 2), got $rc"
+  printf '%s\n' "$out" | grep -q "selected no roots" \
+    || fail "empty partition lint must refuse by name, not fail internally: $out"
+
+  # The last partition that still has a root is not refused, so the bound is
+  # the empty set itself rather than an arbitrary cap on the count.
+  "$LINT" --partition "1of${roots}" --list-files > "$tmp/ok" 2>&1 \
+    || fail "a partition that still holds a root must not be refused"
+  [ "$(grep -c . "$tmp/ok")" -ge 1 ] || fail "expected at least one root"
+  pass "a lint partition that would check nothing is refused instead of passing empty"
 }
 
 # fm_lint_stub_git <fakebin-dir>: install a git stub for the changed-file mode
@@ -718,10 +785,28 @@ test_changed_mode_hides_cross_file_codes_that_ci_still_sees() {
     pass "SKIP (ShellCheck $REQUIRED not resolved): changed-mode exclusion behavior"
     return
   fi
-  local tmp fakebin diff_file fixture out rc
+  # The fixture lives in a throwaway repo, never in this one. It has to be a
+  # canonical root for changed mode to lint it at all, and this repository's
+  # canonical roots are bin/*.sh bin/backends/*.sh tests/*.sh - so any path
+  # here that keeps the changed-mode half meaningful also lands in an
+  # inventory something else enumerates. Writing it into a copy of the repo
+  # removes that question instead of answering it: bin/fm-test-run.sh's
+  # tests/*.test.sh set and bin/fm-lint.sh's own canonical set both stay
+  # exactly as they were while this test runs.
+  local tmp fakebin diff_file fixture repo lint_copy out rc
   tmp=$(fm_test_tmproot fm-lint-local-exclude-behavior)
-  fixture="$ROOT/tests/fm-lint-local-exclude-fixture.test.sh"
-  printf '%s\n' "$fixture" >> "$FM_TEST_CLEANUP_REGISTRY"
+  repo="$tmp/repo"
+  mkdir -p "$repo/bin/backends" "$repo/tests"
+  lint_copy="$repo/bin/fm-lint.sh"
+  cp "$LINT" "$lint_copy"
+  cp "$UNRUNNABLE_LIB" "$repo/bin/"
+  # fm-lint.sh resolves its root from its own location, so the copy lints the
+  # throwaway repo. Workflow lint is stubbed clean so the exit status this test
+  # reads is ShellCheck's verdict on the fixture and nothing else.
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/fm-lint-workflows.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/bin/backends/noop.sh"
+  chmod +x "$lint_copy" "$repo/bin/fm-lint-workflows.sh"
+  fixture="$repo/tests/fm-lint-local-exclude-fixture.test.sh"
   cat > "$fixture" <<'SH'
 #!/usr/bin/env bash
 # Assigned here and only consumed by a library the local gate does not follow.
@@ -743,20 +828,19 @@ SH
   fm_lint_write_diff_file "$diff_file" "tests/fm-lint-local-exclude-fixture.test.sh"
 
   rc=0
-  out=$(PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
+  out=$(cd "$repo" && PATH="$fakebin:$PATH" GITHUB_ACTIONS='' CI='' FM_LINT_JOBS=1 \
     FM_TEST_GIT_BRANCH=feature \
-    FM_TEST_GIT_DIFF_FILE="$diff_file" "$LINT" 2>&1) || rc=$?
+    FM_TEST_GIT_DIFF_FILE="$diff_file" "$lint_copy" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] \
     || fail "changed-mode local lint failed a cross-file-only fixture"$'\n'"$out"
   assert_not_contains "$out" "SC2034" "changed-mode local lint still reported SC2034"
   assert_not_contains "$out" "SC2329" "changed-mode local lint still reported SC2329"
 
   rc=0
-  out=$("$LINT" "$fixture" 2>&1) || rc=$?
+  out=$(cd "$repo" && "$lint_copy" tests/fm-lint-local-exclude-fixture.test.sh 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "explicit-path lint passed a cross-file-only fixture"$'\n'"$out"
   assert_contains "$out" "SC2034" "explicit-path lint did not keep SC2034"
   assert_contains "$out" "SC2329" "explicit-path lint did not keep SC2329"
-  rm -f "$fixture"
   pass "fm-lint.sh changed mode excludes cross-file codes that explicit paths still report"
 }
 
@@ -1583,6 +1667,8 @@ SH
 test_help_reports_the_complete_interface
 test_list_files_reports_the_shell_inventory
 test_canonical_partitions_preserve_full_lint
+test_partition_count_generalises_past_two
+test_a_partition_that_would_lint_nothing_is_refused
 test_fast_mode_disables_extended_analysis
 test_ci_defaults_to_full_analysis
 test_ci_rejects_explicit_fast_mode
