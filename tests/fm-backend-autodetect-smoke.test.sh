@@ -93,7 +93,7 @@ trap on_exit EXIT
 # gitignored and exists only in a checkout something has already operated in, so
 # this test would pass or fail on what a shard-mate happened to leave behind.
 HOME_DIR="$TMP_ROOT"
-STATE="$HOME_DIR/state"; DATA="$TMP_ROOT/data"; CONFIG="$TMP_ROOT/config"
+STATE="$HOME_DIR/state"; DATA="$HOME_DIR/data"; CONFIG="$HOME_DIR/config"
 mkdir -p "$STATE" "$DATA/$ID" "$CONFIG"
 # Backend auto-detection is what is under test here, so opt out of the default-on
 # presentation projection and keep the assertions on the flat per-home workspace.
