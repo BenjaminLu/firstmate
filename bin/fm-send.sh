@@ -705,6 +705,50 @@ fm_send_feed_resolved_holds() { # <answer-text>
   fi
 }
 
+# fm_send_refuse_unresolvable_commit_ish: refuse a steer that names a commit
+# which does not exist in the target task's local copy. A verification
+# instruction pointing at a commit nobody read is worthless, and a commit-ish is
+# the one such value a script can check: it either resolves or it does not.
+#
+# Two boundaries make this safe to put in front of every text steer.
+#
+# It steps aside rather than blocking whenever it cannot judge - no meta, no
+# recorded worktree, a worktree that is gone, not a git repository, or no git on
+# the path. Blocking a legitimate steer because the check could not answer is a
+# worse failure than the error it prevents.
+#
+# It matches only whole WORDS of 8-40 hex characters, so ordinary prose is
+# untouched: the 8-character floor puts every hex-only English word below the
+# match (the system dictionary has twelve at 6-7 characters - facade, decade,
+# efface - and none at 8 or above). Splitting on whitespace alone is deliberate.
+# Splitting on non-hex characters instead would read the first field of a UUID
+# (550e8400-...) as an unresolvable commit and refuse a steer that never named
+# one. Leading and trailing punctuation is stripped per word so a sha ending a
+# sentence is still read, which cannot resurface that risk: a UUID or a dashed
+# date carries its dashes on the inside, where nothing strips them.
+#
+# The candidate scan runs before any of that, so the overwhelmingly common
+# steer - one that names no sha at all - pays a text pipeline and no git
+# process on a path every steer in the fleet crosses.
+fm_send_refuse_unresolvable_commit_ish() { # <message> <meta-file>
+  local msg=$1 meta=$2 candidates wt sha
+  candidates=$(printf '%s\n' "$msg" | tr -s '[:space:]' '\n' |
+    sed -e 's/^[[:punct:]]*//' -e 's/[[:punct:]]*$//' |
+    grep -E '^[0-9a-f]{8,40}$' || true)
+  [ -n "$candidates" ] || return 0
+  [ -n "$meta" ] || return 0
+  command -v git >/dev/null 2>&1 || return 0
+  wt=$(fm_meta_get "$meta" worktree)
+  [ -n "$wt" ] && [ -d "$wt" ] || return 0
+  git -C "$wt" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  for sha in $candidates; do
+    git -C "$wt" cat-file -e "$sha^{commit}" 2>/dev/null && continue
+    echo "fm-send: $sha does not resolve to a commit in this task's local copy; read it before naming it" >&2
+    return 1
+  done
+  return 0
+}
+
 # Resolve the target's harness from its meta (recorded by fm-spawn), used only to
 # scope the codex `$<skill>` popup-settle below. A task selector carries
 # meta; an explicit backend-target escape hatch has none, so its harness is
@@ -756,6 +800,11 @@ else
     echo "error: a text steer requires a nonempty message; nothing was sent (an empty marked request would deliver only marker and correlation bytes and leave the parent waiting on a reply to nothing)" >&2
     exit 1
   fi
+  # A steer naming a commit that does not exist makes the instruction it carries
+  # worthless, and this is the one such error a script can catch. Bounded to
+  # 8-40 hex WORDS so ordinary prose is untouched, and it steps aside rather
+  # than blocking when the worktree cannot answer.
+  fm_send_refuse_unresolvable_commit_ish "$MESSAGE" "$TARGET_META" || exit 2
   if [ "$TARGET_BACKEND" = remote ]; then
     FM_SEND_REMOTE_BUDGET=${FM_SEND_REMOTE_BUDGET:-30}
     case "$FM_SEND_REMOTE_BUDGET" in
