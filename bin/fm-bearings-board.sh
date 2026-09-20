@@ -779,6 +779,8 @@ validate_payload() {  # <data.json>
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
       and ((has("thin") | not) or (.thin | type == "boolean"))
+      and ((has("blocks") | not)
+        or ((.blocks | type == "number") and .blocks >= 0 and (.blocks | floor) == .blocks))
       and ((has("recommend_value") | not)
         or (.recommend_value | placeholder)
         or ((.recommend_value | slug(128))
@@ -1236,6 +1238,24 @@ EOF
     # row it came from.
     def with_ack($key): if $acks[$key] == null then . else . + {ack: $acks[$key]} end;
     def repo_of($id): record($id) | if . == null then null else .repo end;
+    # How much work stops until the captain answers this call.
+    #
+    # Read from the snapshot gate rows, which already name the ids each queued
+    # item is blocked by, so this is counted from what the fleet holds rather
+    # than weighted by hand. That matters more than it looks: the board plots
+    # calls by this number, and a hand-tuned urgency score would be a second
+    # black box on the one surface that exists to remove them.
+    #
+    # Zero is an ordinary answer and means exactly what it says - nothing is
+    # waiting on this call - not that the number is unknown.
+    def blocked_behind($id):
+      [$snap.gates[]?
+       | (.blocked_by // "-")
+       | select(. != "-" and . != "")
+       | split(",")
+       | map(sub("^ +"; "") | sub(" +$"; ""))
+       | select(index($id) != null)]
+      | length;
     def owned: .owner == "(main)";
     # The Charted Next id IS the dispatch.charted routing channel, so a row
     # keeps its real backlog id whenever that id is already a routable key; a
@@ -1326,9 +1346,10 @@ EOF
     # verified packet the worker wrote, then placeholders for a composer.
     def decision_card: . as $row | ($written[$row.id] // null) as $call
       | ($cards[$row.id] // null) as $card
-      | if $call != null then record_seeded($call)
-        elif $card == null then placeholder_card
-        else packet_seeded($card) end;
+      | (if $call != null then record_seeded($call)
+         elif $card == null then placeholder_card
+         else packet_seeded($card) end)
+      + {blocks: blocked_behind($row.id)};
     def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
     def merge_card: .task as $task
       | ((record($task) | if . == null then null else .title end)
@@ -1341,6 +1362,7 @@ EOF
          options: [
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
            {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
+         blocks: blocked_behind($task),
          allow_freeform: true}
       + (if (.url | https_url) then {pr_url: .url} else {} end);
     def merge_ready_prs:

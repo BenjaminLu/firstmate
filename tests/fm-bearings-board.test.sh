@@ -1717,6 +1717,44 @@ test_compose_ignores_a_card_record_of_a_schema_it_does_not_know() {
   pass "a card record of an unknown schema is ignored rather than guessed at"
 }
 
+# The board plots every open call by how much work is stalled behind it, so
+# that number has to be counted from the fleet rather than invented. The gate
+# rows already name the ids each queued item is blocked by; this is that count
+# and nothing else.
+test_compose_counts_the_work_stalled_behind_each_call() {
+  local home skeleton snap
+  home=$(make_compose_home compose-blocks)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  # Two queued items wait on gated-work, one of them also on pick-route, and
+  # the space after the comma is there on purpose: a blocker list is prose in
+  # a field, so the count must not depend on how it was spaced.
+  jq '.gates[0].blocked_by = "gated-work"
+    | .gates[2].blocked_by = "gated-work, pick-route"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the blocked-by fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose queued work names its blockers"
+  jq -e '.captains_call
+    | ([.[] | select(.key == "gated-work") | .blocks] == [2])
+    and ([.[] | select(.key == "pick-route") | .blocks] == [1])' "$skeleton" >/dev/null \
+    || fail "the stalled-work count was not read from the gate rows: $(cat "$skeleton")"
+  pass "compose counts the work stalled behind each call from the gate rows"
+}
+
+# Zero is an answer, not a gap. A call nothing is waiting on must say so with a
+# number, because the board plots it and an absent count would place it nowhere.
+test_compose_counts_zero_for_a_call_nothing_waits_on() {
+  local home skeleton
+  home=$(make_compose_home compose-blocks-none)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  jq -e '[.captains_call[] | select(has("blocks") | not)] == []
+    and ([.captains_call[] | select(.key == "gated-work") | .blocks] == [0])' "$skeleton" >/dev/null \
+    || fail "a call nothing waits on did not carry a zero count: $(cat "$skeleton")"
+  pass "a call nothing is waiting on carries a zero count rather than none"
+}
+
 test_build_names_the_unfilled_card_slot_it_refuses() {
   local home skeleton filled board out rc
   home=$(make_compose_home compose-unfilled-slot)
@@ -2265,6 +2303,8 @@ test_compose_keeps_the_packet_card_for_a_call_that_wrote_no_record
 test_compose_carries_a_thin_call_to_the_board_as_visibly_thin
 test_compose_survives_a_card_record_it_cannot_read
 test_compose_ignores_a_card_record_of_a_schema_it_does_not_know
+test_compose_counts_the_work_stalled_behind_each_call
+test_compose_counts_zero_for_a_call_nothing_waits_on
 test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled
