@@ -213,13 +213,77 @@ test_an_oversized_call_is_shortened_visibly() {
   pass "an overlong call is shortened visibly rather than silently"
 }
 
-test_concurrent_writers_never_tear_a_record() {
+# The flush boundary measured in bin/fm-gate-calls-lib.sh's BOUNDS section.
+# Above this a single `printf ... >>` stops being a single write() and
+# concurrent appends interleave into torn, unparseable, unreported records.
+FLUSH_BOUNDARY=1024
+
+# Assert every line in a file is inside the boundary. Takes the file and a
+# label, so a failure names which input class produced the over-bound line.
+assert_lines_within_boundary() {  # <file> <label>
+  local file=$1 label=$2 longest
+  [ -f "$file" ] || return 0
+  longest=$(awk '{ if (length($0) + 1 > m) m = length($0) + 1 } END { print m + 0 }' "$file")
+  [ "$longest" -le "$FLUSH_BOUNDARY" ] \
+    || fail "$label: emitted a ${longest}-byte line, past the ${FLUSH_BOUNDARY}-byte flush boundary where concurrent appends tear"
+}
+
+test_no_emitted_line_can_cross_the_flush_boundary() {
+  local home cjk quotes maxed
+  home=$(make_home boundary)
+  cjk=''
+  while [ "${#cjk}" -lt 600 ]; do cjk="${cjk}中文的理由"; done
+  quotes=$(head -c 480 < /dev/zero | tr '\0' '"')
+  maxed=$(head -c 500 < /dev/zero | tr '\0' 'z')
+
+  # This is the guard for the blocker, and it is a property check rather than
+  # a race: the header claims every line this library emits stays inside the
+  # boundary, so the test drives the input classes that could break that
+  # claim through the real command and measures what came out. It fails the
+  # same way every run, which is what the concurrency check below cannot do.
+  run_gate_call "$home" record --site pr-merge --task task-b1 --verdict refused \
+    --what 'merge pull request 38' \
+    --grounds "$(head -c 9000 < /dev/zero | tr '\0' 'g')" >/dev/null 2>&1 || true
+  run_gate_call "$home" record --site pr-merge --task task-b2 --verdict refused \
+    --what "$maxed" --grounds "$cjk" --link "https://x.example/$cjk" \
+    --key "$maxed" >/dev/null 2>&1 || true
+  run_gate_call "$home" record --site pr-merge --task task-b3 --verdict refused \
+    --what 'merge pull request 38' --grounds "$quotes$quotes" \
+    --link "https://x.example/$quotes" >/dev/null 2>&1 || true
+  run_gate_call "$home" record --site "$(head -c 40 < /dev/zero | tr '\0' 's')" \
+    --task "$(head -c 80 < /dev/zero | tr '\0' 't')" --verdict decided \
+    --what "$maxed" --grounds "$cjk$cjk" \
+    --link "https://x.example/$(head -c 470 < /dev/zero | tr '\0' 'p')" \
+    --key "$(head -c 120 < /dev/zero | tr '\0' 'k')" >/dev/null 2>&1 || true
+  # Inputs that are refused, so the drops record is exercised too: its lines
+  # tear exactly like the log's, and it is the file that reports the gaps.
+  run_gate_call "$home" record --task task-b5 --verdict conjured \
+    --what "$maxed" --grounds "$cjk$cjk" >/dev/null 2>&1 || true
+  run_gate_call "$home" record --task "$cjk" --verdict refused \
+    --what "$maxed" --grounds "$cjk" >/dev/null 2>&1 || true
+
+  assert_present "$home/state/gate-calls.jsonl" "boundary: no records were written at all"
+  assert_present "$home/state/gate-calls.drops" "boundary: no drops were written at all"
+  assert_lines_within_boundary "$home/state/gate-calls.jsonl" "boundary: the log"
+  assert_lines_within_boundary "$home/state/gate-calls.drops" "boundary: the drops record"
+  pass "no input class produces a line past the flush boundary, in the log or the drops record"
+}
+
+test_concurrent_writers_produce_parseable_records() {
   local home log rounds=20 writers=3 r i grounds torn=0 total line
   home=$(make_home concurrent)
   log="$home/state/gate-calls.jsonl"
-  # Longer than any bound, so every record is shortened to the maximum line
-  # the library will emit. That is the only size worth racing: a bound that
-  # holds for short lines and tears at its own maximum is not a bound.
+  # WHAT THIS CAN AND CANNOT PROVE, because the difference decided a finding.
+  #
+  # Tearing is a race, so this case observes it only when the timing lands.
+  # Measured against a deliberately restored 3900-byte bound on one host, it
+  # saw zero torn records in 7 runs of 10 - it would have reported the
+  # blocker fixed while it was fully present. So this is a smoke check, not
+  # the guard, and it must not be read as evidence that the bound holds.
+  #
+  # test_no_emitted_line_can_cross_the_flush_boundary above is the guard: it
+  # checks the property that makes tearing impossible instead of racing for
+  # the symptom, and it fails every run when the bound is wrong.
   grounds=$(head -c 4000 < /dev/zero | tr '\0' 'g')
 
   for r in $(seq 1 "$rounds"); do
@@ -238,10 +302,10 @@ test_concurrent_writers_never_tear_a_record() {
     printf '%s' "$line" | jq -e . >/dev/null 2>&1 || torn=$((torn + 1))
   done < "$log"
   expect_code 0 "$torn" \
-    "concurrent: $torn of $total records were torn - a torn line is unparseable, writes no drops entry and says nothing on stderr, which is the silent loss this log exists to prevent"
+    "concurrent: $torn of $total records written concurrently are unparseable - a torn line writes no drops entry and says nothing on stderr, which is the silent loss this log exists to prevent"
   assert_absent "$home/state/gate-calls.drops" \
     "concurrent: a clean concurrent run reported dropped calls"
-  pass "concurrent writers at the maximum line size never tear a record"
+  pass "records written concurrently at the maximum line size came back whole and parseable"
 }
 
 test_every_cut_field_stays_valid_utf8_in_any_locale() {
@@ -632,7 +696,8 @@ test_a_bulky_link_costs_the_link_and_never_the_ruling
 test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds
 test_an_escape_heavy_link_cannot_cross_the_boundary
 test_a_bulky_task_id_keeps_the_drops_record_bounded
-test_concurrent_writers_never_tear_a_record
+test_no_emitted_line_can_cross_the_flush_boundary
+test_concurrent_writers_produce_parseable_records
 test_a_shortened_record_stays_valid_utf8_in_any_locale
 test_every_cut_field_stays_valid_utf8_in_any_locale
 test_an_unwritable_log_is_reported_not_swallowed

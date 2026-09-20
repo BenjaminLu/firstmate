@@ -161,9 +161,14 @@
 # writes an over-bound line anyway. What is left when every move is spent -
 # the timestamp, the capped site and task, the verdict - is a few hundred
 # bytes, which is what makes the guarantee total rather than typical.
-# tests/fm-gate-calls.test.sh checks that directly, driving adversarial inputs
-# through the real command and failing if any emitted line crosses the
-# boundary, so this paragraph stays true rather than becoming folklore.
+# tests/fm-gate-calls.test.sh's boundary case checks that directly: it drives
+# adversarial inputs through the real command and fails if any emitted line -
+# in the log or in the drops record - crosses the boundary. It checks the
+# property rather than racing for the symptom, which is what lets it fail
+# every run when the bound is wrong, and it is what keeps this paragraph true
+# rather than folklore. The concurrency case beside it is a smoke check and
+# proves nothing on its own: measured against a restored 3900-byte bound it
+# saw no torn record in 7 runs of 10.
 # bin/fm-board-live.sh's own append states the correct version of this
 # reasoning - atomic "on a line this short" - and its lines are a couple of
 # hundred bytes; the guarantee does not generalise to a long line.
