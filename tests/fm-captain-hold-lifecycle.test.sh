@@ -4524,6 +4524,35 @@ test_a_drop_judges_the_row_the_gate_judges() {
   assert_contains "$meta" "decision_dropped=$short" "the drop was not recorded under the attested entry"
   run_captain "$home" verify "$id" >/dev/null 2> "$home/legacy-drop-verify.err" \
     || fail "the gate still could not pass after the drop: $(cat "$home/legacy-drop-verify.err")"
+
+  # An archive this read cannot open must not be spent as "not attested" -
+  # that is this branch's own principle, and it would tell a reader their
+  # entry is not attested when it is. Both spellings the previous commit made
+  # interchangeable have to behave the same way, and the archive has to be
+  # named rather than swallowed.
+  # The drop is asked for by the ROW spelling, which is not in the candidate
+  # list, so the answer has to come from resolution - the path that read the
+  # archive and then spent a failure to read it as "not attested".
+  run_shim "$home" hold "$id" second-key --title "A second call" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not create the second composed call"
+  printf 'decision_keys=second-key\n' >> "$home/state/$id.meta"
+  tasks_in "$home" "done" "$id-decision-second-key" >/dev/null \
+    || fail "could not close the second composed call"
+  chmod 0000 "$home/data/done-archive.md"
+  if [ -r "$home/data/done-archive.md" ]; then
+    chmod 0644 "$home/data/done-archive.md"
+    echo "skip: this filesystem ignores mode 0000, so an unreadable archive cannot be staged"
+  else
+    out=$(run_captain "$home" complete "$id" \
+      --drop-unrecoverable "$id-decision-second-key" 2>&1) \
+      && fail "an unreadable archive let a drop through: $out"
+    assert_contains "$out" "done-archive.md" \
+      "the operator was never told the archive could not be read: $out"
+    assert_not_contains "$out" "there is nothing to drop" \
+      "an unreadable archive was spent as proof the entry is not attested: $out"
+    chmod 0644 "$home/data/done-archive.md"
+  fi
   pass "a drop judges the row the gate judges, under either spelling of the entry"
 }
 

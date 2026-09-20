@@ -2018,6 +2018,14 @@ reconcile_note() {
 # entry is never in the metadata yet. Matching the metadata alone made the
 # printed remedy guaranteed to answer "there is nothing to drop" on exactly
 # the path it was printed for.
+# Exit 0 prints the entry, 1 means nothing here names that row, and 2 means
+# the question could not be settled - a backend that never answered, or an
+# archive that cannot be read. Those three stay apart all the way up: spending
+# an unreadable store as "not attested" is the defect this whole branch
+# exists to stop, and it would tell a reader their entry is not attested when
+# it is. Nothing is silenced either: resolve_entry and archived_row_body
+# already name the archive on stderr, which their own contract calls the only
+# channel surviving these command substitutions, so it reaches the operator.
 attested_entry_for_drop() {  # <origin> <candidate-comma-list> <given>; prints the entry
   local origin=$1 previous=$2 given=$3 given_row entry entry_row match='' rc
   if list_has_key "$previous" "$given"; then
@@ -2025,13 +2033,21 @@ attested_entry_for_drop() {  # <origin> <candidate-comma-list> <given>; prints t
     return 0
   fi
   rc=0
-  given_row=$(resolve_entry "$origin" "$given" 2>/dev/null) || rc=$?
-  [ "$rc" -eq 0 ] || return 1
+  given_row=$(resolve_entry "$origin" "$given") || rc=$?
+  case "$rc" in
+    0) ;;
+    2|124) return 2 ;;
+    *) return 1 ;;
+  esac
   given_row=${given_row%% *}
   for entry in $(printf '%s\n' "$previous" | tr ',' ' '); do
     rc=0
-    entry_row=$(resolve_entry "$origin" "$entry" 2>/dev/null) || rc=$?
-    [ "$rc" -eq 0 ] || continue
+    entry_row=$(resolve_entry "$origin" "$entry") || rc=$?
+    case "$rc" in
+      0) ;;
+      2|124) return 2 ;;
+      *) continue ;;
+    esac
     entry_row=${entry_row%% *}
     [ "$entry_row" = "$given_row" ] || continue
     [ -z "$match" ] || return 1
@@ -2057,7 +2073,7 @@ keys_without() {  # <comma-list> <space-separated-drops>
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc resolved
   local resolved_how attested_by_prefix='' drops='' none=0 dropped_previous='' drop dropped_entries=''
-  local drop_candidates=''
+  local drop_candidates='' drop_status=0
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -2103,7 +2119,11 @@ command_complete() {
   # held and unanswered while recording that it was unrecoverable.
   drop_candidates=$(sorted_key_union "$previous" "$supplied")
   for drop in $drops; do
-    entry=$(attested_entry_for_drop "$origin" "$drop_candidates" "$drop") \
+    drop_status=0
+    entry=$(attested_entry_for_drop "$origin" "$drop_candidates" "$drop") || drop_status=$?
+    [ "$drop_status" -ne 2 ] \
+      || fail "whether task $drop names an entry of origin $origin's captain-call inventory could not be established (the diagnostic above names what could not be read); nothing is dropped on a read that did not answer"
+    [ "$drop_status" -eq 0 ] \
       || fail "task $drop is neither in origin $origin's attested captain-call inventory nor supplied on this command line; there is nothing to drop"
     resolved=$(resolve_entry "$origin" "$entry") || exit $?
     resolved=${resolved%% *}
