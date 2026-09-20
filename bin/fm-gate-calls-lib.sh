@@ -150,9 +150,20 @@
 # The boundary is 1024 bytes including the newline. A torn line is the exact
 # failure this record exists to prevent: it is unparseable, it writes no drops
 # entry, and it says nothing on stderr, so the log reads as complete and is
-# not. FM_GATE_CALL_MAX_LINE is therefore set below that boundary with margin,
-# and tests/fm-gate-calls.test.sh drives real concurrent writers at the bound
-# so the claim in this paragraph stays true rather than becoming folklore.
+# not. FM_GATE_CALL_MAX_LINE is therefore set below that boundary with margin.
+#
+# The claim is about EVERY line this library emits, not about typical ones, so
+# two things have to hold and both are load-bearing. The caps are counted in
+# BYTES, the same unit as the bound - a cap in characters bounds nothing,
+# because 498 characters of CJK are 1458 bytes. And the shortening ladder can
+# always REACH the bound: when shortening the substance is not enough it drops
+# `link`, then `key`, into `rejected`, so it never runs out of moves and
+# writes an over-bound line anyway. What is left when every move is spent -
+# the timestamp, the capped site and task, the verdict - is a few hundred
+# bytes, which is what makes the guarantee total rather than typical.
+# tests/fm-gate-calls.test.sh checks that directly, driving adversarial inputs
+# through the real command and failing if any emitted line crosses the
+# boundary, so this paragraph stays true rather than becoming folklore.
 # bin/fm-board-live.sh's own append states the correct version of this
 # reasoning - atomic "on a line this short" - and its lines are a couple of
 # hundred bytes; the guarantee does not generalise to a long line.
@@ -169,7 +180,9 @@
 # write(). Raising it past that boundary reintroduces silent torn records.
 FM_GATE_CALL_MAX_LINE=900
 
-# Character caps on the four identity fields (see BOUNDS above).
+# BYTE caps on the four short fields (see BOUNDS above). Bytes, not
+# characters: the line bound they serve is counted in bytes, and a cap counted
+# in characters does not bound it - 498 characters of CJK are 1458 bytes.
 FM_GATE_CALL_CAP_SITE=40
 FM_GATE_CALL_CAP_TASK=80
 FM_GATE_CALL_CAP_LINK=500
@@ -181,6 +194,12 @@ FM_GATE_CALL_CAP_KEY=120
 # nothing after it reads as the whole reason. Plain ASCII so it survives every
 # locale and adds no multi-byte cut point of its own.
 FM_GATE_CALL_CUT_MARK='...'
+
+# How much of `grounds`/`what` the shortening loop keeps before it starts
+# dropping presentation instead. Below this the entry stops being a ruling -
+# "a ruling with no reason is not a ruling" - so a long link is dropped before
+# the reason is.
+FM_GATE_CALL_MIN_BODY=120
 
 FM_GATE_CALL_VERDICTS='decided escalated refused deferred'
 
@@ -194,6 +213,14 @@ fm_gate_calls_drops_path() {  # <state-dir>
 
 fm_gate_call_bytes() {  # <text> -> byte length on stdout
   printf '%s' "$1" | wc -c | tr -d ' '
+}
+
+# Cut to a BYTE length. A bare slice counts characters under a UTF-8 locale,
+# so it cannot enforce a byte cap; `local LC_ALL=C` makes the slice byte-wise
+# whatever the caller's locale is, and restores on return.
+fm_gate_call_cut_bytes() {  # <text> <max-bytes>
+  local LC_ALL=C
+  printf '%s' "${1:0:$2}"
 }
 
 # JSON string content for one field. Newlines survive as \n; the remaining C0
@@ -315,9 +342,27 @@ fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <
     "$link" "$key" "$truncated" "$rejected" "$dropped")
   while [ "$(fm_gate_call_bytes "$line")" -gt "$FM_GATE_CALL_MAX_LINE" ]; do
     truncated=true
-    # Halve the BODY and re-apply the marker, rather than halving a value
-    # that already carries one, so the marker never accumulates.
-    if [ -n "$grounds_body" ]; then
+    # Order matters, and it is the whole point of this ladder. Shorten the
+    # substance first, but stop at FM_GATE_CALL_MIN_BODY and drop presentation
+    # rather than reduce a ruling to its marker; only if dropping both still
+    # leaves the line over the bound does the substance go. Halve the BODY and
+    # re-apply the marker, rather than halving a value that already carries
+    # one, so the marker never accumulates.
+    if [ "${#grounds_body}" -gt "$FM_GATE_CALL_MIN_BODY" ]; then
+      grounds_body=$(fm_gate_call_trim_partial_utf8 \
+        "${grounds_body:0:$(( ${#grounds_body} / 2 ))}")
+      grounds="$grounds_body$FM_GATE_CALL_CUT_MARK"
+    elif [ "${#what_body}" -gt "$FM_GATE_CALL_MIN_BODY" ]; then
+      what_body=$(fm_gate_call_trim_partial_utf8 \
+        "${what_body:0:$(( ${#what_body} / 2 ))}")
+      what="$what_body$FM_GATE_CALL_CUT_MARK"
+    elif [ -n "$link" ]; then
+      link=''
+      rejected="${rejected:+$rejected,}link"
+    elif [ -n "$key" ]; then
+      key=''
+      rejected="${rejected:+$rejected,}key"
+    elif [ -n "$grounds_body" ]; then
       grounds_body=$(fm_gate_call_trim_partial_utf8 \
         "${grounds_body:0:$(( ${#grounds_body} / 2 ))}")
       grounds="$grounds_body$FM_GATE_CALL_CUT_MARK"
@@ -344,14 +389,14 @@ fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what
   # A call refused for an over-long identity field still has to be written
   # down, so here - and only here, where the record already says it was
   # dropped - those fields are cut to their caps rather than refused again.
-  [ "${#site}" -le "$FM_GATE_CALL_CAP_SITE" ] \
-    || { site=${site:0:$FM_GATE_CALL_CAP_SITE}; truncated=true; }
-  [ "${#task}" -le "$FM_GATE_CALL_CAP_TASK" ] \
-    || { task=${task:0:$FM_GATE_CALL_CAP_TASK}; truncated=true; }
-  [ "${#link}" -le "$FM_GATE_CALL_CAP_LINK" ] \
-    || { link=$(fm_gate_call_trim_partial_utf8 "${link:0:$FM_GATE_CALL_CAP_LINK}"); truncated=true; }
-  [ "${#key}" -le "$FM_GATE_CALL_CAP_KEY" ] \
-    || { key=${key:0:$FM_GATE_CALL_CAP_KEY}; truncated=true; }
+  [ "$(fm_gate_call_bytes "$site")" -le "$FM_GATE_CALL_CAP_SITE" ] \
+    || { site=$(fm_gate_call_cut_bytes "$site" "$FM_GATE_CALL_CAP_SITE"); truncated=true; }
+  [ "$(fm_gate_call_bytes "$task")" -le "$FM_GATE_CALL_CAP_TASK" ] \
+    || { task=$(fm_gate_call_cut_bytes "$task" "$FM_GATE_CALL_CAP_TASK"); truncated=true; }
+  [ "$(fm_gate_call_bytes "$link")" -le "$FM_GATE_CALL_CAP_LINK" ] \
+    || { link=$(fm_gate_call_cut_bytes "$link" "$FM_GATE_CALL_CAP_LINK"); truncated=true; }
+  [ "$(fm_gate_call_bytes "$key")" -le "$FM_GATE_CALL_CAP_KEY" ] \
+    || { key=$(fm_gate_call_cut_bytes "$key" "$FM_GATE_CALL_CAP_KEY"); truncated=true; }
   fm_gate_call_bounded_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \
     "$link" "$key" "$truncated" "$rejected" "$reason"
   line=$FM_GATE_CALL_BOUNDED_LINE
@@ -403,8 +448,8 @@ fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> 
         "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
       return 1 ;;
   esac
-  if [ "${#site}" -gt "$FM_GATE_CALL_CAP_SITE" ]; then
-    fm_gate_call_drop "$state" "site must be at most $FM_GATE_CALL_CAP_SITE characters" \
+  if [ "$(fm_gate_call_bytes "$site")" -gt "$FM_GATE_CALL_CAP_SITE" ]; then
+    fm_gate_call_drop "$state" "site must be at most $FM_GATE_CALL_CAP_SITE bytes" \
       "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
@@ -414,8 +459,8 @@ fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> 
         "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
       return 1 ;;
   esac
-  if [ "${#task}" -gt "$FM_GATE_CALL_CAP_TASK" ]; then
-    fm_gate_call_drop "$state" "task must be at most $FM_GATE_CALL_CAP_TASK characters" \
+  if [ "$(fm_gate_call_bytes "$task")" -gt "$FM_GATE_CALL_CAP_TASK" ]; then
+    fm_gate_call_drop "$state" "task must be at most $FM_GATE_CALL_CAP_TASK bytes" \
       "$at" "$site" "$task" "$verdict" "$what" "$grounds" "$link" "$key" "$truncated" "$rejected"
     return 1
   fi
@@ -448,7 +493,7 @@ fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> 
         esac ;;
       *) link_ok=0 ;;
     esac
-    [ "${#link}" -le "$FM_GATE_CALL_CAP_LINK" ] || link_ok=0
+    [ "$(fm_gate_call_bytes "$link")" -le "$FM_GATE_CALL_CAP_LINK" ] || link_ok=0
     if [ "$link_ok" -ne 1 ]; then
       link=''
       rejected='link'
@@ -459,7 +504,7 @@ fm_gate_call_record() {  # <state-dir> <site> <task> <verdict> <what> <grounds> 
     case "$key" in
       *[!A-Za-z0-9._:-]*) key_ok=0 ;;
     esac
-    [ "${#key}" -le "$FM_GATE_CALL_CAP_KEY" ] || key_ok=0
+    [ "$(fm_gate_call_bytes "$key")" -le "$FM_GATE_CALL_CAP_KEY" ] || key_ok=0
     if [ "$key_ok" -ne 1 ]; then
       key=''
       rejected="${rejected:+$rejected,}key"

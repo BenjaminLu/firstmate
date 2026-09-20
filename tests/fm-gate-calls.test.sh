@@ -279,6 +279,96 @@ test_a_shortened_record_stays_valid_utf8_in_any_locale() {
   pass "a shortened record stays valid UTF-8, and valid JSON, at every cut offset under a C locale as well as a UTF-8 one"
 }
 
+test_a_bulky_link_costs_the_link_and_never_the_ruling() {
+  local home log rc=0 cjk link grounds
+  home=$(make_home bulky-link)
+  log="$home/state/gate-calls.jsonl"
+  # 498 characters, 1458 bytes. Inside a character cap, far outside a byte
+  # one - which is how a valid call used to cross the tear boundary.
+  cjk=''
+  while [ "${#cjk}" -lt 480 ]; do cjk="${cjk}中"; done
+  link="https://x.example/${cjk}"
+  grounds=$(head -c 3000 < /dev/zero | tr '\0' 'g')
+
+  run_gate_call "$home" record --site pr-merge --task task-n1 --verdict refused \
+    --what 'merge pull request 38' --grounds "$grounds" --link "$link" --key R1 \
+    >/dev/null 2>&1 || rc=$?
+
+  expect_code 0 "$rc" "bulky-link: the call must still record"
+  [ "$(wc -c < "$log" | tr -d ' ')" -le 1024 ] \
+    || fail "bulky-link: the emitted line crossed the 1024-byte flush boundary, where concurrent appends tear"
+  assert_equals 'merge pull request 38' "$(log_field "$log" 1 what)" \
+    "bulky-link: the subject of the call was destroyed to chase the bound"
+  case "$(log_field "$log" 1 grounds)" in
+    ...|'') fail "bulky-link: the ruling was reduced to its marker - a ruling with no reason is not a ruling" ;;
+  esac
+  assert_contains "$(log_field "$log" 1 rejected)" link \
+    "bulky-link: the dropped link is invisible in the record"
+  pass "an oversized link is dropped and named, and the ruling it was attached to survives intact"
+}
+
+test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds() {
+  local home log rc=0 cjk link
+  home=$(make_home byte-cap-link)
+  log="$home/state/gate-calls.jsonl"
+  # 498 characters, 1458 bytes: inside the cap if the cap counts characters,
+  # outside it if the cap counts bytes - which is the unit the line bound
+  # uses. The grounds here are short, so the shortening ladder has no reason
+  # to run: anything that happens to them is the cap failing to catch this.
+  cjk=''
+  while [ "${#cjk}" -lt 480 ]; do cjk="${cjk}中"; done
+  link="https://x.example/${cjk}"
+
+  run_gate_call "$home" record --site pr-merge --task task-n1c --verdict refused \
+    --what 'merge pull request 38' --grounds 'the checks are not green' \
+    --link "$link" >/dev/null 2>&1 || rc=$?
+
+  expect_code 0 "$rc" "byte-cap-link: the call must still record"
+  assert_equals link "$(log_field "$log" 1 rejected)" \
+    "byte-cap-link: a 1458-byte link passed a cap that is supposed to be counted in the same unit as the line bound"
+  assert_equals 'the checks are not green' "$(log_field "$log" 1 grounds)" \
+    "byte-cap-link: the grounds were shortened, so the link reached the line and the ladder had to rescue it"
+  assert_equals false "$(log_field "$log" 1 truncated)" \
+    "byte-cap-link: nothing should have needed shortening once the link was rejected"
+  pass "an over-cap link is rejected on its byte length, before it can cost the grounds anything"
+}
+
+test_an_escape_heavy_link_cannot_cross_the_boundary() {
+  local home log rc=0 quotes
+  home=$(make_home escape-link)
+  log="$home/state/gate-calls.jsonl"
+  # Inside every cap as raw bytes; JSON escaping doubles each one.
+  quotes=$(head -c 480 < /dev/zero | tr '\0' '"')
+
+  run_gate_call "$home" record --site pr-merge --task task-n1b --verdict refused \
+    --what 'merge pull request 38' --grounds 'the checks are not green' \
+    --link "https://x.example/$quotes" >/dev/null 2>&1 || rc=$?
+
+  expect_code 0 "$rc" "escape-link: the call must still record"
+  [ "$(wc -c < "$log" | tr -d ' ')" -le 1024 ] \
+    || fail "escape-link: JSON escaping pushed the emitted line past the flush boundary"
+  assert_contains "$(log_field "$log" 1 grounds)" 'not green' \
+    "escape-link: the grounds were lost to an over-long link"
+  pass "a link that only becomes oversized once escaped is dropped rather than written over the bound"
+}
+
+test_a_bulky_task_id_keeps_the_drops_record_bounded() {
+  local home drops rc=0 cjk
+  home=$(make_home bulky-task)
+  drops="$home/state/gate-calls.drops"
+  cjk=''
+  while [ "${#cjk}" -lt 160 ]; do cjk="${cjk}中"; done
+
+  run_gate_call "$home" record --site review-finding --task "$cjk" \
+    --verdict refused --what w --grounds g >/dev/null 2>&1 || rc=$?
+
+  expect_code 1 "$rc" "bulky-task: an over-cap task id must be refused"
+  assert_present "$drops" "bulky-task: the refusal left no durable trace"
+  [ "$(wc -c < "$drops" | tr -d ' ')" -le 1024 ] \
+    || fail "bulky-task: the drops line crossed the flush boundary, so the record of the gap can tear too"
+  pass "an over-cap identity field keeps the drops record inside the same boundary as the log"
+}
+
 # ------------------------------------------------- a missing record is visible
 
 test_an_unwritable_log_is_reported_not_swallowed() {
@@ -492,6 +582,10 @@ test_a_multi_line_refusal_keeps_its_structure_on_one_line
 test_a_declined_review_finding_is_recorded_as_refused
 test_a_postponed_call_is_the_only_thing_recorded_as_deferred
 test_an_oversized_call_is_shortened_visibly
+test_a_bulky_link_costs_the_link_and_never_the_ruling
+test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds
+test_an_escape_heavy_link_cannot_cross_the_boundary
+test_a_bulky_task_id_keeps_the_drops_record_bounded
 test_concurrent_writers_never_tear_a_record
 test_a_shortened_record_stays_valid_utf8_in_any_locale
 test_an_unwritable_log_is_reported_not_swallowed
