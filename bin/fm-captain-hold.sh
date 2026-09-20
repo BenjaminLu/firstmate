@@ -1168,11 +1168,19 @@ ANSWER_LIVE_WORKER_REMEDY="record the captain's answer with --release, which kee
 # the remedy names the gate there rather than sending the reader to a command
 # that refuses in turn. The kind comes from the worker record the guard has
 # already found; a record naming no kind gets the plain remedy.
+#
+# The gate's own form is `complete <origin-id> <task-id>`, and here both are
+# the same value - the guard is reachable only when the captain call held IS
+# the worker's own row, which is the shape the lifecycle skill prefers. Two
+# identical ids read like a typo, so the remedy prints what each one is for
+# rather than the bare command: the arguments are separate namespaces that
+# merely coincide in this case, and every other call site passes two
+# different values.
 reconcile_live_worker_remedy() {  # <task-id>
   local id=$1 kind=''
   [ ! -f "$STATE/$id.meta" ] || kind=$(meta_value "$STATE/$id.meta" kind)
   if [ "$kind" = scout ]; then
-    printf '%s' "pass this scout's captain-call completion gate with bin/fm-captain-hold.sh complete $id, then stand the worker down with bin/fm-teardown.sh - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"
+    printf '%s' "pass this scout's captain-call completion gate with bin/fm-captain-hold.sh complete $id $id, where the first id names the worker whose inventory is attested and the second the captain call in it - here the same row - then stand the worker down with bin/fm-teardown.sh, which keeps this row open and still held for the captain, and then reconcile close it with the same evidence"
     return 0
   fi
   printf '%s' "stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"
