@@ -4361,6 +4361,49 @@ test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act() {
   pass "an unanswerable archived call ends somewhere a person can act, in both consumers"
 }
 
+# The documentation claims every read of a possibly-retired row sees the
+# archive, and that claim has now been published ahead of the code three
+# times. These are the two reads that were still blind. The board one is not
+# cosmetic: bin/fm-bearings-board.sh keeps a decision card whenever `open`
+# answers "absent", because absent might hide a live call - so an archived row
+# answered as absent is a card the captain can never dismiss.
+test_the_remaining_reads_see_the_archive_too() {
+  local home id rc out
+  home=$(make_home archive-blind-reads)
+  id=sample-blind-read
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$id" "A call that retention retires" --repo sample >/dev/null \
+    || fail "could not create the blind-read fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the blind-read fixture"
+  printf 'Fund the clock seam.\n' > "$home/blind-decision.txt"
+  run_captain "$home" answer "$id" --decision-file "$home/blind-decision.txt" >/dev/null \
+    || fail "could not answer the blind-read fixture"
+  assert_grep "$id" "$home/data/done-archive.md" "the fixture did not archive the answered call"
+
+  # The board's reconcile intake: a retired row is closed, not absent.
+  run_captain "$home" bind blind-src >/dev/null || fail "could not bind the source"
+  out=$(printf '%s\n' "$id" \
+    | run_captain "$home" reconcile-requests --source-id blind-src --source "captured board" 2>&1) \
+    && fail "the intake filed a request against a closed row: $out"
+  assert_contains "$out" "refused: $id (already closed)" \
+    "the intake called an archived row absent: $out"
+  assert_absent "$home/state/reconcile-requests/$id.request" \
+    "the intake recorded a request it refused"
+
+  # `open`: 1 is "no longer an open captain call"; 3 is "absent from this
+  # backlog", which is what makes the board keep the card.
+  rc=0
+  run_captain "$home" open "$id" --distinguish-absent >/dev/null 2>&1 || rc=$?
+  assert_equals 1 "$rc" "an archived row answered as absent, so its board card can never be dismissed"
+  rc=0
+  run_captain "$home" open sample-genuinely-absent --distinguish-absent >/dev/null 2>&1 || rc=$?
+  assert_equals 3 "$rc" "a genuinely absent id stopped being reported as absent"
+  pass "the board intake and the open predicate see the archive too"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4572,6 +4615,7 @@ test_a_replayed_answer_stays_idempotent_after_retention
 test_a_reconciliation_retires_its_request_after_retention
 test_hold_refuses_an_id_the_archive_already_owns
 test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act
+test_the_remaining_reads_see_the_archive_too
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
 test_an_interrupted_close_still_finishes_when_a_worker_appears

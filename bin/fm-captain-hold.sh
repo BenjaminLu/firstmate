@@ -1721,6 +1721,7 @@ publish_parent_resolution_then_retire() {  # <task-id> <occurrence> <note>
 
 command_reconcile_requests() {
   local source_id='' source='' origin row id note provenance show show_status=0 created=0 skipped=0 tab=$'\t'
+  local archived_status
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source-id) shift; source_id=${1:-} ;;
@@ -1753,7 +1754,19 @@ command_reconcile_requests() {
       fail "the backlog backend exceeded its read bound reading $id"
     fi
     if [ -z "$show" ]; then
-      printf 'refused: %s (absent)\n' "$id"
+      # A row done_keep has retired is closed, not absent. Both outcomes are a
+      # refusal, so nothing changes about what the board gets - but the reason
+      # is what the reader acts on, and "absent" sends them to look where the
+      # row is not.
+      archived_status=0
+      archived_row_body "$id" >/dev/null || archived_status=$?
+      [ "$archived_status" -ne 2 ] \
+        || fail "the backlog archive could not be read while resolving $id"
+      if [ "$archived_status" -eq 0 ]; then
+        printf 'refused: %s (already closed)\n' "$id"
+      else
+        printf 'refused: %s (absent)\n' "$id"
+      fi
       skipped=$((skipped + 1))
     elif [ "$(show_field "$show" state)" = "done" ]; then
       printf 'refused: %s (already closed)\n' "$id"
@@ -1940,7 +1953,10 @@ reconcile_note() {
   require_tasks_axi
   command_open "$id" \
     || fail "task $id is not an open captain call; a note cannot keep a closed call open"
-  task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  # command_open refuses a closed row one line above, so a retired row cannot
+  # reach this read today. The message still names both halves, because an
+  # unreachable wrong message is a wrong message waiting for its guard to move.
+  task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
   body=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the existing body for $id"
   note_digest=$(sha256_text "$note")
@@ -2307,6 +2323,15 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
     return 1
   fi
   if [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
+    # Not listed is not the same as not there. A row done_keep has retired is
+    # a CLOSED row, so the honest answer is 1, "no longer an open captain
+    # call" - and the difference is visible: bin/fm-bearings-board.sh keeps a
+    # card on a 3 precisely because absent might still hide a live call, so an
+    # archived row answered as absent leaves the captain a card he can never
+    # dismiss.
+    if archived_row_body "$id" >/dev/null 2>&1; then
+      return 1
+    fi
     [ "$distinguish_absent" = 0 ] || return 3
     return 1
   fi
