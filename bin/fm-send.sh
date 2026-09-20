@@ -820,7 +820,10 @@ fm_send_refuse_unresolvable_commit_ish() { # <message> <meta-file>
       break
     done
     [ "$resolved" = 1 ] && continue
-    echo "fm-send: $sha does not resolve to a commit in this task's local copy; read it before naming it" >&2
+    # State the observation, not a cause: the value may have been read
+    # somewhere this home cannot see. Naming what WAS looked in is what lets
+    # the reader tell a typo from a copy that has not fetched yet.
+    echo "fm-send: $sha resolves to no commit in any local copy this home can read; looked in: $(printf '%s' "$sources" | tr '\n' ' '). Nothing was sent - check the value rather than resending the same text" >&2
     return 1
   done
   return 0

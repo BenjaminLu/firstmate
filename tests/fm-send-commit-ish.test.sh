@@ -7,7 +7,7 @@
 # tests drive the real fm-send executable over a stubbed tmux and a real git
 # worktree, and pin:
 #   1. A message naming an unresolvable commit-ish refuses with exit 2, names
-#      the value, and records nothing - the steer is not sent.
+#      the value and the copies it looked in, and records nothing.
 #   2. A message naming a commit that does resolve is sent unchanged.
 #   3. Ordinary prose carrying hex-like words is not treated as a commit-ish:
 #      the 8-character floor keeps 'facade' and 'decade' below the match.
@@ -119,8 +119,10 @@ test_refuses_a_message_naming_a_commit_that_does_not_resolve() {
   expect_code 2 "$rc" "a steer naming an unresolvable commit should refuse"
   assert_contains "$(cat "$err")" 'deadbeefdeadbeef' \
     "the refusal must name the value that does not resolve"
-  assert_contains "$(cat "$err")" 'does not resolve' \
-    "the refusal must say what is wrong with it"
+  assert_contains "$(cat "$err")" 'resolves to no commit' \
+    "the refusal must state what was observed"
+  assert_contains "$(cat "$err")" "$dir/worktree" \
+    "the refusal must name the local copy it looked in"
   [ ! -d "$dir/home/state/task-a.inbox" ] ||
     fail "a refused steer still wrote an inbox record"
   [ ! -s "$dir/send.log" ] ||
@@ -200,7 +202,7 @@ test_a_remote_targets_recorded_paths_are_not_judged_locally() {
     "project=$(cd "$dir/project" && pwd)" \
     "remote_host=remote-mac"
   run_send "$dir" "$err" -- task-a 'verify against deadbeefdeadbeef'
-  assert_not_contains "$(cat "$err")" 'does not resolve' \
+  assert_not_contains "$(cat "$err")" 'resolves to no commit' \
     "a remote target's steer must not be judged against a local repository"
   pass "fm-send: a remote target's recorded paths are not judged against this host"
 }
