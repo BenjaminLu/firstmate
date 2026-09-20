@@ -180,6 +180,19 @@ board() {
   } > "$home/.lavish/bearings-board.html"
 }
 
+# make_stalled_git <home>: a git that never answers, for driving the bound on a
+# worktree read. It shadows git only for the check under test, because the
+# fixture PATH puts this directory first.
+make_stalled_git() {
+  local home=$1
+  cat > "$home/bin/git" <<'SH'
+#!/usr/bin/env bash
+sleep "${GIT_STALL_SECS:-30}"
+exit 0
+SH
+  chmod 0755 "$home/bin/git"
+}
+
 # run <home> <out> [env assignments...]: one sweep with the cadence gate open, so
 # a case exercises the obligations rather than the no-nag interval.
 run() {
@@ -691,6 +704,35 @@ test_a_board_with_no_jq_to_read_it_is_unknown_not_clean() {
   pass "a board with no jq to read it is unknown naming the tool, not clean"
 }
 
+test_local_worktree_reads_stop_when_the_budget_is_spent() {
+  local home out report elapsed started finished i
+  # The local reads used to shrink their own bound and run anyway, so a home
+  # with many such tasks grew the sweep without limit until the watcher killed
+  # it - and a killed run prints nothing and writes no record, so the probe
+  # clock never moves and the next sweep repeats it. That is permanent silence
+  # through the one path the budget did not cover.
+  home=$(make_home budget-local)
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    task "$home" "stalled$i" "kind=ship"
+    task_branch "$home" "stalled$i" "fm/stalled$i"
+  done
+  make_stalled_git "$home"
+  out="$home/out.txt"
+  started=$(date +%s)
+  run "$home" "$out" FM_OBLIGATION_BUDGET_SECS=3 GIT_STALL_SECS=30
+  finished=$(date +%s)
+  elapsed=$((finished - started))
+  report=$(cat "$out")
+  # Twelve tasks that each used to cost up to their own clamped bound. The
+  # sweep must now stop at the budget plus at most one read in flight.
+  [ "$elapsed" -le 20 ] \
+    || fail "a sweep over twelve stalled worktrees took ${elapsed}s, so the local reads are still not charged to the budget"
+  assert_contains "$report" "the time budget ran out before the rest of the forge reads" \
+    "a sweep that stopped for the budget did not say so"
+  assert_not_contains "$report" "owed:" "a task the budget never reached was reported as owed"
+  pass "local worktree reads are charged to the sweep budget and decline once it is spent"
+}
+
 test_targets_the_budget_never_reached_are_named_not_dropped() {
   local home out report
   # The single-target case exercises one call's own bound. This is the other
@@ -1181,6 +1223,7 @@ test_a_board_with_no_payload_is_unknown_not_clean
 test_a_board_file_that_cannot_be_read_is_unknown_not_clean
 test_a_board_payload_that_is_not_json_is_unknown_not_clean
 test_a_board_with_no_jq_to_read_it_is_unknown_not_clean
+test_local_worktree_reads_stop_when_the_budget_is_spent
 test_targets_the_budget_never_reached_are_named_not_dropped
 test_a_home_where_all_four_are_met_is_silent
 test_an_empty_home_is_silent

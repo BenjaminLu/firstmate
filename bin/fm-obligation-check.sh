@@ -480,17 +480,42 @@ add_target() {
 
 # A bounded read of the task's own worktree. Local, but bounded anyway: a
 # worktree on a stalled mount must not hang the sweep.
+# A bounded read of a task's own worktree, charged to the same sweep budget as
+# a forge call.
+#
+# WHY IT DECLINES RATHER THAN CLAMPING. It used to shrink its own bound to what
+# the budget had left and run anyway, with CALL_MIN_SECS flooring that at a
+# second, so every task past the deadline still cost up to two seconds and the
+# sweep grew without limit: measured 23, 30 and 46 seconds for six, twelve and
+# twenty-four tasks with a stalled git. Past FM_CHECK_TIMEOUT the watcher kills
+# the run, and a killed run prints nothing AND writes no record - so the probe
+# clock never moves and the next sweep repeats it. That is the permanent
+# silence the budget exists to prevent, reached through the one path the budget
+# did not cover. It now declines once the budget is spent, exactly as the forge
+# reads do, and the caller turns that into the ordinary budget note.
+#
+# Statuses, because the caller has to tell them apart:
+#   0  the command answered
+#   1  the command refused cleanly - a determinate no, such as a detached HEAD
+#   2  the read could not be established - it hit its bound, or answered
+#      nothing where an answer was required
+#   3  the sweep budget is spent and nothing was run
 GIT_OUT=
+GIT_READ_BUDGET_SPENT=3
 git_read() {
-  local wt=$1 bound left
+  local wt=$1 bound left status
   GIT_OUT=
   shift
+  budget_allows || return 3
   left=$(budget_left)
   bound=$LOCAL_READ_SECS
-  [ "$left" -ge "$CALL_MIN_SECS" ] || left=$CALL_MIN_SECS
   [ "$left" -ge "$bound" ] || bound=$left
-  GIT_OUT=$(fm_run_timed "$bound" git -C "$wt" "$@" 2>/dev/null) || return 1
-  [ -n "$GIT_OUT" ] || return 1
+  [ "$bound" -ge "$CALL_MIN_SECS" ] || bound=$CALL_MIN_SECS
+  GIT_OUT=$(fm_run_timed "$bound" git -C "$wt" "$@" 2>/dev/null)
+  status=$?
+  [ "$status" -ne 124 ] || return 2
+  [ "$status" -eq 0 ] || return 1
+  [ -n "$GIT_OUT" ] || return 2
   return 0
 }
 
@@ -550,18 +575,32 @@ discover_task_pull_request() {
     unknown "$id's worktree $wt is not there, so whether it has a pull request of its own could not be established"
     return 0
   fi
-  if ! git_read "$wt" symbolic-ref --quiet --short HEAD; then
-    # No branch yet. bin/fm-brief.sh starts every task at a detached HEAD and
-    # the worker creates its branch, so this is a task that has not branched
-    # and therefore cannot have a pull request - a determinate none.
-    return 0
-  fi
-  branch=$GIT_OUT
-  if ! git_read "$wt" remote get-url origin; then
-    unknown "$id's worktree has no readable origin, so whether it has a pull request of its own could not be established"
-    return 0
-  fi
-  remote=$GIT_OUT
+  git_read "$wt" symbolic-ref --quiet --short HEAD
+  case "$?" in
+    0) branch=$GIT_OUT ;;
+    1)
+      # The repository answered and said it has no branch. bin/fm-brief.sh
+      # starts every task at a detached HEAD and the worker creates its branch,
+      # so this is a task that has not branched yet and therefore cannot have a
+      # pull request - a determinate none, established rather than assumed
+      # because the repository read above succeeded.
+      return 0
+      ;;
+    3) budget_note; return 0 ;;
+    *)
+      unknown "the branch of $id's worktree $wt could not be read, so whether it has a pull request of its own could not be established"
+      return 0
+      ;;
+  esac
+  git_read "$wt" remote get-url origin
+  case "$?" in
+    0) remote=$GIT_OUT ;;
+    3) budget_note; return 0 ;;
+    *)
+      unknown "$id's worktree has no readable origin, so whether it has a pull request of its own could not be established"
+      return 0
+      ;;
+  esac
   if ! slug=$(github_slug_from_remote "$remote"); then
     unknown "$id's origin $remote is not a GitHub remote, and this check reads GitHub only"
     return 0
