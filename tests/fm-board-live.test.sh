@@ -79,16 +79,35 @@ fm_test_mode() {  # <path>
 
 # A home that can actually record an answer: the fixture home plus a backlog
 # with one task held for the captain, which is what a decision card keys.
+#
+# Every failure here is a BROKEN FIXTURE and says which step broke. It is not
+# an absent dependency: whether tasks-axi is installed is asked separately, by
+# name, at each case that needs it. Conflating the two is how nine cases -
+# the token, the origin refusal, the unauthenticated refusal, the merge
+# refusal, the recorded answer - once retired themselves to a green skip the
+# moment this helper stopped working, and reported safety they never checked.
 make_answering_home() {  # <name> ; prints the home path
   local home
-  home=$(make_home "$1") || return 1
-  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
-  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
-  ( cd "$home" \
-    && BEADS_ACTOR=fixture tasks-axi add pick-one "Pick one" --repo firstmate \
-    && BEADS_ACTOR=fixture tasks-axi hold pick-one --kind captain --reason "captain must decide" \
-  ) >/dev/null 2>&1 || return 1
+  home=$(make_home "$1") || { echo "make_answering_home: could not build the home" >&2; return 1; }
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml" \
+    || { echo "make_answering_home: could not install the backlog config" >&2; return 1; }
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md" \
+    || { echo "make_answering_home: could not write the backlog" >&2; return 1; }
+  ( cd "$home" && BEADS_ACTOR=fixture tasks-axi add pick-one "Pick one" --repo firstmate ) \
+    >/dev/null 2>&1 || { echo "make_answering_home: could not create the task" >&2; return 1; }
+  ( cd "$home" && BEADS_ACTOR=fixture tasks-axi hold pick-one --kind captain \
+      --reason "captain must decide" ) \
+    >/dev/null 2>&1 || { echo "make_answering_home: could not hold the task for the captain" >&2; return 1; }
   printf '%s\n' "$home"
+}
+
+# The dependency, asked by name and nothing else - the idiom this suite
+# already uses for tmux and jq. A case skips only when tasks-axi is genuinely
+# absent, and fails for every other reason.
+need_tasks_axi() {
+  command -v tasks-axi >/dev/null 2>&1 && return 0
+  echo "skip: tasks-axi not found"
+  return 1
 }
 
 serve_home() {  # <home> ; prints the port
@@ -145,7 +164,9 @@ test_the_answer_token_never_reaches_a_terminal() {
 
 test_a_rotated_token_stops_an_old_board_answering() {
   local home token rotated port got
-  home=$(make_answering_home inbound-rotate) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-rotate) \
+    || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
   rotated=$(FM_HOME="$home" "$LIVE" token --rotate) || fail "the token could not be rotated"
   [ "$rotated" != "$token" ] || fail "rotating the token issued the same one again"
@@ -161,7 +182,9 @@ test_a_rotated_token_stops_an_old_board_answering() {
 
 test_a_message_from_another_origin_never_reaches_the_port() {
   local home token port got
-  home=$(make_answering_home inbound-origin) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-origin) \
+    || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
   port=$(serve_home "$home") || fail "the server did not start"
   # A website the captain happens to be visiting, holding a token it should
@@ -181,7 +204,9 @@ test_a_message_from_another_origin_never_reaches_the_port() {
 
 test_a_message_with_no_token_is_refused_out_loud() {
   local home port got
-  home=$(make_answering_home inbound-unauth) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-unauth) \
+    || fail "could not build a home with a captain-held task"
   FM_HOME="$home" "$LIVE" token >/dev/null || fail "a home could not issue an answer token"
   port=$(serve_home "$home") || fail "the server did not start"
   # A local process that is not a browser: it sends no Origin at all, so the
@@ -202,7 +227,9 @@ test_a_message_with_no_token_is_refused_out_loud() {
 
 test_an_inbound_message_can_only_ever_carry_an_answer() {
   local home token port got
-  home=$(make_answering_home inbound-authority) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-authority) \
+    || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
   port=$(serve_home "$home") || fail "the server did not start"
   # An authenticated message asking for anything other than an answer. The
@@ -220,7 +247,9 @@ test_an_inbound_message_can_only_ever_carry_an_answer() {
 
 test_the_captains_click_settles_the_call_the_way_a_typed_answer_does() {
   local home token port got body
-  home=$(make_answering_home inbound-answer) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-answer) \
+    || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
   port=$(serve_home "$home") || fail "the server did not start"
   got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 2 60000 --count-type inbound \
@@ -250,7 +279,9 @@ test_the_captains_click_settles_the_call_the_way_a_typed_answer_does() {
 
 test_an_answer_is_durable_before_anything_is_attempted_with_it() {
   local home token port journal
-  home=$(make_answering_home inbound-journal) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-journal) \
+    || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
   port=$(serve_home "$home") || fail "the server did not start"
   node "$CLIENT" "ws://127.0.0.1:$port/board-live" 2 60000 --count-type inbound \
@@ -294,7 +325,9 @@ test_an_answer_that_cannot_be_written_down_is_refused_rather_than_attempted() {
 
 test_the_reconcile_choice_is_not_recorded_as_an_answer() {
   local home token port got
-  home=$(make_answering_home inbound-reconcile) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-reconcile) \
+    || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
   port=$(serve_home "$home") || fail "the server did not start"
   node "$CLIENT" "ws://127.0.0.1:$port/board-live" 2 60000 --count-type inbound \
@@ -352,7 +385,9 @@ test_an_answer_path_stopped_mid_run_still_tells_firstmate() {
 
 test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked() {
   local home token port got
-  home=$(make_answering_home inbound-dispatch) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-dispatch) \
+    || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
   port=$(serve_home "$home") || fail "the server did not start"
   # The dispatch bar answers for the rows he ticked, not for itself, and names
@@ -388,7 +423,9 @@ test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked() {
 
 test_a_malformed_message_is_refused_rather_than_guessed_at() {
   local home token port got
-  home=$(make_answering_home inbound-malformed) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  need_tasks_axi || return 0
+  home=$(make_answering_home inbound-malformed) \
+    || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
   port=$(serve_home "$home") || fail "the server did not start"
   got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 3 20000 --count-type inbound \
