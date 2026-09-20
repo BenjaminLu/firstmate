@@ -1755,6 +1755,45 @@ test_compose_counts_zero_for_a_call_nothing_waits_on() {
   pass "a call nothing is waiting on carries a zero count rather than none"
 }
 
+# The merge lane lists every open pull request with the reason it is not a
+# merge call. The reason has to come from the SAME conditions that decide
+# whether a merge card exists, or the lane and the cards can disagree - and a
+# lane saying "ready" beside a call that never appeared is worse than no lane.
+test_compose_gives_every_open_pull_request_its_reason() {
+  local home skeleton
+  home=$(make_compose_home compose-merge-lane)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  # The fixture carries one passing pull request whose task this backlog claims
+  # and one failing one whose task it does not.
+  jq -e '.merge_queue
+    | (length == 2)
+    and ([.[] | select(.num == "9") | .ready] == [true])
+    and ([.[] | select(.num == "9") | has("reason")] == [false])
+    and ([.[] | select(.num == "11") | .ready] == [false])
+    and ([.[] | select(.num == "11") | .reason] | length == 1)' "$skeleton" >/dev/null \
+    || fail "the merge lane did not carry a verdict for every open pull request: $(jq -c .merge_queue "$skeleton")"
+  pass "compose gives every open pull request a merge verdict or a reason"
+}
+
+# A failing check and a pull request nothing claims are different reasons, and
+# the captain has to be able to tell them apart - one is work to fix, the other
+# is a record to correct.
+test_compose_tells_a_failed_check_from_an_unclaimed_pull_request() {
+  local home skeleton snap
+  home=$(make_compose_home compose-merge-reasons)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.candidate_prs[1].task = "gated-work"' "$COMPOSE_ASSETS/snapshot.json" > "$snap" \
+    || fail "cannot stage the merge-reason fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose failing pull request has a claimed task"
+  jq -e '[.merge_queue[] | select(.num == "11") | .reason] == ["checks-failed"]' "$skeleton" >/dev/null \
+    || fail "a failing check was not named as the reason: $(jq -c .merge_queue "$skeleton")"
+  pass "compose names a failed check rather than lumping it in with unclaimed work"
+}
+
 test_build_names_the_unfilled_card_slot_it_refuses() {
   local home skeleton filled board out rc
   home=$(make_compose_home compose-unfilled-slot)
@@ -2305,6 +2344,8 @@ test_compose_survives_a_card_record_it_cannot_read
 test_compose_ignores_a_card_record_of_a_schema_it_does_not_know
 test_compose_counts_the_work_stalled_behind_each_call
 test_compose_counts_zero_for_a_call_nothing_waits_on
+test_compose_gives_every_open_pull_request_its_reason
+test_compose_tells_a_failed_check_from_an_unclaimed_pull_request
 test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled

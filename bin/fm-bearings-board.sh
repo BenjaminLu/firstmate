@@ -797,6 +797,22 @@ validate_payload() {  # <data.json>
       and (.what | copy) and (.owner | nonempty_string)
       and optional_https_url("pr_url")
       and optional_subject;
+    # One open pull request in the merge lane. `ready` is the board saying it
+    # would offer this as a merge call; `reason` is the code for why it will
+    # not, and the two must never both be absent - a row that neither offers
+    # nor explains is the empty lane the captain complained about.
+    def merge_row:
+      type == "object"
+      and (.repo | nonempty_string)
+      and (.num | nonempty_string)
+      and (.ready | type == "boolean")
+      and optional_https_url("url")
+      and ((has("reason") | not)
+        or (.reason as $code
+          | ["backlog-unreadable", "unroutable", "not-claimed", "checks-failed",
+             "checks-pending", "not-mergeable", "changes-requested", "duplicate"]
+          | index($code) != null))
+      and (if .ready then (has("reason") | not) else has("reason") end);
     def charted_item:
       type == "object" and repo_marker and (.id | slug(128))
       and (.title | copy) and (.reason | copy_or_empty)
@@ -826,6 +842,8 @@ validate_payload() {  # <data.json>
     and ([.underway[] | underway_item] | all)
     and ([.landed[] | landed_item] | all)
     and ([.charted[] | charted_item] | all)
+    and ((has("merge_queue") | not)
+      or ((.merge_queue | type == "array") and ([.merge_queue[] | merge_row] | all)))
   ' "$1" >/dev/null || return 1
   validate_packet_drawings "$1"
 }
@@ -1365,6 +1383,30 @@ EOF
          blocks: blocked_behind($task),
          allow_freeform: true}
       + (if (.url | https_url) then {pr_url: .url} else {} end);
+    # Why this pull request is NOT on the desk of the captain as a merge
+    # call, or null when it is.
+    #
+    # Computed from the same conditions that decide whether a merge card
+    # exists, so the lane and the cards cannot disagree. A lane that said a
+    # pull request was ready beside a call that never appeared would be worse
+    # than no lane at all - it is the same "the surface says more than is true"
+    # failure this board exists to remove, wearing the friendliest possible
+    # face.
+    #
+    # A CODE, never prose. The words belong with the rest of the board copy so
+    # they arrive translated, and so the lane needs no composer to fill a
+    # translation slot before the board can be built.
+    def merge_block_code($dupes):
+      .task as $task
+      | if ($readable | not) then "backlog-unreadable"
+      elif ((.task | slug(128 - ("merge." | length))) | not) then "unroutable"
+      elif (record(.task) == null) then "not-claimed"
+      elif (.checks == "failing") then "checks-failed"
+      elif (.checks != "passing") then "checks-pending"
+      elif (.mergeable != "MERGEABLE") then "not-mergeable"
+      elif (.review == "CHANGES_REQUESTED") then "changes-requested"
+      elif (($dupes | index($task)) != null) then "duplicate"
+      else null end;
     def merge_ready_prs:
       [ .candidate_prs[]?
         | select((.task | slug(128 - ("merge." | length))) and record(.task) != null and merge_ready) ];
@@ -1400,6 +1442,21 @@ EOF
           | select([$prs[] | select(.task == $pr.task)] | length == 1)
           | merge_card ]
         | first_per_key | map(with_ack(.key))),
+      # Every open pull request this home knows about, and for each the exact
+      # reason it is not asking him to merge it. The standing answer to
+      # 為什麼船長裁決這一塊一直是空的: his own green-only rule empties the lane,
+      # and until now the board never said so.
+      merge_queue: (
+        ([ merge_ready_prs | group_by(.task)[] | select(length > 1) | .[0].task ]) as $dupes
+        | [ .candidate_prs[]? | . as $pr
+          | merge_block_code($dupes) as $code
+          | {repo: .repo, num: .num, task: .task, checks: .checks, review: .review,
+             ready: ($code == null)}
+          # A snapshot url is "-" when the forge gave none, and the lane is
+          # worth more than a link, so a url the payload contract would refuse
+          # is dropped and the row still says what is holding the work.
+          + (if (.url | https_url) then {url: .url} else {} end)
+          + (if $code == null then {} else {reason: $code} end) ]),
       underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
         doing: t(.doing; .state)} ],
       landed: [ .landed[]?
