@@ -19,9 +19,13 @@ Between the two, all 23 unchanged members carry two completed samples and the sl
 Every other job in both runs completed.
 
 A hint is only retained from a run whose own copy of that file was byte-identical to this tree's, compared through the GitHub trees API rather than assumed from a date.
-Two members are the exception and are marked in the table's comment, because this branch edits them: `tests/fm-test-run.test.sh` and `tests/fm-ci-workflow.test.sh` have no CI sample at their current content by construction.
-`tests/fm-ci-workflow.test.sh` measured 16734 ms on run 35517549623 at a heavier version of itself - the `--check-coverage` call responsible was removed later on the same branch - and its retained 3849 ms is that measurement scaled by the two versions' measured local ratio (8.16 s / 35.76 s), the same technique and the same caveat as the `fm-watch-triage` split recorded below.
-`tests/fm-test-run.test.sh`'s 172000 ms is the one number here that is an estimate rather than a measurement, and it is flagged as such in the table: replace it with that script's own `duration_ms` from the first run at this head.
+Every entry in the parallel table now satisfies that rule, including the two this branch edits.
+`tests/fm-test-run.test.sh` carried a 172000 ms estimate for one round because no run of its current content existed; run [35520170650](https://github.com/BenjaminLu/firstmate/actions/runs/35520170650) produced one and the retained value is that measurement, **123724 ms**.
+The estimate was 39% high, which is the safe direction, and replacing it is the branch applying its own rule to its own edit rather than to everyone else's.
+
+One entry in the SERIAL table is still not a measurement of this tree, and it is named in that table's own comment rather than beside the line, because the reader there is `read -r path ms` and would swallow a trailing marker into the number.
+`tests/fm-ci-workflow.test.sh` measured 16734 ms on run 35517549623 at a heavier version of itself - the `--check-coverage` call responsible was removed later on the same branch, and it now reads `--check-lane-walls` instead - so its retained **3817 ms** is that measurement scaled by the two versions' measured local ratio (8.156 s / 35.757 s), the same technique and the same caveat as the `fm-watch-triage` split recorded below.
+Replace it with its own `duration_ms` at the next refresh.
 
 Observed maxima provide conservative packing weights, not an upper bound on future durations.
 How far from an upper bound is worth knowing concretely: `tests/fm-captain-hold-lifecycle.test.sh` measured 373081 ms and 447694 ms on two runs of the same content hours apart on 2026-09-20, a 1.20x spread on a script that is six and a half minutes long, while the same script's lane-level wall moved only 0.4% between two later runs.
@@ -69,31 +73,48 @@ The accuracy that allowance is sized against is measured, not assumed: where a l
 
 ### Where this packing came from
 
-At the refreshed hints the set totals 1398143 ms across 24 scripts, and `tests/fm-captain-hold-lifecycle.test.sh` alone is 449669 ms of it.
-Three execution slots exist - shard 2's one worker and shard 1's two - so no split can finish sooner than 1398143/3 = 466048 ms, and no split can put shard 2 below that one script.
-Alphabetical dispatch costs shard 1 roughly another 60 s on top of that floor, and the two together are why this lane pair has no comfortable pack: searched exhaustively over every assignment, the best achievable worse-lane wall is about 507000 ms.
-The retained layout is the one that reaches it - shard 2 holds `fm-captain-hold-lifecycle` plus `fm-herdr-lab`, `fm-backend-herdr` and `fm-send-popup-settle`, all three of which were shard 2 members before the repack, so no moved script can lose a prerequisite its new job does not install.
-`tests/fm-pi-primary-types.test.sh` stays on shard 1 because that is the job installing the Pi package, and it is the only member that needs it.
+At the retained hints the set totals 1349867 ms across 24 scripts, and `tests/fm-captain-hold-lifecycle.test.sh` alone is 449669 ms of it.
+Three execution slots exist - shard 2's one worker and shard 1's two - so no split can finish sooner than 1349867/3 = 449955 ms, and no split can put shard 2 below that one script, which is 449669 ms.
 
-That leaves **15166 ms - about 15 s - below the 522000 ms budget on the slower lane**, and 15392 ms on the other.
-Against the 600000 ms cap, which is the physical limit rather than the gate, the same walls leave 93166 ms and 93392 ms.
-Quote the first pair to a contributor: the budget is what turns a check red, and at the coverage job rather than ten minutes later.
+Two membership constraints bind, and both are prerequisites rather than preferences:
 
-Stated the way the next change will meet it: this set runs at a measured 45.1 ms per line of test file on average, and its worst rate is `tests/fm-lint.test.sh` at 161.1 ms per line.
+- `tests/fm-pi-primary-types.test.sh` stays on shard 1, because that is the job installing the Pi package and it is the only member that needs it. Shard 1's job installs everything shard 2's does and that package besides, so a prerequisite can only ever be lost moving in the other direction.
+- `tests/fm-captain-hold-lifecycle.test.sh` stays on shard 2, because its hint is the only one in the table with no sample taken under `--jobs 2`, and run 35484461648 measured that script rising 79 s when contended. A split that moves it into the concurrent lane looks better on paper and would be packing on a number this repository has already measured as wrong in the optimistic direction.
+
+**Under those two constraints the best reachable worse-lane wall is 474659 ms, and the retained layout is the one that reaches it.**
+That is a claim a reader can check: enumerate every assignment of the other 22 members, score each with the same alphabetical list-scheduling the model uses, and take the minimum of the worse lane.
+Without the second constraint the search returns 450046 ms, by putting `fm-lint` on shard 2 and `fm-captain-hold-lifecycle` on shard 1; that split is rejected on the evidence above, not because it does not exist.
+
+That leaves **47341 ms - about 47 s - below the 522000 ms budget on the slower lane**, and 47393 ms on the other.
+Against the 600000 ms cap, which is the physical limit rather than the gate, the same walls leave 125341 ms and 125393 ms.
+Quote the budget figure to a contributor: it is what turns a check red, and at the coverage job rather than ten minutes later.
+
+**And say alongside it that the budget is deliberately about three times tighter than the runner.**
+Every hint is an observed maximum retained from a slow or cancelled run, so a healthy run comes in well under the projection: on run 35520170650 shard 1 took 360 s against a 474659 ms projection and shard 2 took 429 s against 474607 ms, leaving 3m43s and 2m40s of real wall rather than 47 s.
+That gap is the conservatism working as intended and must not be closed by loosening the budget - `fm-captain-hold-lifecycle` alone has swung 373 s to 448 s on identical content, and the hints are maxima precisely so a slow runner does not cancel a lane.
+It does mean a contributor who trips the gate is being stopped early rather than at the wall, and should be told which of the two they hit.
+
+Stated the way the next change will meet it: this set runs at a measured 43.4 ms per line of test file on average, and its worst rate is `tests/fm-lint.test.sh` at 161.1 ms per line.
 PR 37's largest single test-file addition was 1491 lines.
-**No addition of that size fits at all** - at the set average it is 67 s against 15 s of room, and at the worst rate 240 s.
-What fits today is roughly 340 lines at the set average and 94 at the worst rate.
+At the set average that is 65 s and fits; at the worst rate it is 240 s and does not.
+Roughly 1090 added lines fit at the set average, and 290 at the worst rate.
 
-That is the honest state of these two lanes and it should be read as a result, not a defect in the guard: the suite has grown into its runners.
 Three levers remain and none is taken here.
-Splitting `tests/fm-captain-hold-lifecycle.test.sh` the way `tests/fm-watch-triage.test.sh` was split below would lower shard 2's floor.
+Splitting `tests/fm-captain-hold-lifecycle.test.sh` the way `tests/fm-watch-triage.test.sh` was split below would lower shard 2's floor, which is the binding one.
 Ordering the lanes longest-first would return about 60 s to shard 1.
 Deleting tests the fleet does not need would return the most of all.
 Raising the cap is not among them: it removes the only thing that noticed.
 
+Neither of these lanes is the run's critical path any more.
+On run 35520170650 they finished 12th and 14th slowest of eighteen jobs, and the run's wall was `Behavior portable serial 4` at 20m14s against a 30-minute cap.
+This branch repacks the serial lane as a side effect of one hint change - all nine memberships moved - but does not target it; on the standing ask that CI finish fast, the lever is there.
+
 `bin/fm-test-run.sh` holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1` and `list_portable_parallel_2`.
 [`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh) requires every member to carry a hint, requires both projected walls to sit inside the budget, requires the coverage guard to agree with `--check-lane-walls` on both, and drives the projection end to end over fixture hint tables placed either side of the budget - on each lane in turn, and on a pair of lanes with identical sums and one wall over - so the assertion is demonstrably able to both fail and pass rather than asserted to be.
-It also withholds one member's hint and requires the projection to rise, because a model that drops the work it cannot measure would report headroom exactly where the packing is least trustworthy.
+It also withholds one member's hint twice over, once below the fallback and once above it, and requires the projection to move in opposite directions and to be REFUSED both times.
+That pair is the reason the guard refuses an unmeasured member rather than reporting one.
+The fallback an unhinted member falls back to is `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS`, a flat 27000 ms, and this set's mean member is 56244 ms - so for the eight members heavier than the fallback, losing a hint makes the projection FALL.
+A missing hint is therefore optimistic exactly where the model cannot see, which is the shape that put this lane past its cap in the first place: a merge added 2309 lines of tests and the packer balanced on weights taken before they existed.
 Those cases run against a bare copy of the runner rather than a rebuilt fixture repository, because this script is itself a member of the lane being measured and an expensive test of the packing distorts the packing.
 The largest individual hint sets a lower bound on any split's projection, regardless of how evenly the rest is assigned.
 

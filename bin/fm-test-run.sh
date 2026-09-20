@@ -40,10 +40,14 @@
 #   --check-lane-walls
 #                   print each portable parallel lane's projected wall under the
 #                   worker count CI gives it, then the budget, the CI job cap,
-#                   the worse lane's wall and which lane that is. Exit 1 when
-#                   that wall is past the budget. --check-coverage reports the
-#                   same numbers and refuses on the same condition; this is the
-#                   cheap entry point for the packing question alone.
+#                   the worse lane's wall, which lane that is, and how many
+#                   members carry no measured hint. Exit 1 when that wall is
+#                   past the budget OR any member is unhinted, because the
+#                   fallback under an unhinted member is flat and below this
+#                   set's mean, so a projection built on it is optimistic for
+#                   anything heavier. --check-coverage reports the same numbers
+#                   and refuses on the same two conditions; this is the cheap
+#                   entry point for the packing question alone.
 #   --list-dispatch-order
 #                   print the selected paths in the order a concurrent run
 #                   would hand them to workers, and exit 0. This is the order
@@ -155,10 +159,13 @@
 # parallel_unhinted (the number of members missing a parallel hint). A modeled
 # wall past the budget FAILS the guard, so the packing goes red at the coverage
 # job instead of ten minutes later at a lane's timeout.
-# An unhinted member is still weighed, on the conservative serial fallback, so
-# the projection is never optimistic about work it cannot measure; it is counted
-# and reported rather than failing the guard on its own. These projections
-# remain estimates, not measured job wall times.
+# An unhinted member is weighed on the serial fallback rather than dropped, but
+# that fallback is a flat PORTABLE_SERIAL_DEFAULT_WEIGHT_MS and is BELOW this
+# set's mean member, so for a member heavier than it the projection FALLS when
+# the hint goes missing - optimistic exactly where the model cannot see. The
+# fallback is therefore a floor under the arithmetic, not a safe answer, and
+# both entry points REFUSE while any member is unhinted instead of relying on
+# it. These projections remain estimates, not measured job wall times.
 #
 # portable-serial stays strictly serial. Its CI shards (portable-serial-<k>of<n>)
 # split it across separate runners, so two of its stateful scripts still never
@@ -616,7 +623,7 @@ tests/fm-send-settle.test.sh 2388
 tests/fm-send-strict.test.sh 4454
 tests/fm-spawn-batch.test.sh 2944
 tests/fm-supervision-instructions.test.sh 378
-tests/fm-test-run.test.sh 172000
+tests/fm-test-run.test.sh 123724
 tests/fm-tmux-submit-busy.test.sh 2673
 tests/fm-transition-lib.test.sh 108
 tests/fm-x-mode.test.sh 33525
@@ -682,10 +689,12 @@ portable_parallel_lane_wall() {
   unhinted=0
   while IFS= read -r script; do
     [ -n "$script" ] || continue
-    # An unmeasured member is still weighed, on the same conservative fallback
-    # --list-scheduled uses. Dropping it would make the projection optimistic
-    # exactly when the packing is least trustworthy, which is the shape of a
-    # guard that passes because it could not see.
+    # An unmeasured member is weighed on the same fallback --list-scheduled
+    # uses, so the arithmetic below never silently omits it. That fallback is
+    # flat and below this set's mean member, so it is a floor rather than a
+    # conservative answer: losing the hint of anything heavier LOWERS the
+    # projection. Counting it here is what lets the callers refuse rather than
+    # report a number that is optimistic exactly where it cannot see.
     hint=$(portable_parallel_hint_for "$script")
     if [ -n "$hint" ]; then
       ms=$hint
@@ -714,6 +723,15 @@ portable_parallel_lane_wall() {
   printf '%s %s\n' "$wall" "$unhinted"
 }
 
+# The members read on stdin that carry no measured parallel hint, one per line.
+portable_parallel_unhinted_members() {
+  local script
+  while IFS= read -r script; do
+    [ -n "$script" ] || continue
+    [ -n "$(portable_parallel_hint_for "$script")" ] || printf '  %s\n' "$script"
+  done
+}
+
 # The worker count CI runs a parallel lane with, by lane number.
 portable_parallel_lane_jobs() {
   case $1 in
@@ -730,9 +748,10 @@ portable_parallel_lane_jobs() {
 # refuses on the same condition; this is the cheap entry point, so a caller
 # asking only about the packing does not pay for the whole inventory proof.
 portable_parallel_lane_walls() {
-  local n jobs wall unhinted max worst
+  local n jobs wall unhinted max worst total_unhinted
   max=0
   worst=1
+  total_unhinted=0
   for n in 1 2; do
     jobs=$(portable_parallel_lane_jobs "$n")
     case $n in
@@ -740,13 +759,23 @@ portable_parallel_lane_walls() {
       2) read -r wall unhinted <<<"$(list_portable_parallel_2 | portable_parallel_lane_wall "$jobs")" ;;
     esac
     printf 'lane=%s jobs=%s wall_ms=%s unhinted=%s\n' "$n" "$jobs" "$wall" "$unhinted"
+    total_unhinted=$((total_unhinted + unhinted))
     if [ "$wall" -gt "$max" ]; then
       max=$wall
       worst=$n
     fi
   done
-  printf 'budget_ms=%s cap_ms=%s max_wall_ms=%s worst_lane=%s\n' \
-    "$PORTABLE_PARALLEL_LANE_BUDGET_MS" "$PORTABLE_PARALLEL_LANE_CAP_MS" "$max" "$worst"
+  printf 'budget_ms=%s cap_ms=%s max_wall_ms=%s worst_lane=%s unhinted=%s\n' \
+    "$PORTABLE_PARALLEL_LANE_BUDGET_MS" "$PORTABLE_PARALLEL_LANE_CAP_MS" \
+    "$max" "$worst" "$total_unhinted"
+  # An unmeasured member is refused, not merely counted. The case this exists
+  # for is a newly proven-isolated heavy script added to a lane before its hint
+  # is measured, and for that case the fallback is optimistic rather than
+  # conservative - so a projection built on it says a pack is fine and the
+  # objection arrives ten minutes later inside the lane. That is the event that
+  # created this guard: a merge added 2309 lines of tests, the packer balanced
+  # on weights taken before they existed, and the lane walked past its cap.
+  [ "$total_unhinted" -eq 0 ] || return 1
   [ "$max" -le "$PORTABLE_PARALLEL_LANE_BUDGET_MS" ] || return 1
   return 0
 }
@@ -755,12 +784,15 @@ portable_parallel_lane_walls() {
 # --list-scheduled output, which is NOT the order the lane is dispatched in -
 # see concurrent_dispatch_order above and docs/fm-test-portable-shards.md.
 #
-# This shape is what minimises the worse of the two walls, searched exhaustively
-# over every assignment, and it is not the even-sums shape. Shard 2 runs serial,
-# so a script placed there costs its full duration; shard 1 runs with two
-# workers, so the same script costs about half - but shard 1 also pays for
-# dispatching alphabetically, which strands whatever sorts late. The best any
-# split reaches is about 507000 ms on the worse lane, and this is it.
+# This shape minimises the worse of the two walls over every assignment that
+# respects the two membership constraints below, and it is not the even-sums
+# shape. Shard 2 runs serial, so a script placed there costs its full duration;
+# shard 1 runs with two workers, so the same script costs about half - but
+# shard 1 also pays for dispatching alphabetically, which strands whatever
+# sorts late. Re-derive that search rather than trusting this sentence; the
+# numbers it returns are in docs/fm-test-portable-shards.md with the two
+# constraints written out, and both are the kind a reader can check.
+#
 # tests/fm-pi-primary-types.test.sh belongs to this lane because
 # this is the parallel job that installs the Pi package, and it is the only
 # member that needs it; moving it needs that workflow step moved with it.
@@ -772,38 +804,43 @@ tests/fm-test-run.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-arm-pretool-check.test.sh
 tests/fm-x-mode.test.sh
+tests/fm-backend-herdr.test.sh
 tests/fm-cd-pretool-check.test.sh
+tests/fm-herdr-lab.test.sh
 tests/fm-brief.test.sh
-tests/fm-grok-harness.test.sh
 tests/fm-composer-lib.test.sh
-tests/fm-send-strict.test.sh
 tests/fm-review-diff.test.sh
 tests/fm-pi-primary-types.test.sh
-tests/fm-spawn-batch.test.sh
 tests/fm-tmux-submit-busy.test.sh
 tests/fm-composer-ghost.test.sh
-tests/fm-send-settle.test.sh
-tests/fm-ensure-agents-md.test.sh
-tests/fm-supervision-instructions.test.sh
 tests/fm-transition-lib.test.sh
 EOF
 }
 
 # Portable parallel shard 2: this lane runs serial, so its wall is exactly its
 # sum and every member costs its full duration here. It carries
-# tests/fm-captain-hold-lifecycle.test.sh, which is this lane's floor and cannot
-# leave, plus the three cheapest scripts shard 1 sheds for more than they cost
-# here. All three were shard 2 members before the 2026-09-20 repack, so no moved
-# script can lose a prerequisite this job does not install.
+# tests/fm-captain-hold-lifecycle.test.sh, which is pinned here rather than
+# merely placed here: its hint is the one in the table with no sample taken
+# under --jobs 2, and run 35484461648 measured it rising 79 s when contended, so
+# a split that moves it into the concurrent lane would be packing on a number
+# this repository has already measured as wrong in the unsafe direction. The
+# rest are the cheapest members shard 1 sheds for more than they cost here.
+# Shard 1's job installs everything this one does and the Pi package besides, so
+# membership only ever risks a prerequisite moving in this direction; none of
+# these needs anything this job lacks.
 # The next time this lane needs to be shorter, the lever is splitting that first
 # script the way tests/fm-watch-triage.test.sh was split
 # (docs/fm-test-portable-shards.md).
 list_portable_parallel_2() {
   cat <<'EOF'
 tests/fm-captain-hold-lifecycle.test.sh
-tests/fm-backend-herdr.test.sh
-tests/fm-herdr-lab.test.sh
+tests/fm-grok-harness.test.sh
 tests/fm-send-popup-settle.test.sh
+tests/fm-send-strict.test.sh
+tests/fm-spawn-batch.test.sh
+tests/fm-send-settle.test.sh
+tests/fm-ensure-agents-md.test.sh
+tests/fm-supervision-instructions.test.sh
 EOF
 }
 
@@ -891,6 +928,15 @@ list_portable_serial() {
 # than only on the fastest one measured. These are balance hints only: the shard
 # partition stays complete and disjoint whatever they say, so a stale hint costs
 # balance rather than coverage. That doc owns the refresh procedure.
+#
+# ONE ENTRY IS NOT A MEASUREMENT OF THIS TREE and is named here rather than left
+# to look like the other 187. tests/fm-ci-workflow.test.sh's 3817 is that
+# script's 16734 ms CI measurement on run 35517549623 scaled by the measured
+# local ratio of that version to this one (8.156 s / 35.757 s), because the
+# --check-coverage call responsible was removed on the same branch. Replace it
+# with its own duration_ms at the next refresh. The marking lives in this
+# comment rather than beside the line because the reader below is
+# `read -r path ms`, which would swallow a trailing field into the number.
 portable_serial_weight_hints() {
   cat <<'EOF'
 tests/fm-afk-contract.test.sh 16574
@@ -924,7 +970,7 @@ tests/fm-calm-claude-mod-plugin.test.sh 48
 tests/fm-calm-claude-mod.test.sh 1455
 tests/fm-calm-pi-extension.test.sh 54060
 tests/fm-check-unregister.test.sh 456
-tests/fm-ci-workflow.test.sh 3849
+tests/fm-ci-workflow.test.sh 3817
 tests/fm-classify-corr-token.test.sh 22892
 tests/fm-classify-decision-key.test.sh 3545
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 74
@@ -1560,9 +1606,17 @@ run_coverage_guard() {
   parallel_max_wall_ms=$(printf '%s\n' "$walls" | sed -n 's/.*max_wall_ms=\([0-9]*\).*/\1/p')
   worst_lane=$(printf '%s\n' "$walls" | sed -n 's/.*worst_lane=\([0-9]*\).*/\1/p')
   if [ "${walls_over:-0}" = 1 ]; then
-    log "coverage guard: portable parallel shard $worst_lane projects a ${parallel_max_wall_ms}ms wall against the ${PORTABLE_PARALLEL_LANE_BUDGET_MS}ms budget and the ${PORTABLE_PARALLEL_LANE_CAP_MS}ms CI job cap"
+    if [ "$((p1_unhinted + p2_unhinted))" -gt 0 ]; then
+      log "coverage guard: $((p1_unhinted + p2_unhinted)) portable parallel member(s) have no measured hint, so both lane projections are packed on a flat default that sits below this set's mean member"
+      list_portable_parallel_1 | portable_parallel_unhinted_members >&2
+      list_portable_parallel_2 | portable_parallel_unhinted_members >&2
+      log "measure them on CI and add them to portable_parallel_weight_hints; see docs/fm-test-portable-shards.md"
+    fi
+    if [ "$parallel_max_wall_ms" -gt "$PORTABLE_PARALLEL_LANE_BUDGET_MS" ]; then
+      log "coverage guard: portable parallel shard $worst_lane projects a ${parallel_max_wall_ms}ms wall against the ${PORTABLE_PARALLEL_LANE_BUDGET_MS}ms budget and the ${PORTABLE_PARALLEL_LANE_CAP_MS}ms CI job cap"
+      log "repack the lanes, or - when one script already exceeds the budget on its own - split that script; see docs/fm-test-portable-shards.md"
+    fi
     log "shard 1 (${p1_jobs} worker(s)): ${p1_wall}ms; shard 2 (${p2_jobs} worker(s)): ${p2_wall}ms"
-    log "repack the lanes, or - when one script already exceeds the budget on its own - split that script; see docs/fm-test-portable-shards.md"
     rm -rf "$tmp"
     return 1
   fi

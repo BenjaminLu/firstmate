@@ -154,10 +154,11 @@ CAPS
 # The two portable parallel lanes carry the same isolation proof, so nothing in
 # the runner or the coverage guard distinguishes them - both would accept
 # --jobs. What separates them is measured shape: lane 1 is packing-bound and
-# gains, lane 2 holds one script that is the whole lane and gains nothing while
-# costing more runner-seconds. This branch is the demonstration that the
-# distinction is easy to lose: both lanes were given the flag together on one
-# argument, and only the measurement said one was wrong.
+# gains, while lane 2 is dominated by tests/fm-captain-hold-lifecycle.test.sh
+# and measured 36% more runner-seconds for no wall when given a second worker.
+# This branch is the demonstration that the distinction is easy to lose: both
+# lanes were given the flag together on one argument, and only the measurement
+# said one was wrong.
 #
 # Those worker counts are also an input to a model now. bin/fm-test-run.sh packs
 # the lanes by each one's projected WALL, and a lane's wall is its makespan over
@@ -218,7 +219,7 @@ end
 raise "lane 1 must keep more than one worker: it is packing-bound and its wall is a makespan, not a sum" \
   unless workflow_jobs(run_step(lanes.fetch(1))) > 1
 
-raise "lane 2 must stay serial: it is one script that is the whole lane, so a second worker has nothing to run. See docs/fm-test-portable-shards.md before changing this." \
+raise "lane 2 must stay serial: on run 35484461648 a second worker there bought no wall - 393s against a 347-415s serial band - while its script sum rose 36% and the script that sets its makespan rose 79s. That is a measurement, not an inference from how many scripts the lane happens to hold today. See docs/fm-test-portable-shards.md before changing this." \
   unless workflow_jobs(run_step(lanes.fetch(2))) == 1
 
 # The cap the model is held against is this file's, and the model only mirrors
