@@ -71,9 +71,9 @@ That is not hypothetical: by 2026-09-01 the lane had grown from 116 to 139 scrip
 Refresh the hints whenever the serial lane gains scripts, rather than waiting for that bound to trip.
 
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size and coverage rather than a copied inventory.
-Nine serial runners pack the refreshed measurements into 730.7 s (12m11s) on every shard, which is also the ideal: no script is now long enough to set the makespan on its own.
-That figure is derived over a 182-script serial lane, and packing is longest-processing-time over the whole lane, so it moves whenever the lane gains or loses a script rather than only when a hint changes: re-derive it from `--list --lane portable-serial` and the hint table rather than quoting it after the lane has grown.
-Scored against the same measurements, the previous hints left shard 3 carrying 983s of real work against that 731s ideal, and the refresh alone cut the modeled makespan to 819s.
+Nine serial runners pack the refreshed measurements into 748.7 s (12m29s) on every shard, which is also the ideal: no script is now long enough to set the makespan on its own.
+That figure is derived over a 188-script serial lane, and packing is longest-processing-time over the whole lane, so it moves whenever the lane gains or loses a script rather than only when a hint changes: re-derive it from `--list --lane portable-serial` and the hint table rather than quoting it after the lane has grown.
+Scored against the same measurements, the previous hints left shard 3 carrying 983s of real work against that 749s ideal, and the refresh alone cut the modeled makespan to 819s.
 The remaining 97s came from splitting the longest script.
 `tests/fm-watch-triage.test.sh` used to run 819s as one file, occupied a whole shard, and stayed the makespan at every shard count, so it was recorded here as this layout's indivisible floor.
 It was not indivisible: its 122 cases are hermetic - each mints its own state directory and its own stubs through `make_case` - and they now run as 95 in that file and 27 in `tests/fm-watch-triage-waits.test.sh`, which owns the wake someone has already explained (a declared pause or dated wait, a captain-held item, the away-posture record, and the wedge threshold that must consult them).
