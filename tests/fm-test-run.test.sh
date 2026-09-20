@@ -1097,22 +1097,45 @@ test_portable_shard_union_and_coverage_guard() {
 # measured hint and the packing over those hints stays even. Both halves went
 # unchecked until one lane grew past its CI job cap and was cancelled on every
 # run, so assert them through the guard's own reported numbers.
-test_portable_parallel_lanes_stay_duration_balanced() {
-  local out max imbalance unhinted
+# What has to hold of the two parallel lanes is that each one FITS, not that
+# their sums match. They are packed to equal projected WALL, and their walls are
+# not their sums in the same way: CI runs shard 1 with --jobs 2, so its wall is
+# a fraction of its sum, while shard 2 runs serial and its wall IS its sum.
+#
+# Equal sums is not merely a weaker rule here, it is an unsatisfiable one. At the
+# hints this lane carries, an even split puts about 677s in each lane, and that
+# is 77s past the 600s cap for the serial one - so a partition that passed the
+# old five-percent rule would be a partition that always times out. The rule was
+# written when the sums were small enough for both to be true at once and stayed
+# after they were not.
+#
+# The margin below is what absorbs the drift between refreshes, and the cap
+# stays the tripwire that reports a lane outgrowing it.
+test_portable_parallel_lanes_each_fit_under_the_cap() {
+  local out unhinted serial_ms jobs2_ms jobs2_wall budget
+  # The lane cap in .github/workflows/ci.yml, which owns it; 600000ms = 10min.
+  local cap=600000
+  # Fit with room: a lane packed to the cap has no margin for the next refresh.
+  budget=$((cap * 85 / 100))
   out=$("$RUNNER" --check-coverage)
   unhinted=$(printf '%s\n' "$out" | sed -n 's/.*parallel_unhinted=\([0-9]*\).*/\1/p')
-  max=$(printf '%s\n' "$out" | sed -n 's/.*parallel_max_ms=\([0-9]*\).*/\1/p')
-  imbalance=$(printf '%s\n' "$out" | sed -n 's/.*parallel_imbalance_ms=\([0-9]*\).*/\1/p')
-  [ -n "$unhinted" ] && [ -n "$max" ] && [ -n "$imbalance" ] \
-    || fail "coverage guard must report parallel_unhinted, parallel_max_ms, parallel_imbalance_ms: $out"
+  serial_ms=$(printf '%s\n' "$out" | sed -n 's/.*parallel_serial_lane_ms=\([0-9]*\).*/\1/p')
+  jobs2_ms=$(printf '%s\n' "$out" | sed -n 's/.*parallel_jobs2_lane_ms=\([0-9]*\).*/\1/p')
+  [ -n "$unhinted" ] && [ -n "$serial_ms" ] && [ -n "$jobs2_ms" ] \
+    || fail "coverage guard must report parallel_unhinted and both parallel lane sums: $out"
   [ "$unhinted" = "0" ] \
     || fail "$unhinted proven-isolated scripts have no measured parallel hint, so the lanes are packed on a guess"
-  [ "$max" -gt 0 ] || fail "parallel_max_ms must be a positive packed duration, got $max"
-  # 5% of the worst lane: wide enough that one script's growth does not trip it,
-  # narrow enough that a lopsided partition cannot call itself balanced.
-  [ "$((imbalance * 20))" -le "$max" ] \
-    || fail "parallel lanes differ by ${imbalance}ms against a ${max}ms worst lane, more than 5%"
-  pass "portable parallel lanes are fully hinted and packed within 5% of each other"
+  [ "$serial_ms" -gt 0 ] || fail "parallel_serial_lane_ms must be a positive packed duration, got $serial_ms"
+  # Shard 2 runs serial, so its packed sum IS the wall it will take.
+  [ "$serial_ms" -le "$budget" ] \
+    || fail "the serial parallel lane packs ${serial_ms}ms against a ${cap}ms cap, leaving no margin (budget ${budget}ms)"
+  # Shard 1 runs --jobs 2. Two workers cannot beat half the sum, and cannot beat
+  # the longest single script either; half the sum is the bound a packing choice
+  # controls, so that is what is held to the budget.
+  jobs2_wall=$((jobs2_ms / 2))
+  [ "$jobs2_wall" -le "$budget" ] \
+    || fail "the --jobs 2 parallel lane packs ${jobs2_ms}ms, whose two-worker floor ${jobs2_wall}ms exceeds the ${budget}ms budget"
+  pass "both portable parallel lanes are fully hinted and each fits under the cap with margin"
 }
 
 test_portable_serial_shards_partition_the_serial_lane() {
@@ -1860,7 +1883,7 @@ test_exclude_family
 test_list_scheduled_proven_isolated_uses_serial_weights
 test_list_scheduled_non_lane_selections_use_serial_weights
 test_portable_shard_union_and_coverage_guard
-test_portable_parallel_lanes_stay_duration_balanced
+test_portable_parallel_lanes_each_fit_under_the_cap
 test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_hint_coverage_is_reported_and_bounded
 test_portable_serial_shard_lane_refusals

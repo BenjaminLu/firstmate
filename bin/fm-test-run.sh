@@ -125,13 +125,22 @@
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated candidate set remains
 # owned by bin/fm-test-isolation-proof.sh; portable parallel shards are a
-# duration-balanced partition of that exact set, packed from the measured hints
-# in portable_parallel_weight_hints (see docs/fm-test-portable-shards.md).
+# partition of that exact set packed from the measured hints in
+# portable_parallel_weight_hints, balanced on each lane's projected WALL rather
+# than on equal sums, because CI runs shard 1 with --jobs 2 and shard 2 serial
+# (see docs/fm-test-portable-shards.md).
 # --check-coverage reports parallel_max_ms (the larger lane hint sum),
 # parallel_imbalance_ms (the absolute difference between the sums), and
 # parallel_unhinted (the number of members missing a parallel hint).
 # These sums exclude unhinted members and are estimates, not measured job wall
 # times. Missing parallel hints are reported without failing this guard.
+# Read parallel_max_ms as a SUM and never as a lane's wall: the larger sum is
+# shard 1's, which CI runs with --jobs 2, so it is the lane with the SHORTER
+# wall of the two. Comparing either number against the workflow's 10-minute cap
+# compares the wrong thing - only shard 2, which runs serial, has a wall its
+# sum predicts. That is why the two lanes are reported separately as well:
+# parallel_serial_lane_ms IS shard 2's projected wall, and
+# parallel_jobs2_lane_ms is shard 1's SUM, whose wall is a fraction of it.
 #
 # portable-serial stays strictly serial. Its CI shards (portable-serial-<k>of<n>)
 # split it across separate runners, so two of its stateful scripts still never
@@ -523,32 +532,42 @@ EOF
 # Per-script serial CI duration hints, one "<path> <ms>" per line, used to
 # pack only the two portable parallel lanes. Measurement provenance and the
 # refresh procedure are owned by docs/fm-test-portable-shards.md.
+#
+# HOW THESE NUMBERS WERE OBTAINED, so the next refresh is a re-read and not a
+# re-derivation. Each value is the SLOWEST duration_ms that script recorded
+# across six CI runs - the five complete green runs and the one cancelled run
+# named in that document - read from each run's fm-test-timing-aggregate
+# artifact. Every one of the 24 carries five or six samples, and the slowest is
+# retained, which is the same evidence rule the serial hints use.
+# Do not refresh one of these by timing a suite on a workstation: the spread
+# between two CI runs of the same script reached 26% here, so a single sample
+# is not a measurement and a laptop's seconds are not a runner's.
 portable_parallel_weight_hints() {
   cat <<'EOF'
-tests/fm-arm-pretool-check.test.sh 30898
-tests/fm-backend-herdr.test.sh 22144
-tests/fm-brief.test.sh 1625
-tests/fm-captain-hold-lifecycle.test.sh 296481
-tests/fm-cd-pretool-check.test.sh 16964
-tests/fm-composer-ghost.test.sh 2120
-tests/fm-composer-lib.test.sh 4798
-tests/fm-crew-state.test.sh 11557
-tests/fm-ensure-agents-md.test.sh 901
-tests/fm-grok-harness.test.sh 6563
-tests/fm-herdr-lab.test.sh 9800
-tests/fm-lint.test.sh 164262
-tests/fm-pi-primary-types.test.sh 8624
-tests/fm-pr-merge.test.sh 111145
-tests/fm-review-diff.test.sh 2747
-tests/fm-send-popup-settle.test.sh 4939
-tests/fm-send-settle.test.sh 2051
-tests/fm-send-strict.test.sh 3861
-tests/fm-spawn-batch.test.sh 2265
-tests/fm-supervision-instructions.test.sh 297
-tests/fm-test-run.test.sh 92944
-tests/fm-tmux-submit-busy.test.sh 2477
-tests/fm-transition-lib.test.sh 99
-tests/fm-x-mode.test.sh 31870
+tests/fm-arm-pretool-check.test.sh 32627
+tests/fm-backend-herdr.test.sh 30404
+tests/fm-brief.test.sh 7933
+tests/fm-captain-hold-lifecycle.test.sh 461859
+tests/fm-cd-pretool-check.test.sh 17708
+tests/fm-composer-ghost.test.sh 2436
+tests/fm-composer-lib.test.sh 7348
+tests/fm-crew-state.test.sh 36046
+tests/fm-ensure-agents-md.test.sh 938
+tests/fm-grok-harness.test.sh 7879
+tests/fm-herdr-lab.test.sh 17323
+tests/fm-lint.test.sh 264656
+tests/fm-pi-primary-types.test.sh 3484
+tests/fm-pr-merge.test.sh 261597
+tests/fm-review-diff.test.sh 3175
+tests/fm-send-popup-settle.test.sh 5536
+tests/fm-send-settle.test.sh 2262
+tests/fm-send-strict.test.sh 4260
+tests/fm-spawn-batch.test.sh 2790
+tests/fm-supervision-instructions.test.sh 360
+tests/fm-test-run.test.sh 149184
+tests/fm-tmux-submit-busy.test.sh 2656
+tests/fm-transition-lib.test.sh 102
+tests/fm-x-mode.test.sh 31357
 EOF
 }
 
@@ -564,8 +583,14 @@ portable_parallel_lane_weight() {
   ' <(portable_parallel_weight_hints) -
 }
 
-# Portable parallel shard 1: LPT balance of the proven-isolated set over the
-# hints above. Stored order agrees with this lane's --list-scheduled output.
+# Portable parallel shard 1: the larger HINT SUM, deliberately. CI runs this
+# lane with --jobs 2, so its wall is well under its sum - 296 s against a 506 s
+# sum on run 35509935039 - and the two lanes are balanced on projected WALL
+# rather than on equal sums. A large parallel_imbalance_ms here is that design,
+# not a packing error: equal sums would leave the serial lane doing nearly
+# twice the wall of this one. At the hints above this lane sums 856 s and is
+# projected at about 501 s against the 600 s cap.
+# Stored order agrees with this lane's --list-scheduled output.
 # tests/fm-pi-primary-types.test.sh belongs to this lane because
 # this is the parallel job that installs the Pi package; moving it needs that
 # workflow step moved with it.
@@ -574,33 +599,41 @@ list_portable_parallel_1() {
 tests/fm-lint.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-test-run.test.sh
+tests/fm-arm-pretool-check.test.sh
+tests/fm-x-mode.test.sh
+tests/fm-backend-herdr.test.sh
 tests/fm-cd-pretool-check.test.sh
-tests/fm-pi-primary-types.test.sh
+tests/fm-herdr-lab.test.sh
+tests/fm-brief.test.sh
 tests/fm-grok-harness.test.sh
 tests/fm-composer-lib.test.sh
-tests/fm-review-diff.test.sh
-tests/fm-tmux-submit-busy.test.sh
-tests/fm-composer-ghost.test.sh
-tests/fm-brief.test.sh
-EOF
-}
-
-# Portable parallel shard 2: the complementary LPT half of the proven set.
-list_portable_parallel_2() {
-  cat <<'EOF'
-tests/fm-captain-hold-lifecycle.test.sh
-tests/fm-x-mode.test.sh
-tests/fm-arm-pretool-check.test.sh
-tests/fm-backend-herdr.test.sh
-tests/fm-crew-state.test.sh
-tests/fm-herdr-lab.test.sh
 tests/fm-send-popup-settle.test.sh
 tests/fm-send-strict.test.sh
+tests/fm-pi-primary-types.test.sh
+tests/fm-review-diff.test.sh
 tests/fm-spawn-batch.test.sh
+tests/fm-tmux-submit-busy.test.sh
+tests/fm-composer-ghost.test.sh
 tests/fm-send-settle.test.sh
 tests/fm-ensure-agents-md.test.sh
 tests/fm-supervision-instructions.test.sh
 tests/fm-transition-lib.test.sh
+EOF
+}
+
+# Portable parallel shard 2: the serial lane, kept deliberately small. It holds
+# tests/fm-captain-hold-lifecycle.test.sh because that script CANNOT move to the
+# --jobs 2 lane: the workflow's own measurement has contention lengthening this
+# lane's makespan-setting script by 79 s, and at its current 462 s that would
+# put shard 1 at the cap instead of this one. A serial lane's wall IS its sum,
+# so this one is packed to about 498 s against a 600 s cap - roughly the same
+# projected wall as shard 1, which is what balancing on wall means here. The
+# ~100 s left under the cap is what absorbs the next drift, and the cap stays
+# the tripwire that reports it rather than a number sized to be survived.
+list_portable_parallel_2() {
+  cat <<'EOF'
+tests/fm-captain-hold-lifecycle.test.sh
+tests/fm-crew-state.test.sh
 EOF
 }
 
@@ -1346,11 +1379,13 @@ run_coverage_guard() {
   parallel_imbalance_ms=$((p1_ms - p2_ms))
   [ "$parallel_imbalance_ms" -ge 0 ] || parallel_imbalance_ms=$((-parallel_imbalance_ms))
 
-  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s parallel_max_ms=%s parallel_imbalance_ms=%s parallel_unhinted=%s serial=%s serial_shards=%s serial_unhinted=%s herdr=%s herdr_shards=%s herdr_unhinted=%s\n' \
+  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s parallel_max_ms=%s parallel_imbalance_ms=%s parallel_jobs2_lane_ms=%s parallel_serial_lane_ms=%s parallel_unhinted=%s serial=%s serial_shards=%s serial_unhinted=%s herdr=%s herdr_shards=%s herdr_unhinted=%s\n' \
     "$(wc -l <"$tmp/all" | tr -d ' ')" \
     "$(wc -l <"$tmp/shards_union" | tr -d ' ')" \
     "$parallel_max_ms" \
     "$parallel_imbalance_ms" \
+    "$p1_ms" \
+    "$p2_ms" \
     "$((p1_unhinted + p2_unhinted))" \
     "$(wc -l <"$tmp/serial" | tr -d ' ')" \
     "$PORTABLE_SERIAL_SHARDS" \

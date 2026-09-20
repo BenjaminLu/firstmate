@@ -29,16 +29,40 @@ The complete historical run supplies tail-script hints, not a completion time fo
 
 ## Parallel lanes
 
-The two parallel lanes use longest-processing-time assignment over those hints.
+The two parallel lanes are packed to equal projected WALL, which is not the same as equal sums, because CI runs shard 1 with `--jobs 2` and shard 2 serial.
+A serial lane's wall is its sum; a two-worker lane's wall is a fraction of its sum, measured at 296 s against a 506 s sum on run [35509935039](https://github.com/BenjaminLu/firstmate/actions/runs/35509935039).
+So shard 1 deliberately carries the larger sum and shard 2 the smaller, and a large `parallel_imbalance_ms` is that design rather than a packing error.
+`tests/fm-captain-hold-lifecycle.test.sh` is pinned to shard 2 for the reason in the concurrency section below: it is the makespan-setting script, and contention lengthens it, so moving it into the `--jobs 2` lane would put THAT lane at the cap instead.
+
+**Equal sums is not a weaker rule here, it is an unsatisfiable one, and that is why it was replaced.**
+At the current hints an even split is about 677 s per lane, which is 77 s past the 600 s cap for the lane that runs serial - so a partition satisfying the old five-percent balance rule would be a partition that always times out.
+That rule was written when the sums were small enough for both to hold at once and stayed after they were not.
+`tests/fm-test-run.test.sh` now asserts what has to be true instead: every member hinted, and each lane's projected wall inside 85% of the cap, so the margin absorbs drift between refreshes and the cap stays the tripwire that reports a lane outgrowing it.
 [`bin/fm-test-run.sh`](../bin/fm-test-run.sh) holds the duration values in `portable_parallel_weight_hints` and the ordered memberships and lane-specific prerequisite constraints beside `list_portable_parallel_1` and `list_portable_parallel_2`.
 Read the derived packing estimates with that runner's `--check-coverage`; its header and `--help` own the output fields and the selection-specific `--list-scheduled` weight rules.
 The largest individual hint sets a lower bound on the estimated duration of any split, regardless of how evenly the remaining work is assigned.
 The CI cap and its rationale are owned by [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
-[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_parallel_lanes_stay_duration_balanced`, requires every parallel member to have a hint and the lane sums to differ by no more than five percent of the larger sum.
+[`tests/fm-test-run.test.sh`](../tests/fm-test-run.test.sh), in `test_portable_parallel_lanes_each_fit_under_the_cap`, requires every parallel member to have a hint and each lane's projected wall to sit inside 85% of the CI cap.
 Its scheduling regressions also check stored parallel lane order and preserve serial-weight scheduling for other selections.
 These checks do not detect a script outgrowing an existing hint or establish measured job headroom.
 Refresh `portable_parallel_weight_hints` with the slowest completed `duration_ms` per script from several green CI runs' `fm-test-timing-portable-parallel-*` artifacts whenever the parallel set gains scripts or a member grows materially.
+
+### The 2026-09-20 refresh, and the one cancelled run it names
+
+Every hint in `portable_parallel_weight_hints` was refreshed on 2026-09-20 to the slowest `duration_ms` that script recorded across six runs, read from each run's `fm-test-timing-aggregate` artifact.
+Five are complete green runs: [35505054553](https://github.com/BenjaminLu/firstmate/actions/runs/35505054553), [35503920748](https://github.com/BenjaminLu/firstmate/actions/runs/35503920748), [35503181619](https://github.com/BenjaminLu/firstmate/actions/runs/35503181619), [35503091467](https://github.com/BenjaminLu/firstmate/actions/runs/35503091467), and [35502455291](https://github.com/BenjaminLu/firstmate/actions/runs/35502455291).
+Every one of the 24 parallel members carries five or six samples, so none is packed on a single reading.
+
+The sixth is **cancelled** run [35509935039](https://github.com/BenjaminLu/firstmate/actions/runs/35509935039), taken as the named supplement the rule above requires, and this is which of its shards were used and why.
+Its twelve completed lanes supplied ordinary samples through the aggregate artifact; parallel lane 2 was cut at its cap before finishing, so its six completed scripts were read from that job's own `FM_TEST_END` lines, which carry the same `duration_ms` the artifact would have.
+Nothing was taken from the seven scripts that lane never reached, and no timeout duration was treated as a sample.
+It has to be named because it is the only run in existence that measures `tests/fm-captain-hold-lifecycle.test.sh` at its current size: the commit that grew it is newer than every green run above, which is exactly the case the supplement rule exists for.
+
+That suite is also the clearest reading of why this refresh was owed.
+Its hint said 296 s. The last green run without the growth commit already measured 365 s, and the cancelled run with it measured 462 s - so the hint was stale by 69 s before that commit and by 165 s after it, and the packer had been placing it against the 296 s figure the whole time.
+Three other members were also materially understated, all in the same direction.
+The spread between two CI readings of the same script reached 26% in this sample, which is why the rule is several runs and the slowest, and why timing a suite on a workstation is not a refresh.
 
 ## Portable serial remainder
 
