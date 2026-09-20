@@ -2293,6 +2293,16 @@ TS
   # becomes fatal is how a wait acquires a way to red a healthy run - a bare
   # 'Working' over the whole viewport would settle on strictly fewer frames,
   # and settling is the only way past this line.
+  #
+  # Everything the lines below read is left OUT of this wait on purpose, which
+  # is the opposite of the choice made at the /reload wait further down. Those
+  # lines are the product claims this case exists to make - Calm hid the tool
+  # row, Calm hid the thinking label - and requiring them here would report a
+  # Calm regression as a wait that ran out, which is worse to read than the
+  # assertion that names the row. The two rows assert_geometry_gap needs are
+  # the two asserted immediately above it, so it never reads a frame those
+  # assertions have not already judged. What this wait owns is only that the
+  # turn stopped working.
   fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
     --tail 12 \
     --absent-re 'Working(\.\.\.)?([[:space:]]|─|$)' \
@@ -2355,8 +2365,21 @@ TS
   # a separate assert_not_contains after a loop that already required the text
   # gone could never fire, and the loop running out in silence is what used to
   # report this as a geometry failure one screen later.
+  #
+  # All three expanded thinking blocks must go, not just the first: a frame
+  # where one collapsed and the others had not is mid-redraw, and its row
+  # geometry is not the geometry assert_geometry_gap is here to measure. The
+  # two rows that assertion reads are named for the same reason they are named
+  # at the /reload wait - it gets one shot at the capture this call leaves
+  # behind. 'CALM_GEOMETRY_FINAL' is a substring of the final thinking block's
+  # own label, so requiring that label gone is also what keeps the required
+  # text unambiguous.
   fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
     --absent 'CALM_GEOMETRY_THINKING_ONE' \
+    --absent 'CALM_GEOMETRY_THINKING_TWO' \
+    --absent 'CALM_GEOMETRY_FINAL_THINKING' \
+    --present '[skill] ahoy' \
+    --present 'CALM_GEOMETRY_FINAL' \
     || fail "collapsing thinking restored hidden-row output"
   assert_geometry_gap "$snapshot" "re-collapsed native Calm transcript"
 
@@ -2367,9 +2390,21 @@ TS
   assert_contains "$(cat "$calm_off_snapshot")" "Thinking..." "turning Calm off did not restore collapsed thinking labels"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l '/calm'
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" Enter
+  # Every row the redraw has to hide, not two of them. Calm off restored two
+  # tool calls and two tool results as well as the thinking labels, and a frame
+  # where the first pair had gone and the second had not is a partial redraw
+  # whose gap is not 2 - so waiting on a two-string proxy for "the redraw
+  # finished" and then measuring the exact final geometry is the race written
+  # one line apart. The two rows assert_geometry_gap reads are named for the
+  # same reason.
   fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
     --absent 'probe-one.txt' \
+    --absent 'probe-two.txt' \
+    --absent 'tool result one' \
+    --absent 'tool result two' \
     --absent 'Thinking...' \
+    --present '[skill] ahoy' \
+    --present 'CALM_GEOMETRY_FINAL' \
     || fail "turning Calm back on did not hide the tool-call and thinking rows again"
   assert_geometry_gap "$snapshot" "Calm redraw of existing transcript"
 
