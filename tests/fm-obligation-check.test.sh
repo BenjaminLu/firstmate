@@ -1,0 +1,823 @@
+#!/usr/bin/env bash
+# Tests for bin/fm-obligation-check.sh, the fleet obligation report.
+#
+# Every obligation is proven in BOTH directions: it prints when the obligation
+# is genuinely owed, and it stays silent when the obligation is genuinely met.
+# Only proving the printing half would let the silent case rot into a check that
+# reports nothing because it can no longer see anything, which is exactly the
+# failure this script was written to end - an obligation that stopped being met
+# and made no sound.
+#
+# The forge is a fixture, and it is deliberately not a fixture that invents its
+# own output shape. Each repository is a JSON file in gh's own --json shape, and
+# the fake gh applies the CALLER's --jq program to it with the local jq, so what
+# the hermetic suite exercises is the script's own extraction program rather
+# than a hand-written answer that agrees with whatever the script expects.
+# gh evaluates --jq with gojq rather than the jq binary, so that those programs
+# also compile where they actually run is proven separately and against the real
+# forge by tests/fm-obligation-forge-live-e2e.test.sh.
+set -u
+
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+CHECK="$ROOT/bin/fm-obligation-check.sh"
+CHECKPOINT="$ROOT/bin/fm-watch-checkpoint.sh"
+TMP_ROOT=$(fm_test_tmproot fm-obligation-check)
+
+command -v jq >/dev/null 2>&1 || { printf 'skip: jq is required to shape the forge fixtures\n'; exit 0; }
+
+SLUG=fmtest/repo
+PR_BASE="https://github.com/$SLUG/pull"
+
+# --- fixtures ---------------------------------------------------------------
+
+make_home() {
+  local name=$1 home
+  home="$TMP_ROOT/$name"
+  mkdir -p "$home/state" "$home/data" "$home/.lavish" "$home/forge" "$home/bin"
+  make_gh "$home"
+  printf '%s\n' "$home"
+}
+
+# A gh that answers from the fixture repository files and applies the caller's
+# own --jq program. It logs every invocation so a case can assert how many forge
+# calls a sweep actually made.
+make_gh() {
+  local home=$1
+  cat > "$home/bin/gh" <<'SH'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "$GH_LOG"
+mode= repo= number= program=
+args=("$@")
+i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  case "${args[i]}" in
+    list) mode=list ;;
+    view) i=$((i + 1)); mode=view; number=${args[i]} ;;
+    --repo) i=$((i + 1)); repo=${args[i]} ;;
+    --jq) i=$((i + 1)); program=${args[i]} ;;
+    --json|--limit|--state) i=$((i + 1)) ;;
+  esac
+  i=$((i + 1))
+done
+[ -z "${GH_FIXTURE_HANG:-}" ] || sleep "$GH_FIXTURE_HANG"
+[ -z "${GH_FIXTURE_FAIL:-}" ] || { printf 'the forge said no\n' >&2; exit 1; }
+file="$GH_FORGE/${repo//\//__}.json"
+[ -f "$file" ] || { printf 'no such repository\n' >&2; exit 1; }
+if [ "$mode" = list ]; then
+  jq -c '[.[] | select(.state == "OPEN")]' "$file" | jq -r "$program"
+else
+  jq -c --arg n "$number" '.[] | select((.number | tostring) == $n)' "$file" | jq -r "$program"
+fi
+SH
+  chmod 0755 "$home/bin/gh"
+}
+
+# forge_pr <home> <slug> <number> <state> <head> <reviews> <comments>
+forge_pr() {
+  local home=$1 slug=$2 number=$3 state=$4 head=$5 reviews=$6 comments=$7 file tmp
+  file="$home/forge/${slug//\//__}.json"
+  [ -f "$file" ] || printf '[]\n' > "$file"
+  tmp="$file.tmp"
+  jq --argjson n "$number" --arg s "$state" --arg h "$head" \
+    --argjson r "$reviews" --argjson c "$comments" --arg u "https://github.com/$slug/pull/$number" \
+    '. + [{number: $n, url: $u, state: $s, headRefOid: $h,
+           reviews: [range($r) | {state: "COMMENTED"}],
+           comments: [range($c) | {body: "a note"}]}]' "$file" > "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+sha() { printf '%040d\n' "$1" | tr '0' "${2:-a}" | cut -c1-40; }
+
+# A 40-hex commit that is distinct per seed.
+commit() { printf '%s%036d\n' "$1" "$1" | cut -c1-40 | tr ' ' '0'; }
+
+# task <home> <id> [extra meta lines...]
+task() {
+  local home=$1 id=$2
+  shift 2
+  {
+    printf 'window=default:w1:p1\n'
+    printf 'endpoint_task_id=%s\n' "$id"
+    printf 'worktree=%s/wt/%s\n' "$home" "$id"
+    local line
+    for line in "$@"; do printf '%s\n' "$line"; done
+  } > "$home/state/$id.meta"
+}
+
+# poll <home> <id> <url>: the armed merge poll's own sidecar.
+poll() {
+  local home=$1 id=$2 url=$3 host=github.com path number
+  path=$(printf '%s' "$url" | sed -E 's#^https://github\.com/([^/]+/[^/]+)/pull/.*#\1#')
+  number=${url##*/}
+  printf '%s\n%s\n%s\n%s\n%s\n' github "$url" "$host" "$path" "$number" > "$home/state/$id.pr-poll"
+}
+
+# steer <home> <id> <count>: <count> handled steering records.
+steer() {
+  local home=$1 id=$2 count=$3 i
+  mkdir -p "$home/state/$id.inbox/handled"
+  for ((i = 1; i <= count; i++)); do
+    printf 'a steer\n' > "$home/state/$id.inbox/handled/$(printf '%03d' "$i").msg"
+  done
+}
+
+design_record() {
+  local home=$1 id=$2 name=${3:-design.md}
+  mkdir -p "$home/data/$id"
+  printf '# the plan\n' > "$home/data/$id/$name"
+}
+
+# board <home> <key>=<pr-url>...: a built board page carrying Captain's Call cards.
+board() {
+  local home=$1 cards='[]' entry key url
+  shift
+  for entry in "$@"; do
+    key=${entry%%=*}
+    url=${entry#*=}
+    cards=$(printf '%s' "$cards" | jq --arg k "$key" --arg u "$url" '. + [{key: $k, pr_url: $u}]')
+  done
+  {
+    printf '<html><body>\n'
+    printf '<script id="bearings-data" type="application/json">\n'
+    printf '%s\n' "$(printf '%s' "$cards" | jq -c '{schema: "fm-bearings-board.v1", captains_call: ., landed: [], underway: [], charted: []}')"
+    printf '</script>\n'
+    printf '</body></html>\n'
+  } > "$home/.lavish/bearings-board.html"
+}
+
+# run <home> <out> [env assignments...]: one sweep with the cadence gate open, so
+# a case exercises the obligations rather than the no-nag interval.
+run() {
+  local home=$1 out=$2
+  shift 2
+  local status=0
+  # The case's own assignments come LAST so a case that means to drive the
+  # cadence gate or the watcher bound actually overrides the defaults here.
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=0 FM_CHECK_TIMEOUT=30 \
+    PATH="$home/bin:$PATH" "$@" "$CHECK" > "$out" 2>&1 || status=$?
+  expect_code 0 "$status" "check exit"
+}
+
+assert_silent() {
+  [ ! -s "$1" ] || fail "$2: $(cat "$1")"
+}
+
+# --- obligation 1: an open pull request with nothing posted on it -----------
+
+test_open_pull_request_with_nothing_posted_is_reported() {
+  local home out
+  home=$(make_home o1-owed)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "nothing posted on $PR_BASE/7 (task alpha)" \
+    "an open pull request with no review and no comment was not reported"
+  assert_contains "$(cat "$out")" "obligations owed:" "the finding was not reported as owed"
+  [ "$(wc -l < "$out" | tr -d '[:space:]')" = 1 ] || fail "the report must be exactly one line for the wake record"
+  pass "an open pull request with nothing posted on it is reported"
+}
+
+test_a_reviewed_pull_request_is_silent() {
+  local home out
+  home=$(make_home o1-review)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 1 0
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a pull request carrying a formal review was still reported as unreviewed"
+  pass "a pull request with a formal review is silent"
+}
+
+test_a_commented_pull_request_is_silent() {
+  local home out
+  home=$(make_home o1-comment)
+  # The reviewed-PR path posts its findings with `gh pr comment`, so a comment
+  # and not only a formal review has to satisfy this obligation.
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 1
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a pull request carrying a posted comment was still reported as unreviewed"
+  pass "a pull request whose findings were posted as a comment is silent"
+}
+
+test_a_closed_pull_request_is_not_owed_a_review() {
+  local home out
+  home=$(make_home o1-closed)
+  forge_pr "$home" "$SLUG" 7 MERGED "$(commit 7)" 0 0
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a pull request that is no longer open was reported as owing a review"
+  pass "only an OPEN pull request is owed a review"
+}
+
+# --- obligation 2: an armed merge poll bound to the wrong commit ------------
+
+test_a_poll_bound_to_a_superseded_commit_is_reported() {
+  local home out
+  home=$(make_home o2-owed)
+  forge_pr "$home" "$SLUG" 8 OPEN "$(commit 2)" 1 0
+  task "$home" beta "kind=ship" "pr=$PR_BASE/8" "pr_head=$(commit 1)"
+  poll "$home" beta "$PR_BASE/8"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "the recorded head for beta is $(commit 1 | cut -c1-9)" \
+    "the report does not name the superseded commit the records still hold"
+  assert_contains "$(cat "$out")" "$PR_BASE/8 is at $(commit 2 | cut -c1-9)" \
+    "the report does not name the live head the pull request actually has"
+  pass "a merge poll bound to a superseded commit is reported"
+}
+
+test_a_poll_bound_to_the_live_commit_is_silent() {
+  local home out
+  home=$(make_home o2-current)
+  forge_pr "$home" "$SLUG" 8 OPEN "$(commit 2)" 1 0
+  task "$home" beta "kind=ship" "pr=$PR_BASE/8" "pr_head=$(commit 2)"
+  poll "$home" beta "$PR_BASE/8"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a merge poll bound to the pull request's live head was reported as stale"
+  pass "a merge poll bound to the live head is silent"
+}
+
+test_a_poll_on_a_closed_pull_request_is_reported() {
+  local home out
+  home=$(make_home o2-dead)
+  # The recorded incident: a poll left watching a pull request closed hours
+  # earlier. It can never fire, so nothing will ever report on that task again.
+  forge_pr "$home" "$SLUG" 9 CLOSED "$(commit 3)" 1 0
+  task "$home" gamma "kind=ship" "pr=$PR_BASE/9" "pr_head=$(commit 3)"
+  poll "$home" gamma "$PR_BASE/9"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "the merge poll for gamma watches $PR_BASE/9, which is closed unmerged" \
+    "a poll left watching a closed pull request was not reported"
+  pass "a merge poll watching a closed unmerged pull request is reported"
+}
+
+test_a_poll_on_a_merged_pull_request_is_silent() {
+  local home out
+  home=$(make_home o2-merged)
+  # That poll is doing its job: its next sweep prints `merged` and retires it.
+  forge_pr "$home" "$SLUG" 9 MERGED "$(commit 4)" 1 0
+  task "$home" gamma "kind=ship" "pr=$PR_BASE/9" "pr_head=$(commit 3)"
+  poll "$home" gamma "$PR_BASE/9"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a poll whose pull request merged was reported instead of being left to fire"
+  pass "a merge poll whose pull request has merged is silent"
+}
+
+test_a_poll_with_no_recorded_head_is_silent() {
+  local home out
+  home=$(make_home o2-nohead)
+  forge_pr "$home" "$SLUG" 8 OPEN "$(commit 2)" 1 0
+  task "$home" beta "kind=ship" "pr=$PR_BASE/8"
+  poll "$home" beta "$PR_BASE/8"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a task that never recorded a head was reported as holding a stale one"
+  pass "a poll with no recorded head has nothing stale to report"
+}
+
+# --- obligation 3: a landed pull request still an open call on the board ----
+
+test_a_merged_pull_request_left_on_the_board_is_reported() {
+  local home out
+  home=$(make_home o3-owed)
+  forge_pr "$home" "$SLUG" 11 MERGED "$(commit 5)" 1 1
+  board "$home" "delta=$PR_BASE/11"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "the board still shows delta as an open call, but $PR_BASE/11 is merged" \
+    "a merged pull request still on the board was not reported"
+  pass "a merged pull request still shown as an open call is reported"
+}
+
+test_an_open_pull_request_on_the_board_is_silent() {
+  local home out
+  home=$(make_home o3-open)
+  forge_pr "$home" "$SLUG" 11 OPEN "$(commit 5)" 1 1
+  board "$home" "delta=$PR_BASE/11"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a board card whose pull request is still open was reported as stale"
+  pass "a board card whose pull request is still open is silent"
+}
+
+test_a_home_with_no_board_is_silent() {
+  local home out
+  home=$(make_home o3-noboard)
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a home that has never built a board reported a stale card"
+  pass "a home with no board has no card to be stale"
+}
+
+# --- obligation 4: a steered task with no design record ---------------------
+
+test_a_steered_task_with_no_design_record_is_reported() {
+  local home out
+  home=$(make_home o4-owed)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 4
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "epsilon has been steered 4 times with no design record at data/epsilon/design.md" \
+    "a task whose plan lives only in its steering inbox was not reported"
+  pass "a steered task with no design record is reported"
+}
+
+test_a_steered_task_with_a_design_record_is_silent() {
+  local home out
+  home=$(make_home o4-design)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 4
+  design_record "$home" epsilon design.md
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a task that already has a design record was reported as missing one"
+  pass "a steered task with a design record is silent"
+}
+
+test_a_steered_scout_with_a_report_is_silent() {
+  local home out
+  home=$(make_home o4-report)
+  task "$home" zeta "kind=scout"
+  steer "$home" zeta 4
+  design_record "$home" zeta report.md
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a scout whose report already holds its reasoning was reported as missing a design record"
+  pass "a task whose report holds the reasoning is silent"
+}
+
+test_a_task_that_was_never_steered_is_silent() {
+  local home out
+  home=$(make_home o4-unsteered)
+  # Its whole plan is in its brief, which is already durable, so nothing is owed.
+  task "$home" eta "kind=ship"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a task that was never steered was reported as missing a design record"
+  pass "a task that was never steered is silent"
+}
+
+test_a_secondmate_is_not_a_work_item() {
+  local home out
+  home=$(make_home o4-secondmate)
+  task "$home" mate "kind=secondmate"
+  steer "$home" mate 9
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a persistent secondmate was treated as a task owing a design record"
+  pass "a secondmate is not a work item and owes none of the four"
+}
+
+# --- undeterminable is its own answer ---------------------------------------
+
+test_an_unreachable_forge_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home unreachable)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  run "$home" "$out" GH_FIXTURE_FAIL=1
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "an unreachable forge produced silence, which means all four obligations are met"
+  assert_contains "$report" "unknown: $PR_BASE/7 could not be read" \
+    "an unreachable forge was not reported as an undeterminable answer"
+  assert_not_contains "$report" "owed:" \
+    "an undeterminable obligation was reported as owed, which sends firstmate to do work that may not be needed"
+  pass "an unreachable forge is reported as unknown, never as clean and never as owed"
+}
+
+test_a_missing_gh_is_unknown_not_clean() {
+  local home out report status=0
+  home=$(make_home no-gh)
+  rm -f "$home/bin/gh"
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=0 FM_CHECK_TIMEOUT=30 \
+    PATH="$(fm_test_base_path_sans "$PATH" gh)" "$CHECK" > "$out" 2>&1 || status=$?
+  expect_code 0 "$status" "check exit"
+  report=$(cat "$out")
+  assert_contains "$report" "gh is not installed" "an absent gh was not named as the reason nothing could be read"
+  assert_contains "$report" "unknown:" "an absent gh did not produce an unknown answer"
+  assert_not_contains "$report" "owed:" "an absent gh was turned into an owed obligation"
+  pass "an absent gh is reported as unknown naming the tool"
+}
+
+test_a_gitlab_merge_request_is_a_named_gap_not_a_pass() {
+  local home out report
+  home=$(make_home gitlab)
+  task "$home" theta "kind=ship" "pr=https://gitlab.example.com/grp/proj/-/merge_requests/4"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  assert_contains "$report" "this check reads GitHub only" \
+    "a GitLab merge request was passed over instead of being reported as a named gap"
+  assert_contains "$report" "unknown:" "the GitLab gap was not reported as an undeterminable answer"
+  pass "a GitLab merge request is a named unknown rather than a silent pass"
+}
+
+test_the_budget_running_out_is_unknown_not_dropped() {
+  local home out report
+  home=$(make_home budget)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  # One forge call that never answers inside a two-second sweep budget.
+  run "$home" "$out" FM_OBLIGATION_BUDGET_SECS=2 GH_FIXTURE_HANG=8
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a sweep the budget cut short produced silence"
+  assert_contains "$report" "unknown:" "a sweep the budget cut short did not report an unknown answer"
+  assert_not_contains "$report" "owed:" "a pull request the budget never reached was reported as owed"
+  pass "a sweep the budget cuts short reports what it could not determine"
+}
+
+test_an_oversized_budget_is_cut_to_fit_and_named() {
+  local home out
+  home=$(make_home budget-cut)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 1
+  out="$home/out.txt"
+  run "$home" "$out" FM_CHECK_TIMEOUT=10 FM_OBLIGATION_BUDGET_SECS=90
+  assert_contains "$(cat "$out")" "the sweep budget 90s was cut to 7s to stay inside the watcher check timeout of 10s" \
+    "a budget larger than the watcher's own bound was cut without saying so"
+  pass "a budget that cannot fit the watcher's bound is cut and the cut is named"
+}
+
+test_an_unreadable_board_is_unknown_not_clean() {
+  local home out report
+  home=$(make_home board-broken)
+  printf '<html><body>no payload here</body></html>\n' > "$home/.lavish/bearings-board.html"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  assert_contains "$report" "carries no readable payload" "a board with no payload was passed over as having no stale card"
+  assert_contains "$report" "unknown:" "an unreadable board did not produce an unknown answer"
+  pass "a board whose payload cannot be read is unknown, not clean"
+}
+
+# --- silence means all four were checked and met ----------------------------
+
+test_a_home_where_all_four_are_met_is_silent() {
+  local home out
+  home=$(make_home all-met)
+  # One of each: a reviewed open pull request whose poll is bound to its live
+  # head, a board card on that same open pull request, and a steered task with
+  # a design record.
+  forge_pr "$home" "$SLUG" 20 OPEN "$(commit 6)" 1 2
+  task "$home" iota "kind=ship" "pr=$PR_BASE/20" "pr_head=$(commit 6)"
+  poll "$home" iota "$PR_BASE/20"
+  steer "$home" iota 3
+  design_record "$home" iota design.md
+  board "$home" "iota=$PR_BASE/20"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a home where all four obligations are met still reported something"
+  # Silence has to be the result of asking, not of never getting that far.
+  assert_present "$home/gh.log" "the sweep was silent because it never reached the forge at all"
+  pass "silence means all four obligations were checked and found met"
+}
+
+test_an_empty_home_is_silent() {
+  local home out
+  home=$(make_home empty)
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_silent "$out" "a home with no tasks and no board reported an obligation"
+  pass "a home with nothing under way owes nothing"
+}
+
+# --- it observes and changes nothing ----------------------------------------
+
+test_the_check_changes_nothing_but_its_own_record() {
+  local home out before after
+  home=$(make_home observer)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0
+  forge_pr "$home" "$SLUG" 11 MERGED "$(commit 5)" 1 1
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 1)"
+  poll "$home" alpha "$PR_BASE/7"
+  steer "$home" alpha 2
+  board "$home" "delta=$PR_BASE/11"
+  before="$TMP_ROOT/observer-before.txt"
+  after="$TMP_ROOT/observer-after.txt"
+  ( cd "$home" && find . -type f ! -name 'gh.log' ! -name 'out.txt' -exec shasum {} \; | sort ) > "$before"
+  out="$home/out.txt"
+  run "$home" "$out"
+  [ -s "$out" ] || fail "the observer case did not actually report anything, so it proves nothing"
+  ( cd "$home" && find . -type f ! -name 'gh.log' ! -name 'out.txt' -exec shasum {} \; | sort ) > "$after"
+  diff <(grep -v 'fleet-obligations' "$before") <(grep -v 'fleet-obligations' "$after") >/dev/null \
+    || fail "the check changed something other than its own report record:"$'\n'"$(diff "$before" "$after" || true)"
+  assert_present "$home/state/.fleet-obligations" "the check wrote no report record"
+  pass "the check reads everything and writes only its own report record"
+}
+
+# --- reporting once, and reporting again ------------------------------------
+
+test_the_same_finding_is_reported_once() {
+  local home out
+  home=$(make_home once)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 2
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "epsilon has been steered" "the first sweep did not report the finding"
+  run "$home" "$out"
+  assert_silent "$out" "an unchanged finding was reported again on the very next sweep"
+  pass "an unchanged finding set is reported once rather than on every sweep"
+}
+
+test_a_new_finding_is_news() {
+  local home out
+  home=$(make_home news)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 2
+  out="$home/out.txt"
+  run "$home" "$out"
+  run "$home" "$out"
+  assert_silent "$out" "the unchanged set was not suppressed, so this case cannot prove the next step"
+  task "$home" kappa "kind=ship"
+  steer "$home" kappa 1
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "kappa has been steered" "a finding that appeared after a suppressed sweep was never reported"
+  pass "a finding that lands after a suppressed sweep is still news"
+}
+
+test_an_undischarged_obligation_is_reported_again() {
+  local home out now
+  home=$(make_home repeat)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 2
+  out="$home/out.txt"
+  run "$home" "$out"
+  run "$home" "$out"
+  assert_silent "$out" "the unchanged set was not suppressed, so this case cannot prove the repeat"
+  # Age the last report past the repeat horizon. Acknowledging a wake is not
+  # discharging the obligation, so it has to come back.
+  now=$(date +%s)
+  sed "s/^epoch=.*/epoch=$((now - 7200))/" "$home/state/.fleet-obligations" > "$home/state/.fleet-obligations.new"
+  mv -f "$home/state/.fleet-obligations.new" "$home/state/.fleet-obligations"
+  run "$home" "$out" FM_OBLIGATION_REPEAT=3600
+  assert_contains "$(cat "$out")" "epsilon has been steered" \
+    "an obligation still owed an hour later went quiet instead of coming back"
+  pass "an obligation that is still owed is reported again once the repeat horizon passes"
+}
+
+test_a_silent_sweep_does_not_push_the_repeat_horizon_out() {
+  local home out now recorded
+  home=$(make_home horizon)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 2
+  out="$home/out.txt"
+  run "$home" "$out"
+  now=$(date +%s)
+  sed "s/^epoch=.*/epoch=$((now - 100))/" "$home/state/.fleet-obligations" > "$home/state/.fleet-obligations.new"
+  mv -f "$home/state/.fleet-obligations.new" "$home/state/.fleet-obligations"
+  run "$home" "$out"
+  assert_silent "$out" "the unchanged set was reported again too early"
+  recorded=$(grep '^epoch=' "$home/state/.fleet-obligations" | cut -d= -f2)
+  [ "$recorded" = "$((now - 100))" ] \
+    || fail "a silent sweep rewrote the report clock, so each suppressed sweep would push the repeat another interval away"
+  pass "a suppressed sweep leaves the report clock alone so the repeat still arrives"
+}
+
+test_the_forge_is_not_read_between_intervals() {
+  local home out now calls
+  home=$(make_home interval)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 1 1
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  run "$home" "$out"
+  now=$(date +%s)
+  printf '%s\nepoch=%s\n' fm-fleet-obligations-v1 "$now" > "$home/state/.fleet-obligations"
+  : > "$home/gh.log"
+  local status=0
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=900 FM_CHECK_TIMEOUT=30 \
+    PATH="$home/bin:$PATH" "$CHECK" > "$out" 2>&1 || status=$?
+  expect_code 0 "$status" "check exit"
+  calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 0 ] || fail "the forge was read $calls times inside the no-probe interval"
+  assert_silent "$out" "a sweep inside the no-probe interval still reported"
+  pass "the forge is not read again until the probe interval has passed"
+}
+
+# --- the forge is asked once per distinct pull request ----------------------
+
+test_one_read_covers_a_pull_request_every_obligation_names() {
+  local home out calls
+  home=$(make_home one-call)
+  # The same pull request is a task's own, an armed poll's, and a board card's.
+  # That is one question about one pull request, so it must cost one read.
+  forge_pr "$home" "$SLUG" 41 MERGED "$(commit 1)" 1 1
+  task "$home" t41 "kind=ship" "pr=$PR_BASE/41" "pr_head=$(commit 1)"
+  poll "$home" t41 "$PR_BASE/41"
+  board "$home" "t41=$PR_BASE/41"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "the board still shows t41 as an open call" "the single read did not answer the board's question"
+  calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 1 ] \
+    || fail "one pull request named by three obligations cost $calls forge calls instead of one"
+  pass "one read answers every obligation that names the same pull request"
+}
+
+test_the_forge_is_asked_only_about_this_home_s_own_work() {
+  local home out calls
+  home=$(make_home scoped)
+  # Three of the repository's pull requests are open, and this home watches one.
+  # The cost must follow this home's work, not the size of the repository.
+  forge_pr "$home" "$SLUG" 41 OPEN "$(commit 1)" 0 0
+  forge_pr "$home" "$SLUG" 42 OPEN "$(commit 2)" 0 0
+  forge_pr "$home" "$SLUG" 43 OPEN "$(commit 3)" 0 0
+  task "$home" t42 "kind=ship" "pr=$PR_BASE/42" "pr_head=$(commit 2)"
+  out="$home/out.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "$PR_BASE/42" "the watched pull request was not reported"
+  assert_not_contains "$(cat "$out")" "$PR_BASE/41" "a pull request this home does not watch was reported"
+  calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 1 ] \
+    || fail "watching one of three open pull requests cost $calls forge calls, so the cost is set by the repository rather than by this home"
+  pass "the forge is asked only about the pull requests this home is watching"
+}
+
+# --- the printed line stays one line and hides nothing silently -------------
+
+test_an_overlong_report_says_how_much_is_not_shown() {
+  local home out report i
+  home=$(make_home cut)
+  for i in $(seq 1 30); do
+    task "$home" "task-with-a-deliberately-long-identifier-$i" "kind=ship"
+    steer "$home" "task-with-a-deliberately-long-identifier-$i" 3
+  done
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ "$(wc -l < "$out" | tr -d '[:space:]')" = 1 ] || fail "the report must stay one line for the wake record"
+  assert_contains "$report" "more; run: bin/fm-obligation-check.sh report" \
+    "an over-long report was cut without saying how much it did not show"
+  # Nothing may be lost: the full set has to be readable from the record.
+  [ "$(FM_HOME="$home" "$CHECK" report | grep -c 'has been steered')" = 30 ] \
+    || fail "the findings past the printed cut are not recoverable from the report action"
+  pass "an over-long report names what it cut and keeps all of it readable"
+}
+
+test_report_states_plainly_when_nothing_is_owed() {
+  local home
+  home=$(make_home report-clean)
+  FM_HOME="$home" "$CHECK" report | grep -q 'all four obligations met' \
+    || fail "report did not say plainly that the last check found everything met"
+  pass "report says plainly when the last check found all four met"
+}
+
+# --- refusals and arming ----------------------------------------------------
+
+test_invalid_settings_and_actions_refuse() {
+  local home status
+  home=$(make_home refuse)
+  status=0
+  env FM_HOME="$home" FM_OBLIGATION_CALL_SECS=0 "$CHECK" check >/dev/null 2>&1 || status=$?
+  expect_code 2 "$status" "a call bound of zero must refuse"
+  status=0
+  env FM_HOME="$home" FM_OBLIGATION_INTERVAL=5 "$CHECK" check >/dev/null 2>&1 || status=$?
+  expect_code 2 "$status" "an out-of-range interval must refuse"
+  status=0
+  env FM_HOME="$home" "$CHECK" wobble >/dev/null 2>&1 || status=$?
+  expect_code 2 "$status" "an unknown action must refuse"
+  pass "an unusable setting or action refuses rather than checking something else"
+}
+
+test_arm_registers_the_check_and_disarm_retires_it() {
+  local home mode
+  home=$(make_home arm)
+  FM_HOME="$home" "$CHECK" arm >/dev/null || fail "arm failed"
+  assert_present "$home/state/fleet-obligations.check.sh" "arm did not write the check shim"
+  assert_present "$home/state/fleet-obligations.check-trust" "arm did not bind the shim's bytes"
+  mode=$(stat -c %a "$home/state/fleet-obligations.check.sh" 2>/dev/null \
+    || stat -f %Lp "$home/state/fleet-obligations.check.sh")
+  [ "$mode" = 700 ] || fail "the check shim is mode $mode, not 700"
+  assert_grep 'fm-custom-check-v1' "$home/state/fleet-obligations.check-trust" "the trust binding has the wrong schema"
+
+  FM_HOME="$home" "$CHECK" arm >/dev/null || fail "arming twice failed"
+  assert_grep 'fm-custom-check-v1' "$home/state/fleet-obligations.check-trust" "re-arming lost the trust binding"
+
+  FM_HOME="$home" "$CHECK" disarm >/dev/null || fail "disarm failed"
+  assert_absent "$home/state/fleet-obligations.check.sh" "disarm left the check shim behind"
+  assert_absent "$home/state/fleet-obligations.check-trust" "disarm left the trust binding behind"
+  assert_absent "$home/state/.fleet-obligations" "disarm left the report record behind"
+  pass "arm registers a trusted check and disarm retires every trace of it"
+}
+
+test_if_needed_arms_only_a_home_with_something_to_report_on() {
+  local home
+  # A registered custom check makes supervision REQUIRED for a home
+  # (bin/fm-supervision-lib.sh), so a home with no task and no board must not be
+  # armed into keeping a watcher alive to report on nothing.
+  home=$(make_home arm-empty)
+  FM_HOME="$home" "$CHECK" arm --if-needed >/dev/null || fail "arm --if-needed failed on an empty home"
+  assert_absent "$home/state/fleet-obligations.check.sh" "an empty home was armed into needing a watcher"
+
+  # A live task: supervision is required for the task anyway, so arming is free.
+  task "$home" epsilon "kind=ship"
+  FM_HOME="$home" "$CHECK" arm --if-needed >/dev/null || fail "arm --if-needed failed on a home with a task"
+  assert_present "$home/state/fleet-obligations.check.sh" "a home with a live task was left unarmed"
+
+  # A board with no task at all: the eight-hour stale card is exactly this case.
+  local board_home
+  board_home=$(make_home arm-board)
+  board "$board_home" "delta=$PR_BASE/11"
+  FM_HOME="$board_home" "$CHECK" arm --if-needed >/dev/null || fail "arm --if-needed failed on a home with a board"
+  assert_present "$board_home/state/fleet-obligations.check.sh" "a home whose board can hold a stale card was left unarmed"
+  pass "--if-needed arms a home that has something to report on and leaves an empty one alone"
+}
+
+test_arm_refuses_a_symlink_at_the_shim_path() {
+  local home target mode status=0
+  # Following a symlink here would write the shim body into a file someone else
+  # owns and then make that file executable. Refusing means the target is left
+  # exactly as it was, content and mode; the dangling link itself is cleared,
+  # because a home holding a shim with no trust binding wakes firstmate about an
+  # unauthenticated state check on every watcher cycle.
+  home=$(make_home arm-symlink)
+  target="$home/not-the-shim.txt"
+  printf 'a file the shim must not touch\n' > "$target"
+  mode=$(stat -c %a "$target" 2>/dev/null || stat -f %Lp "$target")
+  ln -s "$target" "$home/state/fleet-obligations.check.sh"
+  FM_HOME="$home" "$CHECK" arm >/dev/null 2>&1 || status=$?
+  [ "$status" -ne 0 ] || fail "arm followed a symlink at the shim path"
+  [ "$(cat "$target")" = 'a file the shim must not touch' ] || fail "arm followed the symlink and overwrote its target"
+  [ "$(stat -c %a "$target" 2>/dev/null || stat -f %Lp "$target")" = "$mode" ] \
+    || fail "arm changed the mode of the symlink's target"
+  assert_absent "$home/state/fleet-obligations.check-trust" "a refused arm still wrote a trust binding"
+  pass "a symlink at the shim path is refused instead of followed"
+}
+
+test_the_armed_check_reaches_the_watcher_as_a_wake() {
+  local home out err status=0
+  home=$(make_home wake)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 3
+  FM_HOME="$home" "$CHECK" arm >/dev/null || fail "could not arm the obligation check"
+  out="$home/wake-out.txt"
+  err="$home/wake-err.txt"
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    PATH="$home/bin:$PATH" FM_CHECK_TIMEOUT=30 FM_OBLIGATION_INTERVAL=0 \
+    FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=1 \
+    "$CHECKPOINT" --seconds 10 > "$out" 2> "$err" || status=$?
+  expect_code 0 "$status" "watcher checkpoint exit"
+  assert_contains "$(cat "$out")" "check:" "the armed check did not reach the watcher as a check wake"
+  assert_contains "$(cat "$out")" "epsilon has been steered" "the wake did not carry the obligation report"
+  pass "the armed check reaches the watcher as an ordinary check wake"
+}
+
+test_open_pull_request_with_nothing_posted_is_reported
+test_a_reviewed_pull_request_is_silent
+test_a_commented_pull_request_is_silent
+test_a_closed_pull_request_is_not_owed_a_review
+test_a_poll_bound_to_a_superseded_commit_is_reported
+test_a_poll_bound_to_the_live_commit_is_silent
+test_a_poll_on_a_closed_pull_request_is_reported
+test_a_poll_on_a_merged_pull_request_is_silent
+test_a_poll_with_no_recorded_head_is_silent
+test_a_merged_pull_request_left_on_the_board_is_reported
+test_an_open_pull_request_on_the_board_is_silent
+test_a_home_with_no_board_is_silent
+test_a_steered_task_with_no_design_record_is_reported
+test_a_steered_task_with_a_design_record_is_silent
+test_a_steered_scout_with_a_report_is_silent
+test_a_task_that_was_never_steered_is_silent
+test_a_secondmate_is_not_a_work_item
+test_an_unreachable_forge_is_unknown_not_clean
+test_a_missing_gh_is_unknown_not_clean
+test_a_gitlab_merge_request_is_a_named_gap_not_a_pass
+test_the_budget_running_out_is_unknown_not_dropped
+test_an_oversized_budget_is_cut_to_fit_and_named
+test_an_unreadable_board_is_unknown_not_clean
+test_a_home_where_all_four_are_met_is_silent
+test_an_empty_home_is_silent
+test_the_check_changes_nothing_but_its_own_record
+test_the_same_finding_is_reported_once
+test_a_new_finding_is_news
+test_an_undischarged_obligation_is_reported_again
+test_a_silent_sweep_does_not_push_the_repeat_horizon_out
+test_the_forge_is_not_read_between_intervals
+test_one_read_covers_a_pull_request_every_obligation_names
+test_the_forge_is_asked_only_about_this_home_s_own_work
+test_an_overlong_report_says_how_much_is_not_shown
+test_report_states_plainly_when_nothing_is_owed
+test_invalid_settings_and_actions_refuse
+test_arm_registers_the_check_and_disarm_retires_it
+test_if_needed_arms_only_a_home_with_something_to_report_on
+test_arm_refuses_a_symlink_at_the_shim_path
+test_the_armed_check_reaches_the_watcher_as_a_wake
