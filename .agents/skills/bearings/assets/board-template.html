@@ -554,6 +554,7 @@ __FM_BEARINGS_BOARD_DATA__
       too_long: "Answer is too long to queue (512 bytes maximum).",
       no_channel: "Not sent. This board has no way to reach firstmate from here, so your answer was not recorded.",
       no_channel_dispatch: "Not sent. This board has no way to reach firstmate from here, so nothing was dispatched.",
+      no_channel_yet: "This board cannot reach firstmate from here, so it cannot take an answer right now.",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -585,6 +586,7 @@ __FM_BEARINGS_BOARD_DATA__
       too_long: "回答太長，無法排入（上限 512 bytes）。",
       no_channel: "沒有送出。這個看板從這裡連不到 firstmate，所以你的回答沒有被記錄。",
       no_channel_dispatch: "沒有送出。這個看板從這裡連不到 firstmate，所以沒有派工。",
+      no_channel_yet: "這個看板從這裡連不到 firstmate，現在沒辦法接收回答。",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -616,6 +618,7 @@ __FM_BEARINGS_BOARD_DATA__
       too_long: "回答太长，无法排入（上限 512 bytes）。",
       no_channel: "没有送出。这个看板从这里连不到 firstmate，所以你的回答没有被记录。",
       no_channel_dispatch: "没有送出。这个看板从这里连不到 firstmate，所以没有派工。",
+      no_channel_yet: "这个看板从这里连不到 firstmate，现在没办法接收回答。",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -1359,6 +1362,20 @@ __FM_BEARINGS_BOARD_DATA__
       var answerLimit = el("span", "bb-limit");
       answerLimit.setAttribute("role", "alert");
       foot.appendChild(answerLimit);
+      /* Asked at RENDER, not only at send, and AFTER the element it writes
+         into exists. With no channel the captain could previously read the
+         options, pick one, type his own words and press - and only then learn
+         it was not recorded. The work is spent before he is told. The function
+         that answers the question is already on this page, so asking it once
+         here costs nothing and turns "I answered and it told me no" into "I
+         could see it could not take an answer".
+         Still refused at send as well: the channel can go away between the
+         two, and the send-time refusal is what keeps that honest. */
+      if (!answerChannel()) {
+        btn.disabled = true;
+        answerLimit.textContent = t("no_channel_yet");
+        answerLimit.className = "bb-limit is-visible";
+      }
       form.appendChild(foot);
 
       form.addEventListener("submit", function (ev2) {
@@ -1529,7 +1546,10 @@ __FM_BEARINGS_BOARD_DATA__
     function refreshBar(limitMessage) {
       var n = pickedIds().length;
       barCount.textContent = limitMessage || (n ? t("pick_n", { n: n }) : t("pick_none"));
-      barBtn.disabled = !n;
+      /* A picked row is not enough to make this button live: it also has to
+         be able to send. Same reason as the card - do not let him pick rows
+         for a dispatch that cannot leave the page. */
+      barBtn.disabled = !n || !answerChannel();
     }
     function barRefuse(message) {
       if (!barLimit) return;

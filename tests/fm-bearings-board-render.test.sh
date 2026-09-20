@@ -174,6 +174,49 @@ no_channel_payload() {
 # refused - honestly, but the whole decisions surface was inert, which is the
 # standing complaint with a better error message. The live transport carries
 # answers now and names its own seam; the page has to call it.
+# R4. The card used to disclose only after the captain had read the options,
+# picked one, typed his own words and pressed. The work is spent before he is
+# told. The channel is now consulted at render, so he can see it cannot take
+# an answer before he composes one.
+test_a_card_that_cannot_send_says_so_before_the_captain_composes_an_answer() {
+  local home out
+  home=$(make_home no-channel-upfront)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "true" ] \
+    || fail "the card's answer button looked live on a board that cannot send: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "cannot take an answer" \
+    "the card did not say up front that it cannot take an answer: $out"
+  pass "a card that cannot send says so before the captain composes an answer"
+}
+
+# The render-time check cannot be the only one. A channel that says it can
+# reach firstmate and then cannot is exactly what the transport's contract
+# describes when it returns false, and the captain must not be left with a
+# card that marked itself answered on a send that never left.
+test_a_send_that_reports_failure_leaves_the_card_unanswered() {
+  local home out
+  home=$(make_home seam-flaky)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 BOARD_LIVE_SEAM=flaky \
+    render_payload "$home" "$(no_channel_payload)")
+
+  # It was pressable - the seam said it could send - and it tried.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "false" ] \
+    || fail "a seam reporting it can answer still disabled the button: $out"
+  [ "$(printf '%s' "$out" | jq -r '.live_answers | length')" = "1" ] \
+    || fail "the answer was never attempted: $out"
+
+  # And the failure was honoured.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "false" ] \
+    || fail "a send that reported failure still marked the card answered: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].ack')" = "null" ] \
+    || fail "a send that reported failure still drew an acknowledgement: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "not recorded" \
+    "a send that reported failure did not say the answer was not recorded: $out"
+
+  pass "a send that reports failure leaves the card unanswered and says so"
+}
+
 test_an_answer_goes_down_the_live_seam_when_the_serving_surface_is_absent() {
   local home out
   home=$(make_home live-seam)
@@ -205,8 +248,12 @@ test_a_disconnected_live_seam_refuses_instead_of_reporting_success() {
 
   [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "false" ] \
     || fail "a disconnected live seam still marked the card answered: $out"
-  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "not recorded" \
-    "a disconnected live seam did not say the answer was not recorded: $out"
+  # A seam that cannot reach firstmate is refused at render, like no seam at
+  # all: the captain is told before he composes, not after he presses.
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "cannot take an answer" \
+    "a disconnected live seam did not say the card cannot take an answer: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "true" ] \
+    || fail "a disconnected live seam left the answer button looking live: $out"
 
   pass "a disconnected live seam refuses instead of reporting success"
 }
@@ -237,8 +284,8 @@ test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered() {
     || fail "the card marked itself answered without sending anything: $out"
   [ "$(printf '%s' "$out" | jq -r '.cards[0].ack')" = "null" ] \
     || fail "the card acknowledged an answer it never sent: $out"
-  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "not recorded" \
-    "the card did not say the answer was not recorded: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "cannot take an answer" \
+    "the card did not say it cannot take an answer: $out"
 
   pass "a card with no answer channel refuses visibly instead of looking answered"
 }
@@ -262,6 +309,9 @@ test_the_dispatch_bar_refuses_visibly_when_it_cannot_send() {
     || fail "the bar's refusal would not be announced: $out"
   [ "$(printf '%s' "$out" | jq -r '.dispatch.count')" = "1 picked for dispatch" ] \
     || fail "the refusal was written into the counter slot instead of the alert: $out"
+  # R4 on the bar: a picked row is not enough to make the button live.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.btn_disabled')" = "true" ] \
+    || fail "the dispatch button looked live on a board that cannot send: $out"
   [ "$(printf '%s' "$out" | jq -r '[.charted[].ack] | map(select(. != null)) | length')" = "0" ] \
     || fail "a row was acknowledged for a dispatch that was never sent: $out"
 
@@ -1458,3 +1508,5 @@ test_the_dispatch_bar_refuses_visibly_when_it_cannot_send
 test_an_answer_goes_down_the_live_seam_when_the_serving_surface_is_absent
 test_a_disconnected_live_seam_refuses_instead_of_reporting_success
 test_the_live_seam_is_preferred_over_the_serving_surface
+test_a_card_that_cannot_send_says_so_before_the_captain_composes_an_answer
+test_a_send_that_reports_failure_leaves_the_card_unanswered

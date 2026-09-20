@@ -129,7 +129,7 @@ const liveAnswers = [];
 globalThis.window = {
   ...(liveSeam ? {
     fmBoardLive: {
-      canAnswer: () => liveSeam === "connected",
+      canAnswer: () => liveSeam === "connected" || liveSeam === "flaky",
       answer: (picks) => { liveAnswers.push(picks); return liveSeam === "connected"; },
     },
   } : {}),
@@ -319,7 +319,12 @@ const answerCard = (card) => {
     return queued.map((q) => q.data);
   };
   const note = nodes.find((n) => n.name === "note");
-  if (note) {
+  // A browser does not submit a form through a DISABLED submit button, and
+  // implicit submission from a text field is blocked with it too. The shim
+  // pressed anyway, which would hide a card that correctly refuses up front
+  // by letting the send-time path overwrite what it said.
+  const defaultBtn = nodes.find((n) => n.tagName === "button" && n.type === "submit");
+  if (note && !(defaultBtn && defaultBtn.disabled === true)) {
     note.value = "in my own words";
     const dflt = nodes.find((n) => n.tagName === "button" && n.type === "submit");
     card._onEnterAll = recordAll(() => {
@@ -402,6 +407,9 @@ const cards = deck.children
       .filter((n) => n.className.includes("is-visible"))
       .map((n) => n.textContent)[0] ?? "",
     is_queued: card.className.split(/\s+/).includes("is-queued"),
+    /* Whether the captain could press at all. A card that cannot send must
+       say so before he composes an answer, not after he presses. */
+    send_disabled: findAll(card, "fm-btn").some((b) => b.type === "submit" && b.disabled === true),
     hidden: card.hidden === true,
   }));
 const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
@@ -427,6 +435,7 @@ const dispatch = {
      whether anything would announce it. A refusal routed into the counter
      slot would show up here as an empty limit with a wordy count. */
   limit: dispatchLimit?.className?.includes("is-visible") ? dispatchLimit.textContent : "",
+  btn_disabled: byId.get("bb-dispatch-btn")?.disabled === true,
   limit_role: dispatchLimit?.attributes?.role ?? "",
 };
 const empty = ch.children.filter((c) => c.className.includes("bb-empty")).map((c) => c.textContent);
