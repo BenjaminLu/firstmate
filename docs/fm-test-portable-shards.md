@@ -193,8 +193,8 @@ Every cell is that lane's own measurement: the serial columns are the three base
 
 | lane | bound | serial wall, 3 runs (median) | `jobs=2` wall | script sum, median -> jobs=2 | longest script, median -> jobs=2 |
 |---|---|---|---:|---:|---:|
-| portable parallel 1 | packing: 11 scripts, longest 191 s against a 546 s sum | 472-551 s (546 s) | **356 s** | 546 -> 592 s (+8%) | 191 -> 218 s |
-| portable parallel 2 | one script: `fm-captain-hold-lifecycle` is two thirds of the lane | 347-415 s (396 s) | **393 s** | 396 -> 538 s (+36%) | 281 -> 360 s |
+| portable parallel 1 | packing: 11 scripts, longest 191 s against a 546 s sum | 472-551 s (546 s) | **356 s** | 546 -> 592 s (+8%) | 191 -> 218 s (+14%) |
+| portable parallel 2 | one script: `fm-captain-hold-lifecycle` is two thirds of the lane | 347-415 s (396 s) | **393 s** | 396 -> 538 s (+36%) | 268 -> 360 s (+34%) |
 
 Read the `jobs=2` wall against its own row's serial range, which is the whole test.
 Lane 1's 356 s is 116 s below the fastest of its three serial runs, so the gain is outside the run-to-run spread rather than inside it. Lane 2's 393 s sits between its own minimum and maximum, so nothing measurable was saved - packing cannot shorten a lane whose makespan is one script, while the contention the extra worker adds makes that script longer. The two effects cancel, and what is left is 36% more runner-seconds.
