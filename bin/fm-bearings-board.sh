@@ -788,6 +788,12 @@ validate_payload() {  # <data.json>
       and ((has("blocks") | not)
         or ((.blocks | type == "number") and .blocks >= 0 and (.blocks | floor) == .blocks))
       and ((has("blocks_partial") | not) or (.blocks_partial | type == "boolean"))
+      # Who supplied the numbers the decision map places this bubble by. The
+      # plot prints a note saying nothing on it is weighted by hand, and for a
+      # card whose risk is a {FILL: ...} slot firstmate types in at compose
+      # time that is false - so the board has to carry which it was.
+      and ((has("weighed_by") | not)
+        or (.weighed_by == "fleet" or .weighed_by == "firstmate"))
       and ((has("recommend_value") | not)
         or (.recommend_value | placeholder)
         or ((.recommend_value | slug(128))
@@ -1328,7 +1334,8 @@ EOF
          {value: "option-b", label: fill("option B label"), consequence: fill("option B consequence")}],
        recommend_why: fill("recommend_why"),
        recommend_value: recommend_slot(["option-a", "option-b"]),
-       reversible: reversible_slot, risk: risk_slot, allow_freeform: true}
+       reversible: reversible_slot, risk: risk_slot, allow_freeform: true,
+       weighed_by: "firstmate"}
       + (($links[.id] // []) | if length == 0 then {} else {evidence: .} end)
       + hold_close;
     def packet_seeded($card): . as $row
@@ -1347,6 +1354,8 @@ EOF
       + ({recommend_value: recommend_slot([$card.options[].value]),
           reversible: reversible_slot, risk: risk_slot}
          | with_entries(select($card[.key] == null)))
+      + {weighed_by: (if ($card.risk == null or $card.reversible == null)
+                      then "firstmate" else "fleet" end)}
       + (if $card.close != null then {close: $card.close} else hold_close end);
     # A card composed from the record the call wrote, which is the only card
     # shape on this board that needs no composer at all.
@@ -1383,6 +1392,7 @@ EOF
       + (if $card.recommend_value != null then {recommend_value: $card.recommend_value} else {} end)
       + (if $card.risk != null then {risk: $card.risk} else {} end)
       + (if $card.reversible != null then {reversible: $card.reversible} else {} end)
+      + {weighed_by: "fleet"}
       # No figures. The drawings on a card live under `packet.figures` and are
       # read from the figure sections of a verified packet, not from the
       # decision block a --card-file carries, so a record-seeded card has none
@@ -1412,7 +1422,8 @@ EOF
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},
            {value: "hold", label: {en: "Not yet", hant: "暫緩", hans: "暂缓"}}],
          blocks: (blocked_stat($task) | .n),
-         allow_freeform: true}
+         allow_freeform: true,
+         weighed_by: "firstmate"}
       + (if (blocked_stat($task) | .partial) then {blocks_partial: true} else {} end)
       + (if (.url | https_url) then {pr_url: .url} else {} end);
     # Why this pull request is NOT on the desk of the captain as a merge

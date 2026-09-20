@@ -443,7 +443,13 @@ test_the_map_makes_no_risk_claim_nobody_made() {
       {key:"thin-call", type:"decision", repo:"s", title:"Nobody assessed this",
        thin:true, blocks:0, allow_freeform:true, options:[]},
       {key:"low-call", type:"decision", repo:"s", title:"Somebody did",
-       risk:"low", reversible:"yes", blocks:0, allow_freeform:true,
+       risk:"low", reversible:"yes", weighed_by:"fleet", blocks:0, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"says-yes", type:"decision", repo:"s", title:"He said it can be undone",
+       risk:"high", reversible:"yes", weighed_by:"fleet", blocks:0, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"says-nothing", type:"decision", repo:"s", title:"Nobody said either way",
+       risk:"high", weighed_by:"fleet", blocks:0, allow_freeform:true,
        options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
 
   thin=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "thin-call")')
@@ -471,7 +477,58 @@ test_the_map_makes_no_risk_claim_nobody_made() {
   # And the note stops claiming both positions come from the record.
   assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not because it is cheap" \
     "the note under the plot still claimed a position nobody recorded: $out"
+
+  # The SECOND field feeding the same axis. An absent reversibility used to be
+  # weighted exactly like the captain being told the work is fully reversible,
+  # so the plot could not be read to tell "he said yes" from "nobody said".
+  local yes nothing
+  yes=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "says-yes")')
+  nothing=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "says-nothing")')
+  [ "$(printf '%s' "$yes" | jq -r '.cx')" != "$(printf '%s' "$nothing" | jq -r '.cx')" ] \
+    || fail "a stated reversibility and an absent one landed on the same coordinate: $out"
+  [ "$(printf '%s' "$nothing" | jq -r '.dashed')" = "true" ] \
+    || fail "a position that could not be derived was drawn as a measurement: $out"
+  [ "$(printf '%s' "$yes" | jq -r '.dashed')" = "false" ] \
+    || fail "a fully recorded position was drawn as unmeasured: $out"
+  [ "$(printf '%s' "$yes" | jq -r '.aria')" != "$(printf '%s' "$nothing" | jq -r '.aria')" ] \
+    || fail "the two bubbles said the same thing in words: $out"
+  assert_contains "$(printf '%s' "$nothing" | jq -r '.aria')" "nobody said whether" \
+    "the bubble with no reversibility did not say what was missing: $out"
   pass "the map makes no risk claim for a call nobody assessed"
+}
+
+# The other half of R14, and the one the note makes a false claim about. A
+# merge card's risk - and any placeholder-seeded card's - is a {FILL} slot
+# firstmate types in at compose time, so those positions ARE weighted by hand,
+# under a note printed on the same page saying nothing is.
+test_the_map_says_which_bubbles_are_the_first_mates_own_assessment() {
+  local home out mine fleet
+  home=$(make_home map-byhand)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"merge.t1", type:"merge", repo:"r", title:"Merge: a green PR",
+       risk:"medium", weighed_by:"firstmate", blocks:1, allow_freeform:true,
+       options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}]},
+      {key:"recorded", type:"decision", repo:"r", title:"The call wrote its own",
+       risk:"medium", reversible:"partly", weighed_by:"fleet", blocks:1,
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
+
+  mine=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "merge.t1")')
+  fleet=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "recorded")')
+
+  assert_contains "$(printf '%s' "$mine" | jq -r '.aria')" "first mate" \
+    "a position the first mate assessed did not say so: $out"
+  [ "$(printf '%s' "$fleet" | jq -r '.aria' | grep -c "first mate")" = "0" ] \
+    || fail "a position the fleet recorded was blamed on the first mate: $out"
+  [ "$(printf '%s' "$mine" | jq -r '.dashed')" = "true" ] \
+    || fail "a hand-weighted position was drawn as a measurement: $out"
+  # And the note says it, on a plot where no field is missing at all - which is
+  # exactly the case the old single condition suppressed the caveat for.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not a measurement" \
+    "the note kept claiming nothing on the plot is weighted by hand: $out"
+  pass "the map says which bubbles are the first mate's assessment, not the fleet's"
 }
 
 # The other half of R12: a count the fleet could only establish a floor for
@@ -1987,3 +2044,4 @@ test_the_dispatch_bar_refuses_a_send_that_reports_failure
 test_the_map_makes_no_risk_claim_nobody_made
 test_a_floor_count_reads_as_a_floor_not_a_total
 test_a_reason_with_no_words_never_shows_the_captain_a_machine_token
+test_the_map_says_which_bubbles_are_the_first_mates_own_assessment

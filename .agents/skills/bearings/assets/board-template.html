@@ -651,7 +651,10 @@ __FM_BEARINGS_BOARD_DATA__
       map_blocks_atleast: "at least {n} waiting",
       map_empty: "No open calls to plot.",
       map_unassessed: "nobody assessed what a wrong answer costs",
-      map_note_unassessed: "A bubble with a broken outline carries no risk assessment at all - nobody wrote one - so it sits at the left edge because the cost is unknown, not because it is cheap.",
+      map_note_unassessed: "A bubble with a broken outline has no position the fleet recorded: something it needs is missing, so it sits at the left edge because the cost is unknown, not because it is cheap.",
+      map_note_byhand: "Where a bubble is marked as your first mate's assessment, that is his judgement written when the card was composed, not a measurement the fleet made.",
+      map_norev: "risk {r}, but nobody said whether it can be undone, so how costly it is was never worked out",
+      map_byhand: "That risk is your first mate's assessment, not something the fleet recorded",
       t_merge: "Merges",
       mq_sub: "Your rule: a pull request that has not gone fully green never becomes a merge call.",
       mq_none_head: "Nothing is on your desk, and this is why. {n} open, none of them green and clear, so by your own rule none is asking you to merge it. The lane is empty because the rule is working, not because nothing is happening.",
@@ -718,7 +721,10 @@ __FM_BEARINGS_BOARD_DATA__
       map_blocks_atleast: "至少 {n} 件在等",
       map_empty: "沒有待決事項可畫。",
       map_unassessed: "沒有人評估過答錯的代價",
-      map_note_unassessed: "虛線外框的泡泡完全沒有風險評估 —— 沒有人寫過 —— 所以它靠在最左邊是因為代價不明，不是因為代價低。",
+      map_note_unassessed: "虛線外框的泡泡沒有艦隊記錄下來的位置：它需要的東西少了一項，所以它靠在最左邊是因為代價不明，不是因為代價低。",
+      map_note_byhand: "標示為大副評估的泡泡，是組卡片的時候大副自己的判斷，不是艦隊量出來的。",
+      map_norev: "風險 {r}，但沒有人說過能不能回頭，所以代價有多高從來沒有算出來",
+      map_byhand: "這個風險是大副評估的，不是艦隊記錄的",
       t_merge: "合併",
       mq_sub: "你的規則：沒有全綠的 PR 永遠不會變成合併決策。",
       mq_none_head: "現在沒有東西等你決定，原因在這裡。開著的有 {n} 個，沒有一個是全綠又沒擋住的，所以按你自己的規則，沒有一個在問你要不要合併。這一區是空的代表規則有在運作，不是沒事發生。",
@@ -785,7 +791,10 @@ __FM_BEARINGS_BOARD_DATA__
       map_blocks_atleast: "至少 {n} 件在等",
       map_empty: "没有待决事项可画。",
       map_unassessed: "没有人评估过答错的代价",
-      map_note_unassessed: "虚线外框的泡泡完全没有风险评估 —— 没有人写过 —— 所以它靠在最左边是因为代价不明，不是因为代价低。",
+      map_note_unassessed: "虚线外框的泡泡没有舰队记录下来的位置：它需要的东西少了一项，所以它靠在最左边是因为代价不明，不是因为代价低。",
+      map_note_byhand: "标示为大副评估的泡泡，是组卡片的时候大副自己的判断，不是舰队量出来的。",
+      map_norev: "风险 {r}，但没有人说过能不能回头，所以代价有多高从来没有算出来",
+      map_byhand: "这个风险是大副评估的，不是舰队记录的",
       t_merge: "合并",
       mq_sub: "你的规则：没有全绿的 PR 永远不会变成合并决策。",
       mq_none_head: "现在没有东西等你决定，原因在这里。开着的有 {n} 个，没有一个是全绿又没挡住的，所以按你自己的规则，没有一个在问你要不要合并。这一区是空的代表规则有在运作，不是没事发生。",
@@ -1686,17 +1695,32 @@ __FM_BEARINGS_BOARD_DATA__
       var v = Math.min(c.blocks || 0, 3) / 3;
       return c.type === "merge" ? Math.max(v, 0.8) : v;
     }
-    /* Did anybody actually assess what a wrong answer costs?
-       A thin call carries no risk and no reversibility, because nobody wrote
-       either. The card already refuses to claim otherwise; the picture drawn
-       from the same payload has to refuse too, or the plot invents a position
-       and a colour under a note promising it invented neither. */
-    function assessed(c) { return RISKW[c.risk] != null; }
+    /* Two different questions, kept apart because the answers differ.
+
+       riskKnown: is there a risk to colour the bubble with at all? A thin call
+       has none.
+
+       costDerived: can the HORIZONTAL position be derived from what is
+       recorded? It needs risk AND reversibility, and an absent reversibility
+       used to be weighted exactly like the captain being told the work is
+       fully reversible - so the plot could not be read to tell "he said yes"
+       from "nobody ever said". Every merge card is that case.
+
+       weighedByHand: even when both are present, they may be values FIRSTMATE
+       typed into a {FILL: ...} slot at compose time rather than anything the
+       fleet recorded. The note under the plot claims nothing there is weighted
+       by hand; for those bubbles that is false, and the captain is entitled to
+       know which marks are measurements and which are his first mate's
+       opinion. */
+    function riskKnown(c) { return RISKW[c.risk] != null; }
+    function costDerived(c) { return riskKnown(c) && REVW[c.reversible] != null; }
+    function weighedByHand(c) { return c.weighed_by === "firstmate"; }
+    /* One rule for the broken outline: do not read this position as something
+       the fleet measured. It covers both reasons, and the words say which. */
+    function positionSoft(c) { return !costDerived(c) || weighedByHand(c); }
     function wrongCost(c) {
-      if (!assessed(c)) return 0;
-      var r = RISKW[c.risk];
-      var v = REVW[c.reversible]; if (v == null) v = 0;
-      return Math.min(1, (r + v) / 4);
+      if (!costDerived(c)) return 0;
+      return Math.min(1, (RISKW[c.risk] + REVW[c.reversible]) / 4);
     }
     function riskFill(risk) {
       if (risk === "high") return "var(--rust-500)";
@@ -1724,6 +1748,20 @@ __FM_BEARINGS_BOARD_DATA__
       if (!c.blocks) return c.blocks_partial ? t("map_blocks_atleast", { n: 0 }) : t("map_blocks_none");
       return c.blocks_partial ? t("map_blocks_atleast", { n: c.blocks }) : t("map_blocks", { n: c.blocks });
     }
+    /* What this bubble's horizontal position actually rests on, said in words
+       so the plot is readable by ear and so the distinction survives anyone
+       who cannot see a broken outline. */
+    function positionWords(c) {
+      if (!riskKnown(c)) return t("map_unassessed");
+      /* Built from parts because both can be true at once, and a merge card is
+         exactly that case: its risk is the first mate's and its reversibility
+         was never stated at all. Returning one of them would drop the other. */
+      var said = [costDerived(c)
+        ? t("risk", { r: t("risk_" + c.risk) })
+        : t("map_norev", { r: t("risk_" + c.risk) })];
+      if (weighedByHand(c)) said.push(t("map_byhand"));
+      return said.join(". ");
+    }
     function shortLabel(item) {
       var w = pick(item.title);
       return w.length > 22 ? w.slice(0, 21) + "\u2026" : w;
@@ -1745,10 +1783,15 @@ __FM_BEARINGS_BOARD_DATA__
       /* The note claims both positions come from what the fleet records. That
          claim is false for a call nobody assessed, so when one is on the plot
          the note says which part of it does not apply to that bubble. */
+      /* The note claims both positions come from what the fleet records. It
+         is built from what is actually on the plot, so a caveat can never be
+         suppressed exactly when the bubble it describes is on screen - which
+         is what happened when one condition stood in for two. */
+      var caveats = [];
+      if (items.some(function (c) { return !costDerived(c); })) caveats.push(t("map_note_unassessed"));
+      if (items.some(weighedByHand)) caveats.push(t("map_note_byhand"));
       note.textContent = !items.length ? ""
-        : (items.some(function (c) { return !assessed(c); })
-           ? t("map_note") + " " + t("map_note_unassessed")
-           : t("map_note"));
+        : [t("map_note")].concat(caveats).join(" ");
       if (!items.length) {
         host.appendChild(el("p", "bb-map__note", t("map_empty")));
         return;
@@ -1825,14 +1868,14 @@ __FM_BEARINGS_BOARD_DATA__
         var g = svgEl("g", { "data-key": c.key, tabindex: 0, role: "button" });
         g.setAttribute("class", "bb-bub");
         g.setAttribute("aria-label", pick(c.title) + ". " + blocksWords(c) +
-          ". " + (assessed(c) ? t("risk", { r: t("risk_" + c.risk) }) : t("map_unassessed")));
+          ". " + positionWords(c));
         var circle = svgEl("circle", { cx: pt.x.toFixed(1), cy: pt.y.toFixed(1), r: pt.r,
           fill: riskFill(c.risk), "fill-opacity": 0.6,
           stroke: "var(--ink-900)", "stroke-width": 1.8 });
         /* A broken outline is the second half of saying "not measured": the
            colour says it and the edge says it, so neither has to be noticed
            on its own. */
-        if (!assessed(c)) circle.setAttribute("stroke-dasharray", "3 3");
+        if (positionSoft(c)) circle.setAttribute("stroke-dasharray", "3 3");
         g.appendChild(circle);
         pt.g = g; pt.circle = circle;
         if (c.blocks) {

@@ -1888,6 +1888,61 @@ test_compose_reports_an_intact_blocker_list_as_exact() {
   pass "an intact blocker list is still reported as an exact count"
 }
 
+# The compose half of R14. The note under the decision map says nothing on it
+# is weighted by hand; for a card whose risk is a {FILL: ...} slot firstmate
+# types in at compose time, that is false. The board has to carry which it was,
+# and only compose knows.
+test_compose_records_who_weighed_each_card() {
+  local home skeleton
+  home=$(make_compose_home compose-weighed)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused the recorded snapshot"
+  # gated-work has a verified packet stating its own risk and reversibility, so
+  # its position is the fleet's; pick-route has no packet, so both values are
+  # slots firstmate fills and its position is his.
+  jq -e '[.captains_call[] | select(.key == "gated-work") | .weighed_by] == ["fleet"]
+    and [.captains_call[] | select(.key == "pick-route") | .weighed_by] == ["firstmate"]' \
+    "$skeleton" >/dev/null \
+    || fail "compose did not record who weighed each card: $(jq -c '[.captains_call[] | {key, weighed_by, risk}]' "$skeleton")"
+  pass "compose records whether a card position is the fleet's or the first mate's"
+}
+
+# A packet that states reversibility but leaves risk for firstmate is still
+# his position, not the fleet's: the field is about the POSITION, and the
+# position needs both values. This is the same fixture the risk-slot test uses,
+# read for a different property.
+test_compose_marks_a_half_stated_packet_as_the_first_mates() {
+  local home skeleton decision
+  decision=$(printf '%s' "$COMPOSE_DECISION" | jq -c 'del(.risk)')
+  home=$(make_compose_home compose-weighed-half "$decision")
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a packet whose decision block records no risk"
+  jq -e '[.captains_call[] | select(.key == "gated-work")
+    | {w: .weighed_by, slotted: (.risk == "{FILL: low | medium | high}")}]
+    == [{w: "firstmate", slotted: true}]' "$skeleton" >/dev/null \
+    || fail "a card with one value left for firstmate was marked as the fleet's: $(jq -c '[.captains_call[] | {key, weighed_by, risk}]' "$skeleton")"
+  pass "a card with any value left for the first mate is marked as his"
+}
+
+# Every merge card is this case: its risk is a slot and it carries no
+# reversibility at all.
+test_compose_marks_every_merge_card_as_the_first_mates() {
+  local home skeleton snap
+  home=$(make_compose_home compose-weighed-merge)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.candidate_prs[0].task = "gated-work"' "$COMPOSE_ASSETS/snapshot.json" > "$snap" \
+    || fail "cannot stage the merge fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with a mergeable pull request"
+  jq -e '[.captains_call[] | select(.type == "merge") | .weighed_by] | (length > 0) and all(. == "firstmate")' \
+    "$skeleton" >/dev/null \
+    || fail "a merge card was not marked as the first mate's assessment: $(jq -c '[.captains_call[] | {key, type, weighed_by}]' "$skeleton")"
+  pass "every merge card is marked as the first mate's assessment"
+}
+
 test_build_names_the_unfilled_card_slot_it_refuses() {
   local home skeleton filled board out rc
   home=$(make_compose_home compose-unfilled-slot)
@@ -2440,6 +2495,9 @@ test_compose_counts_the_work_stalled_behind_each_call
 test_compose_counts_zero_for_a_call_nothing_waits_on
 test_compose_says_when_a_stalled_count_is_only_a_floor
 test_compose_reports_an_intact_blocker_list_as_exact
+test_compose_records_who_weighed_each_card
+test_compose_marks_a_half_stated_packet_as_the_first_mates
+test_compose_marks_every_merge_card_as_the_first_mates
 test_compose_gives_every_open_pull_request_its_reason
 test_compose_tells_a_failed_check_from_an_unclaimed_pull_request
 test_compose_places_a_worker_by_its_pull_request_when_it_has_one
