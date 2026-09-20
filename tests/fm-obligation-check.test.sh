@@ -689,6 +689,30 @@ test_a_poll_record_that_is_a_symlink_is_unknown_not_clean() {
   pass "a merge poll record that is a symlink is unknown, not clean"
 }
 
+test_a_poll_record_symlinked_to_a_real_file_is_unknown_not_clean() {
+  local home out report target
+  # The other half of the symlink pair, and it proves a different guard.
+  # A link whose target EXISTS passes -f, so the only thing that refuses it is
+  # readable_file's own [ ! -L ] - the refusal to read THROUGH a symlink into
+  # state/. The dangling case cannot reach that test, because -f already fails.
+  home=$(make_home poll-symlink-real)
+  forge_pr "$home" "$SLUG" 8 OPEN "$(commit 2)" 1 0 fm/poll-symlink-real
+  task "$home" beta "kind=ship" "pr=$PR_BASE/8" "pr_head=$(commit 1)"
+  poll "$home" beta "$PR_BASE/8"
+  assert_poll_control_is_owed "$home"
+  target="$home/elsewhere.pr-poll"
+  cp "$home/state/beta.pr-poll" "$target"
+  rm -f "$home/state/beta.pr-poll"
+  ln -s "$target" "$home/state/beta.pr-poll"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a poll record symlinked to a readable file was followed instead of refused"
+  assert_contains "$report" "the merge poll record for beta cannot be read" \
+    "a symlink into state/ with a live target was read through instead of refused"
+  pass "a merge poll record symlinked to a real file is refused, not read through"
+}
+
 test_a_poll_record_naming_no_pull_request_is_unknown_not_clean() {
   local home out report
   home=$(make_home poll-truncated)
@@ -1784,6 +1808,7 @@ test_a_poll_on_a_closed_pull_request_is_reported
 test_a_poll_on_a_merged_pull_request_is_silent
 test_a_poll_record_that_cannot_be_read_is_unknown_not_clean
 test_a_poll_record_that_is_a_symlink_is_unknown_not_clean
+test_a_poll_record_symlinked_to_a_real_file_is_unknown_not_clean
 test_a_poll_record_naming_no_pull_request_is_unknown_not_clean
 test_a_home_with_no_poll_record_stays_silent
 test_a_poll_with_no_recorded_head_is_silent
