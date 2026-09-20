@@ -758,6 +758,12 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # sentence is still read, which cannot resurface that risk: a UUID or a dashed
 # date carries its dashes on the inside, where nothing strips them.
 #
+# The false positives do not stop at digits, and the disclosure should not
+# either: a bare hex-shaped identifier that is not a commit - a no-mistakes
+# repository directory such as 3ad4eff75fa0, named on its own - is refused. A
+# dictionary of known non-commit shapes would cost more than that miss, so this
+# is a stated price rather than a gap to close.
+#
 # A net is not a proof, and what it misses is part of its contract: an
 # uppercase sha (git resolves those), one embedded in a forge URL (inner
 # slashes are not stripped), and a 7-character abbreviation (below the floor)
