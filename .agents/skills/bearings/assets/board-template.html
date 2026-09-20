@@ -285,6 +285,16 @@ body {
 .bb-clrow__t { font-weight: 700; color: var(--text-strong); }
 .bb-clrow__meta { margin-left: auto; font-size: var(--fs-2xs); color: var(--text-muted); white-space: nowrap; }
 /* ---- the merge lane ---- */
+.bb-lane { margin: 0 0 12px; }
+.bb-lane__h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 5px;
+  padding-bottom: 4px; border-bottom: 1.5px solid var(--border-soft); }
+.bb-lane__label { font-size: var(--fs-2xs); font-weight: 800; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.07em; }
+.bb-lane__n { margin-left: auto; font-size: var(--fs-2xs); font-weight: 800;
+  color: var(--text-strong); font-variant-numeric: tabular-nums; }
+/* the column that exists so a worker can never silently vanish */
+.bb-lane--unplaced .bb-lane__h { border-bottom-color: var(--status-warn); }
+.bb-lane--unplaced .bb-lane__label { color: var(--status-warn); }
 .bb-mqhead { margin: 0 0 10px; font-size: var(--fs-xs); color: var(--text-body); line-height: 1.6; }
 .bb-mqhead b { color: var(--text-strong); }
 .bb-mq { display: flex; flex-direction: column; gap: 5px; }
@@ -652,6 +662,11 @@ __FM_BEARINGS_BOARD_DATA__
       mq_unroutable: "its work item cannot take an answer from this board",
       mq_duplicate: "two open pull requests claim the same work item",
       mq_backlog_unreadable: "the work list could not be read here",
+      lane_working: "Writing", lane_pr: "On a PR · checks running",
+      lane_failed: "A check failed", lane_stuck: "Stuck",
+      lane_waiting: "Waiting on something else", lane_stopped: "Stopped",
+      lane_unreported: "Not reporting", lane_done: "Delivered",
+      lane_unplaced: "Could not be placed",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -708,6 +723,11 @@ __FM_BEARINGS_BOARD_DATA__
       mq_unroutable: "它的工作項目沒辦法從這個看板接收回答",
       mq_duplicate: "兩個開啟中的 PR 認領同一個工作項目",
       mq_backlog_unreadable: "這裡讀不到工作清單",
+      lane_working: "在寫", lane_pr: "PR 上 · 檢查跑著",
+      lane_failed: "有檢查失敗", lane_stuck: "卡住了",
+      lane_waiting: "在等別的東西", lane_stopped: "停了",
+      lane_unreported: "沒有回報", lane_done: "交付了",
+      lane_unplaced: "放不進任何一欄",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -764,6 +784,11 @@ __FM_BEARINGS_BOARD_DATA__
       mq_unroutable: "它的工作项目没办法从这个看板接收回答",
       mq_duplicate: "两个开启中的 PR 认领同一个工作项目",
       mq_backlog_unreadable: "这里读不到工作清单",
+      lane_working: "在写", lane_pr: "PR 上 · 检查跑着",
+      lane_failed: "有检查失败", lane_stuck: "卡住了",
+      lane_waiting: "在等别的东西", lane_stopped: "停了",
+      lane_unreported: "没有回报", lane_done: "交付了",
+      lane_unplaced: "放不进任何一栏",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -1866,11 +1891,16 @@ __FM_BEARINGS_BOARD_DATA__
       });
     }
 
-    /* Underway */
+    /* Underway, as the pipeline rather than as a list.
+       我想知道每個agent的進度. Fourteen workers as fourteen rows says nothing; the
+       same fourteen grouped by the lane they are in says "four on pull
+       requests, one check failed, two stuck" without reading a word. The row
+       itself is unchanged - same name, same status line, same acknowledgement
+       - so what this adds is the shape of the pile, not a second surface. */
     var uw = document.getElementById("bb-underway");
     clear(uw);
     if (!data.underway.length) uw.appendChild(el("div", "bb-empty", t("empty_underway")));
-    data.underway.forEach(function (x) {
+    function workerRow(x) {
       var row = el("div", "bb-row");
       row.appendChild(badge(x.state === "working" ? "online" : "info", x.state));
       var main = el("div", "bb-row__main");
@@ -1881,8 +1911,45 @@ __FM_BEARINGS_BOARD_DATA__
          no repo is known */
       main.appendChild(el("div", "bb-row__sub", pick(x.doing) + " · " + x.kind + " · " + (x.repo || x.id)));
       row.appendChild(main);
-      uw.appendChild(row);
+      return row;
+    }
+    /* The lanes this page can draw, in the order the work moves through them.
+       A payload naming a lane that is not here is NOT an error - the fleet can
+       grow a state before the board learns to draw it - so everything left
+       over is collected below under a heading that says exactly that. A board
+       that quietly loses a worker is worse than one that admits it cannot
+       place him, and the first build of this region lost one. */
+    var LANES = ["working", "pr", "failed", "stuck", "waiting", "stopped", "unreported", "done"];
+    var placed = {};
+    LANES.forEach(function (id) { placed[id] = []; });
+    var unplaced = [];
+    data.underway.forEach(function (x) {
+      var lane = x.lane;
+      if (lane && placed[lane]) placed[lane].push(x);
+      else unplaced.push(x);
     });
+    function laneBlock(id, label, rows) {
+      if (!rows.length) return;
+      var lane = el("div", "bb-lane bb-lane--" + id);
+      var head = el("div", "bb-lane__h");
+      head.appendChild(el("span", "bb-lane__label", label));
+      head.appendChild(el("span", "bb-lane__n", String(rows.length)));
+      lane.appendChild(head);
+      rows.forEach(function (x) { lane.appendChild(workerRow(x)); });
+      uw.appendChild(lane);
+    }
+    /* A payload composed before lanes existed carries no lane on ANY row. That
+       is an older board, not a fleet that could not be placed, so it renders
+       exactly as it always did rather than filing every worker under an alarm.
+       One row carrying a lane is enough to mean the payload knows about them,
+       and from there anything unplaced is a real finding. */
+    var laneAware = data.underway.some(function (x) { return !!x.lane; });
+    if (!laneAware) {
+      data.underway.forEach(function (x) { uw.appendChild(workerRow(x)); });
+    } else {
+      LANES.forEach(function (id) { laneBlock(id, t("lane_" + id), placed[id]); });
+      laneBlock("unplaced", t("lane_unplaced"), unplaced);
+    }
 
     /* Landed */
     var ld = document.getElementById("bb-landed");

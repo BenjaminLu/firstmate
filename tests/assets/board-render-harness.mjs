@@ -492,6 +492,16 @@ process.stdout.write(
   JSON.stringify({ stats, underway, charted, empty, more, cards, headings, error: errorText,
     dispatch, live_answers: liveAnswers, intervals: intervals.size,
     map: bubbles, call_list: callList, map_note: byId.get("bb-map-note")?.textContent ?? "",
+    /* The fleet as lanes: the label, the count it shows, and which workers it
+       holds. The "could not be placed" column is read the same way as any
+       other, because the whole point of it is that it is visible. */
+    lanes: (byId.get("bb-underway") || new Node("div")).querySelectorAll(".bb-lane")
+      .map((l) => ({
+        label: l.querySelectorAll(".bb-lane__label")[0]?.textContent ?? "",
+        count: l.querySelectorAll(".bb-lane__n")[0]?.textContent ?? "",
+        workers: l.querySelectorAll(".bb-row__title").map((n) => n.textContent),
+        unplaced: l.className.includes("bb-lane--unplaced"),
+      })),
     merge: {
       hidden: byId.get("bb-merge-section")?.hidden === true,
       head: byId.get("bb-merge-head")?.textContent ?? "",

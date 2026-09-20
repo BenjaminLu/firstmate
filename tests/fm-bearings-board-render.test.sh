@@ -169,6 +169,76 @@ no_channel_payload() {
                {value:"no", label:"No", consequence:"it was not"}]}]}'
 }
 
+# --- the fleet as lanes ------------------------------------------------------
+# 我想知道每個agent的進度. Fourteen workers as fourteen rows says nothing; the same
+# fourteen grouped by the lane each is in says "four on pull requests, one check
+# failed, two stuck" without reading a word. The shape of the pile is the
+# reading, so these tests are about the grouping and the counts.
+fleet_payload() {  # <rows-json>
+  jq -n --argjson rows "$1" '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, landed:[], charted:[], captains_call:[], underway:$rows}'
+}
+
+test_the_fleet_is_grouped_into_the_lanes_it_is_actually_in() {
+  local home out
+  home=$(make_home fleet-lanes)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"a","repo":"r","name":"Alpha","state":"working","kind":"ship","doing":"writing","lane":"working"},
+    {"id":"b","repo":"r","name":"Bravo","state":"working","kind":"ship","doing":"on a pr","lane":"pr"},
+    {"id":"c","repo":"r","name":"Charlie","state":"working","kind":"ship","doing":"on a pr","lane":"pr"},
+    {"id":"d","repo":"r","name":"Delta","state":"blocked","kind":"ship","doing":"stuck","lane":"stuck"}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '.lanes | length')" = "3" ] \
+    || fail "the fleet was not grouped into the lanes its workers are in: $out"
+  # A lane says how many are in it, which is the number the captain reads.
+  [ "$(printf '%s' "$out" | jq -r '.lanes[] | select(.label | test("PR")) | .count')" = "2" ] \
+    || fail "a lane did not carry its own count: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[] | select(.label | test("PR")) | .workers[]] | sort | join(",")')" = "Bravo,Charlie" ] \
+    || fail "the two workers on pull requests were not in the same lane: $out"
+  # An empty lane is not drawn: a column of zeroes is noise, not a dashboard.
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[] | select(.count == "0")] | length')" = "0" ] \
+    || fail "an empty lane was drawn: $out"
+  # Every worker is still on the board exactly once.
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[].workers[]] | length')" = "4" ] \
+    || fail "grouping the fleet lost or duplicated a worker: $out"
+  pass "the fleet is grouped into the lanes its workers are actually in"
+}
+
+# The safety net, and the reason it exists: the first build of this region
+# dropped a worker - 14 in the payload, 13 on screen, no error. A board that
+# quietly loses a worker is worse than one that says it could not place him.
+test_a_worker_in_an_unknown_lane_is_shown_rather_than_dropped() {
+  local home out
+  home=$(make_home fleet-unplaced)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"a","repo":"r","name":"Alpha","state":"working","kind":"ship","doing":"writing","lane":"working"},
+    {"id":"z","repo":"r","name":"Zulu","state":"marooned","kind":"ship","doing":"who knows","lane":"marooned"}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[].workers[]] | length')" = "2" ] \
+    || fail "a worker in a lane the board cannot draw was dropped: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[] | select(.unplaced) | .workers[]] | join(",")')" = "Zulu" ] \
+    || fail "the unplaceable worker was not collected under its own heading: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.lanes[] | select(.unplaced) | .label')" "placed" \
+    "the column did not say why those workers are in it: $out"
+  pass "a worker in a lane the board cannot draw is shown, never dropped"
+}
+
+# A board composed before lanes existed is an older board, not a fleet that
+# could not be placed. Filing every worker under an alarm would be a false one.
+test_a_board_with_no_lanes_renders_as_it_always_did() {
+  local home out
+  home=$(make_home fleet-no-lanes)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"a","repo":"r","name":"Alpha","state":"working","kind":"ship","doing":"writing"}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '.lanes | length')" = "0" ] \
+    || fail "an older board was re-filed into lanes it never carried: $out"
+  [ "$(printf '%s' "$out" | jq -r '.underway | length')" = "1" ] \
+    || fail "an older board lost its worker rows: $out"
+  pass "a board composed before lanes existed renders exactly as it always did"
+}
+
 # --- the merge lane ----------------------------------------------------------
 # 為什麼船長裁決這一塊一直是空的. The answer is his own rule - nothing that is not
 # green becomes a merge call - and the board never said so. The lane lists every
@@ -1732,3 +1802,6 @@ test_the_map_says_so_when_there_is_nothing_to_plot
 test_an_empty_merge_lane_says_why_it_is_empty
 test_a_green_pull_request_reads_as_ready_in_the_lane
 test_a_board_with_no_merge_data_shows_no_merge_lane
+test_the_fleet_is_grouped_into_the_lanes_it_is_actually_in
+test_a_worker_in_an_unknown_lane_is_shown_rather_than_dropped
+test_a_board_with_no_lanes_renders_as_it_always_did
