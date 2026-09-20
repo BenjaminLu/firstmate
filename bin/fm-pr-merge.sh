@@ -755,7 +755,6 @@ github_approval_state() {
     | "pr_author=" + ((.author.login // "") | tostring),
       "reviews_total=" + (($all | length) | tostring),
       "at_head_any=" + (($at_any | length) | tostring),
-      "at_head=" + (($at | length) | tostring),
       "at_head_standing=" + (($at_standing | length) | tostring),
       "nonstanding=" + (($nonstanding | length) | tostring),
       "nonstanding_login=" + (($nonstanding | last | .author.login // "") | tostring),
@@ -778,7 +777,7 @@ github_verify_mergeable() {
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
   local approval_total=0 approval_named=0
-  local pr_author='' reviews_total='' at_head_any='' at_head='' at_head_standing=''
+  local pr_author='' reviews_total='' at_head_any='' at_head_standing=''
   local nonstanding='' nonstanding_login='' approving='' outside='' refusing=''
   local approver='' approver_assoc='' outside_approver='' outside_assoc=''
   local refuser='' newest_reviewed=''
@@ -857,7 +856,6 @@ FIELDS
       pr_author=*) pr_author=${line#pr_author=} ;;
       reviews_total=*) reviews_total=${line#reviews_total=} ;;
       at_head_any=*) at_head_any=${line#at_head_any=} ;;
-      at_head=*) at_head=${line#at_head=} ;;
       at_head_standing=*) at_head_standing=${line#at_head_standing=} ;;
       nonstanding=*) nonstanding=${line#nonstanding=} ;;
       nonstanding_login=*) nonstanding_login=${line#nonstanding_login=} ;;
@@ -877,9 +875,9 @@ FIELDS
 $approval
 APPROVAL
   # A login or commit carrying a newline would split into a line no name
-  # matches, so a payload that does not read as exactly these sixteen fields is
+  # matches, so a payload that does not read as exactly these fifteen fields is
   # a failed read rather than one an approval count could be taken from.
-  if [ "$approval_named" -ne 16 ] || [ "$approval_total" -ne 16 ]; then
+  if [ "$approval_named" -ne 15 ] || [ "$approval_total" -ne 15 ]; then
     echo "error: could not read the GitHub pull request reviews before merging" >&2
     return 1
   fi
