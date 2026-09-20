@@ -697,14 +697,135 @@ test_a_crowded_plot_never_moves_a_bubble_off_its_own_coordinate() {
   pass "a crowded plot never moves a bubble off its own coordinate"
 }
 
-# The labels are what moves instead, so a crowded plot is still readable.
-test_a_crowded_plot_separates_the_labels_instead() {
+# And a bubble sitting on another is left UNNAMED rather than labelled. Moving
+# the label away was the first answer and it was the wrong target: two bubbles
+# on one point are the same mark to look at, so a label per bubble promises a
+# correspondence the picture cannot show at any distance. At twelve coincident
+# calls the furthest label stood 138px from its own bubble with eleven others
+# in between - the picture asserting a one-to-one mapping it does not have.
+test_a_bubble_sitting_on_another_is_left_unnamed() {
   local home out
-  home=$(make_home map-crowded-labels)
-  out=$(render_payload "$home" "$(crowded_uncosted_payload 6)")
-  [ "$(printf '%s' "$out" | jq -r '[.map[].label_y] | unique | length')" != "1" ] \
-    || fail "six bubbles on one point drew all six labels on one line: $out"
-  pass "a crowded plot separates the labels instead of the bubbles"
+  home=$(make_home map-stacked-unnamed)
+  out=$(render_payload "$home" "$(crowded_uncosted_payload 12)")
+
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.label != "")] | length')" = "0" ] \
+    || fail "a mark a reader cannot tell apart was given a name: $out"
+  # Nothing is lost: the count stays in the mark, every call is still in the
+  # ranked list by name, and each bubble still names itself to a screen reader.
+  [ "$(printf '%s' "$out" | jq -r '.call_list | length')" = "12" ] \
+    || fail "the ranked list stopped naming every call: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.aria == "")] | length')" = "0" ] \
+    || fail "an unlabelled bubble also lost its spoken name: $out"
+  # And the caption says where the names are, rather than leaving him at a
+  # cluster of nameless marks.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "the list underneath names every call" \
+    "the caption left him at an unnamed cluster with no route to the names: $out"
+  pass "a bubble sitting on another is left unnamed, and the caption says where to look"
+}
+
+# R34 and R35, held as one property rather than as two guards.
+#
+# R34 was a label drawn across a DIFFERENT call's bubble at three open calls -
+# two merge cards and one uncosted call all land on the left edge. R35 was the
+# label column bounded by a step count rather than by the plot, so at thirteen
+# it crossed the baseline and at fourteen it put two names on one point.
+#
+# Both are the same cause as the coincident case: a label placed by a rule that
+# cannot see what else is on the plot. So what is held here is the statement
+# the placement makes - every name that IS drawn belongs to the mark beside it,
+# sits inside the picture, and shares its place with nothing - across the
+# densities that produced each of the three faults. Asserting one guard fired
+# would be asserting an implementation detail; this fails whichever rule breaks.
+assert_every_label_belongs_where_it_is() {  # <render-json> <what>
+  printf '%s' "$1" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+marks = [(b["cx"], b["cy"], b["r"], b["key"]) for b in d["map"]]
+bad = []
+for b in d["map"]:
+    if not b["label"]:
+        continue
+    lx, ly = b["cx"], b["label_y"]
+    l, r, t, bo = lx - 29, lx + 29, ly - 8, ly + 3
+    for (ox, oy, orad, okey) in marks:
+        if okey == b["key"]:
+            continue
+        nx = max(l, min(ox, r)); ny = max(t, min(oy, bo))
+        if (ox - nx) ** 2 + (oy - ny) ** 2 < orad ** 2:
+            bad.append(b["key"] + " sits on " + okey)
+    if ly > 274 or ly < 22:
+        bad.append(b["key"] + " is outside the plot")
+placed = []
+for b in d["map"]:
+    if not b["label"]:
+        continue
+    # Sharing a PLACE means the boxes overlap. Two names at the same height in
+    # different columns share nothing, and keying on height alone would have
+    # this test claim more than it can see.
+    box = (b["cx"] - 29, b["cx"] + 29, b["label_y"] - 8, b["label_y"] + 3)
+    for (pb, pk) in placed:
+        if box[0] < pb[1] and box[1] > pb[0] and box[2] < pb[3] and box[3] > pb[2]:
+            bad.append(b["key"] + " shares a place with " + pk)
+    placed.append((box, b["key"]))
+if bad:
+    print("; ".join(bad)); sys.exit(1)
+' || fail "$2: $1"
+}
+
+test_every_name_on_the_plot_belongs_to_the_mark_beside_it() {
+  local home out
+  # R34's own board: two merge cards and a call nobody costed, all of which
+  # land on the left edge because a merge card carries no reversibility.
+  home=$(make_home map-label-three)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"merge.pr1", type:"merge", repo:"r", title:"Merge the loader PR",
+       risk:"medium", weighed_by:"firstmate", blocks:1, allow_freeform:true,
+       options:[{value:"merge",label:"Merge now"},{value:"hold",label:"Not yet"}]},
+      {key:"merge.pr2", type:"merge", repo:"r", title:"Merge the board PR",
+       risk:"medium", weighed_by:"firstmate", blocks:1, allow_freeform:true,
+       options:[{value:"merge",label:"Merge now"},{value:"hold",label:"Not yet"}]},
+      {key:"q1", type:"decision", repo:"r", title:"Retire charted next",
+       thin:true, blocks:2, allow_freeform:true, options:[]}]}')")
+  assert_every_label_belongs_where_it_is "$out" "a name was drawn where it does not belong, at three open calls"
+
+  # R35's density, where the column used to run past the baseline and then
+  # double up.
+  home=$(make_home map-label-fourteen)
+  out=$(render_payload "$home" "$(crowded_uncosted_payload 14)")
+  assert_every_label_belongs_where_it_is "$out" "a name was drawn where it does not belong, at fourteen coincident calls"
+
+  # And a mixed board, which is what the fleet actually produces.
+  home=$(make_home map-label-mixed)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"h", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:[range(0;8) as $i | {
+      key:("k"+($i|tostring)), type:"decision", repo:"r",
+      title:("Call number "+($i|tostring)),
+      risk:(["low","medium","high"][$i%3]), reversible:(["yes","partly","no"][$i%3]),
+      weighed_by:"fleet", blocks:($i%4), allow_freeform:true,
+      options:[{value:"a",label:"A"},{value:"b",label:"B"}]}]}')")
+  assert_every_label_belongs_where_it_is "$out" "a name was drawn where it does not belong, on a mixed board"
+  pass "every name on the plot belongs to the mark beside it"
+}
+
+# A bubble standing on its own keeps its name, right beside its own mark - the
+# fix must not have taken labelling away from the plots that can carry it.
+test_a_bubble_that_stands_alone_keeps_its_name() {
+  local home out
+  home=$(make_home map-sparse-named)
+  out=$(render_payload "$home" "$(map_note_payload '[]')")
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(.label == "")] | length')" = "0" ] \
+    || fail "a bubble with nothing on top of it lost its name: $out"
+  # Beside its own mark, not stepped away from it.
+  [ "$(printf '%s' "$out" | jq -r '[.map[] | select(((.label_y - .cy) | fabs) > (.r + 14))] | length')" = "0" ] \
+    || fail "a label was drawn away from the mark it belongs to: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "list underneath names every call")" = "0" ] \
+    || fail "a fully labelled plot still sent him to the list for names: $out"
+  pass "a bubble that stands alone keeps its name beside its own mark"
 }
 
 # R31. The caption still opened with a flat claim about the number in the
@@ -2563,4 +2684,6 @@ test_the_bar_tells_him_both_reasons_when_both_hold
 test_the_caption_does_not_call_a_floor_count_an_exact_one
 test_the_caption_states_the_count_plainly_when_every_count_is_exact
 test_a_crowded_plot_never_moves_a_bubble_off_its_own_coordinate
-test_a_crowded_plot_separates_the_labels_instead
+test_a_bubble_sitting_on_another_is_left_unnamed
+test_a_bubble_that_stands_alone_keeps_its_name
+test_every_name_on_the_plot_belongs_to_the_mark_beside_it

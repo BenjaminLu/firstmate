@@ -523,11 +523,17 @@ const mapHost = byId.get("bb-map") || new Node("div");
 const listHost = byId.get("bb-calllist") || new Node("div");
 const bubbles = findAll(mapHost, "bb-bub").map((g) => {
   const circle = g.children.find((c) => c.tagName === "circle") ?? {};
+  /* Two kinds of text can sit in a bubble and either may be absent, so they are
+     told apart by what they are rather than by their order: the stalled count
+     is drawn inside the mark and carries its own fill, the name is drawn beside
+     it and does not. A bubble sitting on another has no name at all. */
   const texts = g.children.filter((c) => c.tagName === "text");
+  const countNode = texts.find((n) => n.attributes?.fill);
+  const labelNode = texts.find((n) => !n.attributes?.fill);
   return {
     key: g.attributes?.["data-key"] ?? "",
-    label: texts[texts.length - 1]?.textContent ?? "",
-    count: texts.length > 1 ? texts[0].textContent : "",
+    label: labelNode?.textContent ?? "",
+    count: countNode?.textContent ?? "",
     cx: Number(circle.attributes?.cx ?? 0),
     cy: Number(circle.attributes?.cy ?? 0),
     r: Number(circle.attributes?.r ?? 0),
@@ -536,7 +542,7 @@ const bubbles = findAll(mapHost, "bb-bub").map((g) => {
     /* Where the bubble's own label was drawn. A label may be moved to keep a
        crowded plot readable; the bubble may not, because its position is the
        information. Both are reported so a test can hold that line. */
-    label_y: Number(texts[texts.length - 1]?.attributes?.y ?? 0),
+    label_y: Number(labelNode?.attributes?.y ?? 0),
     /* A broken outline is how the plot says nobody assessed this call. */
     dashed: (circle.attributes?.["stroke-dasharray"] ?? "") !== "",
     aria: g.attributes?.["aria-label"] ?? "",

@@ -651,6 +651,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_alt: "Open calls plotted by how much work is stalled behind each and how costly a wrong answer is",
       map_note: "Up is how much work is stalled behind the call. Right is how expensive a wrong answer is, from the call's own risk and how far it can be undone. Colour repeats the risk.",
       map_note_exact: "The number in a bubble is how many pieces of work stop until you answer.",
+      map_note_stacked: "Where calls land on the same spot their bubbles sit on top of one another, and those are left unnamed rather than labelled with names you could not tell apart - the list underneath names every call, in this order.",
       map_note_measured: "Nothing here is weighted by hand: every position comes from what the fleet already records.",
       map_note_soft: "A broken outline means that bubble is not drawn entirely from what the fleet measured, for one of these reasons.",
       ax_undo_cheap: "cheap to undo", ax_undo_hard: "hard to undo",
@@ -736,6 +737,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_alt: "把待決事項依照「後面卡住多少工作」和「答錯多貴」畫出來",
       map_note: "往上是後面卡住多少工作。往右是答錯有多貴，來自這個問題本身的風險和可不可以回頭。顏色重複風險。",
       map_note_exact: "泡泡裡的數字就是你不回答就停住的工作數。",
+      map_note_stacked: "落在同一個位置的問題，泡泡會疊在一起，那些就不標名字了 —— 標了你也分不出哪個是哪個。下面的清單會照同樣的順序列出每一個。",
       map_note_measured: "這張圖沒有任何一項是人手調的：每個位置都來自艦隊本來就記錄的東西。",
       map_note_soft: "虛線外框表示那個泡泡不是完全照艦隊量到的東西畫的，原因是下面其中之一。",
       ax_undo_cheap: "容易回頭", ax_undo_hard: "難以回頭",
@@ -821,6 +823,7 @@ __FM_BEARINGS_BOARD_DATA__
       map_alt: "把待决事项按照「后面卡住多少工作」和「答错多贵」画出来",
       map_note: "往上是后面卡住多少工作。往右是答错有多贵，来自这个问题本身的风险和可不可以回头。颜色重复风险。",
       map_note_exact: "泡泡里的数字就是你不回答就停住的工作数。",
+      map_note_stacked: "落在同一个位置的问题，泡泡会叠在一起，那些就不标名字了 —— 标了你也分不出哪个是哪个。下面的清单会照同样的顺序列出每一个。",
       map_note_measured: "这张图没有任何一项是人手调的：每个位置都来自舰队本来就记录的东西。",
       map_note_soft: "虚线外框表示那个泡泡不是完全照舰队量到的东西画的，原因是下面其中之一。",
       ax_undo_cheap: "容易回头", ax_undo_hard: "难以回头",
@@ -1886,23 +1889,8 @@ __FM_BEARINGS_BOARD_DATA__
          furthest right, which is the one his own quadrant rule says to decide
          first. So the mark is described once and each reason speaks only for
          the bubbles it actually applies to. */
-      /* The bubble's number is a plain count only when no bubble on the plot is
-         a floor. Printed flat and corrected further down, it told a reader who
-         stopped at the number - and a caption exists to be stopped at - that a
-         bubble reading 2 has two behind it, when the fleet established only
-         that it has at least two. Said here rather than among the reasons for a
-         broken outline, because it is a statement about every bubble. */
-      var says = [t("map_note")];
-      if (!items.some(countSoft)) says.push(t("map_note_exact"));
-      var soft = [];
-      if (items.some(function (c) { return !costDerived(c); })) soft.push(t("map_note_unassessed"));
-      if (items.some(weighedByHand)) soft.push(t("map_note_byhand"));
-      if (items.some(countSoft)) soft.push(t("map_note_floor"));
-      note.textContent = !items.length ? ""
-        : says
-            .concat(soft.length ? [t("map_note_soft")].concat(soft) : [t("map_note_measured")])
-            .join(" ");
       if (!items.length) {
+        note.textContent = "";
         host.appendChild(el("p", "bb-map__note", t("map_empty")));
         return;
       }
@@ -1941,8 +1929,10 @@ __FM_BEARINGS_BOARD_DATA__
       svgText("bb-quadlabel", { x: x1 - 4, y: y1 + 14, "text-anchor": "end" }, t("quad_pick"));
       svgText("bb-quadlabel", { x: x0 + 4, y: y1 + 14 }, t("quad_when"));
 
-      /* Bubbles are inset from every edge by the largest radius plus its
-         label, so the plot never clips and a label never sits on an axis. */
+      /* Bubbles are inset from every edge by the largest radius plus one
+         label, so a mark never clips. That inset accommodates ONE label, which
+         is all it ever has to: a name that would fall outside the plot is not
+         drawn, rather than drawn on the axis furniture below it. */
       var INSET = 34;
       var pts = items.map(function (c, i) {
         return { c: c, i: i,
@@ -1961,21 +1951,93 @@ __FM_BEARINGS_BOARD_DATA__
          What is actually unreadable when bubbles coincide is their LABELS
          running through one another, and a label's position carries no meaning,
          so that is what moves. The mark stays where the data put it. */
+      /* Which marks sit on another. Computed once, because both the labelling
+         and the caption sentence that sends him to the list depend on it. */
+      pts.forEach(function (pt) {
+        pt.overlapped = pts.some(function (o) {
+          if (o === pt) return false;
+          var dx = o.x - pt.x, dy = o.y - pt.y;
+          return Math.sqrt(dx * dx + dy * dy) < o.r + pt.r;
+        });
+      });
+
+      /* The bubble's number is a plain count only when no bubble on the plot is
+         a floor. Printed flat and corrected further down, it told a reader who
+         stopped at the number - and a caption exists to be stopped at - that a
+         bubble reading 2 has two behind it, when the fleet established only
+         that it has at least two. Said here rather than among the reasons for a
+         broken outline, because it is a statement about every bubble. */
+      var says = [t("map_note")];
+      if (!items.some(countSoft)) says.push(t("map_note_exact"));
+      /* Said only when a mark really is left unnamed, so the sentence sending
+         him to the list never appears on a plot where every bubble is labelled. */
+      if (pts.some(function (pt) { return pt.overlapped; })) says.push(t("map_note_stacked"));
+      var soft = [];
+      if (items.some(function (c) { return !costDerived(c); })) soft.push(t("map_note_unassessed"));
+      if (items.some(weighedByHand)) soft.push(t("map_note_byhand"));
+      if (items.some(countSoft)) soft.push(t("map_note_floor"));
+      note.textContent = says
+        .concat(soft.length ? [t("map_note_soft")].concat(soft) : [t("map_note_measured")])
+        .join(" ");
+
+      /* A LABEL IS DRAWN BESIDE ITS OWN MARK OR NOT AT ALL.
+         Stepping a label clear of its neighbours was the first answer and it
+         was the wrong target. Two bubbles on the same point are the same mark
+         to look at, so one label per bubble promises a correspondence the
+         picture cannot show at any distance - and at twelve coincident calls
+         the furthest label stood 138px from its bubble with eleven others in
+         between, which is the picture asserting a one-to-one mapping it does
+         not have. Distance was only the visible symptom.
+         So a bubble sitting on another is left unlabelled: the count stays in
+         the mark, and the ranked list beneath names every call in the same
+         order. A label whose own place is already taken is dropped for the
+         same reason rather than moved somewhere it would misattribute. */
+      var LABEL_HALF = 29, LABEL_UP = 8, LABEL_DOWN = 3;
       var taken = [];
-      function labelY(pt) {
-        var below = pt.y < midY + 20;
-        var at = below ? pt.y + pt.r + 12 : pt.y - pt.r - 6;
-        /* Step away from the bubble until this label clears the ones already
-           placed near it, bounded so a crowded plot degrades to a readable
-           column rather than running off the plot. */
-        for (var step = 0; step < 12; step++) {
-          var clash = taken.some(function (t2) {
-            return Math.abs(t2[0] - pt.x) < 58 && Math.abs(t2[1] - at) < 11;
-          });
-          if (!clash) break;
-          at += below ? 11 : -11;
-        }
-        taken.push([pt.x, at]);
+      function labelBox(x, at) {
+        return { l: x - LABEL_HALF, r: x + LABEL_HALF, t: at - LABEL_UP, b: at + LABEL_DOWN };
+      }
+      /* Does this label sit on a mark that is not its own? Nearest point of the
+         label box to each other circle, compared against that circle's radius. */
+      function hitsMark(box, pt) {
+        return pts.some(function (o) {
+          if (o === pt) return false;
+          var nx = Math.max(box.l, Math.min(o.x, box.r));
+          var ny = Math.max(box.t, Math.min(o.y, box.b));
+          var dx = o.x - nx, dy = o.y - ny;
+          return (dx * dx + dy * dy) < o.r * o.r;
+        });
+      }
+      function hitsLabel(box) {
+        return taken.some(function (b2) {
+          return box.l < b2.r && box.r > b2.l && box.t < b2.b && box.b > b2.t;
+        });
+      }
+      function labelFor(pt) {
+        /* Four ways a name can be untrue where it lands, and every one of them
+           is a fact about the WHOLE PLOT rather than about this bubble: whose
+           mark it is, whether it covers another mark, whether another name is
+           already there, and whether it is still inside the picture. Offsetting
+           from a mark could see none of them, which is why the same lie kept
+           reappearing somewhere new each time it was pushed out of one place.
+
+           MEASURED, so the next reader is not misled about which of these does
+           the work: on the coordinates this plot can actually produce, the
+           first rule decides every case and the other three never fire. The
+           axis puts calls on four rows about 61px apart, a mark is at most
+           21.5px in radius and a name sits about 33px from its centre, so a
+           name reaches about 3px short of the row below it. That margin is an
+           accident of where the radius happens to cap, not something anyone
+           designed, and the day a mark grows the rules below are what keeps the
+           statement true. They are kept for that and are not load-bearing
+           today. */
+        if (pt.overlapped) return null;
+        var at = pt.y < midY + 20 ? pt.y + pt.r + 12 : pt.y - pt.r - 6;
+        var box = labelBox(pt.x, at);
+        if (box.t < y0 || box.b > y1) return null;
+        if (hitsMark(box, pt)) return null;
+        if (hitsLabel(box)) return null;
+        taken.push(box);
         return at;
       }
       pts.forEach(function (pt) {
@@ -2000,12 +2062,14 @@ __FM_BEARINGS_BOARD_DATA__
           n.textContent = String(c.blocks);
           g.appendChild(n);
         }
-        var lab = svgEl("text", { x: pt.x.toFixed(1),
-          y: labelY(pt).toFixed(1),
-          "text-anchor": "middle" });
-        lab.setAttribute("class", "bb-bublabel");
-        lab.textContent = shortLabel(c);
-        g.appendChild(lab);
+        var labelAt = labelFor(pt);
+        if (labelAt !== null) {
+          var lab = svgEl("text", { x: pt.x.toFixed(1), y: labelAt.toFixed(1),
+            "text-anchor": "middle" });
+          lab.setAttribute("class", "bb-bublabel");
+          lab.textContent = shortLabel(c);
+          g.appendChild(lab);
+        }
         function press() { onPick(pt.i); }
         g.addEventListener("click", press);
         g.addEventListener("keydown", function (e) {
