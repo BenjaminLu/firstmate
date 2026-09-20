@@ -251,6 +251,68 @@ test_the_typed_planes_are_not_guarded() {
   pass "fm-send: the typed planes carry invocations, not prose, and are not guarded"
 }
 
+test_answering_a_decision_is_all_or_nothing() {
+  local dir err rc
+  dir=$(setup_case resolve-key)
+  err="$dir/send.err"
+  printf 'needs-decision [key=api-shape]: pick REST or RPC\n' >"$dir/home/state/task-a.status"
+  # A refusal while answering a decision must leave the decision open AND the
+  # answer undelivered: half of that pair would strand the worker.
+  run_send "$dir" "$err" -- task-a --resolve-key api-shape 'go with REST, as in deadbeefdeadbeef'
+  rc=$?
+  expect_code 2 "$rc" "an unresolvable commit in an answer should refuse"
+  assert_no_grep 'resolved [key=api-shape]' "$dir/home/state/task-a.status" \
+    "a refused answer must not close the decision it was answering"
+  [ ! -d "$dir/home/state/task-a.inbox" ] ||
+    fail "a refused answer still delivered a record"
+  # The same answer without the bad value closes the decision and delivers.
+  run_send "$dir" "$err" -- task-a --resolve-key api-shape 'go with REST'
+  rc=$?
+  expect_code 0 "$rc" "a correct answer must still close the decision:"$'\n'"$(cat "$err")"
+  assert_grep 'resolved [key=api-shape]' "$dir/home/state/task-a.status" \
+    "the corrected answer should close the decision"
+  pass "fm-send: a refused answer neither closes the decision nor delivers, and the fix does both"
+}
+
+test_a_marked_secondmate_request_arms_no_expectation_when_refused() {
+  local dir err rc
+  dir=$(setup_case secondmate)
+  err="$dir/send.err"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=sess:fm-task-a" "kind=secondmate" "mode=secondmate" "harness=claude" \
+    "worktree=$(cd "$dir/worktree" && pwd)" \
+    "project=$(cd "$dir/project" && pwd)"
+  run_send "$dir" "$err" -- task-a 'review deadbeefdeadbeef and report back'
+  rc=$?
+  expect_code 2 "$rc" "a marked secondmate request should refuse the same way"
+  [ -z "$(find "$dir/home/state/pending-replies" -type f 2>/dev/null)" ] ||
+    fail "a refused request left a reply expectation armed, so the parent waits on nothing"
+  [ ! -d "$dir/home/state/task-a.inbox" ] || fail "a refused request still delivered a record"
+  pass "fm-send: a refused secondmate request arms no reply expectation"
+}
+
+test_a_fire_and_forget_delivery_is_guarded_too() {
+  local dir err rc
+  dir=$(setup_case fire-and-forget)
+  err="$dir/send.err"
+  # A fire-and-forget delivery is a secondmate-only shape.
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=sess:fm-task-a" "kind=secondmate" "mode=secondmate" "harness=claude" \
+    "worktree=$(cd "$dir/worktree" && pwd)" \
+    "project=$(cd "$dir/project" && pwd)"
+  run_send "$dir" "$err" -- task-a --fire-and-forget 0123456789abcdef \
+    'verify against deadbeefdeadbeef'
+  rc=$?
+  expect_code 2 "$rc" "a fire-and-forget delivery should refuse the same way"
+  [ ! -d "$dir/home/state/task-a.inbox" ] || fail "a refused delivery still wrote a record"
+  # The delivery id itself is 16 hex characters and must never be read as a
+  # commit named in the message: it is an argument, not prose.
+  run_send "$dir" "$err" -- task-a --fire-and-forget 0123456789abcdef 'rebase onto main'
+  rc=$?
+  expect_code 0 "$rc" "a fire-and-forget delivery id must not be read as a commit:"$'\n'"$(cat "$err")"
+  pass "fm-send: a fire-and-forget delivery is guarded, and its delivery id is not prose"
+}
+
 test_refusal_is_skipped_when_no_local_copy_can_answer() {
   local dir err rc
   dir=$(setup_case noworktree)
@@ -279,4 +341,7 @@ test_a_commit_that_resolves_in_another_object_database_is_not_refused
 test_a_remote_targets_recorded_paths_are_not_judged_locally
 test_a_plain_number_is_not_a_commit_ish
 test_the_typed_planes_are_not_guarded
+test_answering_a_decision_is_all_or_nothing
+test_a_marked_secondmate_request_arms_no_expectation_when_refused
+test_a_fire_and_forget_delivery_is_guarded_too
 test_refusal_is_skipped_when_no_local_copy_can_answer
