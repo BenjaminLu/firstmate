@@ -667,6 +667,7 @@ __FM_BEARINGS_BOARD_DATA__
       lane_waiting: "Waiting on something else", lane_stopped: "Stopped",
       lane_unreported: "Not reporting", lane_done: "Delivered",
       lane_unplaced: "Could not be placed",
+      stat_writing: "writing now", stat_stuck: "stuck or failing", stat_prs: "open PRs",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -728,6 +729,7 @@ __FM_BEARINGS_BOARD_DATA__
       lane_waiting: "在等別的東西", lane_stopped: "停了",
       lane_unreported: "沒有回報", lane_done: "交付了",
       lane_unplaced: "放不進任何一欄",
+      stat_writing: "正在寫", stat_stuck: "卡住或失敗", stat_prs: "開著的 PR",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -789,6 +791,7 @@ __FM_BEARINGS_BOARD_DATA__
       lane_waiting: "在等别的东西", lane_stopped: "停了",
       lane_unreported: "没有回报", lane_done: "交付了",
       lane_unplaced: "放不进任何一栏",
+      stat_writing: "正在写", stat_stuck: "卡住或失败", stat_prs: "开着的 PR",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -1112,14 +1115,32 @@ __FM_BEARINGS_BOARD_DATA__
     setText("bb-dispatch-btn", t("dispatch"));
     document.getElementById("bb-provenance").textContent = data.schema + " · " + data.generated;
 
-    /* stat strip */
+    /* The stat strip: what the captain reads before anything else.
+       Every tile is one array length or one lane count and nothing cleverer,
+       so a number on the masthead can always be checked against the region
+       below it. A tile that needed its own derivation would be a third place
+       for the board to disagree with itself. */
     var callTotal = data.captains_call.length;
+    function inLane(id) {
+      return data.underway.filter(function (x) { return x.lane === id; }).length;
+    }
     var stats = [
       { n: callTotal, l: t("stat_need"), call: true },
       { n: data.underway.length, l: t("stat_underway") },
       { n: data.landed.length, l: t("stat_landed") },
       { n: chartedQueued(data.charted).length + chartedMoreQueued, l: t("stat_charted") }
     ];
+    /* The fleet counters, offered only by a board that knows its lanes. An
+       older payload carries none, and a row of zeroes claiming nothing is
+       stuck would be worse than no tile at all. */
+    if (data.underway.some(function (x) { return !!x.lane; })) {
+      stats.splice(1, 0,
+        { n: inLane("working"), l: t("stat_writing") },
+        { n: inLane("stuck") + inLane("failed"), l: t("stat_stuck") });
+    }
+    /* Open pull requests, from the same array the merge lane lists, so the
+       masthead and the lane can never report different totals. */
+    if (data.merge_queue) stats.push({ n: data.merge_queue.length, l: t("stat_prs") });
     var strip = document.getElementById("bb-stats");
     clear(strip);
     stats.forEach(function (s) {

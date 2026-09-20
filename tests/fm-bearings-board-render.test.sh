@@ -169,6 +169,52 @@ no_channel_payload() {
                {value:"no", label:"No", consequence:"it was not"}]}]}'
 }
 
+# The masthead is what the captain reads before anything else, so every tile
+# has to be one number he can check against the region under it.
+test_the_masthead_counts_the_fleet_it_is_showing() {
+  local home out
+  home=$(make_home stats-fleet)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, landed:[], charted:[], captains_call:[],
+    underway:[
+      {id:"a",repo:"r",name:"Alpha",state:"working",kind:"ship",doing:"writing",lane:"working"},
+      {id:"b",repo:"r",name:"Bravo",state:"blocked",kind:"ship",doing:"stuck",lane:"stuck"},
+      {id:"c",repo:"r",name:"Charlie",state:"working",kind:"ship",doing:"red",lane:"failed"}],
+    merge_queue:[
+      {repo:"o/r",num:"1",ready:false,reason:"checks-pending"},
+      {repo:"o/r",num:"2",ready:false,reason:"checks-failed"}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "writing now") | .n')" = "1" ] \
+    || fail "the masthead did not count the workers actually writing: $out"
+  # Stuck and failing are one number because both mean the same thing to him:
+  # that work is not moving without someone looking at it.
+  [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "stuck or failing") | .n')" = "2" ] \
+    || fail "the masthead did not count the work that is not moving: $out"
+  # The open-PR count comes from the same array the merge lane lists, so the
+  # masthead and the lane can never report different totals.
+  [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "open PRs") | .n')" = "2" ] \
+    || fail "the masthead did not count the open pull requests: $out"
+  pass "the masthead counts the fleet it is showing, tile by tile"
+}
+
+# An older board knows none of this, and a row of zeroes claiming nothing is
+# stuck would be worse than no tile at all.
+test_a_board_that_knows_no_lanes_offers_no_fleet_counters() {
+  local home out
+  home=$(make_home stats-older)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, landed:[], charted:[], captains_call:[],
+    underway:[{id:"a",repo:"r",name:"Alpha",state:"working",kind:"ship",doing:"writing"}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '[.stats[] | select(.label == "writing now")] | length')" = "0" ] \
+    || fail "a board that knows no lanes still claimed to count them: $out"
+  [ "$(printf '%s' "$out" | jq -r '[.stats[] | select(.label == "open PRs")] | length')" = "0" ] \
+    || fail "a board that knows no pull requests still counted them: $out"
+  pass "a board that knows no lanes offers no counter it cannot stand behind"
+}
+
 # --- the fleet as lanes ------------------------------------------------------
 # 我想知道每個agent的進度. Fourteen workers as fourteen rows says nothing; the same
 # fourteen grouped by the lane each is in says "four on pull requests, one check
@@ -1805,3 +1851,5 @@ test_a_board_with_no_merge_data_shows_no_merge_lane
 test_the_fleet_is_grouped_into_the_lanes_it_is_actually_in
 test_a_worker_in_an_unknown_lane_is_shown_rather_than_dropped
 test_a_board_with_no_lanes_renders_as_it_always_did
+test_the_masthead_counts_the_fleet_it_is_showing
+test_a_board_that_knows_no_lanes_offers_no_fleet_counters
