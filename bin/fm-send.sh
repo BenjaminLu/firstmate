@@ -11,6 +11,10 @@
 # before anything is marked, recorded, or typed, because an empty marked
 # secondmate request delivers only marker and correlation bytes and leaves the
 # parent waiting on a reply to nothing.
+# An ordinary text steer naming a commit that resolves in no local copy of this
+# task is refused the same way, with exit 2, by the commit-ish guard below.
+# Exit 2 is the one outcome a resend cannot fix: the message itself has to be
+# corrected first.
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
@@ -28,7 +32,10 @@
 # resend is appropriate (unresolvable target, an endpoint that cannot be
 # locked and revalidated or that retired or changed, an unwritable record, a
 # failed or lost remote transport) or a decision-close append failed after
-# delivery (the error then carries the exact manual close). The remote enqueue
+# delivery (the error then carries the exact manual close). The exception is
+# exit 2: nothing was recorded and a resend of the SAME text would only be
+# refused again, because the message names a commit no local copy of this task
+# resolves. Correct the value, then send. The remote enqueue
 # is idempotent: the remote leg deduplicates an exact re-run of the same
 # request onto the existing record (bin/fm-task-inbox-lib.sh), so after a lost
 # transport (ssh exit 255, completion unknown) fm-send retries the same leg
@@ -72,7 +79,9 @@
 # before any resend, and never re-type blindly; a marked request's
 # pending-reply expectation stays armed because this outcome is not a proven
 # failure); any other nonzero = the send failed and nothing may be assumed
-# delivered. Submission dispatches through the target's recorded backend; the
+# delivered. The commit-ish refusal (exit 2) never fires here - it guards the
+# inbox plane only, so a harness-native invocation cannot be refused over a
+# value inside it. Submission dispatches through the target's recorded backend; the
 # tmux adapter shares its composer/submit core with the away-mode daemon via
 # bin/fm-tmux-lib.sh. Tune with FM_SEND_RETRIES (default 3; agy typed targets
 # default to 20 for agy's late busy render) / FM_SEND_SLEEP (0.4). Slash
@@ -705,6 +714,161 @@ fm_send_feed_resolved_holds() { # <answer-text>
   fi
 }
 
+# fm_send_refuse_unresolvable_commit_ish: refuse a steer that names a commit
+# which does not exist in the target task's local copy. A verification
+# instruction pointing at a commit nobody read is worthless, and a commit-ish is
+# the one such value a script can check: it either resolves or it does not.
+#
+# Two boundaries make this safe to put in front of every text steer.
+#
+# It steps aside rather than blocking whenever it cannot judge - no meta, no
+# readable object database among the task's recorded paths, or no git on the
+# path. Firstmate's own repository can only accept a value, never cause a
+# refusal, because it is readable everywhere and is nobody's recorded copy. Blocking a legitimate steer because the check could not answer is a
+# worse failure than the error it prevents.
+#
+# That is why the lookup is not the slot's own object database alone. A pooled
+# slot is its own clone, frozen at spawn, so a commit merged since - read off
+# the forge, which is the opposite of the error this catches - does not resolve
+# there. The question is whether the value is a real commit anywhere this home
+# can see, so every readable source is asked and any hit accepts: the slot's
+# worktree, the project clone it was spawned from (which fleet sync keeps
+# current), and firstmate's own repository, for a steer naming a firstmate
+# commit to a worker on another project. A remote target is skipped entirely -
+# its recorded worktree= and project= name paths on the OTHER host, and whatever
+# sits at those paths locally is an unrelated repository.
+#
+# It guards the ordinary text plane only. The typed planes carry harness-native
+# invocations, not prose naming a commit someone read, and the gate-response
+# flow AGENTS.md section 7 mandates travels one of them: a guard reaching there
+# could refuse a required path over a numeric argument, which is how a safety
+# measure becomes an outage. Which plane a message rides is decided by how it is
+# DELIVERED, not by its first character: a fire-and-forget or remote send
+# becomes a durable record rather than a parser command, so a leading "/" there
+# is ordinary text and is guarded like any other.
+#
+# It matches only whole WORDS of 8-40 hex characters that are not all digits, so
+# ordinary prose is untouched. Every 8+ digit run is hex-shaped, so without that
+# second test a date, an epoch second, a byte offset, a plain count and a pull
+# request number are each read as a commit; excluding them costs the roughly
+# 2.3% of eight-character shas that happen to carry no letter, and that trade is
+# not close. The 8-character floor puts every hex-only English word below the
+# match (the system dictionary has twelve at 6-7 characters - facade, decade,
+# efface - and none at 8 or above). Splitting on whitespace alone is deliberate.
+# Splitting on non-hex characters instead would read the first field of a UUID
+# (550e8400-...) as an unresolvable commit and refuse a steer that never named
+# one. Leading and trailing punctuation is stripped per word so a sha ending a
+# sentence is still read, which cannot resurface that risk: a UUID or a dashed
+# date carries its dashes on the inside, where nothing strips them.
+#
+# The false positives do not stop at digits, and the disclosure should not
+# either: a bare hex-shaped identifier that is not a commit - a no-mistakes
+# repository directory such as 3ad4eff75fa0, named on its own - is refused. A
+# dictionary of known non-commit shapes would cost more than that miss, so this
+# is a stated price rather than a gap to close.
+#
+# A net is not a proof, and what it misses is part of its contract: an
+# uppercase sha (git resolves those), one embedded in a forge URL (inner
+# slashes are not stripped), and a 7-character abbreviation (below the floor)
+# all pass unchecked. Two of those usually mean the value came off the forge
+# and was therefore read, which is why the misses are cheaper than the false
+# refusals that closing them would cost - but read the boundary as a net, not
+# as coverage.
+#
+# The candidate scan runs before any of that, so the overwhelmingly common
+# steer - one that names no sha at all - pays a text pipeline and no git
+# process on a path every steer in the fleet crosses.
+# fm_send_rides_inbox_plane: 0 when <text> to the resolved target rides the
+# durable inbox plane, nonzero when it must reach the terminal itself. The one
+# owner of that classification - the guard below and the send both ask it, so
+# neither can drift from the other.
+#
+# Text addressed to a task selector resolved through this home's metadata rides
+# the inbox plane, unless it is a LOCAL harness-native invocation that must
+# reach the harness's own parser - a leading "/" (slash command), or a leading
+# "$" to a codex target (skill invocation). A remote secondmate selector always
+# rides the inbox: its requests are marked, and a marked request reaches the
+# harness as marker-prefixed chat rather than a parser command anyway, so no
+# remote text has a typed plane to lose. An explicit backend target stays typed
+# even when it happens to match local metadata: it names an endpoint, not a
+# task, the same boundary that keeps it unmarked and outside --resolve-key.
+# Classification reads the pre-marker text so a marked secondmate request and a
+# plain crewmate steer classify identically. It deliberately does NOT promise
+# that a marked parser-native secondmate request executes as a parser command:
+# the pre-existing marker-first wire bytes are retained in stage 1.
+fm_send_rides_inbox_plane() { # <text>
+  [ -n "$TARGET_SELECTOR" ] || return 1
+  [ -z "$FIRE_AND_FORGET_ID" ] && [ "$TARGET_BACKEND" != remote ] || return 0
+  case "$1" in
+  /*) return 1 ;;
+  \$*) [ "$TARGET_HARNESS" != codex ] || return 1 ;;
+  esac
+  return 0
+}
+
+# fm_send_commit_ish_sources: the object databases RECORDED for <meta-file> that
+# can answer, most specific first, one per line. Empty output means no copy of
+# this task can answer, which is a step-aside.
+#
+# Firstmate's own repository is deliberately NOT in this list. It is readable in
+# every production home, so including it here would mean "no readable source"
+# never happens and a steer that no recorded copy can judge would be refused
+# against a repository with nothing to do with the task. It joins the lookup
+# below only once a recorded copy has answered, where it can accept a value but
+# never create a refusal.
+fm_send_commit_ish_sources() { # <meta-file>
+  local meta=$1 repo
+  [ -z "$(fm_meta_get "$meta" remote_host)" ] || return 0
+  for repo in "$(fm_meta_get "$meta" worktree)" "$(fm_meta_get "$meta" project)"; do
+    [ -n "$repo" ] && [ -d "$repo" ] || continue
+    git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
+    printf '%s\n' "$repo"
+  done
+}
+
+fm_send_refuse_unresolvable_commit_ish() { # <message> <meta-file>
+  local msg=$1 meta=$2 candidates sources sha repo resolved
+  candidates=$(printf '%s\n' "$msg" | tr -s '[:space:]' '\n' |
+    sed -e 's/^[[:punct:]]*//' -e 's/[[:punct:]]*$//' |
+    grep -E '^[0-9a-f]{8,40}$' | grep -Ev '^[0-9]+$' || true)
+  [ -n "$candidates" ] || return 0
+  [ -n "$meta" ] || return 0
+  command -v git >/dev/null 2>&1 || return 0
+  sources=$(fm_send_commit_ish_sources "$meta")
+  # The step-aside is decided on the RECORDED copies alone; firstmate's own
+  # repository is appended only after one of them answered, so it can accept a
+  # firstmate commit named to a worker on another project without ever being
+  # the reason a steer is refused.
+  [ -n "$sources" ] || return 0
+  if [ -d "$FM_ROOT" ] && git -C "$FM_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    sources="$sources
+$FM_ROOT"
+  fi
+  for sha in $candidates; do
+    resolved=0
+    # Read the source list line by line rather than word-splitting it: a copy
+    # whose path contains a space would otherwise be split into fragments, so
+    # git -C is never called on the real path and the refusal then names a path
+    # it never actually asked. The heredoc keeps the loop in this shell, so
+    # `resolved` survives it.
+    while IFS= read -r repo; do
+      [ -n "$repo" ] || continue
+      git -C "$repo" cat-file -e "$sha^{commit}" 2>/dev/null || continue
+      resolved=1
+      break
+    done <<EOF
+$sources
+EOF
+    [ "$resolved" = 1 ] && continue
+    # State the observation, not a cause: the value may have been read
+    # somewhere this home cannot see. Naming what WAS looked in is what lets
+    # the reader tell a typo from a copy that has not fetched yet.
+    echo "fm-send: $sha resolves to no commit in any local copy this home can read; looked in: $(printf '%s' "$sources" | sed -e "s/^/'/" -e "s/\$/'/" | tr '\n' ' '). Nothing was sent - check the value rather than resending the same text" >&2
+    return 1
+  done
+  return 0
+}
+
 # Resolve the target's harness from its meta (recorded by fm-spawn), used only to
 # scope the codex `$<skill>` popup-settle below. A task selector carries
 # meta; an explicit backend-target escape hatch has none, so its harness is
@@ -755,6 +919,14 @@ else
   if [ -z "${MESSAGE//[[:space:]]/}" ]; then
     echo "error: a text steer requires a nonempty message; nothing was sent (an empty marked request would deliver only marker and correlation bytes and leave the parent waiting on a reply to nothing)" >&2
     exit 1
+  fi
+  # A steer naming a commit that does not exist makes the instruction it carries
+  # worthless, and this is the one such error a script can catch. Bounded to
+  # 8-40 hex WORDS so ordinary prose is untouched, to the ordinary text plane so
+  # a harness-native invocation is never refused, and it steps aside rather than
+  # blocking when no local copy can answer.
+  if fm_send_rides_inbox_plane "$MESSAGE"; then
+    fm_send_refuse_unresolvable_commit_ish "$MESSAGE" "$TARGET_META" || exit 2
   fi
   if [ "$TARGET_BACKEND" = remote ]; then
     FM_SEND_REMOTE_BUDGET=${FM_SEND_REMOTE_BUDGET:-30}
@@ -822,32 +994,9 @@ else
       exit 1
     fi
   fi
-  # Data-plane selection (see the header): text addressed to a task selector
-  # resolved through this home's metadata rides the inbox plane, unless it is
-  # a LOCAL harness-native invocation that must reach the harness's own parser
-  # - a leading "/" (slash command), or a leading "$" to a codex target (skill
-  # invocation). A remote secondmate selector always rides the inbox: its
-  # requests are marked, and a marked request reaches the harness as
-  # marker-prefixed chat rather than a parser command anyway, so no remote
-  # text has a typed plane to lose. An explicit backend target stays typed
-  # even when it happens to match local metadata: it names an endpoint, not a
-  # task, the same boundary that keeps it unmarked and outside --resolve-key.
-  # Classification reads the pre-marker text so a marked secondmate request
-  # and a plain crewmate steer classify identically. It deliberately does NOT
-  # promise that a marked parser-native secondmate request executes as a parser
-  # command: the pre-existing marker-first wire bytes are retained in stage 1.
+  # Data-plane selection (see the header); fm_send_rides_inbox_plane owns it.
   INBOX_PLANE=0
-  if [ -n "$TARGET_SELECTOR" ]; then
-    if [ -n "$FIRE_AND_FORGET_ID" ] || [ "$TARGET_BACKEND" = remote ]; then
-      INBOX_PLANE=1
-    else
-      case "$RESOLVE_ANSWER_TEXT" in
-      /*) ;;
-      \$*) [ "$TARGET_HARNESS" = codex ] || INBOX_PLANE=1 ;;
-      *) INBOX_PLANE=1 ;;
-      esac
-    fi
-  fi
+  if fm_send_rides_inbox_plane "$RESOLVE_ANSWER_TEXT"; then INBOX_PLANE=1; fi
   if [ "$INBOX_PLANE" = 1 ] && [ "$TARGET_BACKEND" = remote ]; then
     # Remote inbox leg: the message becomes a durable record in the remote
     # home's steering inbox, written idempotently by the host-local leg, then
