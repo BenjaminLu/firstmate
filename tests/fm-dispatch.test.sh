@@ -903,6 +903,81 @@ test_dispatch_refuses_a_design_record_that_is_not_a_file() {
   pass "fm-dispatch: a design record that is not a file the worker can open is refused"
 }
 
+# Bounding the contract read gave an empty result a second meaning - the line is
+# there and no reader can see it - whose consequence is the opposite of the first.
+# The --scout guard reads empty as "not a ship brief", so a SHIP brief dispatched
+# with --scout got past it: item filed, kind flipped to scout, and a worker
+# launched on a brief whose Definition of done still says push and open a pull
+# request. An unclosed fence above the heading produces the same empty, and used
+# to be refused before any record was made.
+test_unreachable_delivery_contract_is_refused_not_read_as_absent() {
+  local case_dir id brief out status
+
+  case_dir=$(make_case unreachable-renamed)
+  id=dispatch-unreachable-renamed
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  printf '%s\n' 'You are a crewmate.' '' \
+    '# Task' "## Captain's intent" 'Ship the toggle.' '' \
+    '## Firstmate spec' 'Leave the settings page alone.' '' \
+    '# Done' 'Delivery contract: mode=direct-PR' > "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  [ "$status" -ne 0 ] || fail "a ship brief whose contract is unreachable should refuse --scout: $out"
+  assert_contains "$out" "no reader can reach" \
+    "the refusal reported the contract as absent rather than unreachable"
+  assert_contains "$out" "Delivery contract: mode=direct-PR" \
+    "the refusal did not name the line that caused it"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" \
+    "the item was filed before the unreachable contract was noticed"
+  assert_absent "$case_dir/home/state/$id.meta" "a worker was launched on an unreachable contract"
+
+  # An unclosed fence above the heading hides it from every reader, and must be
+  # refused here rather than at the spawn after the item is already filed.
+  case_dir=$(make_case unreachable-fence)
+  id=dispatch-unreachable-fence
+  mkdir -p "$case_dir/home/data/$id"
+  brief="$case_dir/home/data/$id/brief.md"
+  printf '%s\n' 'You are a crewmate.' '' \
+    '# Task' "## Captain's intent" 'Ship the toggle.' '' \
+    '## Firstmate spec' 'The scaffold writes:' '```' 'left open' '' \
+    '# Definition of done' 'Delivery contract: mode=direct-PR' > "$brief"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  [ "$status" -ne 0 ] || fail "an unclosed fence hiding the contract should refuse: $out"
+  assert_contains "$out" "no reader can reach" "the fence case was not reported as unreachable"
+  assert_no_grep "$id" "$case_dir/home/data/backlog.md" \
+    "the item was filed before the hidden contract was noticed"
+
+  # And the case bounding the read was FOR must still dispatch: a scout brief
+  # whose captain's ask quotes the contract line records no contract of its own.
+  case_dir=$(make_case unreachable-quoted-scout)
+  id=dispatch-unreachable-quoted
+  cat > "$case_dir/quoting-ask.md" <<'ASK'
+Work out why briefs record the wrong delivery mode.
+
+The brief carries this line and the spawn reads it:
+
+```
+Delivery contract: mode=no-mistakes
+```
+
+Report what you find.
+ASK
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --scout --ask "$case_dir/quoting-ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a scout whose ask quotes the contract line should dispatch: $out"
+  assert_grep 'Delivery contract: mode=no-mistakes' "$case_dir/home/data/$id/brief.md" \
+    "the captain's quoted line was scrubbed instead of left alone"
+  pass "fm-dispatch: a contract no reader can reach is refused, and a quoted one still dispatches"
+}
+
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had() {
   local case_dir id out status brief record
   case_dir=$(make_case design-legacy)
@@ -1008,3 +1083,4 @@ test_design_fill_is_bounded_to_the_decisions_section
 test_design_fill_matches_what_the_detector_accepted
 test_dispatch_refuses_a_design_record_that_is_not_a_file
 test_delivery_contract_is_read_from_its_own_section
+test_unreachable_delivery_contract_is_refused_not_read_as_absent

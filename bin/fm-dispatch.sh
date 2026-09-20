@@ -278,6 +278,17 @@ if [ -e "$BRIEF" ]; then
   [ -f "$BRIEF" ] && [ -r "$BRIEF" ] || die "$BRIEF exists but is not a readable regular file"
   BRIEF_EXISTS=1
   BRIEF_MODE=$(fm_brief_delivery_mode "$BRIEF")
+  # Empty means two different things with opposite consequences: this brief
+  # records no contract, or it records one the readers cannot reach. Every branch
+  # below reports the first, so the second is settled here - otherwise --scout
+  # over a ship brief walks past the guard beneath and files the item anyway.
+  UNREACHABLE_CONTRACT=''
+  if [ -z "$BRIEF_MODE" ]; then
+    UNREACHABLE_CONTRACT=$(fm_brief_delivery_contract_unreachable "$BRIEF") || UNREACHABLE_CONTRACT=''
+  fi
+  if [ -n "$UNREACHABLE_CONTRACT" ]; then
+    die "$BRIEF carries a delivery contract no reader can reach, at line ${UNREACHABLE_CONTRACT%%:*}: ${UNREACHABLE_CONTRACT#*:}. It is not the first line under a \`# Definition of done\` heading, or an unclosed code fence above it hides that heading, so this dispatch and the spawn both read this brief as recording no contract at all. Repair the brief or re-scaffold it; do not dispatch against a contract nothing can see"
+  fi
   if [ "$SCOUT" -eq 1 ]; then
     [ -z "$BRIEF_MODE" ] || die "$BRIEF is a ship brief (Delivery contract: mode=$BRIEF_MODE) but this dispatch is --scout; move that brief aside or drop --scout"
   elif [ -z "$BRIEF_MODE" ]; then

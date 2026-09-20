@@ -2720,6 +2720,15 @@ if [ "$KIND" = ship ]; then
   PROJ_NAME=$(basename "$PROJ_ABS")
   BRIEF_MODE=$(fm_brief_delivery_mode "$BRIEF")
   if [ -z "$BRIEF_MODE" ]; then
+    # Absent and unreachable are different facts. The warning below excuses a
+    # brief scaffolded before ship briefs recorded a contract; a brief that
+    # carries one this reader cannot see is not that, and launching a worker on
+    # it would put its instructions and the task record out of agreement exactly
+    # where this check exists to keep them together.
+    if UNREACHABLE_CONTRACT=$(fm_brief_delivery_contract_unreachable "$BRIEF"); then
+      echo "error: $BRIEF carries a delivery contract no reader can reach, at line ${UNREACHABLE_CONTRACT%%:*}: ${UNREACHABLE_CONTRACT#*:}; it is not the first line under a \`# Definition of done\` heading, or an unclosed code fence above it hides that heading. Repair the brief or re-scaffold it rather than launching on the explicit --mode $MODE" >&2
+      exit 1
+    fi
     echo "warning: $BRIEF records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode $MODE - confirm its definition of done matches" >&2
   elif [ "$BRIEF_MODE" != "$MODE" ]; then
     echo "error: delivery mismatch for $ID: the brief says mode=$BRIEF_MODE but this spawn passed --mode $MODE; correct the flag or re-scaffold the brief so the worker's instructions and the task record agree" >&2

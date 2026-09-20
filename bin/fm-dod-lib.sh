@@ -163,6 +163,10 @@ fm_brief_task_placeholders_present() {  # <file>
 # bin/fm-promote.sh appends - and the contract belongs to the second; first-line,
 # because fm_dod_block always opens its block with that contract line, which is a
 # shape this file states and guarantees rather than one that happens to hold.
+# Open-fence mode ignores <heading> entirely and answers one question about the
+# whole input: is a code fence still open at the end of it, and where did it
+# start. A brief that leaves one open hides every heading below it from every
+# mode above, so a reader that returns nothing there is not reporting absence.
 fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
   local file=$1 heading=$2 mode=$3 input=$1
   if [ "$file" = - ]; then
@@ -198,11 +202,13 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
           fence_marker = marker
           fence_len = marker_len
           fence_open_line = line
+          fence_open_nr = NR
         } else if (marker == fence_marker && marker_len >= fence_len && rest ~ /^[[:space:]]*$/) {
           fenced = 0
         }
       }
 
+      if (mode == "open-fence") next
       if (mode == "first-body-line") {
         if (!was_fenced && !is_fence && line == heading) {
           want = 1
@@ -258,6 +264,11 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator>
       print line
     }
     END {
+      if (mode == "open-fence") {
+        if (!fenced) exit 1
+        printf "%d:%s\n", fence_open_nr, fence_open_line
+        exit 0
+      }
       if (mode == "terminator" && !found && fenced) {
         print fence_open_line
         found = 1
@@ -386,6 +397,46 @@ fm_brief_task_content_valid() {  # <file>
 fm_brief_delivery_mode() {  # <file>
   fm_brief_heading_parse "$1" "# Definition of done" first-body-line |
     sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' | head -n 1
+}
+
+# Print, as `<line-number>:<line>`, a contract line the brief carries that
+# fm_brief_delivery_mode cannot reach; fail when there is none.
+#
+# Empty from that function used to mean exactly one thing: this brief records no
+# contract. Bounding the read gave empty a SECOND meaning - the line is there and
+# the reader cannot see it - whose consequence is the opposite, and every caller
+# reports the first. That is how a ship brief dispatched with --scout gets past
+# the guard that exists to stop it: the guard reads empty as "not a ship brief",
+# files the item, flips kind to scout, and launches a worker whose Definition of
+# done still tells it to push and open a pull request. The callers need this
+# fourth CONDITION, not a fourth parser.
+#
+# A match inside `# Task` is not one of these. That section carries the captain's
+# own words and firstmate's spec, and an ask about delivery modes quoting this
+# line is the exact case bounding the read was for - a scout brief carrying such
+# an ask records no contract and must stay dispatchable. Every scaffold puts both
+# subsections inside `# Task`, so one membership test covers both; a brief with no
+# `# Task` at all has no authored prose to protect and every match counts.
+fm_brief_delivery_contract_unreachable() {  # <file>
+  local file=$1 hit
+  [ -f "$file" ] && [ -r "$file" ] || return 1
+  [ -z "$(fm_brief_delivery_mode "$file")" ] || return 1
+  # An unclosed fence hides every heading below it, so the `# Task` membership
+  # test below cannot be trusted on such a brief: the section never ends and the
+  # contract line reads as authored prose. A brief that leaves a fence open and
+  # carries a contract line is unreachable whatever that test would say.
+  if fm_brief_heading_parse "$file" '' open-fence >/dev/null; then
+    hit=$(grep -n -m 1 '^Delivery contract: mode=' -- "$file") || return 1
+    printf '%s\n' "$hit"
+    return 0
+  fi
+  hit=$(fm_brief_heading_parse "$file" "# Task" mark |
+    awk 'substr($0, 1, 1) == "0" && substr($0, 2) ~ /^Delivery contract: mode=/ {
+      printf "%d:%s\n", NR, substr($0, 2)
+      exit
+    }')
+  [ -n "$hit" ] || return 1
+  printf '%s\n' "$hit"
 }
 
 # Print the first line of the captain-intent text on stdin that opens with an
