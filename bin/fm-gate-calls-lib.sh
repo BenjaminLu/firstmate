@@ -231,6 +231,65 @@ fm_gate_call_line() {  # <at> <site> <task> <verdict> <what> <grounds> <link> <k
     "$tail"
 }
 
+# One byte's numeric value, 0..255. `printf %d "'<byte>"` answers with a
+# SIGNED char, so 0xE4 comes back as -28; without the correction below every
+# UTF-8 lead byte reads as a negative number and the trim below silently does
+# nothing.
+fm_gate_call_byte_ord() {  # <single byte>
+  local ord
+  ord=$(printf '%d' "'$1")
+  [ "$ord" -ge 0 ] || ord=$((ord + 256))
+  printf '%s' "$ord"
+}
+
+# Remove a trailing INCOMPLETE UTF-8 sequence, leaving complete characters and
+# plain bytes alone.
+#
+# The shortening loop measures in bytes but cuts with a slice, and a slice
+# counts characters under a UTF-8 locale and BYTES under LC_ALL=C. So under a
+# C locale - which bin/fm-inactive-reconcile.sh exports, and which any caller
+# may have - the cut lands mid-character and the line stops being valid UTF-8,
+# which means it stops being valid JSON. A strict reader then rejects the
+# whole line, and a rejected line is a lost record with no drops entry: the
+# same invisible loss as a torn line, by a third door.
+#
+# Repairing after the cut, rather than forcing a locale, works whichever
+# semantics the slice used.
+fm_gate_call_trim_partial_utf8() {  # <text>
+  local LC_ALL=C text=$1 cont=0 rest ord need
+  rest=$text
+  while [ "$cont" -lt 3 ] && [ -n "$rest" ]; do
+    ord=$(fm_gate_call_byte_ord "${rest: -1}")
+    [ "$ord" -ge 128 ] && [ "$ord" -le 191 ] || break
+    rest=${rest%?}
+    cont=$((cont + 1))
+  done
+  if [ -z "$rest" ]; then
+    # Nothing but continuation bytes: no lead byte survived the cut at all.
+    printf '%s' ''
+    return 0
+  fi
+  ord=$(fm_gate_call_byte_ord "${rest: -1}")
+  if [ "$ord" -ge 194 ] && [ "$ord" -le 223 ]; then
+    need=1
+  elif [ "$ord" -ge 224 ] && [ "$ord" -le 239 ]; then
+    need=2
+  elif [ "$ord" -ge 240 ] && [ "$ord" -le 244 ]; then
+    need=3
+  else
+    need=0
+  fi
+  if [ "$need" -eq 0 ]; then
+    # No lead byte here, so any continuations collected are orphans whose
+    # lead is already gone and dropping them is the repair.
+    if [ "$cont" -gt 0 ]; then printf '%s' "$rest"; else printf '%s' "$text"; fi
+  elif [ "$cont" -eq "$need" ]; then
+    printf '%s' "$text"
+  else
+    printf '%s' "${rest%?}"
+  fi
+}
+
 # Hold the assembled line under the byte bound by shortening the two free-text
 # fields, longest first, and declaring in the record that it happened. Halving
 # terminates: each pass strictly shrinks the field, an empty field cannot be
@@ -245,9 +304,9 @@ fm_gate_call_bounded_line() {  # <at> <site> <task> <verdict> <what> <grounds> <
   while [ "$(fm_gate_call_bytes "$line")" -gt "$FM_GATE_CALL_MAX_LINE" ]; do
     truncated=true
     if [ -n "$grounds" ]; then
-      grounds=${grounds:0:$(( ${#grounds} / 2 ))}
+      grounds=$(fm_gate_call_trim_partial_utf8 "${grounds:0:$(( ${#grounds} / 2 ))}")
     elif [ -n "$what" ]; then
-      what=${what:0:$(( ${#what} / 2 ))}
+      what=$(fm_gate_call_trim_partial_utf8 "${what:0:$(( ${#what} / 2 ))}")
     else
       break
     fi
@@ -272,7 +331,7 @@ fm_gate_call_drop() {  # <state-dir> <reason> <at> <site> <task> <verdict> <what
   [ "${#task}" -le "$FM_GATE_CALL_CAP_TASK" ] \
     || { task=${task:0:$FM_GATE_CALL_CAP_TASK}; truncated=true; }
   [ "${#link}" -le "$FM_GATE_CALL_CAP_LINK" ] \
-    || { link=${link:0:$FM_GATE_CALL_CAP_LINK}; truncated=true; }
+    || { link=$(fm_gate_call_trim_partial_utf8 "${link:0:$FM_GATE_CALL_CAP_LINK}"); truncated=true; }
   [ "${#key}" -le "$FM_GATE_CALL_CAP_KEY" ] \
     || { key=${key:0:$FM_GATE_CALL_CAP_KEY}; truncated=true; }
   fm_gate_call_bounded_line "$at" "$site" "$task" "$verdict" "$what" "$grounds" \

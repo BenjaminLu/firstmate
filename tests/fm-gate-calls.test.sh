@@ -237,6 +237,41 @@ test_concurrent_writers_never_tear_a_record() {
   pass "concurrent writers at the maximum line size never tear a record"
 }
 
+test_a_shortened_record_stays_valid_utf8_in_any_locale() {
+  local home log locale pad rc=0 cjk grounds
+  command -v python3 >/dev/null 2>&1 || { echo "skip: python3 not found"; return 0; }
+  # CJK, so every character is three bytes and every cut point that is not a
+  # multiple of three lands inside one. The captain's own asks in this work
+  # are CJK. The three ASCII pads below shift the cut through all three byte
+  # offsets, so one of them must land mid-character whatever the halving does
+  # - which is what stops this case passing by luck on a clean boundary.
+  cjk=''
+  while [ "${#cjk}" -lt 800 ]; do
+    cjk="${cjk}中文字元的理由說明"
+  done
+
+  for locale in en_US.UTF-8 C; do
+    for pad in '' 'x' 'xx'; do
+      home=$(make_home "utf8-$locale-${#pad}")
+      log="$home/state/gate-calls.jsonl"
+      grounds="${pad}${cjk}"
+      rc=0
+      LC_ALL="$locale" LANG="$locale" run_gate_call "$home" record \
+        --site review-finding --task task-u8 --verdict refused \
+        --what 'a ruling with a long reason' --grounds "$grounds" \
+        >/dev/null 2>&1 || rc=$?
+      expect_code 0 "$rc" "utf8-$locale-${#pad}: the call must record"
+      assert_equals true "$(log_field "$log" 1 truncated)" \
+        "utf8-$locale-${#pad}: this case only tests anything if the record was shortened"
+      python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' < "$log" \
+        || fail "utf8-$locale-${#pad}: the shortened record is not valid UTF-8, so it is not valid JSON and a strict reader loses the line"
+      python3 -c 'import json,sys; json.loads(sys.stdin.buffer.read().decode("utf-8"))' < "$log" \
+        || fail "utf8-$locale-${#pad}: the shortened record is not a JSON object to a strict parser"
+    done
+  done
+  pass "a shortened record stays valid UTF-8, and valid JSON, at every cut offset under a C locale as well as a UTF-8 one"
+}
+
 # ------------------------------------------------- a missing record is visible
 
 test_an_unwritable_log_is_reported_not_swallowed() {
@@ -451,6 +486,7 @@ test_a_declined_review_finding_is_recorded_as_refused
 test_a_postponed_call_is_the_only_thing_recorded_as_deferred
 test_an_oversized_call_is_shortened_visibly
 test_concurrent_writers_never_tear_a_record
+test_a_shortened_record_stays_valid_utf8_in_any_locale
 test_an_unwritable_log_is_reported_not_swallowed
 test_an_unwritable_state_directory_still_reports
 test_a_drops_record_reads_with_the_same_parser_as_the_log
