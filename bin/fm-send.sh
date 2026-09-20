@@ -728,8 +728,18 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # its recorded worktree= and project= name paths on the OTHER host, and whatever
 # sits at those paths locally is an unrelated repository.
 #
-# It matches only whole WORDS of 8-40 hex characters, so ordinary prose is
-# untouched: the 8-character floor puts every hex-only English word below the
+# It guards the ordinary text plane only. The typed planes carry harness-native
+# invocations, not prose naming a commit someone read, and the gate-response
+# flow AGENTS.md section 7 mandates travels one of them: a guard reaching there
+# could refuse a required path over a numeric argument, which is how a safety
+# measure becomes an outage.
+#
+# It matches only whole WORDS of 8-40 hex characters that are not all digits, so
+# ordinary prose is untouched. Every 8+ digit run is hex-shaped, so without that
+# second test a date, an epoch second, a byte offset, a plain count and a pull
+# request number are each read as a commit; excluding them costs the roughly
+# 2.3% of eight-character shas that happen to carry no letter, and that trade is
+# not close. The 8-character floor puts every hex-only English word below the
 # match (the system dictionary has twelve at 6-7 characters - facade, decade,
 # efface - and none at 8 or above). Splitting on whitespace alone is deliberate.
 # Splitting on non-hex characters instead would read the first field of a UUID
@@ -741,6 +751,34 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # The candidate scan runs before any of that, so the overwhelmingly common
 # steer - one that names no sha at all - pays a text pipeline and no git
 # process on a path every steer in the fleet crosses.
+# fm_send_rides_inbox_plane: 0 when <text> to the resolved target rides the
+# durable inbox plane, nonzero when it must reach the terminal itself. The one
+# owner of that classification - the guard below and the send both ask it, so
+# neither can drift from the other.
+#
+# Text addressed to a task selector resolved through this home's metadata rides
+# the inbox plane, unless it is a LOCAL harness-native invocation that must
+# reach the harness's own parser - a leading "/" (slash command), or a leading
+# "$" to a codex target (skill invocation). A remote secondmate selector always
+# rides the inbox: its requests are marked, and a marked request reaches the
+# harness as marker-prefixed chat rather than a parser command anyway, so no
+# remote text has a typed plane to lose. An explicit backend target stays typed
+# even when it happens to match local metadata: it names an endpoint, not a
+# task, the same boundary that keeps it unmarked and outside --resolve-key.
+# Classification reads the pre-marker text so a marked secondmate request and a
+# plain crewmate steer classify identically. It deliberately does NOT promise
+# that a marked parser-native secondmate request executes as a parser command:
+# the pre-existing marker-first wire bytes are retained in stage 1.
+fm_send_rides_inbox_plane() { # <text>
+  [ -n "$TARGET_SELECTOR" ] || return 1
+  [ -z "$FIRE_AND_FORGET_ID" ] && [ "$TARGET_BACKEND" != remote ] || return 0
+  case "$1" in
+  /*) return 1 ;;
+  \$*) [ "$TARGET_HARNESS" != codex ] || return 1 ;;
+  esac
+  return 0
+}
+
 # fm_send_commit_ish_sources: the readable object databases this home may ask
 # about a value named in a steer to <meta-file>, most specific first, one per
 # line. Empty output means nothing can answer, which is a step-aside.
@@ -759,7 +797,7 @@ fm_send_refuse_unresolvable_commit_ish() { # <message> <meta-file>
   local msg=$1 meta=$2 candidates sources sha repo resolved
   candidates=$(printf '%s\n' "$msg" | tr -s '[:space:]' '\n' |
     sed -e 's/^[[:punct:]]*//' -e 's/[[:punct:]]*$//' |
-    grep -E '^[0-9a-f]{8,40}$' || true)
+    grep -E '^[0-9a-f]{8,40}$' | grep -Ev '^[0-9]+$' || true)
   [ -n "$candidates" ] || return 0
   [ -n "$meta" ] || return 0
   command -v git >/dev/null 2>&1 || return 0
@@ -832,9 +870,12 @@ else
   fi
   # A steer naming a commit that does not exist makes the instruction it carries
   # worthless, and this is the one such error a script can catch. Bounded to
-  # 8-40 hex WORDS so ordinary prose is untouched, and it steps aside rather
-  # than blocking when the worktree cannot answer.
-  fm_send_refuse_unresolvable_commit_ish "$MESSAGE" "$TARGET_META" || exit 2
+  # 8-40 hex WORDS so ordinary prose is untouched, to the ordinary text plane so
+  # a harness-native invocation is never refused, and it steps aside rather than
+  # blocking when no local copy can answer.
+  if fm_send_rides_inbox_plane "$MESSAGE"; then
+    fm_send_refuse_unresolvable_commit_ish "$MESSAGE" "$TARGET_META" || exit 2
+  fi
   if [ "$TARGET_BACKEND" = remote ]; then
     FM_SEND_REMOTE_BUDGET=${FM_SEND_REMOTE_BUDGET:-30}
     case "$FM_SEND_REMOTE_BUDGET" in
@@ -901,32 +942,9 @@ else
       exit 1
     fi
   fi
-  # Data-plane selection (see the header): text addressed to a task selector
-  # resolved through this home's metadata rides the inbox plane, unless it is
-  # a LOCAL harness-native invocation that must reach the harness's own parser
-  # - a leading "/" (slash command), or a leading "$" to a codex target (skill
-  # invocation). A remote secondmate selector always rides the inbox: its
-  # requests are marked, and a marked request reaches the harness as
-  # marker-prefixed chat rather than a parser command anyway, so no remote
-  # text has a typed plane to lose. An explicit backend target stays typed
-  # even when it happens to match local metadata: it names an endpoint, not a
-  # task, the same boundary that keeps it unmarked and outside --resolve-key.
-  # Classification reads the pre-marker text so a marked secondmate request
-  # and a plain crewmate steer classify identically. It deliberately does NOT
-  # promise that a marked parser-native secondmate request executes as a parser
-  # command: the pre-existing marker-first wire bytes are retained in stage 1.
+  # Data-plane selection (see the header); fm_send_rides_inbox_plane owns it.
   INBOX_PLANE=0
-  if [ -n "$TARGET_SELECTOR" ]; then
-    if [ -n "$FIRE_AND_FORGET_ID" ] || [ "$TARGET_BACKEND" = remote ]; then
-      INBOX_PLANE=1
-    else
-      case "$RESOLVE_ANSWER_TEXT" in
-      /*) ;;
-      \$*) [ "$TARGET_HARNESS" = codex ] || INBOX_PLANE=1 ;;
-      *) INBOX_PLANE=1 ;;
-      esac
-    fi
-  fi
+  if fm_send_rides_inbox_plane "$RESOLVE_ANSWER_TEXT"; then INBOX_PLANE=1; fi
   if [ "$INBOX_PLANE" = 1 ] && [ "$TARGET_BACKEND" = remote ]; then
     # Remote inbox leg: the message becomes a durable record in the remote
     # home's steering inbox, written idempotently by the host-local leg, then

@@ -18,6 +18,9 @@
 #      not judged against this host at all.
 #   6. No readable source at all steps aside rather than blocking a steer
 #      it cannot judge.
+# The codex case below passes a literal `$...` message on purpose (the point is
+# sending an unexpanded `$` invocation), so SC2016 is disabled.
+# shellcheck disable=SC2016
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -202,6 +205,52 @@ test_a_remote_targets_recorded_paths_are_not_judged_locally() {
   pass "fm-send: a remote target's recorded paths are not judged against this host"
 }
 
+test_a_plain_number_is_not_a_commit_ish() {
+  local dir err rc msg
+  for msg in 'the retrospective covers 20260920 and after' \
+    'the nudge fired at 1758326400, check the cooldown' \
+    'the cursor sat at 12345678 bytes' \
+    'closes 12345 and 87654321'; do
+    dir=$(setup_case "digits-$RANDOM")
+    err="$dir/send.err"
+    run_send "$dir" "$err" -- task-a "$msg"
+    rc=$?
+    expect_code 0 "$rc" "a plain number must not be read as a commit-ish: $msg"$'\n'"$(cat "$err")"
+  done
+  pass "fm-send: a date, an epoch second, a byte offset and a plain count are not commit-ishes"
+}
+
+test_the_typed_planes_are_not_guarded() {
+  local dir err rc
+  # A leading "/" is a harness-native invocation that must reach the parser.
+  # The gate-response flow AGENTS.md section 7 mandates travels this plane, so
+  # a guard reaching it can refuse a required path.
+  dir=$(setup_case slash)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- task-a '/no-mistakes respond --run deadbeefdeadbeef'
+  rc=$?
+  expect_code 0 "$rc" "a slash invocation must not be guarded:"$'\n'"$(cat "$err")"
+  assert_contains "$(cat "$dir/send.log")" 'deadbeefdeadbeef' \
+    "the slash invocation should still be typed literally"
+  # A codex `$<skill>` invocation is the same plane.
+  dir=$(setup_case codexskill)
+  err="$dir/send.err"
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    "window=sess:fm-task-a" "kind=ship" "harness=codex" \
+    "worktree=$(cd "$dir/worktree" && pwd)" \
+    "project=$(cd "$dir/project" && pwd)"
+  run_send "$dir" "$err" -- task-a '$no-mistakes run deadbeefdeadbeef'
+  rc=$?
+  expect_code 0 "$rc" "a codex skill invocation must not be guarded:"$'\n'"$(cat "$err")"
+  # An explicit backend target names an endpoint, not a task.
+  dir=$(setup_case explicit)
+  err="$dir/send.err"
+  run_send "$dir" "$err" -- sess:win 'verify against deadbeefdeadbeef'
+  rc=$?
+  expect_code 0 "$rc" "an explicit backend target must not be guarded:"$'\n'"$(cat "$err")"
+  pass "fm-send: the typed planes carry invocations, not prose, and are not guarded"
+}
+
 test_refusal_is_skipped_when_no_local_copy_can_answer() {
   local dir err rc
   dir=$(setup_case noworktree)
@@ -228,4 +277,6 @@ test_ordinary_prose_with_hex_like_words_is_not_treated_as_a_commit
 test_a_commit_ending_a_sentence_is_still_read
 test_a_commit_that_resolves_in_another_object_database_is_not_refused
 test_a_remote_targets_recorded_paths_are_not_judged_locally
+test_a_plain_number_is_not_a_commit_ish
+test_the_typed_planes_are_not_guarded
 test_refusal_is_skipped_when_no_local_copy_can_answer
