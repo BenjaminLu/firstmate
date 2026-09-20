@@ -1133,6 +1133,13 @@ __FM_BEARINGS_BOARD_DATA__
     function inLane(id) {
       return data.underway.filter(function (x) { return x.lane === id; }).length;
     }
+    /* Which lanes mean "this is not moving without someone looking at it".
+       Named here as a list rather than added up inline, because the tile has
+       to be checkable against the region under it: these are exactly the
+       lanes, and a lane added to the fleet has one place to be counted.
+       `stopped` is a worker whose own run failed, and leaving it out was a
+       masthead saying one thing was stalled while three were. */
+    var STALLED = ["stuck", "failed", "stopped"];
     var stats = [
       { n: callTotal, l: t("stat_need"), call: true },
       { n: data.underway.length, l: t("stat_underway") },
@@ -1145,7 +1152,8 @@ __FM_BEARINGS_BOARD_DATA__
     if (data.underway.some(function (x) { return !!x.lane; })) {
       stats.splice(1, 0,
         { n: inLane("working"), l: t("stat_writing") },
-        { n: inLane("stuck") + inLane("failed"), l: t("stat_stuck") });
+        { n: STALLED.reduce(function (sum, id) { return sum + inLane(id); }, 0),
+          l: t("stat_stuck") });
     }
     /* Open pull requests, from the same array the merge lane lists, so the
        masthead and the lane can never report different totals. */

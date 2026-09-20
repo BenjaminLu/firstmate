@@ -180,17 +180,24 @@ test_the_masthead_counts_the_fleet_it_is_showing() {
     underway:[
       {id:"a",repo:"r",name:"Alpha",state:"working",kind:"ship",doing:"writing",lane:"working"},
       {id:"b",repo:"r",name:"Bravo",state:"blocked",kind:"ship",doing:"stuck",lane:"stuck"},
-      {id:"c",repo:"r",name:"Charlie",state:"working",kind:"ship",doing:"red",lane:"failed"}],
+      {id:"c",repo:"r",name:"Charlie",state:"working",kind:"ship",doing:"red",lane:"failed"},
+      {id:"d",repo:"r",name:"Delta",state:"failed",kind:"ship",doing:"its run failed",lane:"stopped"}],
     merge_queue:[
       {repo:"o/r",num:"1",ready:false,reason:"checks-pending"},
       {repo:"o/r",num:"2",ready:false,reason:"checks-failed"}]}')")
 
   [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "writing now") | .n')" = "1" ] \
     || fail "the masthead did not count the workers actually writing: $out"
-  # Stuck and failing are one number because both mean the same thing to him:
-  # that work is not moving without someone looking at it.
-  [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "stuck or failing") | .n')" = "2" ] \
+  # Stuck, red checks and a failed run are one number because all three mean
+  # the same thing to him: work that is not moving without someone looking at
+  # it. A worker whose own run failed is the one the tile used to drop, while
+  # its label named precisely that condition.
+  [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "stuck or failing") | .n')" = "3" ] \
     || fail "the masthead did not count the work that is not moving: $out"
+  # And the number is checkable against the region: every worker it counts is
+  # in a lane below, and no other lane is counted.
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[] | select(.label | test("Stuck|check failed|Stopped")) | .workers[]] | length')" = "3" ] \
+    || fail "the masthead tile does not match the lanes beneath it: $out"
   # The open-PR count comes from the same array the merge lane lists, so the
   # masthead and the lane can never report different totals.
   [ "$(printf '%s' "$out" | jq -r '.stats[] | select(.label == "open PRs") | .n')" = "2" ] \
