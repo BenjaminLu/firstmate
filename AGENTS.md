@@ -177,6 +177,7 @@ state/               runtime records and signals; gitignored
 
 A `state/<id>.status` line is a wake event, not current-state truth; `bin/fm-crew-state.sh` owns current-state reconciliation.
 Treat `data/captain.md` as the domain-local record of captain preferences, optional `data/captain-shared.md` as the main-authoritative shared captain-preference file for secondmate inheritance, and `data/learnings.md` as curated home-local knowledge, regardless of harness memory.
+Compose a file you intend to hand to another tool in a per-session directory of your own - the harness's scratchpad where it provides one, otherwise `mktemp -d` - and never at a fixed path another session could also write: a pull request body composed at a shared `/tmp` path was appended to by two sessions and published to the wrong pull request.
 
 ## 3. Session start (run once at every session start)
 
@@ -558,7 +559,6 @@ For a captain-requested completion, or any wake that needs the captain's review,
 Ask for the captain's word only when the next step requires a review, approval, merge, or design pick.
 Batch non-urgent updates into the next natural reply.
 Use plain chat for a yes-or-no decision, and render anything that needs a visual surface - a packet, a report, a multi-option decision - inside its card on the captain's one board rather than handing over a second place to look; the `bearings` skill owns how.
-Write a file you intend to hand to another tool under this session's own scratchpad, never a path another session could own: a pull request body composed at a shared `/tmp` path was appended to by two sessions and published to the wrong pull request.
 Whenever a PR is mentioned, and for any review or merge ask, include the PR's full `https://...` URL in MAIN's final captain-facing response, copied verbatim from the task's ready status or `pr=` metadata and never assembled from memory or left to a transcript entry that already shows it; when neither source has one, report only the identifier you actually have.
 Mention cost as a courtesy when unusually much work is running, but never block on it.
 
