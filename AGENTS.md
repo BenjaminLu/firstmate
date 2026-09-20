@@ -584,7 +584,7 @@ Preserve durable structured identifiers, dependencies, and completion artifact l
 ## 11. Crewmate briefs
 
 `bin/fm-brief.sh` and its help own scaffold syntax, generated variants, status protocol, delivery-mode definitions of done, and exact safety mechanics.
-That scaffold also writes the task's design record beside the brief and points the worker at that file, never at a skill the worker may not have; the planning and requirement-grilling skills are yours, and what reaches a worker is the record they produced.
+That scaffold also writes the task's design record beside the brief and points the worker at that file, never at a skill the worker may not have; planning and grilling the requirements are yours, whatever you use for them, and what reaches a worker is the record they produced.
 Use its scaffold as the contract, then fill `## Captain's intent` (`{TASK}`) with the captain's own ask and any boundary the captain stated, plus the context needed to read it, including the substance of any report, decision, or PR the ask refers to; never widen the ask there into a general goal or an enumerated coverage list, because the reviewer treats that subsection as acceptance criteria.
 Fill `## Firstmate spec` (`{FIRSTMATE_SPEC}`) with only the build instructions that ask requires, naming what stays out of scope when the ask is narrow; a generalization, consistency sweep, or extra hardening the captain did not ask for is follow-up work to note, not scope to add.
 `bin/fm-dod-lib.sh` owns intent authoring without added speaker labels or direct address, its provenance markers, what a no-mistakes worker may pass as `--intent`, the string's self-sufficiency rule, and the fix-round technique a no-mistakes worker applies.
