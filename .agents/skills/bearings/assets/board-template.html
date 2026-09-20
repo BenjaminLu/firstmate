@@ -258,6 +258,32 @@ body {
    to offer from a card whose options went missing on the way to him. */
 .bb-thin { margin: 0 0 10px; font-size: var(--fs-xs); font-weight: 700; color: var(--text-muted);
   border-left: 2.5px solid var(--border-default); padding-left: 10px; }
+/* ---- the decision map ----
+   The plot is drawn from the payload's own numbers, so nothing here is sized
+   by hand except the box it is drawn in. Bubbles are buttons: the captain
+   reads the shape, then presses the one he wants and the card below is his. */
+.bb-triage { margin: 0 0 14px; }
+.bb-map { width: 100%; max-width: 520px; }
+.bb-map svg { width: 100%; height: auto; display: block; }
+.bb-axlabel { font-family: var(--font-sans); font-size: 9px; font-weight: 700; fill: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.06em; }
+.bb-quadlabel { font-family: var(--font-sans); font-size: 9px; font-weight: 800; fill: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.08em; }
+.bb-bublabel { font-family: var(--font-sans); font-size: 10px; font-weight: 800; fill: var(--text-strong); }
+.bb-bub { cursor: pointer; }
+.bb-bub:focus { outline: none; }
+.bb-bub:focus circle { stroke-width: 3.5; }
+.bb-map__note { margin: 6px 0 10px; font-size: var(--fs-2xs); color: var(--text-muted); line-height: 1.5; }
+.bb-calllist { display: flex; flex-direction: column; gap: 4px; }
+.bb-clrow { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+  font-family: var(--font-sans); font-size: var(--fs-xs); color: var(--text-body);
+  background: none; border: 1.5px solid transparent; border-radius: var(--radius-xs);
+  padding: 5px 8px; cursor: pointer; }
+.bb-clrow:hover { border-color: var(--border-default); }
+.bb-clrow.is-sel { border-color: var(--rust-400); background: var(--surface-card); }
+.bb-clrow__n { font-weight: 800; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.bb-clrow__t { font-weight: 700; color: var(--text-strong); }
+.bb-clrow__meta { margin-left: auto; font-size: var(--fs-2xs); color: var(--text-muted); white-space: nowrap; }
 .bb-freeform { width: 100%; font-family: var(--font-sans); font-size: var(--fs-sm); color: var(--text-strong);
   background: var(--surface-card); border: 1.5px solid var(--border-default); border-radius: var(--radius-sm); padding: 8px 11px; }
 .bb-freeform:focus { outline: none; border-color: var(--rust-400); box-shadow: var(--focus-ring); }
@@ -454,6 +480,18 @@ body {
       </span>
       <span class="fm-sign fm-sign--muted" id="bb-call-sub"></span>
     </div>
+    <!-- 決策圖像儀表板. The card below says what ONE call is; this says where
+         every open call sits relative to the others, which a pile of cards
+         cannot. Both coordinates are counted from fields the fleet already
+         holds and the rule is printed underneath, so the picture is never a
+         second thing to take on trust. -->
+    <div class="bb-triage">
+      <div class="bb-map" id="bb-map"></div>
+      <p class="bb-map__note" id="bb-map-note"></p>
+      <!-- the same calls in order. The map is the shape; this is the order,
+           and it is the route for anyone reading by ear rather than by eye. -->
+      <div class="bb-calllist" id="bb-calllist"></div>
+    </div>
     <div class="bb-callwrap">
       <div class="bb-call" id="bb-call"></div>
       <!-- nav sits under the stack so the active card's top edge aligns with
@@ -563,6 +601,15 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel_dispatch: "Not sent. This board has no way to reach firstmate from here, so nothing was dispatched.",
       no_channel_yet: "This board cannot reach firstmate from here, so it cannot take an answer right now.",
       thin_call: "This call came with no options to choose between. Answer it in your own words.",
+      map_title: "Where each open call sits",
+      map_alt: "Open calls plotted by how much work is stalled behind each and how costly a wrong answer is",
+      map_note: "Up is how much work is stalled behind the call - the number in the bubble is how many pieces of work stop until you answer. Right is how expensive a wrong answer is, from the call's own risk and how far it can be undone. Colour repeats the risk. Nothing is weighted by hand: both positions come from what the fleet already records.",
+      ax_undo_cheap: "cheap to undo", ax_undo_hard: "hard to undo",
+      ax_waits_none: "nothing waits", ax_waits: "work is stalled",
+      quad_first: "decide first", quad_think: "think it through",
+      quad_pick: "just pick one", quad_when: "whenever",
+      map_blocks: "{n} waiting", map_blocks_none: "nothing waiting",
+      map_empty: "No open calls to plot.",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -596,6 +643,15 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel_dispatch: "沒有送出。這個看板從這裡連不到 firstmate，所以沒有派工。",
       no_channel_yet: "這個看板從這裡連不到 firstmate，現在沒辦法接收回答。",
       thin_call: "這個問題沒有附選項，請直接用你自己的話回答。",
+      map_title: "每個待決事項的位置",
+      map_alt: "把待決事項依照「後面卡住多少工作」和「答錯多貴」畫出來",
+      map_note: "往上是後面卡住多少工作 —— 泡泡裡的數字是你不回答就停住的工作數。往右是答錯有多貴，來自這個問題本身的風險和可不可以回頭。顏色重複風險。沒有任何一項是人手調的：兩個座標都來自艦隊本來就記錄的東西。",
+      ax_undo_cheap: "容易回頭", ax_undo_hard: "難以回頭",
+      ax_waits_none: "沒有人在等", ax_waits: "工作卡住了",
+      quad_first: "先決定這個", quad_think: "要想清楚",
+      quad_pick: "隨便挑一個", quad_when: "有空再說",
+      map_blocks: "{n} 件在等", map_blocks_none: "沒有人在等",
+      map_empty: "沒有待決事項可畫。",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -629,6 +685,15 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel_dispatch: "没有送出。这个看板从这里连不到 firstmate，所以没有派工。",
       no_channel_yet: "这个看板从这里连不到 firstmate，现在没办法接收回答。",
       thin_call: "这个问题没有附选项，请直接用你自己的话回答。",
+      map_title: "每个待决事项的位置",
+      map_alt: "把待决事项按照「后面卡住多少工作」和「答错多贵」画出来",
+      map_note: "往上是后面卡住多少工作 —— 泡泡里的数字是你不回答就停住的工作数。往右是答错有多贵，来自这个问题本身的风险和可不可以回头。颜色重复风险。没有任何一项是人手调的：两个坐标都来自舰队本来就记录的东西。",
+      ax_undo_cheap: "容易回头", ax_undo_hard: "难以回头",
+      ax_waits_none: "没有人在等", ax_waits: "工作卡住了",
+      quad_first: "先决定这个", quad_think: "要想清楚",
+      quad_pick: "随便挑一个", quad_when: "有空再说",
+      map_blocks: "{n} 件在等", map_blocks_none: "没有人在等",
+      map_empty: "没有待决事项可画。",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -1463,6 +1528,196 @@ __FM_BEARINGS_BOARD_DATA__
       deck.appendChild(card);
     });
 
+    /* ---- the decision map -------------------------------------------------
+       Both coordinates come from the payload and nothing else, and the rule is
+       printed under the plot, so a captain who distrusts the picture can check
+       it against the numbers on the cards. That is the whole reason it is two
+       named quantities rather than one invented urgency score.
+
+       The SVG is built node by node with textContent for every payload string.
+       The packet figure path can take markup because a packet's drawing is a
+       drawing; this is our own geometry with the worker's words in it, and
+       those words must never be able to become markup. */
+    var RISKW = { low: 0, medium: 1, high: 2 };
+    var REVW = { yes: 0, partly: 1, no: 2 };
+    /* A merge call floors at 0.8 because a green pull request holds its whole
+       branch until it lands, whether or not anything names it as a blocker. */
+    function waitingCost(c) {
+      var v = Math.min(c.blocks || 0, 3) / 3;
+      return c.type === "merge" ? Math.max(v, 0.8) : v;
+    }
+    function wrongCost(c) {
+      var r = RISKW[c.risk]; if (r == null) r = 1;
+      var v = REVW[c.reversible]; if (v == null) v = 0;
+      return Math.min(1, (r + v) / 4);
+    }
+    function riskFill(risk) {
+      if (risk === "high") return "var(--rust-500)";
+      if (risk === "low") return "var(--sea-500)";
+      return "var(--gold-500)";
+    }
+    function svgEl(name, attrs) {
+      var n = document.createElementNS("http://www.w3.org/2000/svg", name);
+      for (var k in attrs) { if (attrs.hasOwnProperty(k)) n.setAttribute(k, String(attrs[k])); }
+      return n;
+    }
+    /* A bubble is labelled with the card's own title, cut to something that
+       fits beside a circle. Cutting is done on the rendered string, so it
+       follows the captain's language like everything else. */
+    function shortLabel(item) {
+      var w = pick(item.title);
+      return w.length > 22 ? w.slice(0, 21) + "\u2026" : w;
+    }
+
+    /* Moves the selection on the picture and the list. renderMap builds it
+       over the nodes it just made, so keeping the map in step with the dealt
+       card is a call rather than a second search of the document - and a
+       repaint cannot leave it pointing at nodes that are no longer there. */
+    var markMapSelection = function () {};
+
+    function renderMap(items, onPick) {
+      var host = document.getElementById("bb-map");
+      var note = document.getElementById("bb-map-note");
+      var list = document.getElementById("bb-calllist");
+      markMapSelection = function () {};
+      if (!host || !note || !list) return;
+      clear(host); clear(list);
+      note.textContent = items.length ? t("map_note") : "";
+      if (!items.length) {
+        host.appendChild(el("p", "bb-map__note", t("map_empty")));
+        return;
+      }
+      var W = 420, H = 320, x0 = 54, x1 = W - 16, y0 = 22, y1 = H - 46;
+      var midX = (x0 + x1) / 2, midY = (y0 + y1) / 2;
+      var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img" });
+      svg.setAttribute("aria-label", t("map_alt"));
+      var title = svgEl("title", {});
+      title.textContent = t("map_title");
+      svg.appendChild(title);
+
+      /* the quadrant that earns attention: stalled AND costly to get wrong */
+      svg.appendChild(svgEl("rect", { x: midX, y: y0, width: x1 - midX, height: midY - y0,
+        fill: "var(--rust-050)" }));
+      [[x0, midY, x1, midY], [midX, y0, midX, y1]].forEach(function (g) {
+        svg.appendChild(svgEl("line", { x1: g[0], y1: g[1], x2: g[2], y2: g[3],
+          stroke: "var(--border-soft)", "stroke-width": 1, "stroke-dasharray": "3 3" }));
+      });
+      [[x0, y1, x1, y1], [x0, y0, x0, y1]].forEach(function (g) {
+        svg.appendChild(svgEl("line", { x1: g[0], y1: g[1], x2: g[2], y2: g[3],
+          stroke: "var(--ink-900)", "stroke-width": 1.6 }));
+      });
+      function svgText(cls, attrs, words) {
+        var n = svgEl("text", attrs);
+        n.setAttribute("class", cls);
+        n.textContent = words;
+        svg.appendChild(n);
+        return n;
+      }
+      svgText("bb-axlabel", { x: x0, y: y1 + 30 }, t("ax_undo_cheap"));
+      svgText("bb-axlabel", { x: x1, y: y1 + 30, "text-anchor": "end" }, t("ax_undo_hard"));
+      svgText("bb-axlabel", { transform: "translate(" + (x0 - 12) + "," + y1 + ") rotate(-90)" }, t("ax_waits_none"));
+      svgText("bb-axlabel", { transform: "translate(" + (x0 - 12) + "," + y0 + ") rotate(-90)", "text-anchor": "end" }, t("ax_waits"));
+      svgText("bb-quadlabel", { x: x1 - 4, y: y0 - 6, "text-anchor": "end" }, t("quad_first"));
+      svgText("bb-quadlabel", { x: x0 + 4, y: y0 - 6 }, t("quad_think"));
+      svgText("bb-quadlabel", { x: x1 - 4, y: y1 + 14, "text-anchor": "end" }, t("quad_pick"));
+      svgText("bb-quadlabel", { x: x0 + 4, y: y1 + 14 }, t("quad_when"));
+
+      /* Bubbles are inset from every edge by the largest radius plus its
+         label, so the plot never clips and a label never sits on an axis. */
+      var INSET = 34;
+      var pts = items.map(function (c, i) {
+        return { c: c, i: i,
+          x: x0 + INSET + wrongCost(c) * (x1 - x0 - INSET * 2),
+          y: y1 - INSET - waitingCost(c) * (y1 - y0 - INSET * 2),
+          r: 11 + Math.min(c.blocks || 0, 3) * 3.5 };
+      });
+      /* Two calls can compute to nearly the same point, and two bubbles on top
+         of each other with their labels through one another is worse than an
+         approximate position. One separation pass spreads an overlapping pair
+         along x, which keeps each in its own quadrant - the reading that
+         matters - while making both readable. */
+      for (var pass = 0; pass < 8; pass++) {
+        var moved = false;
+        for (var i = 0; i < pts.length; i++) {
+          for (var j = i + 1; j < pts.length; j++) {
+            var a = pts[i], b = pts[j];
+            var dx = b.x - a.x, dy = b.y - a.y;
+            var need = a.r + b.r + 16;
+            var d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+            if (d >= need) continue;
+            var push = (need - d) / 2 + 0.5;
+            var ux = dx / d || 1;
+            a.x = Math.max(x0 + 22, Math.min(x1 - 22, a.x - ux * push));
+            b.x = Math.max(x0 + 22, Math.min(x1 - 22, b.x + ux * push));
+            moved = true;
+          }
+        }
+        if (!moved) break;
+      }
+      pts.forEach(function (pt) {
+        var c = pt.c;
+        var g = svgEl("g", { "data-key": c.key, tabindex: 0, role: "button" });
+        g.setAttribute("class", "bb-bub");
+        g.setAttribute("aria-label", pick(c.title) + ". " +
+          (c.blocks ? t("map_blocks", { n: c.blocks }) : t("map_blocks_none")) +
+          (c.risk ? ". " + t("risk", { r: t("risk_" + c.risk) }) : ""));
+        var circle = svgEl("circle", { cx: pt.x.toFixed(1), cy: pt.y.toFixed(1), r: pt.r,
+          fill: riskFill(c.risk), "fill-opacity": 0.6,
+          stroke: "var(--ink-900)", "stroke-width": 1.8 });
+        g.appendChild(circle);
+        pt.g = g; pt.circle = circle;
+        if (c.blocks) {
+          var n = svgEl("text", { x: pt.x.toFixed(1), y: (pt.y + 3.6).toFixed(1),
+            "text-anchor": "middle", fill: "var(--paper-000)" });
+          n.setAttribute("class", "bb-bublabel");
+          n.textContent = String(c.blocks);
+          g.appendChild(n);
+        }
+        var lab = svgEl("text", { x: pt.x.toFixed(1),
+          y: (pt.y < midY + 20 ? pt.y + pt.r + 12 : pt.y - pt.r - 6).toFixed(1),
+          "text-anchor": "middle" });
+        lab.setAttribute("class", "bb-bublabel");
+        lab.textContent = shortLabel(c);
+        g.appendChild(lab);
+        function press() { onPick(pt.i); }
+        g.addEventListener("click", press);
+        g.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); press(); }
+        });
+        svg.appendChild(g);
+      });
+      host.appendChild(svg);
+
+      /* The same calls in the order the two numbers put them in. */
+      var ordered = pts.slice().sort(function (a, b) {
+        return (waitingCost(b.c) + wrongCost(b.c)) - (waitingCost(a.c) + wrongCost(a.c));
+      });
+      ordered.forEach(function (pt, rank) {
+        var b = el("button", "bb-clrow");
+        b.type = "button";
+        b.setAttribute("data-key", pt.c.key);
+        b.appendChild(el("span", "bb-clrow__n", String(rank + 1)));
+        b.appendChild(el("span", "bb-clrow__t", pick(pt.c.title)));
+        b.appendChild(el("span", "bb-clrow__meta",
+          pt.c.blocks ? t("map_blocks", { n: pt.c.blocks }) : t("map_blocks_none")));
+        b.addEventListener("click", function () { onPick(pt.i); });
+        pt.row = b;
+        list.appendChild(b);
+      });
+
+      markMapSelection = function (key) {
+        pts.forEach(function (pt) {
+          var on = pt.c.key === key;
+          if (pt.g) pt.g.setAttribute("class", "bb-bub" + (on ? " is-sel" : ""));
+          if (pt.circle) {
+            pt.circle.setAttribute("fill-opacity", on ? "0.95" : "0.6");
+            pt.circle.setAttribute("stroke-width", on ? "3.5" : "1.8");
+          }
+          if (pt.row) pt.row.className = "bb-clrow" + (on ? " is-sel" : "");
+        });
+      };
+    }
+
     /* stack navigation: one card at a time, dealt off the pile */
     var cards = Array.prototype.slice.call(deck.children);
     var stackCount = document.getElementById("bb-stack-count");
@@ -1477,11 +1732,18 @@ __FM_BEARINGS_BOARD_DATA__
         (answered ? " · " + t("answered", { n: answered }) : "");
       stackPrev.disabled = active === 0;
       stackNext.disabled = active === cards.length - 1;
+      /* the map and the ranked list follow the deal, so the captain can always
+         see which bubble the card in front of him belongs to */
+      markMapSelection(data.captains_call[active] ? data.captains_call[active].key : null);
       /* the pile thins as the deal approaches the bottom */
       deck.className = "bb-call" +
         (active === cards.length - 2 ? " bb-call--penult" : "") +
         (active === cards.length - 1 ? " bb-call--last" : "");
     }
+    /* The map and the list both deal a card rather than owning one, so there
+       is still exactly one place a call is answered. Selecting is reading;
+       the card below stays the only surface that sends anything. */
+    renderMap(data.captains_call, function (i) { showCard(i); });
     if (cards.length) {
       stackPrev.onclick = function () { showCard(active - 1); };
       stackNext.onclick = function () { showCard(active + 1); };

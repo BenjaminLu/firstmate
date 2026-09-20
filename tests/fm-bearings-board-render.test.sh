@@ -169,6 +169,113 @@ no_channel_payload() {
                {value:"no", label:"No", consequence:"it was not"}]}]}'
 }
 
+# --- the decision map --------------------------------------------------------
+# 決策圖像儀表板: the captain asked for the decisions as a PICTURE, not a list of
+# paragraphs. The card below still says what one call is; the map says where
+# every open call sits relative to the others, which a pile of cards cannot.
+#
+# Both coordinates must come from the payload and nothing else. A map with a
+# hand-tuned urgency score in it would be a second black box on the one surface
+# that exists to remove them, so these tests check the PLACEMENT, not just that
+# something was drawn.
+map_payload() {
+  jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"urgent", type:"decision", repo:"sample", title:"Three are stopped for this",
+       decide:"Pick one.", risk:"high", reversible:"no", blocks:3, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"idle", type:"decision", repo:"sample", title:"Nobody is waiting",
+       decide:"Pick one.", risk:"low", reversible:"yes", blocks:0, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}'
+}
+
+test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
+  local home out urgent idle
+  home=$(make_home map-place)
+  out=$(render_payload "$home" "$(map_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.map | length')" = "2" ] \
+    || fail "the map did not plot both open calls: $out"
+  urgent=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "urgent")')
+  idle=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "idle")')
+
+  # Up is stalled work. SVG y grows downward, so "higher" is a SMALLER y.
+  [ "$(printf '%s' "$urgent" | jq -r '.cy')" != "" ] || fail "the stalling call was not plotted: $out"
+  printf '%s %s' "$(printf '%s' "$urgent" | jq -r '.cy')" "$(printf '%s' "$idle" | jq -r '.cy')" \
+    | awk '{ exit !($1 < $2) }' \
+    || fail "the call with three stalled behind it was not plotted above the one with none: $out"
+  # Right is how expensive a wrong answer is.
+  printf '%s %s' "$(printf '%s' "$urgent" | jq -r '.cx')" "$(printf '%s' "$idle" | jq -r '.cx')" \
+    | awk '{ exit !($1 > $2) }' \
+    || fail "the high-risk irreversible call was not plotted right of the cheap one: $out"
+  # Size grows with the stalled count, and the count is IN the bubble.
+  printf '%s %s' "$(printf '%s' "$urgent" | jq -r '.r')" "$(printf '%s' "$idle" | jq -r '.r')" \
+    | awk '{ exit !($1 > $2) }' \
+    || fail "the bubble did not grow with the work stalled behind it: $out"
+  [ "$(printf '%s' "$urgent" | jq -r '.count')" = "3" ] \
+    || fail "the bubble did not carry the number of stalled items: $out"
+  pass "the map plots a stalling, costly call up and to the right of an idle one"
+}
+
+# Colour repeats the risk, so the plot reads without counting pixels.
+test_the_map_colours_each_bubble_by_its_own_risk() {
+  local home out
+  home=$(make_home map-colour)
+  out=$(render_payload "$home" "$(map_payload)")
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "urgent") | .fill')" \
+    != "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "idle") | .fill')" ] \
+    || fail "a high-risk and a low-risk call were drawn the same colour: $out"
+  pass "the map colours each bubble by the call's own risk"
+}
+
+# The picture is not the only route. Anyone reading by ear gets the same two
+# numbers as an ordered list, and the rule behind both is printed under the
+# plot so the captain can check the picture rather than trust it.
+test_the_map_is_also_an_ordered_list_with_its_rule_printed() {
+  local home out
+  home=$(make_home map-list)
+  out=$(render_payload "$home" "$(map_payload)")
+  [ "$(printf '%s' "$out" | jq -r '.call_list[0].key')" = "urgent" ] \
+    || fail "the ranked list did not put the most urgent call first: $out"
+  [ "$(printf '%s' "$out" | jq -r '.call_list[1].key')" = "idle" ] \
+    || fail "the ranked list did not order by the same two numbers: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "stalled" \
+    "the rule behind the plot was not printed under it: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.map[0].aria')" "waiting" \
+    "a bubble did not say in words what it shows in a picture: $out"
+  pass "the map is also an ordered list, with the rule behind both printed"
+}
+
+# Pressing a bubble deals that call's card. One click from the picture to the
+# question, which is what makes the map a control rather than a decoration.
+test_pressing_a_bubble_deals_that_call() {
+  local home out
+  home=$(make_home map-pick)
+  out=$(render_click "$home" "$(map_payload)" "map:idle")
+  [ "$(printf '%s' "$out" | jq -r '.cards[1].hidden')" = "false" ] \
+    || fail "pressing the second call's bubble did not deal its card: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "idle") | .selected')" = "true" ] \
+    || fail "the pressed bubble was not marked as the one being read: $out"
+  pass "pressing a bubble deals that call's card and marks it on the map"
+}
+
+# A board with nothing waiting must not draw an empty plot box and call it a
+# dashboard. It says there is nothing to plot.
+test_the_map_says_so_when_there_is_nothing_to_plot() {
+  local home out
+  home=$(make_home map-empty)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[], captains_call:[]}')")
+  [ "$(printf '%s' "$out" | jq -r '.map | length')" = "0" ] \
+    || fail "an empty board still drew bubbles: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note')" = "" ] \
+    || fail "an empty map still printed the rule for a plot it did not draw: $out"
+  pass "a board with no open calls says there is nothing to plot"
+}
+
 # A thin call - the ordinary needs-decision, which PR #33 deliberately left
 # under no packet obligation - reaches the board with no options of its own.
 # It must SAY that. The captain answering a card cannot otherwise tell a call
@@ -1555,3 +1662,8 @@ test_a_card_that_cannot_send_says_so_before_the_captain_composes_an_answer
 test_a_send_that_reports_failure_leaves_the_card_unanswered
 test_a_call_that_carried_no_options_says_so_on_the_card
 test_an_ordinary_card_says_nothing_about_missing_options
+test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one
+test_the_map_colours_each_bubble_by_its_own_risk
+test_the_map_is_also_an_ordered_list_with_its_rule_printed
+test_pressing_a_bubble_deals_that_call
+test_the_map_says_so_when_there_is_nothing_to_plot

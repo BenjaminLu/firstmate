@@ -65,7 +65,13 @@ class Node {
   }
   set textContent(v) { this._text = String(v); this.children = []; }
   appendChild(n) { n.parentNode = this; this.children.push(n); return n; }
-  setAttribute(k, v) { this.attributes[k] = v; }
+  setAttribute(k, v) {
+    this.attributes[k] = v;
+    /* A real SVGElement has no writable className, so the page sets its class
+       through setAttribute - and a real querySelectorAll still matches it.
+       Mirroring it here keeps both true of the shim. */
+    if (k === "class") this.className = String(v);
+  }
   addEventListener(type, fn) { (this._on[type] = this._on[type] || []).push(fn); }
   dispatch(type, ev) {
     (this._on[type] || []).slice()
@@ -95,6 +101,10 @@ byId.set("bearings-data", dataNode);
 
 globalThis.document = {
   createElement: (tag) => new Node(tag),
+  /* The decision map is SVG, which the page must build in the SVG namespace.
+     The shim keeps no namespaces, so the node is the same - what matters is
+     that the call exists, because a page that cannot make one draws no map. */
+  createElementNS: (_ns, tag) => new Node(tag),
   // Lazily mint any element the page asks for: the shim tracks whatever ids
   // the shipped template actually uses instead of pinning a fixed list.
   getElementById: (id) => {
@@ -218,6 +228,15 @@ if (click === "dispatch") {
   const next = byId.get("bb-stack-next");
   next.onclick(); next.onclick();
   runTimers();
+} else if (click.startsWith("map:")) {
+  /* Pressing a bubble on the decision map. It is the picture's whole claim to
+     be a control rather than a decoration, so it is driven through the page's
+     own listener like every other click here. */
+  const key = click.slice(4);
+  const bub = byId.get("bb-map").querySelectorAll(".bb-bub")
+    .find((g) => g.attributes["data-key"] === key);
+  if (!bub) throw new Error("no bubble for key: " + key);
+  bub.dispatch("click");
 } else if (click) {
   throw new Error("unknown click: " + click);
 }
@@ -415,6 +434,31 @@ const cards = deck.children
     send_disabled: findAll(card, "fm-btn").some((b) => b.type === "submit" && b.disabled === true),
     hidden: card.hidden === true,
   }));
+/* The decision map: one entry per bubble, in document order, plus the ranked
+   list beneath it. Read off the built SVG rather than recomputed here, so a
+   test cannot agree with a formula this file got wrong too. */
+const mapHost = byId.get("bb-map") || new Node("div");
+const listHost = byId.get("bb-calllist") || new Node("div");
+const bubbles = findAll(mapHost, "bb-bub").map((g) => {
+  const circle = g.children.find((c) => c.tagName === "circle") ?? {};
+  const texts = g.children.filter((c) => c.tagName === "text");
+  return {
+    key: g.attributes?.["data-key"] ?? "",
+    label: texts[texts.length - 1]?.textContent ?? "",
+    count: texts.length > 1 ? texts[0].textContent : "",
+    cx: Number(circle.attributes?.cx ?? 0),
+    cy: Number(circle.attributes?.cy ?? 0),
+    r: Number(circle.attributes?.r ?? 0),
+    fill: circle.attributes?.fill ?? "",
+    selected: (g.attributes?.class ?? "").includes("is-sel"),
+    aria: g.attributes?.["aria-label"] ?? "",
+  };
+});
+const callList = findAll(listHost, "bb-clrow").map((b) => ({
+  key: b.attributes?.["data-key"] ?? "",
+  text: b.textContent,
+  selected: (b.attributes?.class ?? "").includes("is-sel"),
+}));
 const headings = ["bb-t-call", "bb-t-charted", "bb-t-underway", "bb-t-landed"]
   .map((id) => byId.get(id)?.textContent ?? "");
 
@@ -446,4 +490,5 @@ const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map(
 
 process.stdout.write(
   JSON.stringify({ stats, underway, charted, empty, more, cards, headings, error: errorText,
-    dispatch, live_answers: liveAnswers, intervals: intervals.size }) + "\n");
+    dispatch, live_answers: liveAnswers, intervals: intervals.size,
+    map: bubbles, call_list: callList, map_note: byId.get("bb-map-note")?.textContent ?? "" }) + "\n");
