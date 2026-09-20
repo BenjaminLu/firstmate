@@ -403,7 +403,7 @@ ROWS
 
 test_lavish_axi_min_version() {
   local label version mode case_dir fakebin out unavailable n
-  unavailable='PRESENTATION_UNAVAILABLE: lavish-axi (requires >=0.1.46; install: npm install -g lavish-axi && lavish-axi setup hooks) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish'
+  unavailable='PRESENTATION_UNAVAILABLE: lavish-axi (requires >=0.1.46; install: npm install -g lavish-axi && lavish-axi setup hooks) - the captain'"'"'s board is NOT affected: this home'"'"'s own server builds, serves and answers it (bin/fm-bearings-board.sh url). What needs a compatible build is a Lavish REVIEW session: an annotated review of an HTML artifact, bin/fm-packet.sh serve, and the optional bin/fm-bearings-board.sh build --lavish surface; install or upgrade before using one'
   n=0
   while IFS='^' read -r label version mode; do
     [ -n "$label" ] || continue

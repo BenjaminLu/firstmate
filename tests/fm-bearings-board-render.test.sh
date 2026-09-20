@@ -2345,11 +2345,13 @@ test_an_inline_packet_never_offers_a_second_address() {
   printf '%s' "$out" | jq -e '
     (.cards[0] | (.chips | index("open the packet")) == null and .packet != null)
   ' >/dev/null || fail "an inline packet still offered its own separate page: $out"
-  # And the build opened exactly one Lavish session: the board itself.
-  [ "$(wc -l < "$home/lavish-open" | tr -d ' ')" = 1 ] \
-    || fail "the build established more than the board's own session"
-  grep -q 'bearings-board.html$' "$home/lavish-open" \
-    || fail "the one opened session was not the board: $(cat "$home/lavish-open")"
+  # And the build established no separate address for the packet. An ordinary
+  # build now hosts the board on this home's own server and never reaches
+  # lavish-axi at all, so the count that proves it is zero: any session here
+  # could only be a second page for the card, which is the thing this case
+  # exists to forbid.
+  [ ! -s "$home/lavish-open" ] \
+    || fail "the build established a Lavish session, which could only be a second address for the packet: $(cat "$home/lavish-open")"
   pass "a card with the packet inline opens no second session and offers no second address"
 }
 

@@ -224,6 +224,11 @@ The bearings board subscribes to this home's fleet events over a websocket and r
 Nothing has to be set up for that: `bin/fm-bearings-board.sh build` derives the subscribing board and starts the server, and a board opened with no server running still renders from the payload built into it and says on the page that it is not updating.
 The server is Node against its standard library only, with no package to install, because a clone on a machine configured with nothing must get the working board.
 
+That same server also HOSTS the board page, at `http://127.0.0.1:<port>/` - the address `bin/fm-bearings-board.sh url` prints and `open` opens.
+So the captain's board needs nothing installed beyond node: no external presentation tool stands between a clone and a working, live-updating board.
+It serves exactly the one file the build wrote and nothing else - one route, one constant filename, no directory and no path a request can reach, so `state/` and `data/` are not reachable by it rather than protected from it.
+`bin/fm-bearings-board.sh build --lavish` additionally offers the board as a Lavish session for a home that has `lavish-axi` and wants that surface; without the flag nothing invokes, probes, or needs it, and its absence degrades nothing about the board.
+
 `state/board-live.jsonl` is the append-only event log every publisher writes to, and it is the durability: an event published while the server is down is read at the next start rather than lost.
 `state/board-live.endpoint` records the URL the running server took, `state/board-live.pid` its process, and `state/board-live.log` whatever it said if it could not start.
 The server exits when its home's `state/` directory is gone, so a removed home never leaves one behind.
@@ -240,6 +245,9 @@ Nothing has to be set up for that either - a board build issues the token and bi
 
 Only writing is proved: reading the board needs no token, so any page on an origin the allowlist admits - a sandboxed cross-origin frame presenting `Origin: null`, or a page served from a local dev server on `http://localhost` - can subscribe and watch the whole live payload, including every open captain's call and its wording.
 That is accepted exposure rather than a defence, it predates the allowlist this adds, and closing it would mean the page must send the token to subscribe.
+Serving the page from the same port puts the token behind that same unauthenticated read: the built page carries it, the board file is mode 0600, so on a shared machine a local process that could not read that file can now fetch the page and answer as the captain.
+No browser gains anything - the same-origin policy keeps another origin from reading the response, and the origin allowlist still refuses its socket - so the change is exactly that the port now grants what a file read granted.
+Authenticating the read is one decision about that one boundary and it is the captain's; the token check on every inbound message is unchanged either way.
 
 `bin/fm-board-live.sh`'s header owns the publish kinds, the lifecycle commands, what proves an inbound message is the captain's and what that proof does not claim.
 `bin/fm-board-live.mjs`'s header owns what an event may change, why the wire carries whole board state rather than deltas, why a change needing new prose marks the board behind instead of being guessed at, and the inbound message and reply shapes.

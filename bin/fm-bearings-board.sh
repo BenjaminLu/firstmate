@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fm-bearings-board.sh - build and arm the /bearings lavish fleet board.
+# fm-bearings-board.sh - build and serve the /bearings fleet board.
 #
 # The board is the captain-facing interactive surface of /bearings lavish: the
 # shipped template (.agents/skills/bearings/assets/board-template.html) plus one
@@ -11,38 +11,74 @@
 # Usage:
 #   fm-bearings-board.sh compose [--lang en|hant|hans] [--out <file>] [--snapshot <file>]
 #   fm-bearings-board.sh compose --check <data.json>
-#   fm-bearings-board.sh build <data.json>
+#   fm-bearings-board.sh build [--lavish] <data.json>
 #   fm-bearings-board.sh derive <data.json> [--out <file>] [--endpoint <ws-url>]
 #   fm-bearings-board.sh ack <key> (--acting | --refused --why-file <path> | --clear)
 #   fm-bearings-board.sh path
-#   fm-bearings-board.sh url
-#   fm-bearings-board.sh open
+#   fm-bearings-board.sh url [--lavish]
+#   fm-bearings-board.sh open [--lavish]
 #
 # build      Refuse any leftover compose placeholder (naming every one), then
 #            validate the payload, drop the Captain's Call cards whose subject
 #            already landed, give every surviving decision card the standard
 #            reconcile choice, and inject the result into a fresh copy of the
-#            shipped template at the stable board path. Establish the Lavish
-#            session on that board and PROVE it is live BEFORE binding and
-#            arming its answer source, so a registered poll can never race a
-#            session that does not exist or attach to one that has ended.
-#            Bind to the keyed-answer intake (bin/fm-captain-hold.sh) ALWAYS
-#            precedes arm, so the board can never produce an answer that has
-#            nowhere to go (captain-hold-lifecycle's ordering rule, enforced
-#            here rather than left to agent memory). Output starts with
-#            `board: <path>`, then includes lavish-axi's session output and
-#            the remaining status:
+#            shipped template at the stable board path. Output, in order:
 #              live: <ws endpoint>           (the board subscribes to fleet
 #                                            events and repaints as they land)
-#              session: live | reopened
-#              served: <path>
-#              bound: <source-id>
-#              armed: <source-id>            (first registration)
-#              already-armed: <source-id>    (registration already present)
-#              listening: <owner>            (only when a replacement was needed)
+#              board: <path>
+#              bound: <source-id>            (where the captain's answer lands)
+#              url: <http://127.0.0.1:PORT/> (open this)
 #            Every dropped card is named on stderr as a `dropped-landed-card:`
 #            line, so a rebuild states what it removed instead of quietly
 #            shrinking Captain's Call.
+#
+#            NOTHING EXTERNAL HOSTS THIS BOARD. bin/fm-board-live.mjs already
+#            runs in every home to push fleet events at the page; it serves the
+#            page from that same port, so a clone on a machine configured with
+#            nothing gets a URL and a board that updates. A home whose server
+#            will not start still gets its board FILE, built from the same
+#            template and painting the same payload, and the build says on
+#            stderr that nothing is serving it and it cannot answer - the one
+#            thing it never does is let that be discovered at the surface the
+#            captain reads.
+#
+#            WHAT "ARMED" MEANS NOW, AND WHY NOTHING IS REGISTERED FOR IT. The
+#            captain's answer no longer arrives through a polled source: it
+#            comes back over the same socket the board subscribes on, is proved
+#            by state/board-live.token, and reaches bin/fm-board-answer.sh
+#            directly. So there is no poll to arm for the board's own answers
+#            and none is registered; the `armed:`/`listening:` lines belong to
+#            --lavish alone. captain-hold-lifecycle's bind-before-arm ordering
+#            is unchanged and is enforced harder than before, by construction
+#            rather than by sequence: issuing the page's answer token BINDS
+#            that channel to the keyed-answer intake and refuses if it cannot
+#            (bin/fm-board-live.sh `token`), and the token is issued while the
+#            page is being derived - so a board able to answer cannot come into
+#            existence before its answers have somewhere to go. `bound:` is
+#            printed to name the channel, not to create it.
+#            A registration an EARLIER build armed is left exactly where it is:
+#            it is still a live, bound channel onto a session the captain may
+#            still have open, and retiring it here would take away a surface
+#            nobody asked to lose. Retire one deliberately, with
+#            bin/fm-procevent-lavish.sh retire.
+#
+#            --lavish ADDITIONALLY offers the board as a Lavish session, for a
+#            home that has lavish-axi and wants that surface. It is an
+#            acceleration and never a requirement: without the flag this script
+#            never invokes, probes, or needs lavish-axi at all. With it, the
+#            session is established and PROVED live before its answer source is
+#            bound and armed, so a registered poll can never race a session
+#            that does not exist or attach to one that has ended, and the
+#            output gains lavish-axi's own session output plus:
+#              session: live | reopened
+#              served: <path>                (the Lavish session serves it)
+#              bound: <source-id> (lavish review)
+#              armed: <source-id>            (first registration)
+#              already-armed: <source-id>    (registration already present)
+#              listening: <owner>            (only when a replacement was needed)
+#            That poll is the older review channel - a session-end message or
+#            an annotation the captain leaves on the Lavish page - and not the
+#            board's buttons, which go down the socket either way.
 # compose    Print an fm-bearings-board.v1 payload SKELETON mapped
 #            deterministically from `bin/fm-bearings-snapshot.sh --json`
 #            (or the recorded snapshot named by --snapshot), so the composer
@@ -171,19 +207,26 @@
 #            removes the record. Output is `ack: <path>` or
 #            `cleared: <path>`.
 # path       Print the stable board path for this home.
-# url        Print the board's Lavish session URL, read from the server's live
-#            session listing for the stable path; exit 1 with a reason when no
-#            open session exists. The URL never changes while the board keeps
-#            its path, because Lavish keys the session on the file's realpath.
-#            When the installed lavish-axi supports session names, build opens
-#            the board as `--name <name>` (FM_BEARINGS_BOARD_NAME, default
-#            `bearings`) and the URL is the memorable `/s/<name>` form; an
-#            older lavish-axi keeps the keyed `/session/<id>` form.
+# url        Print the URL this home serves its board at, starting the home's
+#            own server if it is down - a URL nobody is serving is not a URL,
+#            and that server is idempotent and the board's own. Needs nothing
+#            installed beyond node. The port is derived from the home's path so
+#            the URL is stable across restarts and distinct per home;
+#            docs/configuration.md owns it.
+#            --lavish instead prints the board's Lavish session URL, read from
+#            that server's live session listing for the stable path; exit 1
+#            with a reason when no open session exists. That URL never changes
+#            while the board keeps its path, because Lavish keys the session on
+#            the file's realpath. When the installed lavish-axi supports
+#            session names, `build --lavish` opens the board as `--name <name>`
+#            (FM_BEARINGS_BOARD_NAME, default `bearings`) and the URL is the
+#            memorable `/s/<name>` form; an older lavish-axi keeps the keyed
+#            `/session/<id>` form.
 # open       Print that URL and open it in the default browser (macOS `open`,
 #            else `xdg-open`), so the captain reaches the board without
-#            remembering the session id.
+#            remembering an address. Takes the same --lavish.
 #
-# A LIVE SESSION IS PROVED, NEVER ASSUMED. `lavish-axi <file>` exits 0 even
+# A LIVE SESSION IS PROVED, NEVER ASSUMED (--lavish only). `lavish-axi <file>` exits 0 even
 # when it refuses to reopen a session the captain ended from the browser,
 # reporting `status: user-ended` with the same session id, so exit status alone
 # cannot tell a live board from a dead one. build requires the server's fresh
@@ -430,6 +473,15 @@ live_endpoint() {
   local out
   out=$("$SCRIPT_DIR/fm-board-live.sh" start 2>/dev/null) || return 1
   printf '%s\n' "$out" | grep -m1 '^ws://' || return 1
+}
+
+# The URL the captain opens. It is the SAME server, read a second way, so a
+# clone needs nothing installed to host the board and nothing configured to
+# find it. bin/fm-board-live.sh owns the derivation; asking it rather than
+# rebuilding the URL here is what keeps a fallback port from producing a URL
+# nobody is serving.
+live_page_url() {
+  "$SCRIPT_DIR/fm-board-live.sh" page 2>/dev/null
 }
 
 # Write the shipped template with the live transport inserted above the data
@@ -1608,8 +1660,16 @@ EOF
 }
 
 command_build() {
-  local data=${1-} board json tmp sid extracted effective owner version pre_reopen_owner leftover
-  [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+  local data="" board json tmp sid extracted effective owner version pre_reopen_owner leftover
+  local use_lavish=0 answer_sid page
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --lavish) use_lavish=1; shift ;;
+      -*) usage >&2; exit 2 ;;
+      *) [ -z "$data" ] || { usage >&2; exit 2; }; data=$1; shift ;;
+    esac
+  done
+  [ -n "$data" ] || { usage >&2; exit 2; }
   command -v jq >/dev/null 2>&1 || fail "jq is required"
   [ -f "$data" ] || fail "board data does not exist: $data"
   jq empty "$data" 2>/dev/null || fail "board data is not valid JSON: $data"
@@ -1632,12 +1692,13 @@ command_build() {
   # board - built from the same template, painting the same payload - and the
   # build SAYS the board will not update rather than leaving that to be
   # discovered at the surface the captain reads.
-  local endpoint="" source_page="$TEMPLATE" derived=""
+  local endpoint="" source_page="$TEMPLATE" derived="" live_board=0
   if endpoint=$(live_endpoint); then
     derived=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-live.XXXXXX") \
       || fail "cannot stage the live board"
     if derive_live_board "$endpoint" "$derived" 1; then
       source_page=$derived
+      live_board=1
       printf 'live: %s\n' "$endpoint"
     else
       rm -f -- "$derived"
@@ -1699,6 +1760,29 @@ command_build() {
   fi
   printf 'board: %s\n' "$board"
 
+  # THE HOME'S OWN SERVER IS THE PATH EVERY CLONE GETS. It pushed the fleet to
+  # the board already; it hosts the page too, so the board opens on a machine
+  # with nothing installed. `bound:` names the channel that answer arrives on,
+  # and it is printed rather than performed here on purpose: issuing the page's
+  # answer token BINDS that channel and refuses if it cannot, several steps
+  # above, so a page able to answer cannot exist before its answers have an
+  # intake. That is captain-hold-lifecycle's bind-before-arm ordering, enforced
+  # by construction rather than by order of statements.
+  if [ "$live_board" = 1 ]; then
+    answer_sid=$("$SCRIPT_DIR/fm-board-answer.sh" source-id) \
+      || fail "cannot name the board answer channel"
+    printf 'bound: %s\n' "$answer_sid"
+    page=$(live_page_url) \
+      || fail "the board was built but this home's server is not serving it (bin/fm-board-live.sh doctor)"
+    printf 'url: %s\n' "$page"
+  else
+    printf 'url: no - the board was built without the live transport, so nothing is serving it and it cannot answer; see the reason above (bin/fm-board-live.sh doctor)\n' >&2
+  fi
+
+  [ "$use_lavish" = 1 ] || return 0
+
+  # --lavish only, from here down. An optional second surface, never a
+  # requirement: a home without lavish-axi never reaches this line.
   command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
   sid=$("$SCRIPT_DIR/fm-procevent-lavish.sh" source-id "$board") \
     || fail "cannot derive the board source id"
@@ -1716,7 +1800,10 @@ command_build() {
 
   "$SCRIPT_DIR/fm-captain-hold.sh" bind "$sid" >/dev/null \
     || fail "cannot bind the board source to the keyed-answer intake"
-  printf 'bound: %s\n' "$sid"
+  # Named as the review channel, because an ordinary build has already printed
+  # a `bound:` line for the socket the board's own buttons answer on, and two
+  # lines reading the same would tell the reader they are the same channel.
+  printf 'bound: %s (lavish review)\n' "$sid"
 
   owner=$(source_owner "$sid")
   if [ "$BOARD_SESSION_REOPENED" = 1 ]; then
@@ -1746,9 +1833,25 @@ command_build() {
 }
 
 command_url() {
-  local board real listing url
+  local board real listing url lavish=0
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --lavish) lavish=1; shift ;;
+      *) usage >&2; exit 2 ;;
+    esac
+  done
   board=$(board_path)
   [ -f "$board" ] || fail "no board has been built yet at $board (run /bearings lavish)"
+  if [ "$lavish" = 0 ]; then
+    # This home's own server, which is what a clone has. Starting it when it is
+    # down is the point rather than a side effect: a URL nobody is serving is
+    # not a URL, and the server is idempotent, home-scoped, and already the
+    # board's own.
+    live_endpoint >/dev/null 2>&1 || fail "this home's board server will not start (bin/fm-board-live.sh doctor)"
+    url=$(live_page_url) || fail "this home's board server recorded no address (bin/fm-board-live.sh doctor)"
+    printf '%s\n' "$url"
+    return 0
+  fi
   command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
   real=$(board_realpath "$board") || fail "cannot resolve the board path"
   listing=$(lavish-axi 2>/dev/null) || fail "lavish-axi did not answer"
@@ -1762,7 +1865,7 @@ command_url() {
 
 command_open() {
   local url
-  url=$(command_url) || exit 1
+  url=$(command_url "$@") || exit 1
   printf '%s\n' "$url"
   if command -v open >/dev/null 2>&1; then open "$url"
   elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1
@@ -1827,8 +1930,8 @@ case "${1-}" in
   derive) shift; command_derive "$@" ;;
   ack) shift; command_ack "$@" ;;
   path) board_path ;;
-  url) command_url ;;
-  open) command_open ;;
+  url) shift; command_url "$@" ;;
+  open) shift; command_open "$@" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

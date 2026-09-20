@@ -12,11 +12,11 @@
 //   fm-board-live.mjs state
 //   fm-board-live.mjs --help
 //
-// serve   Run the server in the foreground. It holds one authoritative board
-//         state, pushes it to every subscriber, and exits nonzero rather than
-//         running on a port it could not take. --once serves until the first
-//         client has been sent its state and then exits, which is what the
-//         tests drive.
+// serve   Run the server in the foreground. It serves the board page at `/`,
+//         holds one authoritative board state, pushes it to every subscriber,
+//         and exits nonzero rather than running on a port it could not take.
+//         --once serves until the first client has been sent its state and
+//         then exits, which is what the tests drive.
 // state   Print the merged board state this server would serve right now, as
 //         one JSON document, and exit. Reads nothing from the network and
 //         starts no server, so a home can be inspected without one running.
@@ -47,6 +47,28 @@
 // stale, naming what changed, and the page says a rebuild is owed. A board
 // that is quietly missing a captain's call is the failure this whole branch
 // exists to stop; a board that says it is behind is not that failure.
+//
+// AND THE PAGE ITSELF IS SERVED FROM THIS PORT. The board used to be hosted by
+// an external tool, so a clone without that tool installed had a live server,
+// a built page, and no way to open it. This port already belonged to the home,
+// so it answers GET / with that page and nothing else: exactly the one file
+// bin/fm-bearings-board.sh built, never a directory, never state/, never data/,
+// where the reports and briefs live. There is no path to traverse because
+// there is no path - one route serves one constant filename, and every other
+// request is a plain 404. The listener stays on 127.0.0.1.
+//
+// WHAT SERVING IT COSTS, SAID PLAINLY. The built page carries the inbound
+// token, and the board file is mode 0600, so until now only the captain's own
+// user could read that credential. Serving the page puts it behind the port
+// instead of behind the file mode: every local process that can reach this
+// port can now fetch the page and answer as the captain. No BROWSER gains
+// anything - a page on another origin cannot read this response, the same-
+// origin policy sees to that, and the origin allowlist still refuses its
+// socket - so the change is exactly "on a shared machine, the port grants what
+// a file read granted". That is the read side of this port, which already
+// serves the whole board to any allowed origin without proof; authenticating
+// it is one decision about one boundary and it is the captain's, not this
+// file's. The token check on every inbound message is unchanged.
 //
 // AND THE CLICK COMES BACK THE SAME WAY. The socket carries the fleet out and
 // the captain's answer in. The inbound half is the dangerous one - an answer
@@ -783,6 +805,12 @@ function endpointUrl(port) {
   return `ws://127.0.0.1:${port}/board-live`;
 }
 
+/* The same port, read as a page rather than as a subscription. This is the
+   URL a clone gets with nothing installed. */
+function pageUrl(port) {
+  return `http://127.0.0.1:${port}/`;
+}
+
 function serve(opts) {
   const base = { ...readBase() };
   const log = new EventLog(LOG_PATH);
@@ -903,10 +931,47 @@ function serve(opts) {
   }
 
   const server = createServer((req, res) => {
-    // The board page is served by its own surface; this port answers one
-    // question, so anything else gets a plain refusal rather than a 404 page.
-    res.writeHead(426, { "content-type": "text/plain; charset=utf-8" });
-    res.end("fm-board-live: websocket only, connect to /board-live\n");
+    const method = req.method || "GET";
+    const path = (req.url || "/").split("?")[0];
+    const head = method === "HEAD";
+    const send = (code, type, body) => {
+      res.writeHead(code, {
+        "content-type": type,
+        "content-length": Buffer.byteLength(body),
+        "cache-control": "no-store",
+        // The page carries a credential, so nothing may guess at its type and
+        // nothing may keep a copy it was not handed directly.
+        "x-content-type-options": "nosniff",
+      });
+      res.end(head ? undefined : body);
+    };
+    if (path === "/board-live") {
+      // Reached without an Upgrade, so it is not the subscription it names.
+      send(426, "text/plain; charset=utf-8",
+        "fm-board-live: this path is the websocket; the board is at /\n");
+      return;
+    }
+    if (method !== "GET" && !head) {
+      send(405, "text/plain; charset=utf-8", "fm-board-live: GET only\n");
+      return;
+    }
+    if (path !== "/") {
+      // ONE route, ONE constant filename. Nothing here joins a request to a
+      // path, so nothing in a request can reach a file - the home's state and
+      // data directories are not "protected" from this server, they are
+      // unreachable by it.
+      send(404, "text/plain; charset=utf-8", "fm-board-live: the board is at /\n");
+      return;
+    }
+    let page;
+    try {
+      page = readFileSync(BOARD_PATH);
+    } catch {
+      send(404, "text/plain; charset=utf-8",
+        "fm-board-live: no board has been built in this home yet (run /bearings)\n");
+      return;
+    }
+    send(200, "text/html; charset=utf-8", page);
   });
 
   server.on("upgrade", (req, socket) => {
@@ -1025,6 +1090,7 @@ function serve(opts) {
       { mode: 0o600 },
     );
     process.stdout.write(`endpoint: ${endpointUrl(port)}\n`);
+    process.stdout.write(`page: ${pageUrl(port)}\n`);
     process.stdout.write(`log: ${LOG_PATH}\n`);
     process.stdout.write(`board: ${BOARD_PATH}\n`);
   });

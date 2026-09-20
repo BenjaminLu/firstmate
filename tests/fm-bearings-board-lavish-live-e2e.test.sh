@@ -79,7 +79,7 @@ run_board() {
 }
 
 BOARD="$LAB/.lavish/bearings-board.html"
-run_board build "$LAB/payload.json" >/dev/null 2>&1 || fail "the guard board did not build"
+run_board build --lavish "$LAB/payload.json" >/dev/null 2>&1 || fail "the guard board did not build"
 [ -f "$BOARD" ] || fail "the guard board was not published"
 
 url=$(lavish-axi "$BOARD" | sed -n 's/^[[:space:]]*url:[[:space:]]*//p' | head -1 | tr -d '"')
@@ -109,7 +109,7 @@ lavish-axi 2>/dev/null | grep -F "$BOARD," | grep -q ',open,' \
 pass "lavish-axi ${VERSION:-version-unknown} reports a captain-ended session without reopening it and without failing"
 
 # THE BEHAVIOR UNDER GUARD: the build must not accept that, and must recover.
-out=$(run_board build "$LAB/payload.json" 2>&1) \
+out=$(run_board build --lavish "$LAB/payload.json" 2>&1) \
   || fail "the board build refused a recoverable captain-ended session: $out"
 case "$out" in
   *"session: reopened"*) ;;
