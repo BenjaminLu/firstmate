@@ -143,7 +143,11 @@ fi
 # reviewDecision. A review counts when it is submitted and standing, sits at the
 # current head, comes from an account this repository granted standing, and
 # either carries GitHub's own APPROVED state or ends with the approved verdict
-# line. A missing, stale, or outside approval is a blocker; a read that cannot
+# line. The ways of being unapproved are reported apart rather than collapsed
+# into one line: no review posted, a review at this head that states no verdict,
+# one from an account with no standing, one withdrawn or never submitted, and an
+# approval of a superseded commit each send the operator somewhere different,
+# which is why bin/fm-pr-merge.sh separates them too. A read that cannot
 # complete says so rather than falling silent, because an approval this cannot
 # see is one it must not report as present.
 #
@@ -174,26 +178,58 @@ if ! APPROVAL_ROWS=$(gh pr view "$URL" --json reviews --jq '
     (.authorAssociation // "") as $a
     | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
   .reviews[]
-  | select(submitted and standing)
   | (.commit.oid // "") as $oid
-  | if .state == "APPROVED" then $oid + " A" else $oid + " T" + tail_line end
+  | if (submitted | not) then $oid + " D"
+    elif (standing | not) then $oid + " X"
+    elif .state == "APPROVED" then $oid + " A"
+    else $oid + " T" + tail_line
+    end
   ' 2>/dev/null); then
   printf 'APPROVAL UNREADABLE: could not read the reviews on this pull request\n'
 else
+  # Every review is classified rather than filtered, because the four ways a
+  # pull request can be unapproved send the operator somewhere different and
+  # bin/fm-pr-merge.sh reports them apart for that reason. A preview that keeps
+  # the decision and drops the distinction is not previewing the decision.
   APPROVED_AT_HEAD=0
+  REVIEWS_SEEN=0
+  STANDING_AT_HEAD=0
+  WITHDRAWN_AT_HEAD=0
+  OUTSIDE_AT_HEAD=0
+  NEWEST_REVIEWED=
   while IFS= read -r row; do
     [ -n "$row" ] || continue
+    REVIEWS_SEEN=$((REVIEWS_SEEN + 1))
     row_commit=${row%% *}
-    [ "$row_commit" = "$HEAD" ] || continue
     row_verdict=${row#* }
+    NEWEST_REVIEWED=$row_commit
+    [ "$row_commit" = "$HEAD" ] || continue
     case "$row_verdict" in
-      A) APPROVED_AT_HEAD=1 ;;
-      T*) [ "${row_verdict#T}" != "$FM_REVIEW_VERDICT_APPROVED" ] || APPROVED_AT_HEAD=1 ;;
+      D) WITHDRAWN_AT_HEAD=1 ;;
+      X) OUTSIDE_AT_HEAD=1 ;;
+      A) STANDING_AT_HEAD=1; APPROVED_AT_HEAD=1 ;;
+      T*)
+        STANDING_AT_HEAD=1
+        [ "${row_verdict#T}" != "$FM_REVIEW_VERDICT_APPROVED" ] || APPROVED_AT_HEAD=1
+        ;;
     esac
   done <<APPROVAL_ROWS
 $APPROVAL_ROWS
 APPROVAL_ROWS
-  [ "$APPROVED_AT_HEAD" -eq 1 ] || printf 'NO APPROVAL AT HEAD: %s\n' "$HEAD"
+  if [ "$APPROVED_AT_HEAD" -ne 1 ]; then
+    if [ "$REVIEWS_SEEN" -eq 0 ]; then
+      printf 'NO APPROVAL AT HEAD: %s (no review has been posted)\n' "$HEAD"
+    elif [ "$STANDING_AT_HEAD" -eq 1 ]; then
+      printf 'NO APPROVAL AT HEAD: %s (the review at this head states no verdict)\n' "$HEAD"
+    elif [ "$OUTSIDE_AT_HEAD" -eq 1 ]; then
+      printf 'NO APPROVAL AT HEAD: %s (the review at this head is from an account with no standing)\n' "$HEAD"
+    elif [ "$WITHDRAWN_AT_HEAD" -eq 1 ]; then
+      printf 'NO APPROVAL AT HEAD: %s (every review at this head is withdrawn or unsubmitted)\n' "$HEAD"
+    else
+      printf 'NO APPROVAL AT HEAD: %s (the newest review is of commit %s)\n' \
+        "$HEAD" "${NEWEST_REVIEWED:-unreadable}"
+    fi
+  fi
 fi
 
 if [ "$REVIEW_DECISION" = CHANGES_REQUESTED ]; then

@@ -212,24 +212,41 @@ test_a_missing_approval_is_a_blocker() {
   out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[]}' run_state) \
     || fail "no-review fixture was refused"
   case "$out" in
-    *"NO APPROVAL AT HEAD: $head"*) ;;
-    *) fail "an unreviewed pull request must not read as ready, got: $out" ;;
+    *"NO APPROVAL AT HEAD: $head (no review has been posted)"*) ;;
+    *) fail "an unreviewed pull request must say no review was posted, got: $out" ;;
   esac
 
   # Approved, but of a commit that is no longer what would merge.
   out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"2710bc5efc936efb70e95b86ca3582e9da7e60f4"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
     || fail "stale-approval fixture was refused"
   case "$out" in
-    *'NO APPROVAL AT HEAD'*) ;;
-    *) fail "an approval of a superseded commit must not read as ready, got: $out" ;;
+    *'NO APPROVAL AT HEAD'*'(the newest review is of commit 2710bc5efc936efb70e95b86ca3582e9da7e60f4)'*) ;;
+    *) fail "an approval of a superseded commit must name that commit, got: $out" ;;
   esac
 
   # Approved at the head by an account with no standing on this repository.
   out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"NONE","author":{"login":"stranger"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
     || fail "outside-approval fixture was refused"
   case "$out" in
-    *'NO APPROVAL AT HEAD'*) ;;
-    *) fail "a stranger's approval must not read as ready, got: $out" ;;
+    *'NO APPROVAL AT HEAD'*'(the review at this head is from an account with no standing)'*) ;;
+    *) fail "a stranger's approval must be named as such, got: $out" ;;
+  esac
+
+  # A withdrawn review at the head, which is not the same as a stale approval
+  # and must not be reported as one.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"DISMISSED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Review verdict: APPROVED"}]}' run_state) \
+    || fail "withdrawn-approval fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(every review at this head is withdrawn or unsubmitted)'*) ;;
+    *) fail "a withdrawn review at the head must be named as such, got: $out" ;;
+  esac
+
+  # A standing review at the head that reached no verdict.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Some notes, no verdict."}]}' run_state) \
+    || fail "no-verdict fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(the review at this head states no verdict)'*) ;;
+    *) fail "a verdictless review at the head must be named as such, got: $out" ;;
   esac
 
   # A read it cannot complete says so rather than staying silent.
@@ -239,7 +256,7 @@ test_a_missing_approval_is_a_blocker() {
     *'APPROVAL UNREADABLE'*) ;;
     *) fail "an unreadable approval must be reported, not omitted, got: $out" ;;
   esac
-  pass "a missing, stale, outside, or unreadable approval is reported as a blocker"
+  pass "each way of being unapproved is reported apart, the way the merge path reports them"
 }
 
 test_required_failure_is_a_blocker() {
