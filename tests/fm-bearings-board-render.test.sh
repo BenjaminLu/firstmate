@@ -169,6 +169,49 @@ no_channel_payload() {
                {value:"no", label:"No", consequence:"it was not"}]}]}'
 }
 
+# A thin call - the ordinary needs-decision, which PR #33 deliberately left
+# under no packet obligation - reaches the board with no options of its own.
+# It must SAY that. The captain answering a card cannot otherwise tell a call
+# that had nothing to offer him from one whose options went missing between
+# the worker and the page, and the second is the failure this whole surface
+# exists to remove.
+thin_call_payload() {
+  jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[{
+      key:"thin-one", type:"decision", repo:"sample", thin:true,
+      title:"Rename the flag?",
+      decide:"Rename the flag?",
+      allow_freeform:true,
+      options:[]}]}'
+}
+
+test_a_call_that_carried_no_options_says_so_on_the_card() {
+  local home out
+  home=$(make_home thin-card)
+  out=$(render_payload "$home" "$(thin_call_payload)")
+
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].thin_note')" "no options" \
+    "a thin call did not say on the card that it carried no options: $out"
+  # And the freeform box is there, because it is the only way to answer it.
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].send_disabled')" = "false" ] \
+    || fail "a thin call could not be answered at all: $out"
+  pass "a call that carried no options says so on the card"
+}
+
+# The statement is meaningful only if it is absent from every ordinary card.
+# A note that always shows says nothing.
+test_an_ordinary_card_says_nothing_about_missing_options() {
+  local home out
+  home=$(make_home not-thin-card)
+  out=$(render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].thin_note')" = "" ] \
+    || fail "a card that carried its options still claimed to have none: $out"
+  pass "a card that carried its options says nothing about missing ones"
+}
+
 # R3. The board was written when the surface serving it carried every answer.
 # On the captain's own machine that surface is not installed, so every card
 # refused - honestly, but the whole decisions surface was inert, which is the
@@ -1510,3 +1553,5 @@ test_a_disconnected_live_seam_refuses_instead_of_reporting_success
 test_the_live_seam_is_preferred_over_the_serving_surface
 test_a_card_that_cannot_send_says_so_before_the_captain_composes_an_answer
 test_a_send_that_reports_failure_leaves_the_card_unanswered
+test_a_call_that_carried_no_options_says_so_on_the_card
+test_an_ordinary_card_says_nothing_about_missing_options

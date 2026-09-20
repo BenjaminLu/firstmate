@@ -251,6 +251,13 @@ body {
 .is-queued .bb-queued { display: inline-flex; }
 .bb-limit { display: none; font-size: var(--fs-xs); font-weight: 700; color: var(--status-danger); }
 .bb-limit.is-visible { display: inline; }
+/* A call that offered no options says so here, in the space where the options
+   would have been. It is deliberately not styled as an error: a needs-decision
+   with no option list is the ordinary shape, not a fault. What it must never be
+   is silent, because the captain cannot otherwise tell a call that had nothing
+   to offer from a card whose options went missing on the way to him. */
+.bb-thin { margin: 0 0 10px; font-size: var(--fs-xs); font-weight: 700; color: var(--text-muted);
+  border-left: 2.5px solid var(--border-default); padding-left: 10px; }
 .bb-freeform { width: 100%; font-family: var(--font-sans); font-size: var(--fs-sm); color: var(--text-strong);
   background: var(--surface-card); border: 1.5px solid var(--border-default); border-radius: var(--radius-sm); padding: 8px 11px; }
 .bb-freeform:focus { outline: none; border-color: var(--rust-400); box-shadow: var(--focus-ring); }
@@ -555,6 +562,7 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel: "Not sent. This board has no way to reach firstmate from here, so your answer was not recorded.",
       no_channel_dispatch: "Not sent. This board has no way to reach firstmate from here, so nothing was dispatched.",
       no_channel_yet: "This board cannot reach firstmate from here, so it cannot take an answer right now.",
+      thin_call: "This call came with no options to choose between. Answer it in your own words.",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -587,6 +595,7 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel: "沒有送出。這個看板從這裡連不到 firstmate，所以你的回答沒有被記錄。",
       no_channel_dispatch: "沒有送出。這個看板從這裡連不到 firstmate，所以沒有派工。",
       no_channel_yet: "這個看板從這裡連不到 firstmate，現在沒辦法接收回答。",
+      thin_call: "這個問題沒有附選項，請直接用你自己的話回答。",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -619,6 +628,7 @@ __FM_BEARINGS_BOARD_DATA__
       no_channel: "没有送出。这个看板从这里连不到 firstmate，所以你的回答没有被记录。",
       no_channel_dispatch: "没有送出。这个看板从这里连不到 firstmate，所以没有派工。",
       no_channel_yet: "这个看板从这里连不到 firstmate，现在没办法接收回答。",
+      thin_call: "这个问题没有附选项，请直接用你自己的话回答。",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -1163,6 +1173,10 @@ __FM_BEARINGS_BOARD_DATA__
       var form = document.createElement("form");
       form.setAttribute("data-lavish-question", item.key);
       var packet = packetOf(item);
+      /* Said before the options rather than after them, because it is about
+         what is NOT below. `thin` is set by compose from the record the call
+         wrote; a card that carries no such flag renders exactly as it did. */
+      if (item.thin) form.appendChild(el("p", "bb-thin", t("thin_call")));
       /* Every answer goes through queueAnswer with the value it is answering
          with, passed in. A choose button inside an option's own tab passes
          that option's value - the same value the decision block defines, down

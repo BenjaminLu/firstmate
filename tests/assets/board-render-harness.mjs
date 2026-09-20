@@ -7,7 +7,7 @@
 //   { stats:[{n,label}], underway:[{title,sub,badges,ack}],
 //     charted:[{title,sub,badges,pickable,ack}], empty, more,
 //     cards:[{badges,title,ctx:[{k,v}],options:[{label,consequence,rec}],chips,ack,
-//             hidden, tabs:[{label,selected}],
+//             hidden, thin_note, tabs:[{label,selected}],
 //             panels:[{hidden,figures,notes,rows,label,cost,
 //                      buttons:[{text,queues}]}],
 //             on_enter, on_enter_all,
@@ -407,6 +407,9 @@ const cards = deck.children
       .filter((n) => n.className.includes("is-visible"))
       .map((n) => n.textContent)[0] ?? "",
     is_queued: card.className.split(/\s+/).includes("is-queued"),
+    /* What a call that carried no options says in place of them. Empty on
+       every ordinary card, which is what makes its presence meaningful. */
+    thin_note: findAll(card, "bb-thin").map((n) => n.textContent)[0] ?? "",
     /* Whether the captain could press at all. A card that cannot send must
        say so before he composes an answer, not after he presses. */
     send_disabled: findAll(card, "fm-btn").some((b) => b.type === "submit" && b.disabled === true),
