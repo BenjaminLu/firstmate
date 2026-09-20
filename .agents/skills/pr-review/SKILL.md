@@ -30,7 +30,7 @@ Where a task carries a design record, that record owns intent, so the pull reque
 2. **The pull request opens as soon as there is something to review**, not after everything is green.
    The worker's `done: PR <url>` line is the signal; record it with `bin/fm-pr-check.sh <id> <PR url>` as section 7 requires.
 3. **A reviewer reviews it on the pull request.**
-   Dispatch the first review on the worker's `done:` line, not on the pull request merely existing: a pull request opened before the work is finished is there to be watched and to arm the merge poll, and a reviewer dispatched against it reviews the first commit of a change still being written.
+   Dispatch the first review on the worker's `done:` line, not on the pull request merely existing: a pull request opened before the work is finished is there to be watched and to arm the merge poll with `bin/fm-pr-check.sh <id> <PR url> --arm-only`, and a reviewer dispatched against it reviews the first commit of a change still being written.
    Do not wait for the checks: a reviewer reading the diff and a CI run watching the same commit are independent, and serializing them buys nothing.
 4. **Firstmate reads the findings, rules, posts the ruling on the pull request, and records it.**
 5. **Fixes land as commits on the same pull request**, by the same worker, one finding per commit.
