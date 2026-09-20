@@ -4299,7 +4299,7 @@ test_hold_refuses_an_id_the_archive_already_owns() {
 # both must end somewhere a person can act, without ever clearing a call
 # nobody answered.
 test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act() {
-  local home origin call other out meta
+  local home origin call other out meta raise show
   home=$(make_home unanswerable-archived)
   origin=sample-unrecoverable-origin
   call=sample-unrecoverable-call
@@ -4354,9 +4354,20 @@ test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act() {
     "the refusal did not say what --title is for: $out"
   assert_contains "$out" '--reason "<why the captain owns it>"' \
     "the refusal hid the mandatory --reason: $out"
-  run_captain "$home" hold sample-raised-again --title "The question again" \
-    --reason "captain owns the re-raised call" --repo sample >/dev/null \
-    || fail "the flag set the refusal named did not create the new call"
+  # Run what it PRINTS, placeholders substituted and nothing else changed.
+  # The previous version retyped an equivalent and added --repo, which the
+  # printed form omits - so it tested a flag set the message does not name.
+  raise=$(named_captain_hold_command "$out" "raise the call again as its own task with ") \
+    || fail "the refusal named no runnable hold command: $out"
+  raise=${raise//<new-id>/sample-raised-again}
+  raise=${raise//\"<the question>\"/The-question-again}
+  raise=${raise//\"<why the captain owns it>\"/captain-owns-it}
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  run_captain "$home" $raise >/dev/null 2> "$home/raise.err" \
+    || fail "the hold command the refusal printed was refused: $raise ($(cat "$home/raise.err"))"
+  show=$(tasks_in "$home" show sample-raised-again --full) \
+    || fail "the printed hold command created no row"
+  assert_contains "$show" "held: yes" "the printed hold command did not hold the new call"
   out=$(run_captain "$home" hold sample-raised-twice --title "Another question" --repo sample 2>&1) \
     && fail "hold created a call with no reason, so the named --reason was not mandatory after all: $out"
   assert_contains "$out" "reason" "the refusal for a missing reason did not name it: $out"
@@ -4535,14 +4546,21 @@ test_a_drop_judges_the_row_the_gate_judges() {
     && fail "the gate passed an unanswered composed call: $out"
   assert_contains "$out" "--drop-unrecoverable $short" \
     "the gate named an identity the metadata does not hold: $out"
-  out=$(run_captain "$home" complete "$id" --drop-unrecoverable "$composed" 2>&1) \
-    || fail "the drop refused the row id the entry resolves to: $out"
+  # The verify branch of the same helper, driven to a fixed point rather than
+  # substring-matched and then retyped with a different final argument. This
+  # is the branch R1 came through: the covered branch was the one an earlier
+  # round had already forced correct.
+  out=$(run_to_fixed_point "$home" "$id" "$out" "retire them from the inventory with ") \
+    || fail "the verify branch's printed drop did not converge: $out"
   assert_contains "$out" "dropped as unrecoverable: $short" \
-    "the drop recorded a spelling the metadata never held: $out"
-  meta=$(cat "$home/state/$id.meta")
-  assert_contains "$meta" "decision_dropped=$short" "the drop was not recorded under the attested entry"
+    "the converged run recorded no drop: $out"
+  # The row spelling still resolves to the same entry, which is what makes
+  # the two spellings interchangeable.
   run_captain "$home" verify "$id" >/dev/null 2> "$home/legacy-drop-verify.err" \
     || fail "the gate still could not pass after the drop: $(cat "$home/legacy-drop-verify.err")"
+  meta=$(cat "$home/state/$id.meta")
+  assert_contains "$meta" "decision_dropped=$short" \
+    "the converged drop was not recorded under the attested entry the metadata holds"
 
   # An archive this read cannot open must not be spent as "not attested" -
   # that is this branch's own principle, and it would tell a reader their
@@ -4695,7 +4713,7 @@ SH
 # status decision is open, which is the only state this fires in. Both
 # remedies are run rather than read.
 test_verify_names_a_complete_that_works() {
-  local home origin call out gate
+  local home origin call out gate raise then_cmd probe
   home=$(make_home verify-remedy)
   origin=sample-verify-remedy
   call=sample-verify-call
@@ -4739,10 +4757,30 @@ test_verify_names_a_complete_that_works() {
   assert_contains "$out" "hold <new-id>" "the empty-inventory refusal named no way to create one: $out"
   assert_not_contains "$out" "--none" \
     "the refusal named --none, which the empty-inventory guard refuses in this very state: $out"
-  out=$(run_captain "$home" complete "$origin" --none 2>&1) \
-    && fail "--none was accepted in the empty-inventory state the refusal fires in: $out"
-  assert_contains "$out" "before attesting" \
-    "the --none refusal in this state was something other than the empty-inventory guard: $out"
+  # Checked while the inventory is still empty, which is the state the guard
+  # applies to and the reason the refusal must not name --none here.
+  probe=$(run_captain "$home" complete "$origin" --none 2>&1) \
+    && fail "--none was accepted in the empty-inventory state the refusal fires in: $probe"
+  assert_contains "$probe" "before attesting" \
+    "the --none refusal in this state was something other than the empty-inventory guard: $probe"
+  # Two commands in one remedy, both run as printed with the placeholder
+  # substituted, in the order named - not substring-matched and left there.
+  raise=$(named_captain_hold_command "$out" "hold one with ") \
+    || fail "the empty-inventory refusal named no runnable hold command: $out"
+  raise=${raise//<new-id>/sample-verify-raised}
+  raise=${raise//\"<the question>\"/The-question}
+  raise=${raise//\"<why the captain owns it>\"/captain-owns-it}
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  run_captain "$home" $raise >/dev/null 2> "$home/empty-raise.err" \
+    || fail "the hold command the refusal printed was refused: $raise ($(cat "$home/empty-raise.err"))"
+  then_cmd=$(named_captain_hold_command "$out" "then ") \
+    || fail "the empty-inventory refusal named no second command: $out"
+  then_cmd=${then_cmd//<new-id>/sample-verify-raised}
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  run_captain "$home" $then_cmd >/dev/null 2> "$home/empty-complete.err" \
+    || fail "the complete command the refusal printed was refused: $then_cmd ($(cat "$home/empty-complete.err"))"
+  run_captain "$home" verify "$origin" >/dev/null 2> "$home/empty-verify.err" \
+    || fail "the printed sequence did not clear what it was named for: $(cat "$home/empty-verify.err")"
   pass "verify names a complete that works, in both states it fires in"
 }
 
