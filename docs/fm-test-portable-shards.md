@@ -126,8 +126,9 @@ Two shards is the whole win available here, and the reason is worth recording so
 A third runner is a slot spent for nothing until that script is divisible, and splitting it means paying real lab setup again per piece.
 `bin/fm-test-run.sh --check-coverage` reports `herdr_shards=` and `herdr_unhinted=`, and refuses past the same unmeasured-share bound the serial lane uses.
 
-Refresh the Herdr hints exactly as the serial ones are refreshed, from the per-shard artifacts.
-Name the timing file in the glob rather than matching every JSON: unlike the serial artifact, the Herdr artifact also carries `sessions-before-<k>.json`, and feeding that to the same `jq` aborts the record it is reading.
+Refresh the Herdr hints exactly as the serial ones are refreshed, from the per-shard artifacts, but note two ways this glob differs from the serial one at the same `--dir` shape.
+It is one level deeper, because `actions/upload-artifact@v4` roots a multi-path artifact at the least common ancestor of its paths: the Herdr artifact uploads from both `fm-test/` and `fm-herdr/`, so it extracts with a directory level the single-path serial artifact does not have.
+It also names the timing file rather than matching every JSON, because that extra level carries `fm-herdr/sessions-before-<k>.json` too; `jq` prints a diagnostic for each such file and carries on to the next, so matching them costs noise rather than hints, but the noise is what invites someone to "fix" a recipe that works.
 
 ```sh
 for run in <run-id> <run-id> <run-id>; do
@@ -135,7 +136,7 @@ for run in <run-id> <run-id> <run-id>; do
     gh run download "$run" -R <owner>/firstmate --name "fm-test-timing-herdr-$k" --dir "/tmp/fm-herdr/$run/$k"
   done
 done
-jq -r '.scripts[] | select(.exit == 0) | [.path, .duration_ms] | @tsv' /tmp/fm-herdr/*/*/fm-test-timing-herdr-*.json \
+jq -r '.scripts[] | select(.exit == 0) | [.path, .duration_ms] | @tsv' /tmp/fm-herdr/*/*/*/fm-test-timing-herdr-*.json \
   | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print p, m[p] }' \
   | LC_ALL=C sort
 bin/fm-test-run.sh --check-coverage
