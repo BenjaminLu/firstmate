@@ -226,8 +226,10 @@ The server is Node against its standard library only, with no package to install
 
 That same server also HOSTS the board page, at `http://127.0.0.1:<port>/` - the address `bin/fm-bearings-board.sh url` prints and `open` opens.
 So the captain's board needs nothing installed beyond node: no external presentation tool stands between a clone and a working, live-updating board.
-It serves exactly the one file the build wrote and nothing else - one route, one constant filename, no directory and no path a request can reach, so `state/` and `data/` are not reachable by it rather than protected from it.
-`bin/fm-bearings-board.sh build --lavish` additionally offers the board as a Lavish session for a home that has `lavish-axi` and wants that surface; without the flag nothing invokes, probes, or needs it, and its absence degrades nothing about the board.
+It serves exactly the one file the build wrote and nothing else: each route names its own file, and a request never contributes a path segment to anything opened, so `state/` and `data/` are not reachable by it rather than protected from it.
+Two things here are known to be short-lived and are built as routes rather than as settled facts: this port is to serve the decision packet too, separated by path, and the board file moves from `.lavish/bearings-board.html` to `state/board.html`.
+The board depends on no external command at all - nothing invokes, probes, or needs `lavish-axi` on this path - and nothing may frame it: every response carries `x-frame-options: DENY` and `frame-ancestors 'none'`.
+The board is a local surface: the listener is loopback, and the server answers only a request whose `Host` is `127.0.0.1` or `localhost` at the port it actually took, so a name an attacker points at 127.0.0.1 cannot borrow this origin.
 
 `state/board-live.jsonl` is the append-only event log every publisher writes to, and it is the durability: an event published while the server is down is read at the next start rather than lost.
 `state/board-live.endpoint` records the URL the running server took, `state/board-live.pid` its process, `state/board-live.code` what that process is running, and `state/board-live.log` whatever it said if it could not start.
@@ -250,8 +252,12 @@ Nothing has to be set up for that either - a board build issues the token and bi
 Only writing is proved: reading the board needs no token, so any page on an origin the allowlist admits - a sandboxed cross-origin frame presenting `Origin: null`, or a page served from a local dev server on `http://localhost` - can subscribe and watch the whole live payload, including every open captain's call and its wording.
 That is accepted exposure rather than a defence, it predates the allowlist this adds, and closing it would mean the page must send the token to subscribe.
 Serving the page from the same port puts the token behind that same unauthenticated read: the built page carries it, the board file is mode 0600, so on a shared machine a local process that could not read that file can now fetch the page and answer as the captain.
-No browser gains anything - the same-origin policy keeps another origin from reading the response, and the origin allowlist still refuses its socket - so the change is exactly that the port now grants what a file read granted.
-Authenticating the read is one decision about that one boundary and it is the captain's; the token check on every inbound message is unchanged either way.
+The captain has since decided that reading requires the token as well, accepting that it stops every board already built until it is rebuilt; that change lands separately, so the posture described here has a known end date.
+The token check on every inbound message is unchanged and was never the part in question.
+Reading and acting are different boundaries, and the defences differ accordingly.
+Another origin cannot read this port's responses and its socket is refused by the origin allowlist, but neither fact stops a page that never reads: framing the board and letting the captain click through an overlay settles a real call, because the framed document's origin is the board's own.
+That is why framing is refused outright on every response rather than argued away, and why the `Host` allowlist is there to make the same-origin policy actually hold for this port.
+`bin/fm-board-live.mjs`'s header owns the reasoning in full.
 
 `bin/fm-board-live.sh`'s header owns the publish kinds, the lifecycle commands, what proves an inbound message is the captain's and what that proof does not claim.
 `bin/fm-board-live.mjs`'s header owns what an event may change, why the wire carries whole board state rather than deltas, why a change needing new prose marks the board behind instead of being guessed at, and the inbound message and reply shapes.

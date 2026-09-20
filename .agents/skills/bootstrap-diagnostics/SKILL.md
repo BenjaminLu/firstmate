@@ -24,7 +24,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   For `quota-axi`, bootstrap requires it because firstmate reads its current output directly before resolving every crew-dispatch profile array; without it, report the missing requirement and do not choose around an unexamined candidate.
 - `PRESENTATION_UNAVAILABLE: lavish-axi ...` - the captain's board is NOT what this line is about and must never be reported as unavailable because of it.
   The board is built, served and answered by this home's own server, so a home with no lavish-axi still gets a working, live-updating board at the address `bin/fm-bearings-board.sh url` prints; `bin/fm-bearings-board.sh`'s header owns that path.
-  What this line means is that a Lavish REVIEW session is unavailable: an annotated review of an HTML artifact, `bin/fm-packet.sh serve`, and the optional `bin/fm-bearings-board.sh build --lavish` surface beside the served board.
+  What this line means is that a Lavish REVIEW session is unavailable: an annotated review of an HTML artifact, `bin/fm-packet.sh serve`, and a visual scout's review loop. The board does not use Lavish at all.
   Continue every other kind of work, the board included, and do not hold unrelated dispatch for installation consent.
   Do not use Lavish until it satisfies the floor owned by `bin/fm-bootstrap.sh`; when a review session is actually wanted, request consent for the printed install or upgrade command, then rerun bootstrap to confirm compatibility before using it.
   Scout briefs check the same floor when scaffolded and ask for a text report instead of a Lavish loop, so scaffold a visual scout only after that rerun confirms compatibility.

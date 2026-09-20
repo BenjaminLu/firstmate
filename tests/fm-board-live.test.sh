@@ -673,6 +673,109 @@ http_get() {  # <url> <outfile>
   ' "$1" "$2"
 }
 
+# Status plus the response headers, lowercased, one per line. A header this
+# port must send is not provable from the body.
+http_head() {  # <url> [host-header]
+  node -e '
+    const http = require("node:http");
+    const opts = new URL(process.argv[1]);
+    const headers = {};
+    if (process.argv[2]) headers.host = process.argv[2];
+    http.get({hostname: opts.hostname, port: opts.port, path: opts.pathname, headers}, (res) => {
+      let out = String(res.statusCode) + "\n";
+      for (const [k, v] of Object.entries(res.headers)) out += k.toLowerCase() + ": " + v + "\n";
+      res.resume();
+      res.on("end", () => process.stdout.write(out));
+    }).on("error", (e) => { process.stderr.write(String(e.message)); process.exit(1); });
+  ' "$1" "${2-}"
+}
+
+# THE ATTACK THIS CLOSES NEVER READS ANYTHING. A page on any origin can frame
+# this board and draw its own control over the frame; the captain clicks once,
+# and because the framed document's origin IS the board's own, the origin
+# allowlist admits its socket and the token baked into the page authenticates
+# it. A real captain's call is settled with real provenance while every check
+# in the server correctly sees a legitimate board. Refusing the frame is the
+# whole defence, so both headers are asserted on the page itself and on a
+# refusal, because a header sent only on the happy path is not a defence.
+test_no_origin_may_put_the_board_in_a_frame() {
+  local home port got
+  home=$(make_home framed) || fail "could not build a home"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(http_head "http://127.0.0.1:$port/") || fail "nothing answered"
+  assert_equals 200 "$(printf '%s\n' "$got" | head -1)" "the board did not serve"
+  assert_contains "$got" "x-frame-options: DENY" \
+    "the board can be framed by any page that wants the captain's click"
+  assert_contains "$got" "frame-ancestors 'none'" \
+    "the board carries no frame-ancestors directive"
+  got=$(http_head "http://127.0.0.1:$port/nope") || fail "nothing answered the 404"
+  assert_contains "$got" "x-frame-options: DENY" \
+    "a refusal may be framed even though the page may not"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "no page on any origin may frame the board, on any response this port sends"
+}
+
+# A Host check authenticates nobody. It is what makes the same-origin policy
+# actually hold for this port: a name an attacker controls can be pointed at
+# 127.0.0.1, and their page would then share an origin with the board as far
+# as the browser is concerned.
+test_a_host_this_home_does_not_answer_to_is_refused() {
+  local home port got
+  home=$(make_home rebound) || fail "could not build a home"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(http_head "http://127.0.0.1:$port/" "attacker.example:$port") \
+    || fail "nothing answered the forged Host"
+  assert_equals 403 "$(printf '%s\n' "$got" | head -1)" \
+    "a name pointed at this loopback address borrowed the board's origin"
+  # A bare name with no port is the other spelling of the same attempt.
+  got=$(http_head "http://127.0.0.1:$port/" "attacker.example") \
+    || fail "nothing answered the portless forged Host"
+  assert_equals 403 "$(printf '%s\n' "$got" | head -1)" \
+    "a portless forged Host was answered"
+  # Both spellings of this machine still work, or the fix would have broken
+  # the board to defend it.
+  assert_equals 200 "$(http_head "http://127.0.0.1:$port/" "127.0.0.1:$port" | head -1)" \
+    "the board refused its own address"
+  assert_equals 200 "$(http_head "http://127.0.0.1:$port/" "localhost:$port" | head -1)" \
+    "the board refused localhost, which is how a captain reaches it"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "the port answers only this home's own loopback address, by either name"
+}
+
+# "It is not there" and "it is there and I cannot read it" are different facts,
+# and sending the captain to re-run the command he just ran hides the second.
+# The symlink case is also the O_NOFOLLOW guard: the board page carries the
+# answer token, and this is the commit that put it behind a port.
+test_a_board_that_cannot_be_read_says_why_rather_than_blaming_the_captain() {
+  local home port board got real
+  home=$(make_home unreadable) || fail "could not build a home"
+  board="$home/.lavish/bearings-board.html"
+  real="$home/.lavish/real.html"
+  port=$(serve_home "$home") || fail "the server did not start"
+  mv "$board" "$real"
+  got=$(http_head "http://127.0.0.1:$port/") || fail "nothing answered"
+  assert_equals 404 "$(printf '%s\n' "$got" | head -1)" "an absent board was not a 404"
+  http_get "http://127.0.0.1:$port/" "$home/absent.txt" >/dev/null
+  assert_contains "$(cat "$home/absent.txt")" "no board has been built" \
+    "an absent board did not say that is what is missing"
+
+  # A symlink where the board should be is refused, not followed and served.
+  ln -s "$real" "$board"
+  got=$(http_head "http://127.0.0.1:$port/") || fail "nothing answered the symlink"
+  assert_equals 500 "$(printf '%s\n' "$got" | head -1)" \
+    "a symlink in the board's place was served as though it were the board"
+  http_get "http://127.0.0.1:$port/" "$home/link.txt" >/dev/null
+  assert_contains "$(cat "$home/link.txt")" "ELOOP" \
+    "the symlink refusal does not name the condition"
+  case $(cat "$home/link.txt") in
+    *"no board has been built"*) fail "a symlink was reported as nothing having been built" ;;
+  esac
+  rm -f "$board"
+  mv "$real" "$board"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "a board that cannot be read names the condition instead of blaming the captain"
+}
+
 test_the_port_serves_the_board_page_itself() {
   local home port url status
   home=$(make_home served-page) || fail "could not build a home"
@@ -1029,6 +1132,9 @@ test_landing_moves_the_row_and_retires_its_call
 test_a_rebuild_supersedes_every_earlier_event
 test_a_home_with_no_board_says_so_rather_than_serving_nothing
 test_the_port_serves_the_board_page_itself
+test_no_origin_may_put_the_board_in_a_frame
+test_a_host_this_home_does_not_answer_to_is_refused
+test_a_board_that_cannot_be_read_says_why_rather_than_blaming_the_captain
 test_the_port_serves_the_board_and_nothing_else
 test_a_home_with_no_board_page_is_told_so_rather_than_served_something_else
 test_a_pinned_port_that_is_taken_is_an_error_not_a_quiet_move

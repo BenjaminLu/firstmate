@@ -159,16 +159,19 @@ Exercised by `tests/fm-procevent.test.sh` against a fake blocking source whose c
 | owner-matched replacement safety | two registrations for the same external source receive distinct owner tokens; unconditional external retirement and the first token cannot retire the replacement, the replacement token can, bounded home sweep derives and uses that exact token, and legacy built-in registrations retain unconditional behavior plus exact `--if-matches` retirement |
 | independent homes | two homes bind the same package id/version to different content-addressed absolute paths and independently capture results and extension state, with no cross-home fallback or result path |
 
-Run the focused external-binding evidence and the live Bearings session guard with:
+Run the focused external-binding evidence with:
 
 ```sh
 node --version
 bin/fm-test-run.sh tests/fm-extension-binding.test.sh
 FM_EXTENSION_BINDING_SEGMENT=lifecycle-invocation-cleanup bin/fm-test-run.sh tests/fm-extension-binding.test.sh
 bin/fm-test-run.sh tests/fm-procevent.test.sh
-FM_BEARINGS_LAVISH_LIVE=1 bin/fm-test-run.sh tests/fm-bearings-board-lavish-live-e2e.test.sh
 bin/fm-doc-audience-check.sh
 ```
+
+The captain's bearings board is no longer a Lavish source and has no live-session guard: on 2026-09-20 it stopped depending on any external command, and this home's own server builds, serves and answers it.
+`tests/fm-bearings-board.test.sh` proves that by building with `lavish-axi` removed from the path, and `tests/fm-board-live.test.sh` covers the answer.
+The Lavish adapter itself remains for other artifacts and keeps the evidence above.
 
 ## Harness and session-provider review
 

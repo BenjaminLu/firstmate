@@ -13,108 +13,16 @@ TMP_ROOT=$(fm_test_tmproot fm-bearings-board)
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
-# A lavish-axi stub that reproduces the shapes verified against the real
-# lavish-axi 0.1.61, because the build's liveness verdict is read from what the
-# vendor emits. The load-bearing shape is the refusal: opening a session the
-# captain ended from the browser EXITS 0 while reporting `status: user-ended`,
-# and that session is absent from the server's listing. `--reopen` restores it.
-# Markers under lavish-state drive the fixture: `user-ended` makes the next
-# plain open refuse, and `refuse-reopen` makes even --reopen leave it dead.
 make_home() {  # <name>
-  local home="$TMP_ROOT/$1" fakebin
+  local home="$TMP_ROOT/$1"
   # Registered with tests/lib.sh, not with a shell array: make_home is called
   # inside a command substitution, so an array append here never reaches the
   # caller and every listener this suite started used to survive the run.
   fm_test_track_procevent_home "$home" "$home/procevent-claims"
-  mkdir -p "$home/state" "$home/data" "$home/lavish-state"
-  fakebin=$(fm_fakebin "$home")
-  cat > "$fakebin/lavish-axi" <<'SH'
-#!/usr/bin/env bash
-set -u
-state=${LAVISH_FAKE_STATE:?}
-# Every invocation in order, so a test can assert what the build asked the
-# vendor for and when. A bare listing logs as `<list>`.
-printf '%s\n' "${*:-<list>}" >> "$state/calls"
-emit() {  # <canonical-file> <status>
-  printf 'session:\n'
-  printf '  file: %s\n' "$1"
-  printf '  url: "http://127.0.0.1:4387/session/deadbeef"\n'
-  printf '  status: %s\n' "$2"
-}
-case "${1-}" in
-  --version) printf '0.1.61\n'; exit 0 ;;
-  --help)
-    # Inert: help never opens, lists, or ends a session. A release that names
-    # sessions advertises the flag here; the `advertise-name` marker selects it.
-    printf 'help[1]: "Run `lavish-axi <html-file>` to open or resume a session"\n'
-    if [ -e "$state/advertise-name" ]; then
-      printf 'help[2]: "Pass `--name <slug>` to give a session a stable URL"\n'
-    fi
-    exit 0
-    ;;
-  poll)
-    # A real blocking listener: it returns only when the trigger appears, so a
-    # live owner in these tests is a live process rather than a timing artifact.
-    # Both waits are bounded, so a listener that escapes its test cannot keep
-    # spawning processes for as long as the host stays up.
-    limit=${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}
-    while [ ! -e "$state/poll-trigger" ]; do
-      [ "$SECONDS" -lt "$limit" ] || exit 75
-      sleep 0.05
-    done
-    printf 'session:\n  status: ended\n'
-    if [ -e "$state/hold-after-terminal" ]; then
-      : > "$state/terminal-emitted"
-      while [ -e "$state/hold-after-terminal" ]; do
-        [ "$SECONDS" -lt "$limit" ] || exit 75
-        sleep 0.05
-      done
-    fi
-    exit 0
-    ;;
-  '')
-    # The marker ends the session at the next listing AFTER it was opened;
-    # the build also lists before any open to probe for session-name support,
-    # and that probe must not spend the marker on a session that does not
-    # exist yet.
-    if [ -e "$state/end-before-next-list" ] && [ -s "$state/open" ]; then
-      : > "$state/open"
-      rm -f "$state/end-before-next-list"
-    fi
-    printf 'sessions[1]{file,status,url,pending_prompts}:\n'
-    if [ -s "$state/open" ]; then
-      while IFS= read -r listed; do
-        [ -n "$listed" ] || continue
-        printf '  %s,open,"http://127.0.0.1:4387/session/deadbeef",0\n' "$listed"
-      done < "$state/open"
-    fi
-    exit 0
-    ;;
-  end) : > "$state/open"; printf 'session:\n  status: ended\n'; exit 0 ;;
-esac
-file=$1
-shift
-reopen=0
-for arg in "$@"; do [ "$arg" != --reopen ] || reopen=1; done
-real=$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")
-if [ -e "$state/user-ended" ] && [ "$reopen" = 0 ]; then
-  emit "$real" user-ended
-  exit 0
-fi
-if [ -e "$state/refuse-reopen" ]; then
-  emit "$real" user-ended
-  exit 0
-fi
-rm -f -- "$state/user-ended"
-printf '%s\n' "$real" > "$state/open"
-emit "$real" opened
-exit 0
-SH
-  chmod +x "$fakebin/lavish-axi"
+  mkdir -p "$home/state" "$home/data"
+  fm_fakebin "$home" >/dev/null
   printf '%s\n' "$home"
 }
-
-end_session_as_captain() { : > "$1/lavish-state/user-ended"; : > "$1/lavish-state/open"; }
 
 run_board() {  # <home> <args...>
   local home=$1
@@ -122,25 +30,7 @@ run_board() {  # <home> <args...>
   PATH="$home/fakebin:$PATH" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
-    LAVISH_FAKE_STATE="$home/lavish-state" \
     "$BOARD" "$@"
-}
-
-run_procevent() {  # <home> <command args...>
-  local home=$1
-  shift
-  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
-    "$ROOT/bin/fm-procevent.sh" "$@"
-}
-
-run_decisions() {  # <home> <command args...>
-  local home=$1
-  shift
-  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    "$ROOT/bin/fm-decision-hold.sh" "$@"
 }
 
 # A realistic payload: a cross-origin full-identity decision key past the old
@@ -420,69 +310,6 @@ test_the_payload_contract_refuses_an_unknown_acknowledgement_kind() {
   pass "the payload contract refuses a malformed acknowledgement and accepts a real one"
 }
 
-# The captain's own answer is the one board refresh trigger the fleet events
-# cannot supply: all of those are consequence-side, so an answer whose
-# consequence has not happened yet used to leave the board looking as if
-# nothing was heard. This asserts the whole chain the captain sees - the
-# captured answer, and an acknowledgement on each key it named - and it
-# asserts the scope, because acknowledging another Lavish review's choices
-# would put pills on rows nobody clicked.
-test_a_captured_board_answer_acknowledges_every_key_it_named() {
-  local home board sid other stub out
-  home=$(make_home ack-capture)
-  board=$(run_board "$home" path)
-  mkdir -p "${board%/*}"
-  printf '<html></html>\n' > "$board"
-  sid=$(PATH="$home/fakebin:$PATH" "$ROOT/bin/fm-procevent-lavish.sh" source-id "$board") \
-    || fail "could not resolve the board's own source id"
-
-  # One poll response carrying both controls the captain clicks: a decision
-  # card's answer, and a dispatch order naming the rows he checked.
-  stub="$home/board-source.sh"
-  cat > "$stub" <<'SH'
-#!/usr/bin/env bash
-cat <<'OUT'
-session:
-  status: feedback
-  session_ended: false
-prompts[2]{tag,text,prompt}:
-  "choice","Take the north route","Context data: {\"schema\":\"fm-bearings-answer.v1\",\"question\":\"gated-work\",\"selection\":\"north\",\"note\":\"\"}"
-  "choice","Dispatch: plain-queued, later-call","Context data: {\"question\":\"dispatch.charted\",\"answer\":\"plain-queued,later-call\"}"
-OUT
-SH
-  chmod +x "$stub"
-  run_procevent "$home" register lavish "$sid" -- "$stub" >/dev/null \
-    || fail "could not register the board source"
-  out=$(run_procevent "$home" start "$sid" 2>&1) \
-    || fail "the board source runner did not complete: $out"
-  assert_contains "$out" "board-acked: $sid" "the captured board answer acknowledged nothing: $out"
-
-  jq -e '.kind == "acting"' "$home/state/board-acks/gated-work.json" >/dev/null \
-    || fail "the decision card's own answer was not acknowledged"
-  # The send button answers for the rows it picked, so each of those is
-  # acknowledged and the pseudo-key it travelled under is not.
-  jq -e '.kind == "acting"' "$home/state/board-acks/plain-queued.json" >/dev/null \
-    || fail "a dispatched row was not acknowledged where the captain checked it"
-  jq -e '.kind == "acting"' "$home/state/board-acks/later-call.json" >/dev/null \
-    || fail "the second dispatched row was not acknowledged"
-  [ ! -e "$home/state/board-acks/dispatch.charted.json" ] \
-    || fail "the dispatch pseudo-key was acknowledged as if it were a row"
-
-  # Another Lavish review is an ephemeral discussion, not this board.
-  other=lavish-00000000deadbe01
-  run_procevent "$home" register lavish "$other" -- "$stub" >/dev/null \
-    || fail "could not register the unrelated source"
-  rm -f "$home"/state/board-acks/*.json
-  out=$(run_procevent "$home" start "$other" 2>&1) \
-    || fail "the unrelated source runner did not complete: $out"
-  if printf '%s' "$out" | grep -q "board-acked:"; then
-    fail "an unrelated Lavish review acknowledged rows on the board: $out"
-  fi
-  [ -z "$(ls -A "$home/state/board-acks" 2>/dev/null)" ] \
-    || fail "an unrelated Lavish review wrote acknowledgements: $(ls -A "$home/state/board-acks")"
-  pass "a captured board answer acknowledges every key it named, and only this board's"
-}
-
 test_path_is_stable_and_home_scoped() {
   local home
   home=$(make_home path)
@@ -665,18 +492,22 @@ test_build_refuses_malformed_payloads_before_touching_the_board() {
   pass "build refuses malformed payloads before touching the board"
 }
 
-test_build_injects_binds_then_arms() {
-  local home data board out sid
+# What survives of the old bind-then-arm case: the payload really does reach
+# the built page unchanged, and the board really is answerable. The Lavish
+# session half of it is gone with the code it pinned - nothing establishes,
+# reopens, probes or arms a vendor session any more, so a suite asserting
+# those shapes would be asserting a surface the product does not have.
+test_build_injects_the_payload_and_names_the_answer_channel() {
+  local home data board out
   home=$(make_home build)
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
   write_valid_payload "$data"
 
-  out=$(run_board "$home" build --lavish "$data") || fail "a valid payload did not build"
+  out=$(run_board "$home" build "$data") || fail "a valid payload did not build"
   assert_contains "$out" "board: $board" "build did not report the board path: $out"
-  assert_contains "$out" "served: $board" "build did not establish the Lavish session: $out"
   assert_contains "$out" "bound: " "build did not report the answer binding: $out"
-  assert_contains "$out" "armed: " "the first build did not arm the board source: $out"
+  assert_contains "$out" "url: http://127.0.0.1:" "build did not print a URL to open: $out"
   assert_present "$board" "build reported success without a board"
 
   # Round-trip: apart from the reconcile choice the build adds to every
@@ -697,151 +528,28 @@ test_build_injects_binds_then_arms() {
     && fail "a payload string embedded a live closing script tag in the page"
   grep -qxF '__FM_BEARINGS_BOARD_DATA__' "$board" \
     && fail "the data slot survived injection"
-
-  sid=$(run_lavish_source_id "$home" "$board")
-  assert_contains "$out" "bound: $sid" "the binding does not name the board source: $out"
-  [ "$(run_decisions "$home" binding "$sid")" = "(any)" ] \
-    || fail "the board source is not bound any-origin"
-  run_procevent "$home" list | awk 'NR > 1 { print $1 }' | grep -Fxq "$sid" \
-    || fail "the board source is not registered after build"
-  pass "build injects the payload, binds any-origin, then arms the source"
+  stop_board_server "$home"
+  pass "build injects the payload and names the channel the captain's answer lands on"
 }
 
-test_registration_cannot_consume_before_any_origin_binding() {
-  local home data runtime origin key hold board sid show
-  home=$(make_home order-proof)
-  data="$home/payload.json"
-  runtime="$home/runtime"
-  origin=order-proof-review
-  key=captain-choice
-  hold="$origin-decision-$key"
-  board="$home/.lavish/bearings-board.html"
-
-  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
-  cat > "$home/data/backlog.md" <<'EOF'
-## In flight
-
-## Queued
-
-## Done
-EOF
-  fm_write_meta "$home/state/$origin.meta" "project=$home/projects/sample" "kind=scout"
-  run_decisions "$home" hold "$origin" "$key" \
-    --title "Choose the order proof" --reason "captain choice pending" --repo sample >/dev/null \
-    || fail "could not create the order-proof captain hold"
-
-  write_valid_payload "$data"
-  jq --arg hold "$hold" '.captains_call[0].key = $hold' "$data" > "$data.tmp" \
-    && mv "$data.tmp" "$data"
-
-  mkdir -p "$runtime"
-  cp -R "$ROOT/bin" "$runtime/bin"
-  cat > "$runtime/bin/fm-procevent-lavish.sh" <<'SH'
-#!/usr/bin/env bash
-set -eu
-if [ "${1:-}" = arm ]; then
-  artifact=${2:-}
-  "$REAL_LAVISH_ADAPTER" arm "$artifact" >/dev/null
-  sid=$("$REAL_LAVISH_ADAPTER" source-id "$artifact")
-  "$REAL_PROCEVENT" start "$sid" >/dev/null
-  exit 0
-fi
-exec "$REAL_LAVISH_ADAPTER" "$@"
-SH
-  chmod +x "$runtime/bin/fm-procevent-lavish.sh"
-  cat > "$home/fakebin/lavish-axi" <<'SH'
-#!/usr/bin/env bash
-if [ -z "${1:-}" ]; then
-  printf 'sessions[1]{file,status,url,pending_prompts}:\n'
-  [ ! -s "$FM_HOME/order-open" ] \
-    || printf '  %s,open,"http://127.0.0.1/session/order",0\n' "$(cat "$FM_HOME/order-open")"
-  exit 0
-fi
-if [ "${1:-}" != poll ]; then
-  real=$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")
-  printf '%s\n' "$real" > "$FM_HOME/order-open"
-  printf 'session:\n  status: opened\n'
-  exit 0
-fi
-cat <<EOF
-session:
-  status: feedback
-  session_ended: false
-prompts[1]{uid,prompt,selector,tag,text}:
-  "2","Order proof: yes\\n\\nContext data:\\n{\\n  \\"schema\\": \\"fm-bearings-answer.v1\\",\\n  \\"question\\": \\"$ORDER_PROOF_HOLD\\",\\n  \\"selection\\": \\"yes\\",\\n  \\"note\\": \\"\\"\\n}","form",choice,"Order proof: yes"
-EOF
-SH
-  chmod +x "$home/fakebin/lavish-axi"
-
-  PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$runtime" FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
-    FM_BEARINGS_BOARD_TEMPLATE="$ROOT/.agents/skills/bearings/assets/board-template.html" \
-    REAL_LAVISH_ADAPTER="$ROOT/bin/fm-procevent-lavish.sh" \
-    REAL_PROCEVENT="$ROOT/bin/fm-procevent.sh" ORDER_PROOF_HOLD="$hold" \
-    "$runtime/bin/fm-bearings-board.sh" build --lavish "$data" >/dev/null \
-    || fail "the order-proof board build failed"
-
-  show=$(cd "$home" && tasks-axi show "$hold" --full) \
-    || fail "the order-proof captain hold disappeared"
-  assert_contains "$show" "state: done" \
-    "registration consumed its answer before the any-origin binding existed"
-  assert_contains "$show" "Resolution mode: answered" \
-    "the answer was not closed through the real keyed-answer intake"
-  sid=$(run_lavish_source_id "$home" "$board")
-  [ "$(run_decisions "$home" binding "$sid")" = "(any)" ] \
-    || fail "the order-proof source did not retain its any-origin binding"
-  pass "registration can consume answers only after any-origin binding exists"
-}
-
-test_build_does_not_bind_or_arm_when_session_start_fails() {
-  local home data rc sid
-  home=$(make_home serve-failure)
-  data="$home/payload.json"
-  write_valid_payload "$data"
-  cat > "$home/fakebin/lavish-axi" <<'SH'
-#!/usr/bin/env bash
-exit 1
-SH
-  chmod +x "$home/fakebin/lavish-axi"
-
-  set +e
-  run_board "$home" build --lavish "$data" >/dev/null 2>&1
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "build continued after Lavish session establishment failed"
-  sid=$(run_lavish_source_id "$home" "$home/.lavish/bearings-board.html")
-  ! run_decisions "$home" binding "$sid" >/dev/null 2>&1 \
-    || fail "build bound the board before its Lavish session existed"
-  ! run_procevent "$home" list | awk 'NR > 1 { print $1 }' | grep -Fxq "$sid" \
-    || fail "build armed the board before its Lavish session existed"
-  pass "build establishes the Lavish session before binding and arming"
-}
-
-run_lavish_source_id() {  # <home> <artifact>
-  local home=$1
-  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
-    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-    FM_PROCEVENT_CLAIM_ROOT="$home/procevent-claims" \
-    "$ROOT/bin/fm-procevent-lavish.sh" source-id "$2"
-}
-
-test_rebuild_is_idempotent_and_does_not_double_arm() {
-  local home data board out records
-  home=$(make_home rearm)
+# The other half of the old idempotence case, with the arming gone: a rebuild
+# refreshes the same file in place rather than writing a second board.
+test_a_rebuild_refreshes_the_board_in_place() {
+  local home data board
+  home=$(make_home rebuild)
   data="$home/payload.json"
   board="$home/.lavish/bearings-board.html"
   write_valid_payload "$data"
-  run_board "$home" build --lavish "$data" >/dev/null || fail "the first build failed"
+  run_board "$home" build "$data" >/dev/null || fail "the first build failed"
 
   jq '.generated = "2026-08-19T01:00Z"' "$data" > "$data.tmp" && mv "$data.tmp" "$data"
-  out=$(run_board "$home" build --lavish "$data") || fail "the rebuild failed"
-  assert_contains "$out" "already-armed: " "the rebuild re-armed an already registered source: $out"
+  run_board "$home" build "$data" >/dev/null || fail "the rebuild failed"
   extract_payload "$board" | jq -e '.generated == "2026-08-19T01:00Z"' >/dev/null \
     || fail "the rebuild did not refresh the board payload in place"
-  records=$(find "$home/state/procevent" -name '*.source' | wc -l | tr -d ' ')
-  [ "$records" = 1 ] || fail "rebuilding left $records source registrations instead of 1"
-  pass "rebuild refreshes the board in place without double-arming"
+  [ "$(find "$home/.lavish" -name '*.html' | wc -l | tr -d ' ')" = 1 ] \
+    || fail "the rebuild left more than one board behind"
+  stop_board_server "$home"
+  pass "a rebuild refreshes the same board in place"
 }
 
 test_build_refuses_a_template_without_exactly_one_slot() {
@@ -879,149 +587,6 @@ test_charted_kind_is_optional_and_accepts_both_values() {
   pass "charted kind is optional and accepts queued and warning"
 }
 
-
-# --- part 1: never arm a poll on an ended session ---------------------------
-
-test_build_reopens_a_session_the_captain_ended() {
-  local home data board out sid claim old_pid old_token new_pid new_token
-  home=$(make_home ended-session)
-  data="$home/payload.json"
-  board="$home/.lavish/bearings-board.html"
-  write_valid_payload "$data"
-  run_board "$home" build --lavish "$data" >/dev/null || fail "the first build failed"
-  sid=$(run_lavish_source_id "$home" "$board")
-  claim="$home/procevent-claims/$sid.claim"
-  old_pid=$(sed -n '2p' "$claim")
-  old_token=$(sed -n '3p' "$claim")
-
-  # The reported case: the captain ends the board from the browser, so opening
-  # it again keeps the same session id, reports it ended, and EXITS 0. A build
-  # that trusts the exit status arms a poll nothing can ever attach to.
-  : > "$home/lavish-state/hold-after-terminal"
-  : > "$home/lavish-state/poll-trigger"
-  for _ in $(seq 1 100); do
-    [ -e "$home/lavish-state/terminal-emitted" ] && break
-    sleep 0.05
-  done
-  [ -e "$home/lavish-state/terminal-emitted" ] \
-    || fail "the old listener did not receive its terminal result"
-  rm -f "$home/lavish-state/poll-trigger"
-  end_session_as_captain "$home"
-  out=$(run_board "$home" build --lavish "$data") || fail "the rebuild refused a recoverable ended session"
-  rm -f "$home/lavish-state/hold-after-terminal"
-  assert_contains "$out" "session: reopened" \
-    "the rebuild did not reopen the ended session: $out"
-  [ ! -e "$home/lavish-state/user-ended" ] \
-    || fail "the rebuild reported success while the session was still ended"
-  new_pid=$(sed -n '2p' "$claim")
-  new_token=$(sed -n '3p' "$claim")
-  [ "$new_pid" != "$old_pid" ] || [ "$new_token" != "$old_token" ] \
-    || fail "the rebuild accepted the pre-reopen source generation"
-  [ "$(run_procevent "$home" list | awk -v id="$sid" 'NR > 1 && $1 == id { print $3 }')" = live ] \
-    || fail "the reopened board has no live listener"
-  pass "a board build reopens a session the captain ended instead of arming a dead one"
-}
-
-test_build_reopens_when_an_opened_session_ends_before_listing() {
-  local home data out board sid
-  home=$(make_home establish-list-race)
-  data="$home/payload.json"
-  board="$home/.lavish/bearings-board.html"
-  write_valid_payload "$data"
-  : > "$home/lavish-state/end-before-next-list"
-  out=$(run_board "$home" build --lavish "$data") || fail "the raced session build failed: $out"
-  assert_contains "$out" "session: reopened" \
-    "the build trusted an opened response after the server no longer listed it: $out"
-  sid=$(run_lavish_source_id "$home" "$board")
-  [ -s "$home/lavish-state/open" ] || fail "the raced session was not live before arming"
-  [ "$(run_procevent "$home" list | awk -v id="$sid" 'NR > 1 && $1 == id { print $3 }')" = live ] \
-    || fail "the replacement session did not receive a live listener"
-  pass "build reopens a session that ends between establish and listing"
-}
-
-test_name_support_probe_never_lists_before_the_session_is_established() {
-  local home data first
-  home=$(make_home name-probe-inert)
-  data="$home/payload.json"
-  write_valid_payload "$data"
-  run_board "$home" build --lavish "$data" >/dev/null || fail "the build failed"
-  # A listing is the read the liveness proof consumes, so nothing the build asks
-  # before opening the session may be one. Pinning the FIRST call keeps a future
-  # probe from answering a question the build has not asked yet.
-  first=$(sed -n '1p' "$home/lavish-state/calls")
-  case "$first" in
-    '<list>') fail "the build listed sessions before establishing one" ;;
-  esac
-  pass "the session-name probe never lists sessions before the session is established"
-}
-
-test_name_support_probe_follows_what_the_release_advertises() {
-  local home data opened
-  home=$(make_home name-probe-absent)
-  data="$home/payload.json"
-  write_valid_payload "$data"
-  run_board "$home" build --lavish "$data" >/dev/null || fail "the unnamed build failed"
-  opened=$(grep -c -- '--name bearings' "$home/lavish-state/calls" || true)
-  [ "$opened" = 0 ] \
-    || fail "the build named a session on a release that does not advertise --name"
-
-  home=$(make_home name-probe-present)
-  data="$home/payload.json"
-  write_valid_payload "$data"
-  : > "$home/lavish-state/advertise-name"
-  run_board "$home" build --lavish "$data" >/dev/null || fail "the named build failed"
-  grep -q -- '--name bearings' "$home/lavish-state/calls" \
-    || fail "the build did not name the session on a release that advertises --name"
-  pass "the session-name probe reads the installed release in both directions"
-}
-
-test_build_refuses_to_arm_when_the_session_stays_ended() {
-  local home data rc out sid
-  home=$(make_home dead-session)
-  data="$home/payload.json"
-  write_valid_payload "$data"
-  # An ended session that will not come back: the build must stop rather than
-  # register a poll against it.
-  : > "$home/lavish-state/refuse-reopen"
-  set +e
-  out=$(run_board "$home" build --lavish "$data" 2>&1)
-  rc=$?
-  set -e
-  [ "$rc" -ne 0 ] || fail "build armed a poll on a session that stayed ended: $out"
-  assert_contains "$out" "ended session" "the refusal did not say why: $out"
-  sid=$(run_lavish_source_id "$home" "$home/.lavish/bearings-board.html")
-  ! run_decisions "$home" binding "$sid" >/dev/null 2>&1 \
-    || fail "build bound the board to a session that stayed ended"
-  ! run_procevent "$home" list | awk 'NR > 1 { print $1 }' | grep -Fxq "$sid" \
-    || fail "build armed the board against a session that stayed ended"
-  pass "build refuses to arm a poll on a session that stays ended"
-}
-
-test_build_starts_a_listener_for_an_already_armed_board() {
-  local home data board out sid claim
-  home=$(make_home relisten)
-  data="$home/payload.json"
-  board="$home/.lavish/bearings-board.html"
-  write_valid_payload "$data"
-  run_board "$home" build --lavish "$data" >/dev/null || fail "the first build failed"
-  sid=$(run_lavish_source_id "$home" "$board")
-
-  # Registered is not listening: drop the listener the way a crashed generation
-  # would, then rebuild. `already-armed` must not be the end of the story.
-  claim="$home/procevent-claims/$sid.claim"
-  assert_present "$claim" "the first build left no listener to lose"
-  kill -KILL -"$(sed -n '2p' "$claim")" 2>/dev/null || true
-  kill -KILL "$(sed -n '2p' "$claim")" 2>/dev/null || true
-  sleep 1
-
-  out=$(run_board "$home" build --lavish "$data") || fail "the rebuild failed"
-  assert_contains "$out" "already-armed: $sid" "the rebuild re-registered the source: $out"
-  [ "$(run_procevent "$home" list | awk -v id="$sid" 'NR > 1 && $1 == id { print $3 }')" = live ] \
-    || fail "the rebuilt board is registered but nothing is listening"
-  pass "a rebuild starts a listener when an already-armed board has none"
-}
-
-# --- part 2: a landed subject is not a live call ----------------------------
 
 test_build_drops_decision_cards_whose_subject_already_landed() {
   local home data board out
@@ -1094,31 +659,6 @@ EOF
 }
 
 # --- part 3: every decision card offers reconcile ---------------------------
-
-test_build_fails_when_reconcile_cannot_establish_a_listener() {
-  local home data out rc sid
-  home=$(make_home no-listener)
-  data="$home/payload.json"
-  write_valid_payload "$data"
-  run_board "$home" build --lavish "$data" >/dev/null || fail "could not establish the listener fixture"
-  sid=$(run_lavish_source_id "$home" "$home/.lavish/bearings-board.html")
-  cat > "$home/fakebin/ps" <<'SH'
-#!/usr/bin/env bash
-exit 1
-SH
-  chmod +x "$home/fakebin/ps"
-  set +e
-  out=$(FM_PROC_ROOT_OVERRIDE="$home/no-proc" run_board "$home" build --lavish "$data" 2>&1)
-  rc=$?
-  set -e
-  rm -f "$home/fakebin/ps"
-  [ "$rc" -ne 0 ] || fail "a build with an uncertain listener reported success: $out"
-  assert_contains "$out" "source $sid is not listening after reconcile" \
-    "the refusal did not name the source: $out"
-  assert_contains "$out" "observed owner: uncertain" \
-    "the refusal did not name the observed owner: $out"
-  pass "build fails when reconcile cannot prove a live listener"
-}
 
 test_every_decision_card_carries_the_reconcile_choice() {
   local home data board
@@ -2506,42 +2046,40 @@ test_a_board_builds_and_is_served_with_no_lavish_installed() {
   pass "a clone with no lavish-axi builds the board, gets a URL, and that URL serves it"
 }
 
-test_url_reads_the_live_session_listing() {
-  local home data board out rc
+test_url_refuses_before_a_board_exists_and_otherwise_serves_it() {
+  local home data out rc url status
+  command -v node >/dev/null 2>&1 || { pass "skip: node not found"; return 0; }
   home=$(make_home url)
   data="$home/payload.json"
-  board="$home/.lavish/bearings-board.html"
-  set +e; out=$(run_board "$home" url --lavish 2>&1); rc=$?; set -e
+  set +e; out=$(run_board "$home" url 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "url succeeded before any board was built"
   assert_contains "$out" "no board has been built" "url did not explain the missing board: $out"
   write_valid_payload "$data"
-  run_board "$home" build --lavish "$data" >/dev/null || fail "a valid payload did not build"
-  out=$(run_board "$home" url --lavish) || fail "url failed for a built, open board: $out"
-  assert_contains "$out" "http://" "url did not print the session URL: $out"
-  end_session_as_captain "$home"
-  set +e; out=$(run_board "$home" url --lavish 2>&1); rc=$?; set -e
-  [ "$rc" -ne 0 ] || fail "url printed a URL for a session the captain ended"
-  pass "url --lavish prints the open session's URL and refuses when none is open"
+  run_board "$home" build "$data" >/dev/null || fail "a valid payload did not build"
+  url=$(run_board "$home" url) || fail "url failed for a built board: $url"
+  case $url in
+    http://127.0.0.1:*/) ;;
+    *) stop_board_server "$home"; fail "url did not print this home's own address: $url" ;;
+  esac
+  # And it is an address something is actually answering on, not a string.
+  status=$(http_get "$url" "$home/served.html") \
+    || { stop_board_server "$home"; fail "nothing is serving the address url printed"; }
+  assert_equals 200 "$status" "the address url printed does not serve the board"
+  stop_board_server "$home"
+  pass "url refuses until a board exists, then prints the address this home serves it at"
 }
 
 test_path_is_stable_and_home_scoped
 test_a_board_builds_and_is_served_with_no_lavish_installed
 test_build_refuses_malformed_payloads_before_touching_the_board
 test_charted_kind_is_optional_and_accepts_both_values
-test_build_injects_binds_then_arms
-test_registration_cannot_consume_before_any_origin_binding
-test_build_does_not_bind_or_arm_when_session_start_fails
-test_rebuild_is_idempotent_and_does_not_double_arm
+test_build_injects_the_payload_and_names_the_answer_channel
+test_a_rebuild_refreshes_the_board_in_place
 test_build_refuses_a_template_without_exactly_one_slot
-test_build_reopens_a_session_the_captain_ended
-test_build_reopens_when_an_opened_session_ends_before_listing
-test_name_support_probe_never_lists_before_the_session_is_established
-test_name_support_probe_follows_what_the_release_advertises
-test_build_refuses_to_arm_when_the_session_stays_ended
-test_build_starts_a_listener_for_an_already_armed_board
+test_charted_kind_is_optional_and_accepts_both_values
+test_build_refuses_a_template_without_exactly_one_slot
 test_build_drops_decision_cards_whose_subject_already_landed
 test_build_keeps_a_decision_absent_from_the_main_backlog
-test_build_fails_when_reconcile_cannot_establish_a_listener
 test_every_decision_card_carries_the_reconcile_choice
 test_build_refuses_a_payload_that_occupies_the_reconcile_value
 test_build_refuses_a_nondecision_reconcile_value
@@ -2594,7 +2132,7 @@ test_compose_places_every_worker_it_can_and_names_the_rest
 test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled
-test_url_reads_the_live_session_listing
+test_url_refuses_before_a_board_exists_and_otherwise_serves_it
 test_ack_records_and_clears_what_the_captain_clicked
 test_ack_refuses_a_refusal_with_no_reason_and_a_key_that_is_not_one
 test_compose_carries_the_refusal_to_the_row_the_captain_clicked
@@ -2606,5 +2144,4 @@ test_compose_keeps_a_record_whose_key_is_absent_from_the_skeleton
 test_a_whitespace_only_refusal_reason_is_refused
 test_a_flag_with_no_value_explains_itself
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind
-test_a_captured_board_answer_acknowledges_every_key_it_named
 test_the_built_board_names_no_remote_host_to_fetch_from

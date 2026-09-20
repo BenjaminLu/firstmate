@@ -26,31 +26,15 @@ make_home() {  # <name>
   fm_test_track_procevent_home "$home" "$home/procevent-claims"
   mkdir -p "$home/state" "$home/data"
   fakebin=$(fm_fakebin "$home")
-  # The build proves the board session is live before it arms anything, so the
-  # stub reports the opened shape the real lavish-axi emits. This suite is about
-  # what the template renders, not about session liveness, which
-  # tests/fm-bearings-board.test.sh owns.
+  # A TRIPWIRE, not a stub. Nothing on the board path may reach for lavish-axi
+  # any more, so this records the attempt and fails rather than answering it.
+  # A stub that answered would let the dependency come back silently; this
+  # makes it come back by name, in whichever case reintroduced it.
   cat > "$fakebin/lavish-axi" <<'SH'
 #!/usr/bin/env bash
-case "${1-}" in
-  --version) printf '0.1.61\n' ;;
-  '')
-    printf 'sessions[1]{file,status,url,pending_prompts}:\n'
-    [ ! -s "$FM_HOME/lavish-open" ] \
-      || printf '  %s,open,"http://127.0.0.1/session/render",0\n' "$(cat "$FM_HOME/lavish-open")"
-    ;;
-  poll)
-    # Bounded, so a listener that escapes its test stops on its own.
-    while [ "$SECONDS" -lt "${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}" ]; do sleep 1; done
-    exit 75
-    ;;
-  *)
-    real=$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")
-    printf '%s\n' "$real" > "$FM_HOME/lavish-open"
-    printf 'session:\n  status: opened\n'
-    ;;
-esac
-exit 0
+printf '%s\n' "$*" >> "$FM_HOME/lavish-invoked"
+printf 'lavish-axi was invoked by the board path, which must not need it\n' >&2
+exit 127
 SH
   chmod +x "$fakebin/lavish-axi"
   printf '%s\n' "$home"
@@ -2345,13 +2329,13 @@ test_an_inline_packet_never_offers_a_second_address() {
   printf '%s' "$out" | jq -e '
     (.cards[0] | (.chips | index("open the packet")) == null and .packet != null)
   ' >/dev/null || fail "an inline packet still offered its own separate page: $out"
-  # And the build established no separate address for the packet. An ordinary
-  # build now hosts the board on this home's own server and never reaches
-  # lavish-axi at all, so the count that proves it is zero: any session here
-  # could only be a second page for the card, which is the thing this case
-  # exists to forbid.
-  [ ! -s "$home/lavish-open" ] \
-    || fail "the build established a Lavish session, which could only be a second address for the packet: $(cat "$home/lavish-open")"
+  # And nothing reached for an external tool to give the packet an address of
+  # its own. The fixture's lavish-axi is a tripwire that records and fails, so
+  # this is a real assertion rather than a file nothing could have written:
+  # any invocation at all, by the board path or by fm-packet.sh serve, lands
+  # in that record and is named here.
+  [ ! -s "$home/lavish-invoked" ] \
+    || fail "the board path invoked lavish-axi, which it must not need: $(cat "$home/lavish-invoked")"
   pass "a card with the packet inline opens no second session and offers no second address"
 }
 
