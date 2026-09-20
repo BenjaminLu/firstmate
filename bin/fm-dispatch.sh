@@ -362,22 +362,39 @@ else
 fi
 if fm_design_placeholder_intact "$DESIGN_RECORD"; then
   DESIGN_TMP="$DATA/$ID/.design.md.dispatch.$$"
+  # Bounded to the `## Decisions` section, the same way fm_design_placeholder_intact
+  # is bounded and for the same reason: a plan about this machinery may show
+  # `{DESIGN}` on a line of its own elsewhere in the record, and an unbounded
+  # replacement would splice the plan into that line too. Detection and
+  # replacement share one assumption and must share one boundary.
   {
+    in_decisions=0
+    filled=0
     while IFS= read -r line || [ -n "$line" ]; do
       case "$line" in
-        "$FM_DESIGN_PLACEHOLDER")
-          if [ "$DESIGN_SET" -eq 1 ]; then
-            emit_file_bytes "$DESIGN"
-          else
-            printf '%s\n' \
-              "None recorded at dispatch ($(date -u +%Y-%m-%d)): $NO_DESIGN" \
-              "Firstmate judged this task to carry no design decisions worth recording. A decision made later is appended below as its own dated entry."
-          fi
+        '## Decisions') in_decisions=1; printf '%s\n' "$line"; continue ;;
+        '#'*)
+          case "$line" in
+            '###'*) : ;;
+            *) in_decisions=0 ;;
+          esac
           ;;
-        *) printf '%s\n' "$line" ;;
       esac
+      if [ "$in_decisions" -eq 1 ] && [ "$line" = "$FM_DESIGN_PLACEHOLDER" ]; then
+        filled=1
+        if [ "$DESIGN_SET" -eq 1 ]; then
+          emit_file_bytes "$DESIGN"
+        else
+          printf '%s\n' \
+            "None recorded at dispatch ($(date -u +%Y-%m-%d)): $NO_DESIGN" \
+            "Firstmate judged this task to carry no design decisions worth recording. A decision made later is appended below as its own dated entry."
+        fi
+        continue
+      fi
+      printf '%s\n' "$line"
     done < "$DESIGN_RECORD"
-  } > "$DESIGN_TMP" || { rm -f -- "$DESIGN_TMP"; die "could not fill $DESIGN_RECORD"; }
+    [ "$filled" -eq 1 ] || exit 1
+  } > "$DESIGN_TMP" || { rm -f -- "$DESIGN_TMP"; die "could not fill $DESIGN_RECORD: its ## Decisions section holds no $FM_DESIGN_PLACEHOLDER line to replace"; }
   mv -f -- "$DESIGN_TMP" "$DESIGN_RECORD" || { rm -f -- "$DESIGN_TMP"; die "could not replace $DESIGN_RECORD"; }
   if fm_design_placeholder_intact "$DESIGN_RECORD"; then
     die "$DESIGN_RECORD's ## Decisions section still holds nothing but $FM_DESIGN_PLACEHOLDER after filling; the scaffold's placeholder line was not where bin/fm-dod-lib.sh puts it"

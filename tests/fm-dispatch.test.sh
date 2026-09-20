@@ -789,6 +789,34 @@ test_design_record_is_filled_from_the_plan_or_the_declaration() {
 
 # A task briefed before design records existed has none. Re-dispatching it must
 # give it one rather than leaving the call with nothing to fill.
+# Detection and replacement share one assumption, so they share one boundary. A
+# record whose ## Decisions is still the placeholder while a bare {DESIGN} line
+# sits further down - a plan about this scaffold, written before it was filled -
+# must have the plan spliced once, into the section, and not into both.
+test_design_fill_is_bounded_to_the_decisions_section() {
+  local case_dir id record out status hits
+  case_dir=$(make_case design-bounded-fill)
+  id=dispatch-design-bounded
+  mkdir -p "$case_dir/home/data/$id"
+  record="$case_dir/home/data/$id/design.md"
+  printf '%s\n' '# Design - a record with a worked example below' '' \
+    '## Decisions' '{DESIGN}' '' \
+    '## Notes for whoever fills this' \
+    'The scaffold writes its placeholder on a line of its own:' '' \
+    '{DESIGN}' '' \
+    'and the dispatch replaces that one line.' > "$record"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a record with a placeholder outside its section should fill: $out"
+  hits=$(grep -c 'Render the toggle from the existing view state; no new store.' "$record")
+  assert_equals "1" "$hits" "the plan was spliced into every placeholder line, not just the section's"
+  grep -qx -- '{DESIGN}' "$record" \
+    || fail "the placeholder outside ## Decisions was consumed; it is the record's own example text"
+  pass "fm-dispatch: the fill replaces the ## Decisions placeholder and leaves a quoted one alone"
+}
+
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had() {
   local case_dir id out status brief record
   case_dir=$(make_case design-legacy)
@@ -842,3 +870,4 @@ test_review_flag_conflicts_and_brief_mismatch_refuse
 test_design_record_choice_is_required_and_exclusive
 test_design_record_is_filled_from_the_plan_or_the_declaration
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had
+test_design_fill_is_bounded_to_the_decisions_section
