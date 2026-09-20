@@ -589,7 +589,7 @@ function tokenMatches(given) {
  * character surviving into a durable record would corrupt it for every later
  * reader. */
 function oneLine(value, max) {
-  return String(value).replace(/[ -]/g, " ").slice(0, max);
+  return String(value).replace(/[\x00-\x1f\x7f]/g, " ").slice(0, max);
 }
 
 function refusal(reason, detail) {
