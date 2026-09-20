@@ -171,10 +171,22 @@ hull_column() {  # <screen text>
 # The stock working row and the boat that replaces it are only up while a turn
 # is working, and both cases below have to observe that window. Its length is
 # held open deliberately rather than left to the model: the command the prompt
-# asks for sleeps for this long inside the turn. Against the 0.1s sampling
-# cadence used below that is roughly fifty chances at a row displayed for the
-# whole window - which is what keeps "never sampled" a statement about the
-# matcher rather than a lost race. Shortening this re-opens that race.
+# asks for sleeps for this long inside the turn.
+#
+# The two observers do not sample at the same rate, and the margin belongs to
+# the slower one. Each sample also pays for a capture-pane spawn, ~0.03s on a
+# loaded runner, which counts against the window just as the sleep does:
+#
+#   flag off  - the frame loop below sleeps 0.1s, so ~0.13s per sample
+#               and ~38 chances across a 5s window
+#   flag on   - wait_screen sleeps 0.25s, so ~0.28s per sample
+#               and ~17 chances across the same window
+#
+# So ~17 is the number to hold this constant against, not ~38. That is still
+# ample for a row displayed the whole time, which is what keeps "never sampled"
+# a statement about the matcher rather than a lost race - but the margin is
+# thinner than the faster observer suggests, and shortening the hold spends it
+# against the slower one first.
 WORKING_HOLD_SECONDS=5
 PROMPT="Run this exact bash command with the Bash tool: sleep $WORKING_HOLD_SECONDS; cat notes.txt   Then reply with one short sentence naming the three words."
 
@@ -264,9 +276,10 @@ done
 wait_settled 'the turn with the flag off'
 off_settled=$(screen)
 # A turn that ran the tool held the working window open for WORKING_HOLD_SECONDS,
-# so missing the row across every sample of it is not a lost race: either the
-# turn never ran the command, or the pattern no longer matches this build's
-# working row. Both are real failures, and they are not the same failure.
+# which is ~38 samples at this loop's cadence, so missing the row across every
+# one of them is not a lost race: either the turn never ran the command, or the
+# pattern no longer matches this build's working row. Both are real failures,
+# and they are not the same failure.
 if [ "$saw_working" -eq 0 ]; then
   printf '%s\n' "$off_settled" >&2
   case "$off_settled" in
