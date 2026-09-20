@@ -80,17 +80,44 @@
 # cut, because half a task id or half a link points at the wrong thing. Those
 # caps are also what make the shortening loop always terminate on a line that
 # still names the call.
-# The bound exists so each append is a single write() and concurrent appends
-# from two firstmate processes cannot interleave. There is deliberately no
-# lock: taking one would let a contended or stale lock delay the fleet action
-# this library only observes.
+#
+# THE BOUND IS THE SHELL'S STDOUT BUFFER, NOT THE FILESYSTEM BLOCK.
+#
+# The bound exists so each append is a single write() and two firstmate
+# processes appending at once cannot interleave. The atomic unit is the size
+# at which the bash `printf` builtin flushes stdout, which is NOT the
+# filesystem block size an earlier version of this comment reasoned about.
+# Measured through bin/fm-gate-call.sh with four concurrent writers, 100
+# records per row, macOS 24.6.0 / APFS / GNU bash 3.2.57 - the stock macOS
+# shell this repository keeps a CI lane for:
+#
+#   write bytes (line + newline)   torn lines
+#     835                            0/100
+#     985                            0/100
+#    1035                           18/100
+#    1085                           12/100
+#    2159                           25/100
+#
+# The boundary is 1024 bytes including the newline. A torn line is the exact
+# failure this record exists to prevent: it is unparseable, it writes no drops
+# entry, and it says nothing on stderr, so the log reads as complete and is
+# not. FM_GATE_CALL_MAX_LINE is therefore set below that boundary with margin,
+# and tests/fm-gate-calls.test.sh drives real concurrent writers at the bound
+# so the claim in this paragraph stays true rather than becoming folklore.
+# bin/fm-board-live.sh's own append states the correct version of this
+# reasoning - atomic "on a line this short" - and its lines are a couple of
+# hundred bytes; the guarantee does not generalise to a long line.
+#
+# There is deliberately no lock: taking one would let a contended or stale lock
+# delay the fleet action this library only observes.
 #
 # Sourced, never executed. bin/fm-gate-call.sh is the command-line entry point.
 # No side effects on source. set -u / set -e safe.
 
-# Assembled-line byte bound. Comfortably inside one filesystem block, which is
-# what keeps a single append from being split across two write() calls.
-FM_GATE_CALL_MAX_LINE=3900
+# Assembled-line byte bound. Set below the measured 1024-byte stdout flush
+# (see BOUNDS above), with margin for the newline, so one append is one
+# write(). Raising it past that boundary reintroduces silent torn records.
+FM_GATE_CALL_MAX_LINE=900
 
 # Character caps on the four identity fields (see BOUNDS above).
 FM_GATE_CALL_CAP_SITE=40

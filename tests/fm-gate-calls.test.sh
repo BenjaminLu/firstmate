@@ -142,9 +142,40 @@ test_an_oversized_call_is_shortened_visibly() {
   expect_code 1 "$(log_lines "$log")" "oversized: the record must stay one line"
   assert_equals true "$(log_field "$log" 1 truncated)" \
     "oversized: shortening was not declared in the record"
-  [ "$(wc -c < "$log" | tr -d ' ')" -lt 4096 ] \
-    || fail "oversized: the record line exceeded its byte bound"
+  [ "$(wc -c < "$log" | tr -d ' ')" -le 1024 ] \
+    || fail "oversized: the record line crossed the 1024-byte flush boundary, where concurrent appends tear"
   pass "an overlong call is shortened visibly rather than silently"
+}
+
+test_concurrent_writers_never_tear_a_record() {
+  local home log rounds=20 writers=3 r i grounds torn=0 total line
+  home=$(make_home concurrent)
+  log="$home/state/gate-calls.jsonl"
+  # Longer than any bound, so every record is shortened to the maximum line
+  # the library will emit. That is the only size worth racing: a bound that
+  # holds for short lines and tears at its own maximum is not a bound.
+  grounds=$(head -c 4000 < /dev/zero | tr '\0' 'g')
+
+  for r in $(seq 1 "$rounds"); do
+    for i in $(seq 1 "$writers"); do
+      run_gate_call "$home" record --site pr-merge --task "task-r${r}w${i}" \
+        --verdict refused --what 'merge pull request 38' --grounds "$grounds" \
+        >/dev/null 2>&1 &
+    done
+    wait
+  done
+
+  total=$(log_lines "$log")
+  expect_code $(( rounds * writers )) "$total" \
+    "concurrent: the log lost or gained whole lines under concurrent writers"
+  while IFS= read -r line; do
+    printf '%s' "$line" | jq -e . >/dev/null 2>&1 || torn=$((torn + 1))
+  done < "$log"
+  expect_code 0 "$torn" \
+    "concurrent: $torn of $total records were torn - a torn line is unparseable, writes no drops entry and says nothing on stderr, which is the silent loss this log exists to prevent"
+  assert_absent "$home/state/gate-calls.drops" \
+    "concurrent: a clean concurrent run reported dropped calls"
+  pass "concurrent writers at the maximum line size never tear a record"
 }
 
 # ------------------------------------------------- a missing record is visible
@@ -242,8 +273,8 @@ test_an_over_long_identity_field_is_refused_rather_than_cut() {
   expect_code 1 "$rc" "long-task: an over-long task id must be refused"
   assert_absent "$log" "long-task: a half-written task id reached the log"
   assert_present "$drops" "long-task: the refused call left no durable trace"
-  [ "$(wc -c < "$drops" | tr -d ' ')" -lt 4096 ] \
-    || fail "long-task: the drops record ignored the byte bound"
+  [ "$(wc -c < "$drops" | tr -d ' ')" -le 1024 ] \
+    || fail "long-task: the drops record crossed the 1024-byte flush boundary"
   assert_grep 'actionable:' "$home/stderr" "long-task: the refusal was silent"
   pass "an over-long task id is refused, not silently cut to point at the wrong task"
 }
@@ -261,8 +292,8 @@ test_an_oversized_drop_stays_within_the_byte_bound() {
   expect_code 1 "$rc" "oversized-drop: an invalid verdict must be refused"
   assert_present "$drops" "oversized-drop: the refused call left no durable trace"
   expect_code 1 "$(log_lines "$drops")" "oversized-drop: the drops record must stay one line"
-  [ "$(wc -c < "$drops" | tr -d ' ')" -lt 4096 ] \
-    || fail "oversized-drop: the drops record exceeded the byte bound"
+  [ "$(wc -c < "$drops" | tr -d ' ')" -le 1024 ] \
+    || fail "oversized-drop: the drops record crossed the 1024-byte flush boundary"
   assert_equals true "$(log_field "$drops" 1 truncated)" \
     "oversized-drop: shortening was not declared in the drops record"
   pass "a dropped call is shortened to the same bound as a recorded one"
@@ -340,6 +371,7 @@ test_a_call_with_no_grounds_is_refused_and_reported
 test_a_multi_line_refusal_keeps_its_structure_on_one_line
 test_a_declined_review_finding_is_recorded_as_deferred
 test_an_oversized_call_is_shortened_visibly
+test_concurrent_writers_never_tear_a_record
 test_an_unwritable_log_is_reported_not_swallowed
 test_an_unwritable_state_directory_still_reports
 test_a_drops_record_reads_with_the_same_parser_as_the_log
