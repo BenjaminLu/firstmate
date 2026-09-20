@@ -43,9 +43,10 @@ serve() {
       printf '%s\n' "${FM_TEST_REVIEWS:-[]}"
       ;;
     "pr view "*" --json reviews --jq "*)
-      # The approval read, fetched raw because the verdict line reaches jq as
-      # data. Defaults to one standing approval at the head, so every fixture
-      # that is not about the approval stays silent the way it always did.
+      # The approval read. The verdict line and the head reach the shell as
+      # data, so this answers the payload and the --jq program does the rest.
+      # Defaults to one standing approval at the head, so every fixture that is
+      # not about the approval stays silent the way it always did.
       if [ -n "${FM_TEST_APPROVAL_ERROR-}" ]; then
         printf '%s\n' "$FM_TEST_APPROVAL_ERROR" >&2
         exit 1
@@ -73,11 +74,7 @@ for arg in "$@"; do
   [ "$prev" != --jq ] || prog=$arg
   prev=$arg
 done
-if [ -z "$prog" ]; then
-  serve "$@"
-else
-  serve "$@" | jq -r "$prog"
-fi
+serve "$@" | jq -r "$prog"
 SH
 chmod +x "$FAKEBIN/gh"
 
