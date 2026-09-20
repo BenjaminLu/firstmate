@@ -659,6 +659,51 @@ test_an_empty_press_does_not_wipe_a_standing_refusal() {
   pass "an empty press never wipes the message already telling him something"
 }
 
+# R31. The caption still opened with a flat claim about the number in the
+# bubble and corrected it four sentences later - the exact shape ruled against
+# for the hand-weighting sentence, left standing in the same string. A reader
+# who stops at the number has been told the wrong thing, and a caption exists
+# to be stopped at.
+#
+# And the sentence that was supposed to tell him which bubbles to distrust
+# pointed at a cue the picture does not carry: it said some "say at least",
+# when a bubble's visible label is the bare number and only the ranked list and
+# the aria text use those words.
+test_the_caption_does_not_call_a_floor_count_an_exact_one() {
+  local home out
+  home=$(make_home caption-floor-claim)
+  out=$(render_payload "$home" "$(map_note_payload '[{
+    "key":"floor", "type":"decision", "repo":"r", "title":"Its blocker list was cut off",
+    "risk":"high", "reversible":"no", "weighed_by":"fleet", "blocks":2, "blocks_partial":true,
+    "allow_freeform":true, "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}]')")
+
+  # The bubble really does show a bare number, which is why the flat claim and
+  # the "says at least" cue were both wrong about this plot.
+  [ "$(printf '%s' "$out" | jq -r '.map[] | select(.key == "floor") | .count')" = "2" ] \
+    || fail "the fixture bubble does not carry a bare number, so this proves nothing: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "is how many pieces of work stop")" = "0" ] \
+    || fail "the caption called a floor count an exact one: $out"
+  # The hedge names the mark the plot actually carries.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "broken-outlined" \
+    "the hedge pointed at a cue the picture does not carry: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "say \"at least\"")" = "0" ] \
+    || fail "the hedge still sends him looking for words the plot does not draw: $out"
+  pass "the caption does not call a floor count an exact one"
+}
+
+# And with no floor on the plot the flat claim is made, because it is true -
+# otherwise the caption hedges a number that needs no hedge.
+test_the_caption_states_the_count_plainly_when_every_count_is_exact() {
+  local home out
+  home=$(make_home caption-exact-claim)
+  out=$(render_payload "$home" "$(map_note_payload '[]')")
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "is how many pieces of work stop" \
+    "a plot whose counts are all exact did not say so: $out"
+  [ "$(printf '%s' "$out" | jq -r '.map_note' | grep -c "broken outline")" = "0" ] \
+    || fail "a plot with no broken outline explained one: $out"
+  pass "the caption states the count plainly when every count is exact"
+}
+
 # R30. Tying the refusal to the bar rather than to the condition that raised it
 # meant it outlived that condition. The length guard un-ticks the row it
 # refused, so the moment the captain touches the selection again he is over no
@@ -2467,3 +2512,5 @@ test_the_bar_keeps_its_length_refusal_on_a_board_that_cannot_send
 test_the_bar_still_says_it_cannot_dispatch_when_nothing_else_is_standing
 test_the_bars_refusal_does_not_outlive_what_raised_it
 test_the_bar_tells_him_both_reasons_when_both_hold
+test_the_caption_does_not_call_a_floor_count_an_exact_one
+test_the_caption_states_the_count_plainly_when_every_count_is_exact
