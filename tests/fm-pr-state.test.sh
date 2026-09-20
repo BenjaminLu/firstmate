@@ -281,6 +281,14 @@ test_a_missing_approval_is_a_blocker() {
     *'APPROVAL UNREADABLE'*) ;;
     *) fail "an unreadable approval must be reported, not omitted, got: $out" ;;
   esac
+  # This file captures gh's stderr for the checks read and prints what it does
+  # not recognise; the approval read was made to do the same, and that half was
+  # unasserted. Which of rate limit, expired token or DNS it was decides what
+  # firstmate does next.
+  case "$out" in
+    *'the forge said:'*'could not resolve host'*) ;;
+    *) fail "the forge's own account of the failed approval read was discarded, got: $out" ;;
+  esac
   pass "each way of being unapproved is reported apart, the way the merge path reports them"
 }
 

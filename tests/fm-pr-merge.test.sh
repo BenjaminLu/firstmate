@@ -305,6 +305,12 @@ case "${1:-} ${2:-}" in
       echo 'error: GET https://gitlab.example/api/v4: 429 Too Many Requests' >&2
       exit 1
     fi
+    if [ -e "$case_dir/glab-merge-called" ] && [ -e "$case_dir/glab-post-merge-view-fails" ]; then
+      # The read AFTER the forge accepted the merge. What the client says here
+      # is the only evidence of whether the merge landed.
+      echo 'error: GET https://gitlab.example/api/v4: 502 Bad Gateway' >&2
+      exit 1
+    fi
     if [ -e "$case_dir/glab-merge-called" ] && [ ! -e "$case_dir/glab-stays-open" ]; then
       cat "$case_dir/mr-post.json"
     else
@@ -318,7 +324,12 @@ case "${1:-} ${2:-}" in
     exit 0
     ;;
   api\ *)
-    [ ! -e "$case_dir/glab-approvals-fail" ] || exit 1
+    if [ -e "$case_dir/glab-approvals-fail" ]; then
+      # The real client writes its reason to stderr; a mock that exits silently
+      # leaves the branch that keeps that text undriven.
+      echo 'error: GET https://gitlab.example/api/v4: 401 Unauthorized' >&2
+      exit 1
+    fi
     if [ -e "$case_dir/glab-approvals.json" ]; then
       cat "$case_dir/glab-approvals.json"
     else
@@ -3560,6 +3571,8 @@ test_gitlab_merge_refuses_when_approvals_cannot_be_read() {
   expect_code 1 "$rc" "gitlab-approvals-unreadable: an unreadable approval must not merge"
   assert_grep 'approvals could not be read' "$case_dir/stderr" \
     "gitlab-approvals-unreadable: the refusal did not name the failed approvals read"
+  assert_grep '401 Unauthorized' "$case_dir/stderr" \
+    "gitlab-approvals-unreadable: the forge's own account of the failure was discarded"
   [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
     || fail "gitlab-approvals-unreadable: glab mr merge ran on an unreadable approval"
   pass "fm-pr-merge refuses a GitLab merge whose approvals it could not read"
@@ -4418,3 +4431,25 @@ test_the_gitlab_read_names_its_failure_and_quotes_the_forge() {
 }
 
 test_the_gitlab_read_names_its_failure_and_quotes_the_forge
+
+# The read after the forge accepted the merge is the one place the forge's own
+# text is the only evidence of whether the merge landed, and R21 added that
+# quoting with no fixture driving it.
+test_a_failed_post_merge_confirmation_quotes_the_forge() {
+  local case_dir
+  case_dir=$(make_gitlab_case gitlab-post-merge-view-fails)
+  : > "$case_dir/glab-post-merge-view-fails"
+
+  # This path exits 0 deliberately: the merge was accepted, so the poll stays
+  # armed and the unconfirmed landing is reported as actionable rather than as a
+  # failed merge. What must not happen is the landing being reported as proven.
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "gitlab-post-merge-view-fails: an unconfirmed landing should not exit non-zero"
+  assert_grep 'landed state could not be confirmed' "$case_dir/stderr" \
+    "gitlab-post-merge-view-fails: the outcome did not say the landing was unconfirmed"
+  assert_grep '502 Bad Gateway' "$case_dir/stderr" \
+    "gitlab-post-merge-view-fails: the forge's own account of the failed confirmation was discarded"
+  pass "a post-merge confirmation that fails keeps the forge's account of why, which is the only evidence the merge landed"
+}
+
+test_a_failed_post_merge_confirmation_quotes_the_forge
