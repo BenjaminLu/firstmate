@@ -646,7 +646,8 @@ fm_capture_match() {
 # <max-attempts> captures have gone by with neither. At least one --present,
 # --absent or --absent-re is required, and every flag but --tail may repeat.
 # Matching is fixed-string except for --absent-re, and --tail N restricts every
-# pattern in the call to the last N lines of the capture.
+# pattern in the call to the last N lines of the capture; N must be a whole
+# number of at least 1, because a slice of nothing satisfies every absence.
 #
 # Wait on the end state, never on the intermediate one. Captures are discrete
 # samples, so a state the program passes through can appear and vanish
@@ -706,6 +707,20 @@ fm_wait_capture_settled() {
         ;;
       *) fail "fm_wait_capture_settled: unknown argument '$1'" ;;
     esac
+    # --tail's value goes to `tail -n`, which discards its own stderr, so an
+    # unusable count yields an empty slice in silence - and every --absent is
+    # then satisfied by looking at nothing. That is the one path in this helper
+    # that can return success without reading a viewport, which is exactly what
+    # its header forbids, so the count is checked here rather than left to
+    # tail. 0 is refused on the same ground: a legal argument that matches
+    # against nothing is the same vacuous pass with no error to notice.
+    if [ "$1" = --tail ]; then
+      case $2 in
+        ''|*[!0-9]*)
+          fail "fm_wait_capture_settled: --tail needs a whole number of lines, got '$2'" ;;
+      esac
+      [ "$2" -ge 1 ] || fail "fm_wait_capture_settled: --tail needs at least 1 line, got '$2'"
+    fi
     case $1 in
       --tail) tail_lines=$2 ;;
       --present) present+=("$2") ;;

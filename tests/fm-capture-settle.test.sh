@@ -241,6 +241,34 @@ test_a_bounded_absence_ignores_a_longer_word_containing_the_token() {
   pass "an --absent-re absence is bounded as written, and --absent stays a literal"
 }
 
+test_an_unusable_tail_count_is_refused_rather_than_matching_nothing() {
+  local out status value
+  # tail -n throws its own error away, so an unusable count leaves an empty
+  # slice and every --absent is satisfied by a viewport nobody read. That is
+  # the one way this helper can return success without looking, so each shape
+  # has to be refused by name before it reaches tail.
+  for value in abc -3 '' 3.5 '2 4'; do
+    out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/badtail" 4 \
+      --tail "$value" --absent 'nothing') 2>&1 ) && status=0 || status=$?
+    expect_code 1 "$status" "--tail '$value' must be refused, not passed to tail: $out"
+    assert_contains "$out" 'whole number of lines' "the refusal must say what --tail accepts (value '$value')"
+  done
+
+  # Zero is the one unusable value that is a legal argument, so it needs its
+  # own refusal: tail -n 0 succeeds and prints nothing at all.
+  out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/zerotail" 4 \
+    --tail 0 --absent 'nothing') 2>&1 ) && status=0 || status=$?
+  expect_code 1 "$status" "--tail 0 must be refused: $out"
+  assert_contains "$out" 'at least 1 line' "the refusal must say why zero is not a scope"
+
+  # A usable count still works, so the guard refuses the bad shapes only.
+  reset_capture 'first row\nsecond row'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/goodtail" 4 \
+    --tail 1 --absent 'first row' 2>&1) && status=0 || status=$?
+  expect_code 0 "$status" "a usable --tail count must still settle: $out"
+  pass "an unusable --tail count is refused by name instead of quietly matching against nothing"
+}
+
 test_a_wait_that_requires_nothing_is_refused() {
   local out status
   reset_capture 'anything at all'
@@ -282,5 +310,6 @@ test_either_half_of_the_end_state_stands_alone
 test_every_text_the_next_assertion_needs_can_be_required
 test_a_scoped_absence_ignores_a_match_outside_its_scope
 test_a_bounded_absence_ignores_a_longer_word_containing_the_token
+test_an_unusable_tail_count_is_refused_rather_than_matching_nothing
 test_a_wait_that_requires_nothing_is_refused
 echo "# all fm-capture-settle tests passed"
