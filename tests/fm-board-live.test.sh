@@ -301,6 +301,7 @@ test_an_answer_is_durable_before_anything_is_attempted_with_it() {
 
 test_an_answer_that_cannot_be_written_down_is_refused_rather_than_attempted() {
   local home token port got
+  need_tasks_axi || return 0
   home=$(make_answering_home inbound-journal-broken) \
     || fail "could not build a home with a captain-held task"
   token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
