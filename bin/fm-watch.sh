@@ -2366,14 +2366,11 @@ while :; do
               # standing, and telling a supervisor "no head is recorded" while a
               # superseded one is exactly what is recorded points them away from
               # the problem instead of at it.
-              # Both facts are read rather than inferred: what the record
-              # holds now, and whether the forge gave a head at all. Neither
-              # branch may borrow the other's explanation, and none of them
-              # predicts what a retirement that has not run yet will do.
               # Two independent facts, each read rather than inferred: whether
               # the forge gave a head at all, and what the record holds now.
               # The row carries both, because "the head is X" and "the record
-              # says Y" are different things and a supervisor needs each.
+              # says Y" are different things and a supervisor needs each. It
+              # also predicts nothing about a retirement that has not run yet.
               left=$(recorded_pr_head "$id")
               if [ -n "$poll_head" ]; then
                 merged_note="merged at $poll_head, but its record could not be updated"
