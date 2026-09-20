@@ -129,7 +129,7 @@ const MAX_ANSWERS = 64;
 // what a merge is recomputed from, so it only has to outlast one build.
 const EVENT_RING = 2000;
 
-/* ---- the board state ----------------------------------------------------// WHOSE BOARD THE SERVER IS SERVING, AND THE TWO RULES THAT FOLLOW FROM IT.
+// WHOSE BOARD THE SERVER IS SERVING, AND THE TWO RULES THAT FOLLOW FROM IT.
 // The state this server pushes is merged from the board at THIS HOME'S STABLE
 // PATH, never from the page that connected. That is deliberate - one home, one
 // board - but it has two consequences a page cannot be left to discover.
@@ -139,17 +139,26 @@ const EVENT_RING = 2000;
 //   has already lost rows the page still holds. Captain's Call is the section
 //   built by REMOVING rows, so it is the one that empties, while the additive
 //   sections survive and keep the result looking plausible. The page refuses
-//   any payload stamped older than the one it was built with and says it has
+//   any payload COMPOSED before the one it was built with and says it has
 //   stopped updating; the rule lives in the transport beside `builtWith`,
 //   because only the page knows what it was built with.
 //
 //   A BOARD THAT IS BEHIND MAY NOT REPORT AN EMPTY DESK. When this merge could
-//   not account for every change it saw, an emptied Captain's Call is not the
-//   news that nothing needs the captain - it is the absence of news. The merge
-//   falls back to what the board was built with and lets the banner say it is
-//   behind, rather than showing zero beside its own "this board is behind"
+//   not account for every change it saw, a Captain's Call that lost rows is not
+//   news about the captain's desk - it is the absence of news. The merge falls
+//   back to what the board was built with and lets the banner say it is behind,
+//   rather than showing a shrunken list beside its own "this board is behind"
 //   line. See `merge` below.
 //
+// AND THE FIELD BOTH OF THOSE HANG ON. `composed` is when a payload's CONTENT
+// was made, stamped once by fm-bearings-board.sh and written by nothing else.
+// `generated` cannot carry that meaning and must not be asked to: compose
+// carries it through from the snapshot it read, and `merge` below overwrites it
+// with the newest event this merge saw. Comparing a composition against it is
+// comparing two different clocks, which is how a page came to be taken
+// backwards by a board older than itself.
+
+/* ---- the board state ----------------------------------------------------
 
  * base      the payload firstmate last built, read out of the board page
  * baseAt    when that page was written; an event at or after it is live, an
@@ -312,19 +321,19 @@ function merge(base, events) {
   // toward re-applying an event the build already composed rather than
   // dropping one it did not - and re-applying is harmless, because every case
   // below writes a value rather than making a change relative to one.
-  // KNOWN GAP, deliberately left as it is rather than changed under this fix.
-  // The boundary is the page's mtime, not the payload's own `generated` stamp,
-  // and the two are not the same instant: a page rewritten after it was composed
-  // carries an mtime newer than its contents, and every event in between is
-  // skipped - neither applied nor reported. Observed on the captain's own board,
-  // whose payload read 2026-09-20T01:12:33Z against a 09:14:24Z mtime, an
-  // eight-hour hole. Moving the boundary to `generated` closes that hole and
-  // opens another: a page republished from an OLDER payload would re-apply the
-  // removals a newer build had undone, which is the card-deleting failure this
-  // file's rebuild-supersedes invariant exists to prevent. Neither timestamp is
-  // the state's true age, so which one orders a REMOVAL is a design question
-  // with evidence on both sides, recorded here rather than settled in passing.
-  const boundary = Math.floor(base.at / 1000) * 1000;
+  // Ordered against WHEN THIS CONTENT WAS COMPOSED. That is the only clock an
+  // event can honestly be measured against: an event is newer than the board if
+  // it happened after the board's content was made, and neither the file's
+  // mtime nor `generated` says that. mtime is when the file was last written,
+  // which a republish moves without recomposing anything - on the board that
+  // produced this fix it read 09:14 against content composed at 01:12, an
+  // eight-hour window of events neither applied nor reported. `generated` is
+  // carried through from the snapshot compose read and is overwritten below, so
+  // it is not a composition clock at all.
+  // A board built before `composed` existed has no such stamp; it falls back to
+  // mtime, which is the old behaviour and no worse than it was.
+  const composedAt = Date.parse(base.payload.composed);
+  const boundary = Math.floor((Number.isNaN(composedAt) ? base.at : composedAt) / 1000) * 1000;
   const openedWith = Array.isArray(state.captains_call) ? state.captains_call.length : 0;
   for (const ev of events) {
     if (ev.at_ms < boundary) continue;
@@ -332,7 +341,14 @@ function merge(base, events) {
     if (applyEvent(state, ev, stale)) applied += 1;
     if (applied > 0 || stale.length !== before) newest = ev.at || newest;
   }
-  // A BOARD THAT IS BEHIND MUST NOT REPORT AN EMPTY DESK. Captain's Call is the
+  // A BOARD THAT IS BEHIND MUST NOT REPORT A DESK IT CANNOT ACCOUNT FOR. It is
+  // the SHRINKAGE that is withheld, not only the emptying: a merge that could
+  // not account for every change it saw cannot say which of the rows it dropped
+  // it was entitled to drop, and one card silently missing from a list of five
+  // is the same failure as five missing from five, minus the only thing that
+  // would have made it visible. The cost is accepted and is the cheaper one: an
+  // answered card stays up while the feed is behind, which the captain can see
+  // and the next rebuild clears. Captain's Call is the
   // one section built by REMOVING rows, so it is the one section a feed can
   // empty on its own while the additive sections go on looking plausible. When
   // this merge could not account for every change it saw, an emptied Captain's
@@ -343,8 +359,8 @@ function merge(base, events) {
   // banner say it is behind. A card that outlived its answer costs the captain
   // a click and an honest refusal; a desk wrongly reported empty costs him the
   // decision itself, with nothing on the page to suggest he look again.
-  if (stale.length > 0 && openedWith > 0
-      && Array.isArray(state.captains_call) && state.captains_call.length === 0) {
+  if (stale.length > 0 && Array.isArray(state.captains_call)
+      && state.captains_call.length < openedWith) {
     state.captains_call = copyOf(base.payload).captains_call;
   }
   if (newest) state.generated = newest;

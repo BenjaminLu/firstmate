@@ -27,7 +27,7 @@ TMP_ROOT=$(fm_test_tmproot fm-board-live)
 command -v node >/dev/null 2>&1 || { echo "skip: node not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
-PAYLOAD='{"schema":"fm-bearings-board.v1","home":"main","generated":"2026-01-01T00:00:00Z",
+PAYLOAD='{"schema":"fm-bearings-board.v1","home":"main","generated":"2026-01-01T00:00:00Z", "composed": "2026-01-01T00:00:00Z",
  "prs_live":false,
  "captains_call":[{"key":"pick-one","type":"decision","repo":"firstmate","title":"Pick one",
    "options":[{"value":"yes","label":"Yes"}]}],
@@ -98,6 +98,69 @@ test_a_board_that_is_behind_never_reports_an_empty_desk() {
   [ "$calls" -gt 0 ] \
     || fail "a board reporting $stale unaccounted change(s) still sent an empty Captain's Call - it would tell the captain nothing needs him while saying it is behind"
   pass "a board that is behind shows what it was built with rather than an empty desk"
+}
+
+# THE PAGE HALF of the same rule the server half enforces. The board derives
+# BOTH sentences under Captain's Call - the section caption and the empty deck's
+# body - from the number of calls the payload carries, and a change the fleet
+# could not word is precisely a call missing from that payload. So while the
+# board knows it is behind, that count is the one number it must not present as
+# complete. Both sentences are asserted, because correcting only the caption
+# leaves the body saying it and a reader sees the reassuring one.
+test_a_behind_board_never_tells_the_captain_his_desk_is_empty() {
+  local home served out sub empty
+  home=$(make_home page-behind-desk) || fail "could not build a home"
+  jq '.captains_call = []' "$home/payload.json" > "$home/nocalls.json" \
+    || fail "could not build a payload with no calls"
+  FM_HOME="$home" "$BOARD" derive "$home/nocalls.json" \
+    --endpoint "ws://127.0.0.1:1/board-live" --out "$home/.lavish/bearings-board.html" \
+    >/dev/null 2>&1 || fail "could not write a board with no calls"
+  FM_HOME="$home" "$LIVE" event call needs-wording >/dev/null 2>&1 \
+    || fail "could not publish the unwordable call"
+  served=$(served_state "$home") || fail "the server produced no state"
+  # The shape under test has to be one the server reaches: no calls, and behind.
+  printf '%s' "$served" | jq -e '(.payload.captains_call | length) == 0 and (.stale | length) > 0' \
+    >/dev/null || fail "the fixture did not reach a behind board with an empty desk"
+  out=$(FM_PAGE_STATE="$served" node "$PAGE" "$home/.lavish/bearings-board.html" behind-empty-desk)
+  sub=$(printf '%s' "$out" | jq -r '.callDesk.sub // ""')
+  empty=$(printf '%s' "$out" | jq -r '.callDesk.empty // ""')
+  case "$sub" in
+    *"nothing needs you"*|*"沒有事需要你"*|*"没有事需要你"*)
+      fail "the section caption still tells the captain nothing needs him while the board says it is behind: $sub" ;;
+  esac
+  case "$empty" in
+    *"Nothing needs your action"*|*"不需要你"*)
+      fail "the empty deck still tells the captain nothing needs him while the board says it is behind: $empty" ;;
+  esac
+  [ -n "$sub$empty" ] \
+    || fail "neither sentence was rendered, so this case proves nothing about either"
+  pass "a board that is behind never tells the captain his desk is empty, in either sentence"
+}
+
+# The partial case, which is the half a "did it empty" condition would miss. A
+# merge that could not account for every change it saw cannot say which of the
+# rows it dropped it was entitled to drop, so one card gone from two is withheld
+# exactly as two gone from two would be. Without this, a board could lose a
+# single call silently and the empty-desk case above would still pass.
+test_a_board_that_is_behind_withholds_a_partial_loss_too() {
+  local home calls
+  home=$(make_home behind-partial) || fail "could not build a home"
+  jq '.captains_call += [{key:"pick-two",type:"decision",repo:"firstmate",
+       title:"Pick two",options:[{value:"yes",label:"Yes"}]}]' \
+    "$home/payload.json" > "$home/two.json" || fail "could not build a two-call payload"
+  FM_HOME="$home" "$BOARD" derive "$home/two.json" \
+    --endpoint "ws://127.0.0.1:1/board-live" --out "$home/.lavish/bearings-board.html" \
+    >/dev/null 2>&1 || fail "could not write the two-call board"
+  # One call answered, and one change the feed cannot word: a partial loss on a
+  # board that is behind.
+  FM_HOME="$home" "$LIVE" event answered pick-one --key pick-one >/dev/null 2>&1 \
+    || fail "could not publish the answer"
+  FM_HOME="$home" "$LIVE" event call needs-wording >/dev/null 2>&1 \
+    || fail "could not publish the unwordable call"
+  calls=$(served_state "$home" | jq -r '.payload.captains_call | length')
+  assert_equals 2 "$calls" \
+    "a board that could not account for its changes still dropped one of its two calls"
+  pass "a board that is behind withholds a partial loss, not only an emptying"
 }
 
 # The converse, so the case above cannot be satisfied by never removing anything:
@@ -675,10 +738,17 @@ test_a_rebuild_supersedes_every_earlier_event() {
   assert_equals waiting "$(served_state "$home" | jq -r '.payload.underway[0].state')" \
     "the event never applied, so this case would prove nothing"
   # A rebuild recomposes everything, so what it writes outranks anything
-  # published before it. Rewriting the page is what a build does.
+  # published before it. A real rebuild stamps `composed` at the moment it
+  # composes, so the fixture advances that stamp rather than only rewriting the
+  # file - a rebuild that left the stamp where it was is not a state the
+  # composer can produce, and ordering against an unmoved stamp would prove
+  # nothing about the rebuild.
   sleep 1
-  FM_HOME="$home" "$BOARD" derive "$home/payload.json" \
-    --endpoint "ws://127.0.0.1:1/board-live" --out "$home/.lavish/bearings-board.html" >/dev/null 2>&1
+  jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.composed = $now' "$home/payload.json" \
+    > "$home/rebuilt.json" || fail "could not restamp the rebuilt payload"
+  FM_HOME="$home" "$BOARD" derive "$home/rebuilt.json" \
+    --endpoint "ws://127.0.0.1:1/board-live" \
+    --out "$home/.lavish/bearings-board.html" >/dev/null 2>&1
   state=$(served_state "$home")
   assert_equals working "$(printf '%s' "$state" | jq -r '.payload.underway[0].state')" \
     "a stale event survived the rebuild that superseded it"
@@ -865,24 +935,44 @@ test_the_page_says_when_a_rebuild_is_owed() {
   pass "a change the fleet cannot paint is named on the page, and cleared when it is not"
 }
 
+# EVERY FIXTURE IN THIS FILE MUST BE A STATE THE SERVER CAN ACTUALLY REACH, and
+# where that is not obvious it is derived by RUNNING the server rather than
+# composed by hand. The first version of this case was hand-built and delivered
+# an old stamp together with a non-empty `stale` - a pair merge() cannot emit,
+# because anything landing in stale rewrites the stamp. It passed, it survived
+# mutation, and the defect it claimed to close still reproduced in a browser.
+#
 # The server merges from this home's stable board, never from the page that
 # connected. A page built from newer state can therefore be handed a merge whose
 # base predates it - and that merge has ALREADY lost the rows the page still
 # holds, because Captain's Call is built by removing rows while the additive
-# sections survive and keep the result looking plausible. This is what the
-# captain met: twenty calls on the page, zero the moment the socket connected.
+# sections survive and keep the result looking plausible.
 test_a_board_older_than_the_page_cannot_take_its_rows_away() {
-  local home out
+  local home page served out
   home=$(make_home page-older-base) || fail "could not build a home"
-  out=$(page_says "$home" older-base)
-  # The page's own stamp is the sound signal here: a count would also be 1 when
-  # the section renders its "nothing needs you" placeholder, which is the very
-  # thing this case exists to catch.
-  assert_contains "$(printf '%s' "$out" | jq -r '.provenance')" "2026-01-01" \
-    "the page redrew from a board older than the one it was built with"
+  page="$home/.lavish/bearings-board.html"
+  # The page the captain has: composed now, after the stable board below.
+  cp "$page" "$home/newer-page.html"
+  # The stable board the server serves from: the same content composed EARLIER,
+  # which is exactly the four-hour-old board the live one was handed.
+  jq '.composed = "2020-01-01T00:00:00Z"' "$home/payload.json" > "$home/older.json" \
+    || fail "could not stamp the older stable board"
+  FM_HOME="$home" "$BOARD" derive "$home/older.json" \
+    --endpoint "ws://127.0.0.1:1/board-live" --out "$page" \
+    >/dev/null 2>&1 || fail "could not write the older stable board"
+  # An answer lands after that older board was composed, so the merge the server
+  # emits has genuinely lost the call - no hand-built pair anywhere.
+  FM_HOME="$home" "$LIVE" event answered pick-one --key pick-one >/dev/null 2>&1 \
+    || fail "could not publish the answer"
+  served=$(served_state "$home") || fail "the server produced no state"
+  printf '%s' "$served" | jq -e '.payload.captains_call | length == 0' >/dev/null \
+    || fail "the fixture did not reach the state under test: the served merge still carries the call"
+  out=$(FM_PAGE_STATE="$served" node "$PAGE" "$home/newer-page.html" older-base)
   assert_contains "$(printf '%s' "$out" | jq -r '.link.text')" "built into this page" \
-    "the page drew an older board without saying it had stopped updating"
-  pass "a board older than the page keeps its rows rather than losing them"
+    "the page drew a board composed before it without saying it had stopped updating"
+  assert_equals 1 "$(printf '%s' "$out" | jq -r '.calls')" \
+    "a merge composed before this page emptied the Captain's Call it was built with"
+  pass "a board composed before the page keeps the page's rows rather than taking them away"
 }
 
 test_a_late_board_cannot_take_the_page_backwards() {
@@ -984,3 +1074,5 @@ test_the_page_carries_the_answer_and_shows_what_came_back
 test_a_board_that_is_behind_never_reports_an_empty_desk
 test_a_board_that_is_current_still_clears_an_answered_call
 test_a_board_older_than_the_page_cannot_take_its_rows_away
+test_a_board_that_is_behind_withholds_a_partial_loss_too
+test_a_behind_board_never_tells_the_captain_his_desk_is_empty

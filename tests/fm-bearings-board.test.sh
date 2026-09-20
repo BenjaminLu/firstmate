@@ -151,7 +151,7 @@ write_valid_payload() {  # <path>
 {
   "schema": "fm-bearings-board.v1",
   "home": "test-home",
-  "generated": "2026-08-19T00:00Z",
+  "generated": "2026-08-19T00:00Z", "composed": "2026-08-19T00:00Z",
   "prs_live": false,
   "captains_call": [
     {

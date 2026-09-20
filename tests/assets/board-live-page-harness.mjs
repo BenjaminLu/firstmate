@@ -17,6 +17,7 @@
 //   behind-clear the same, and then one carrying none
 //   old-seq      a state message older than the one already applied arrives
 //   older-base   a merge whose base predates the page arrives, having lost rows
+//   behind-empty-desk  a board with no calls, behind on one it cannot word
 //   dropped      the socket closes, and reopens with the current state
 //   went-quiet   a message lands and then the page stops receiving
 //   lang         the board's own language switch is used
@@ -371,18 +372,31 @@ switch (scenario) {
     socket().deliver(next({ stale: [{ kind: "call", task: "beta", why: "x" }] }));
     socket().deliver(next());
     break;
-  /* The server merges from this home's stable board, not from the page that
-     connected, so a page built from newer state can be handed a merge whose
-     base is older than itself - and that merge has already lost the rows the
-     page still holds. */
-  case "older-base":
+  /* A MERGE THE SERVER CAN ACTUALLY PRODUCE. The state delivered here is not
+     composed by hand: it is whatever `node bin/fm-board-live.mjs state` emitted
+     for a home whose stable board was composed BEFORE this page, handed in by
+     the caller through FM_PAGE_STATE. Hand-building this shape is what hid the
+     defect the first time - a payload with an old stamp AND a non-empty `stale`
+     is a pair merge() cannot emit, because anything landing in stale sets
+     `newest` and `newest` rewrites the stamp, so the one shape the test
+     constructed was the one shape the server never sends. */
+  /* A board with no calls of its own, behind on a change it cannot word: the
+     one shape in which both "nothing needs you" sentences are shown while the
+     board knows its list is incomplete. Handed in from a real server run. */
+  case "behind-empty-desk": {
     socket().open();
-    socket().deliver(message({
-      seq: 4,
-      payload: live({ generated: "2020-01-01T00:00Z", captains_call: [] }),
-      stale: [{ kind: "call", task: "beta", why: "a new captain's call needs firstmate to word it" }],
-    }));
+    const served = JSON.parse(process.env.FM_PAGE_STATE || "null");
+    if (!served) throw new Error("behind-empty-desk needs FM_PAGE_STATE from a real server run");
+    socket().deliver({ type: "state", schema: "fm-board-live.v1", seq: 5, ...served });
     break;
+  }
+  case "older-base": {
+    socket().open();
+    const served = JSON.parse(process.env.FM_PAGE_STATE || "null");
+    if (!served) throw new Error("older-base needs FM_PAGE_STATE from a real server run");
+    socket().deliver({ type: "state", schema: "fm-board-live.v1", seq: 4, ...served });
+    break;
+  }
   case "old-seq":
     socket().open();
     socket().deliver(message({ seq: 7, payload: live({ generated: "2099-01-01T00:00Z" }) }));
@@ -455,6 +469,18 @@ const call = findById(body, "bb-call");
 process.stdout.write(JSON.stringify({
   link: badge("bb-live-link"),
   behind: badge("bb-live-behind"),
+  /* BOTH sentences under Captain's Call, reported together and as whole text.
+     Asserting one of them is how the first attempt at this passed while the
+     other went on telling the captain his desk was empty. */
+  callDesk: (() => {
+    const sub = findById(body, "bb-call-sub");
+    const deck = findById(body, "bb-call");
+    const empty = deck ? deck.querySelector(".bb-empty") : null;
+    return {
+      sub: sub ? sub.textContent : null,
+      empty: empty ? empty.textContent : null,
+    };
+  })(),
   sent: badge("bb-live-sent"),
   // Every frame the page put on the wire, so what it sends is asserted from
   // the wire rather than from a spy inside the code under test.

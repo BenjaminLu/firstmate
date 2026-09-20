@@ -125,6 +125,21 @@
       hant: "沒在更新 — 顯示頁面內建的資料",
       hans: "没在更新 — 显示页面内建的资料"
     },
+    /* What the two sentences under Captain's Call must say INSTEAD of "nothing
+       needs you" while the board knows it is behind. A change the fleet could
+       not word IS a captain's call missing from the payload, so at exactly the
+       moment the board is behind, the count those sentences are derived from is
+       the one number it must not treat as complete. */
+    call_sub_behind: {
+      en: "this list is not complete — a rebuild is owed",
+      hant: "這份清單並不完整 — 還欠一次重建",
+      hans: "这份清单并不完整 — 还欠一次重建"
+    },
+    call_empty_behind: {
+      en: "Nothing is listed here, and this board cannot say that is all there is — it is waiting on a rebuild.",
+      hant: "這裡沒有列出任何事項，但這塊板無法說那就是全部 — 它還在等一次重建。",
+      hans: "这里没有列出任何事项，但这块板无法说那就是全部 — 它还在等一次重建。"
+    },
     stopped: {
       en: "not updating — last update {age} ago",
       hant: "沒在更新 — 上次更新是 {age} 前",
@@ -269,6 +284,39 @@
      still being updated, and whether what it is showing is everything there
      is. A connection that is perfectly healthy while a captain's call is
      missing must not read as a board with nothing on it. */
+  /* THE PAGE HALF OF "A BOARD THAT IS BEHIND MAY NOT REPORT AN EMPTY DESK".
+     The server half keeps rows from being dropped out of the payload; this is
+     the half about what the board SAYS when the payload legitimately carries
+     none. Both sentences under Captain's Call - the section caption and the
+     empty deck's body - are derived by the board from captains_call.length,
+     and a change the fleet could not word is precisely a captain's call missing
+     from that payload. So while the badge is up, that count is the one number
+     the page must not present as complete.
+     Correcting only the caption is not enough: the body goes on saying it, and
+     a reader sees the reassuring sentence rather than the corrected one. Both
+     are replaced or neither is.
+     It reads the payload back out of the page's own data slot rather than
+     trusting a remembered copy, and it leaves the board's own words alone when
+     that payload carries calls or will not parse - overwriting on a guess is
+     the same fault in the other direction. */
+  function correctEmptyDesk() {
+    var payload;
+    try {
+      var slot = document.getElementById(SLOT_ID);
+      if (!slot) return;
+      payload = JSON.parse(slot.textContent);
+    } catch (e) {
+      return;
+    }
+    if (!payload || !Array.isArray(payload.captains_call)) return;
+    if (payload.captains_call.length > 0) return;
+    var sub = document.getElementById("bb-call-sub");
+    if (sub) sub.textContent = say(SAY.call_sub_behind);
+    var deck = document.getElementById("bb-call");
+    var empty = deck ? deck.querySelector(".bb-empty") : null;
+    if (empty) empty.textContent = say(SAY.call_empty_behind);
+  }
+
   function paintStatus() {
     var node = pin(LINK_ID, TONE[linkState] || "neutral");
     if (!node) return;
@@ -278,6 +326,7 @@
       behind.textContent = say(behindCount === 1 ? BEHIND.one : BEHIND.many)
         .replace("{n}", String(behindCount));
       behind.hidden = false;
+      correctEmptyDesk();
     } else {
       var existing = document.getElementById(BEHIND_ID);
       if (existing) existing.hidden = true;
@@ -378,7 +427,13 @@
      plausible. So a payload stamped older than the one this page was built with
      is never applied. The page keeps what it has and says it is not updating,
      which is the same thing it does when the server has no board at all. */
-  /* Read on first use rather than now: this file is injected ABOVE the data
+  /* WHEN THIS PAGE'S CONTENT WAS COMPOSED, which is the only clock this
+     comparison can use. `generated` is not it: the server overwrites it with
+     the newest event a merge saw, so the first event published after this page
+     was built makes an older board look newer than us - and on a branch whose
+     whole subject is refreshing on fleet events, there are no quiet periods for
+     that to be safe in. `composed` is stamped once, where the content is made.
+     Read on first use rather than now: this file is injected ABOVE the data
      slot so that it can capture the page's markup before the board renders, so
      at this point the slot does not exist yet. The first use is the first state
      message, which is after the page has parsed and before anything has
@@ -389,7 +444,7 @@
     builtAt = NaN;
     try {
       var slot = document.getElementById(SLOT_ID);
-      if (slot) builtAt = Date.parse((JSON.parse(slot.textContent) || {}).generated);
+      if (slot) builtAt = Date.parse((JSON.parse(slot.textContent) || {}).composed);
     } catch (e) {
       builtAt = NaN;
     }
@@ -399,7 +454,7 @@
   function olderThanThisPage(payload) {
     var mine = builtWith();
     if (isNaN(mine) || !payload) return false;
-    var t = Date.parse(payload.generated);
+    var t = Date.parse(payload.composed);
     return !isNaN(t) && t < mine;
   }
 

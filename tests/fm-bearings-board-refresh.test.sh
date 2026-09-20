@@ -246,7 +246,7 @@ test_a_build_waits_for_the_publication_already_under_way() {
   holder=$(FM_STATE_OVERRIDE="$home/state" FM_HOME="$home" hold_refresh_lock "$home") \
     || { echo "skip: could not hold the publication lock in this environment"; return 0; }
   data="$home/payload.json"
-  jq -n '{schema:"fm-bearings-board.v1", home:"build-lock", generated:"2026-09-19T00:00Z",
+  jq -n '{schema:"fm-bearings-board.v1", home:"build-lock", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, lang:"en", captains_call:[], underway:[], landed:[], charted:[]}' > "$data"
   set +e
   out=$(FM_BEARINGS_REFRESH_TIMEOUT=2 run_board "$home" build "$data" 2>&1)

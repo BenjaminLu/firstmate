@@ -62,7 +62,7 @@ render_board() {  # <home> <underway-json> <charted-json> [charted_more] [charte
   local home=$1 underway=$2 charted=$3 more=${4:-0} warning_more=${5:-0} data="$1/payload.json"
   jq -n --argjson underway "$underway" --argjson charted "$charted" \
     --argjson more "$more" --argjson warning_more "$warning_more" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-08-26T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-08-26T00:00Z", composed:"2026-08-26T00:00Z",
     prs_live:false, captains_call:[], underway:$underway, landed:[],
     charted:$charted, charted_more:$more, charted_warning_more:$warning_more}' > "$data"
   PATH="$home/fakebin:$PATH" FM_HOME="$home" \
@@ -83,7 +83,7 @@ render() {  # <home> <charted-json> [charted_more] [charted_warning_more]
 # that the pill comes from what the page remembered, not from the payload.
 rebuild_payload() {  # <generated>
   jq -n --arg gen "$1" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:$gen,
+    schema:"fm-bearings-board.v1", home:"render-home", generated:$gen, composed:$gen,
     prs_live:false, captains_call:[], underway:[], landed:[],
     charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true}]}'
 }
@@ -117,7 +117,7 @@ render_payload() {  # <home> <payload-json>
 
 five_question_payload() {  # <lang>
   jq -n --arg lang "$1" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-18T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-18T00:00Z", composed:"2026-09-18T00:00Z",
     prs_live:false, lang:$lang, underway:[], landed:[],
     charted:[{id:"q1", repo:"sample", title:{en:"Queued work", hant:"排隊中的工作"},
               reason:{en:"waits on the cutover", hant:"等切換完成"}, dispatchable:true}],
@@ -148,7 +148,7 @@ test_hans_absent_falls_back_to_hant_not_empty() {
   home=$(make_home hans-fallback)
   # A captain reading 简体, and copy that carries en + hant but no hans.
   payload=$(jq -n '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, lang:"hans", captains_call:[], underway:[], landed:[],
     charted:[{id:"q1", repo:"sample",
               title:{en:"Queued work", hant:"排隊中的工作"},
@@ -364,7 +364,7 @@ test_an_underway_row_renders_its_step_ladder_trilingually() {
   local home out payload
   home=$(make_home progress-ladder)
   payload=$(jq -n '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, lang:"en", captains_call:[], landed:[], charted:[],
     underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
       name:"Ship the thing", doing:"validating",
@@ -418,7 +418,7 @@ PIPELINE_STATUSES='["completed","running","fixing","failed","pending","skipped",
 test_every_pipeline_step_renders_as_a_label_in_every_language() {
   local home out payload
   payload=$(jq -n --argjson steps "$PIPELINE_STEPS" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, lang:"en", captains_call:[], landed:[], charted:[],
     underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
       name:"Ship the thing", doing:"validating",
@@ -456,7 +456,7 @@ test_a_step_waiting_on_the_captain_never_looks_like_one_not_started() {
   # awaiting the captain, everything after it has not started. If the two read
   # the same, the board cannot answer "how far along is this worker".
   payload=$(jq -n '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, lang:"hant", captains_call:[], landed:[], charted:[],
     underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"parked",
       name:"Ship the thing", doing:"parked at the test gate",
@@ -481,7 +481,7 @@ test_a_step_waiting_on_the_captain_never_looks_like_one_not_started() {
 test_every_pipeline_step_status_renders_as_a_label_in_every_language() {
   local home out payload
   payload=$(jq -n --argjson steps "$PIPELINE_STEPS" --argjson statuses "$PIPELINE_STATUSES" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, lang:"en", captains_call:[], landed:[], charted:[],
     underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
       name:"Ship the thing", doing:"validating",
@@ -521,7 +521,7 @@ test_a_long_last_activity_message_gets_its_own_truncating_line() {
   # duration.
   message="2h58m ago: log: all CI checks passed - still monitoring until merged or closed"
   payload=$(jq -n --arg msg "$message" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, lang:"hant", captains_call:[], landed:[], charted:[],
     underway:[{id:"ship-task", repo:"sample", kind:"ship", state:"working",
       name:"Ship the thing", doing:"validating",
@@ -596,7 +596,7 @@ packet_payload_full_option() {  # <lang> <figures-json>
 
 packet_payload() {  # <lang> <figures-json>
   jq -n --arg lang "$1" --argjson figures "$2" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, lang:$lang, underway:[], landed:[], charted:[],
     captains_call:[{
       key:"stream-choice", type:"decision", repo:"firstmate",
@@ -1211,7 +1211,7 @@ clicked_at() {  # <seconds-ago>
 # a surface with no control on it rather than merely never being handed one.
 ack_payload() {  # <charted-ack-json>
   jq -n --argjson ack "$1" --argjson uwack "$(acting_ack 2)" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, captains_call:[], landed:[],
     underway:[{id:"running", repo:"sample", name:"Work already under way",
                state:"working", kind:"ship", doing:"under way", ack:$uwack}],
@@ -1324,7 +1324,7 @@ test_the_dispatch_send_acknowledges_every_row_it_picked() {
   local home out
   home=$(make_home ack-dispatch)
   out=$(render_click "$home" "$(jq -n '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, captains_call:[], underway:[], landed:[],
     charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true},
              {id:"held", repo:"sample", title:"Blocked work", reason:"waits on the cutover",
@@ -1357,7 +1357,7 @@ test_a_dispatch_acknowledgement_survives_the_language_switch() {
   local home out
   home=$(make_home ack-dispatch-lang)
   out=$(render_click "$home" "$(jq -n '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, captains_call:[], underway:[], landed:[],
     charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"", dispatchable:true}]}')" \
     dispatch hant)
@@ -1419,7 +1419,7 @@ test_a_fresher_click_outranks_a_stale_published_acknowledgement() {
   local home out
   home=$(make_home ack-newer-click)
   out=$(render_click "$home" "$(jq -n --argjson ack "$(acting_ack 600)" '{
-    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z",
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-19T00:00Z", composed:"2026-09-19T00:00Z",
     prs_live:false, captains_call:[], underway:[], landed:[],
     charted:[{id:"picked", repo:"sample", title:"Queued work", reason:"",
               dispatchable:true, ack:$ack}]}')" dispatch hant)

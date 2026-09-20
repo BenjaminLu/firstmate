@@ -978,6 +978,14 @@ validate_payload() {  # <data.json>
     and (.schema == $schema)
     and (.home | nonempty_string)
     and (.generated | nonempty_string)
+    # WHEN THIS CONTENT WAS COMPOSED, and nothing else. `generated` cannot
+    # answer that: it is carried through from the snapshot this compose read,
+    # so a compose from a stored snapshot writes current content under a stale
+    # stamp, and the live merge overwrites it again with the newest event it
+    # saw. Two meanings in one field is what let a page be taken backwards by a
+    # board older than itself. This one is stamped here, at the moment the
+    # content is made, and no other writer may touch it.
+    and (.composed | nonempty_string)
     and (.prs_live | type == "boolean")
     and ((has("lang") | not) or (.lang == "en" or .lang == "hant" or .lang == "hans"))
     and (.captains_call | type == "array")
@@ -1455,7 +1463,8 @@ EOF
     --argjson records "$records" --argjson cards "$cards" --argjson links "$links" \
     --argjson merge_cards "$merge_cards" --argjson acks "$acks" \
     --argjson progress "$progress" --argjson deterministic "$deterministic" \
-    --argjson readable "$readable" --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
+    --argjson readable "$readable" --arg composed "${FM_BEARINGS_COMPOSED_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" \
+    --arg ph "$PLACEHOLDER_RE" "$BOARD_JQ_DEFS"'
     . as $snap |
     # Every captain-facing string goes through this one guard: the validator
     # refuses an empty en, and an ordinary metadata-only backlog row parses to
@@ -1629,7 +1638,7 @@ EOF
         + " gate rows the snapshot omitted, the rest of that same total belonging to "
         + $sibling + ", plus any " + $kind + " rows you cut");
     {
-      schema: $schema, home: .home, generated: .generated, lang: $lang,
+      schema: $schema, home: .home, generated: .generated, composed: $composed, lang: $lang,
       prs_live: (.prs | startswith("checked")),
       captains_call: (
         [ held_rows as $rows | $rows[] | . as $row
@@ -2106,7 +2115,7 @@ command_refresh() {
 }
 
 refresh_worker() {
-  local board lang lock='' skeleton effective leftover source_page
+  local board lang lock='' skeleton effective leftover source_page carried_composed tmp
   local -a compose_args=(--deterministic)
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -2172,6 +2181,26 @@ refresh_worker() {
     refresh_fail "cannot reconcile the board payload against landed work"
   fi
   rm -f -- "$skeleton"
+  # WHEN THIS CONTENT WAS COMPOSED, not when this compose ran. A refresh
+  # recomposes on every fleet event, so stamping each one would move `composed`
+  # on a board whose content never changed - and `composed` is the field the
+  # page and the live merge both order against, so moving it for nothing would
+  # make a board look newer than the content it carries and break the
+  # byte-identical republication this refresh promises. When everything else
+  # matches what is already published, the published stamp is carried forward;
+  # when anything differs, the fresh stamp stands because the content is new.
+  carried_composed=$(injected_payload "$board" | jq -r '.composed // empty' 2>/dev/null) || carried_composed=''
+  if [ -n "$carried_composed" ] \
+    && [ "$(jq -S 'del(.composed)' "$effective" 2>/dev/null)" \
+       = "$(injected_payload "$board" | jq -S 'del(.composed)' 2>/dev/null)" ]; then
+    if tmp=$(mktemp "${TMPDIR:-/tmp}/fm-bearings-composed.XXXXXX"); then
+      if jq --arg c "$carried_composed" '.composed = $c' "$effective" > "$tmp" 2>/dev/null; then
+        mv -f -- "$tmp" "$effective"
+      else
+        rm -f -- "$tmp"
+      fi
+    fi
+  fi
   source_page=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-reslot.XXXXXX") \
     || { rm -f -- "$effective"; refresh_fail "cannot stage the page being republished"; }
   if ! reslot_board "$board" "$source_page"; then
