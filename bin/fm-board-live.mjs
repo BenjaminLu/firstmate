@@ -48,6 +48,21 @@
 // that is quietly missing a captain's call is the failure this whole branch
 // exists to stop; a board that says it is behind is not that failure.
 //
+// AND THE CLICK COMES BACK THE SAME WAY. The socket carries the fleet out and
+// the captain's answer in. The inbound half is the dangerous one - an answer
+// settles a captain's call - so it is authenticated before it can resolve
+// anything, refused out loud when it cannot be, and carried to the records
+// that already own an answer rather than to a second set of its own.
+// bin/fm-board-live.sh's header owns what proves a message is the captain's
+// and what that proof does not claim; bin/fm-board-answer.sh owns what an
+// accepted answer then reaches. Neither is restated here.
+//
+// A REFUSAL IS ALWAYS SAID. Every inbound message is answered on the same
+// socket - accepted, refused with a reason, or recorded/failed once the answer
+// has been carried. A press that quietly does nothing is the failure this
+// whole path exists to remove, and a server that silently dropped a message
+// would be that same failure one layer further in.
+//
 // THE EVENT LOG IS THE DURABILITY, THE SOCKET IS ONLY THE LATENCY. Publishers
 // append to state/board-live.jsonl and do nothing else - no port, no client,
 // nothing that can fail in a caller's critical path. This server follows that
@@ -61,11 +76,12 @@
 //
 // docs/configuration.md owns the port and the file locations.
 
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 import {
   existsSync, mkdirSync, openSync, readSync, closeSync, fstatSync,
-  readFileSync, statSync, watch, writeFileSync, unlinkSync,
+  readFileSync, statSync, watch, writeFileSync, unlinkSync, appendFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,6 +92,9 @@ const FM_HOME = process.env.FM_HOME || FM_ROOT;
 const STATE_DIR = join(FM_HOME, "state");
 const LOG_PATH = join(STATE_DIR, "board-live.jsonl");
 const ENDPOINT_PATH = join(STATE_DIR, "board-live.endpoint");
+const TOKEN_PATH = join(STATE_DIR, "board-live.token");
+const INBOUND_PATH = join(STATE_DIR, "board-inbound.jsonl");
+const ANSWER_SCRIPT = join(SCRIPT_DIR, "fm-board-answer.sh");
 const BOARD_PATH = join(FM_HOME, ".lavish", "bearings-board.html");
 // A PORT NOBODY HAS TO CHOOSE, AND NOBODY ELSE'S. One fixed port would mean a
 // second home on the same machine - a secondmate, a test home, a clone next to
@@ -89,10 +108,23 @@ const PORT_BASE = 41000;
 const PORT_SPAN = 4000;
 const BOARD_SCHEMA = "fm-bearings-board.v1";
 const EVENT_SCHEMA = "fm-board-event.v1";
+const INBOUND_SCHEMA = "fm-board-inbound.v1";
+const INBOUND_RESULT_SCHEMA = "fm-board-inbound-result.v1";
 const SLOT_OPEN = '<script id="bearings-data" type="application/json">';
-// The board page can carry a whole decision packet with inlined drawings, so
-// the ceiling is generous; it exists to bound a corrupt length, not the board.
-const MAX_FRAME = 16 * 1024 * 1024;
+// What a CLIENT may send. An answer is a handful of short fields, so this is
+// generous by three orders of magnitude already; it exists so a corrupt or
+// hostile length cannot make this process allocate. The board's own payload
+// travels the other way and is not bounded by it.
+const MAX_INBOUND = 64 * 1024;
+// How long the answer path gets before the captain is told it did not land.
+// It reads the backlog through tasks-axi, which is the slow part.
+const ANSWER_TIMEOUT_MS = 120000;
+// What a timed-out answer path gets to run its EXIT trap in before it is
+// killed outright, so firstmate is still told the captain answered.
+const ANSWER_GRACE_MS = 5000;
+// One message may settle several cards - the dispatch bar ticks a list - but
+// not an unbounded number of them.
+const MAX_ANSWERS = 64;
 // Events older than the base page are already represented in it. The ring is
 // what a merge is recomputed from, so it only has to outlast one build.
 const EVENT_RING = 2000;
@@ -333,8 +365,10 @@ class EventLog {
  * Handshake: echo the client's key hashed with the protocol's fixed GUID.
  * Frames out: unmasked, one text frame per message, with the 16- and 64-bit
  * length forms so a board carrying a packet is not truncated at 125 bytes.
- * Frames in: only close and ping matter to this server, and a masked frame is
- * required of a client, so an unmasked one is a protocol error and closes.
+ * Frames in: unmasked and reassembled across continuation frames, then handed
+ * up as one text message. A masked frame is required of a client, so an
+ * unmasked one is a protocol error and closes, as is a binary message - the
+ * board speaks JSON text and nothing else.
  */
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -365,11 +399,20 @@ function frame(opcode, payload) {
 }
 
 class Conn {
-  constructor(socket) {
+  constructor(socket, origin) {
     this.socket = socket;
     this.buf = Buffer.alloc(0);
     this.open = true;
     this.alive = true;
+    /* The handshake's Origin, kept for the life of the connection. A browser
+       sets it and page script cannot change it, so it is read once here and
+       never re-read from anything the client sends later. */
+    this.origin = origin;
+    this.fragments = null;
+    this.fragmentOpcode = 0;
+    /* Set by the server. Left null, this connection reads nothing a client
+       sends, which is what it did before there was an inbound half. */
+    this.onText = null;
   }
 
   send(text) {
@@ -407,6 +450,7 @@ class Conn {
       if (this.buf.length < 2) return true;
       const b0 = this.buf[0];
       const b1 = this.buf[1];
+      const fin = (b0 & 0x80) !== 0;
       const opcode = b0 & 0x0f;
       const masked = (b1 & 0x80) !== 0;
       let len = b1 & 0x7f;
@@ -418,24 +462,314 @@ class Conn {
       } else if (len === 127) {
         if (this.buf.length < 10) return true;
         const big = this.buf.readBigUInt64BE(2);
-        if (big > BigInt(MAX_FRAME)) return false;
+        if (big > BigInt(MAX_INBOUND)) return false;
         len = Number(big);
         off = 10;
       }
-      if (len > MAX_FRAME) return false;
+      if (len > MAX_INBOUND) return false;
       if (!masked) return false;
       if (this.buf.length < off + 4 + len) return true;
-      off += 4;
-      this.buf = this.buf.subarray(off + len);
+      // Unmasking is the whole difference between a socket that can be
+      // written to and one that can only be read from: the body was always
+      // there, and was always thrown away without being looked at.
+      const mask = this.buf.subarray(off, off + 4);
+      const body = Buffer.allocUnsafe(len);
+      this.buf.copy(body, 0, off + 4, off + 4 + len);
+      for (let i = 0; i < len; i += 1) body[i] ^= mask[i & 3];
+      this.buf = this.buf.subarray(off + 4 + len);
+
       if (opcode === 0x8) return false;
-      if (opcode === 0xa) this.alive = true;
-      // A client ping is answered with a pong carrying no body; this server
-      // reads no application message, so every other opcode is ignored.
+      if (opcode === 0xa) { this.alive = true; continue; }
       if (opcode === 0x9) {
-        try { this.socket.write(frame(0xa, Buffer.alloc(0))); } catch { return false; }
+        // A pong must carry the ping's own body back.
+        try { this.socket.write(frame(0xa, body)); } catch { return false; }
+        continue;
       }
+      if (opcode === 0x1 || opcode === 0x2) {
+        if (this.fragments !== null) return false;
+        if (!fin) { this.fragments = body; this.fragmentOpcode = opcode; continue; }
+        if (!this.deliver(opcode, body)) return false;
+        continue;
+      }
+      if (opcode === 0x0) {
+        if (this.fragments === null) return false;
+        this.fragments = Buffer.concat([this.fragments, body]);
+        if (this.fragments.length > MAX_INBOUND) return false;
+        if (!fin) continue;
+        const whole = this.fragments;
+        const code = this.fragmentOpcode;
+        this.fragments = null;
+        if (!this.deliver(code, whole)) return false;
+        continue;
+      }
+      return false;
     }
   }
+
+  deliver(opcode, body) {
+    if (opcode !== 0x1) return false;
+    if (typeof this.onText !== "function") return true;
+    try {
+      this.onText(body.toString("utf8"), this);
+    } catch {
+      // A message that threw must not take the subscription down with it: the
+      // board keeps receiving the fleet even when one answer went wrong.
+    }
+    return true;
+  }
+}
+
+/* ---- the inbound half ---------------------------------------------------
+ * What proves a message is the captain's, and what that proof does not claim,
+ * is owned by bin/fm-board-live.sh's header. This is the implementation of it
+ * and the shape of the one message this port accepts:
+ *
+ *   {"schema": "fm-board-inbound.v1", "token": "<64 hex>", "type": "answer",
+ *    "id": "<the page's own correlation id, optional>",
+ *    "answers": [{"key": "<board key>", "selection": "<option value>",
+ *                 "note": "<the captain's typed words>",
+ *                 "label": "<what that option said on the board>",
+ *                 "close": "done" | "release"}]}
+ *
+ * and the one it replies with, on the same socket, always:
+ *
+ *   {"type": "inbound", "schema": "fm-board-inbound-result.v1", "id": ...,
+ *    "status": "accepted" | "refused" | "recorded" | "failed",
+ *    "reason": "<a stable machine reason>", "detail": "<what the answer path said>"}
+ *
+ * `accepted` is sent the moment a message passes; `recorded` or `failed`
+ * follows when the answer path has finished with it. The reason is a fixed
+ * token, never a sentence for the captain: the words he reads are the page's,
+ * because no server here composes captain-facing prose.
+ *
+ * Every field is checked against the same shapes the board's other answer
+ * channel already accepts, so a click settles a call identically however it
+ * arrived and neither channel can accept something the other would refuse.
+ */
+
+const TOKEN_RE = /^[0-9a-f]{64}$/;
+const KEY_RE = /^[A-Za-z0-9._-]{1,128}$/;
+const CORRELATION_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const LOOPBACK_ORIGIN_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/;
+const RECONCILE_VALUE = "reconcile";
+// The dispatch bar's pseudo-key; bin/fm-board-answer.sh owns what it means.
+const DISPATCH_KEY = "dispatch.charted";
+const MAX_NOTE = 512;
+const MAX_LABEL = 512;
+
+/* A browser puts its page's origin here and page script cannot change it, so
+ * a real web origin arriving on this port is a website trying to reach the
+ * captain's fleet and is refused before it is upgraded. An absent header is a
+ * client that is not a browser; `null` is a board opened as a file, and also
+ * a sandboxed frame, which is why the token and not this is the proof. */
+function originAllowed(origin) {
+  if (origin === undefined || origin === null || origin === "") return true;
+  if (origin === "null") return true;
+  return LOOPBACK_ORIGIN_RE.test(origin);
+}
+
+/* Read fresh every time, so rotating the token takes effect on the next click
+ * rather than at the next restart. */
+function readToken() {
+  try {
+    const t = readFileSync(TOKEN_PATH, "utf8").trim();
+    return TOKEN_RE.test(t) ? t : null;
+  } catch {
+    return null;
+  }
+}
+
+function tokenMatches(given) {
+  const want = readToken();
+  if (want === null) return false;
+  if (typeof given !== "string" || !TOKEN_RE.test(given)) return false;
+  const a = Buffer.from(given, "utf8");
+  const b = Buffer.from(want, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/* The boundary that sanitizes, because this is where the untrusted bytes are.
+ * A tab or a newline surviving into a row would move a field, and a control
+ * character surviving into a durable record would corrupt it for every later
+ * reader. */
+function oneLine(value, max) {
+  return String(value).replace(/[\x00-\x1f\x7f]/g, " ").slice(0, max);
+}
+
+function refusal(reason, detail) {
+  return { reason, detail: detail || null };
+}
+
+/* Turn one authenticated message into the rows bin/fm-board-answer.sh reads,
+ * or into the reason it cannot be one. */
+function answerRows(message) {
+  if (message.type !== "answer") {
+    return refusal("unsupported-type", "this port accepts an answer and nothing else");
+  }
+  const list = message.answers;
+  if (!Array.isArray(list) || list.length === 0) {
+    return refusal("malformed", "answers must be a non-empty list");
+  }
+  if (list.length > MAX_ANSWERS) {
+    return refusal("malformed", `at most ${MAX_ANSWERS} answers in one message`);
+  }
+  const rows = [];
+  const keys = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return refusal("malformed", "each answer must be an object");
+    }
+    const key = item.key;
+    if (typeof key !== "string" || !KEY_RE.test(key)) {
+      return refusal("malformed", "each answer needs a routable key");
+    }
+    if (keys.includes(key)) {
+      return refusal("duplicate-key", `two answers for ${key} in one message`);
+    }
+    const selection = item.selection === undefined || item.selection === null ? "" : item.selection;
+    const note = item.note === undefined || item.note === null ? "" : item.note;
+    if (typeof selection !== "string" || typeof note !== "string") {
+      return refusal("malformed", "selection and note must be text");
+    }
+    if (selection !== "" && !KEY_RE.test(selection)) {
+      return refusal("malformed", "an option value is not a value this board can carry");
+    }
+    if (note.length > MAX_NOTE) {
+      return refusal("malformed", `a note may be at most ${MAX_NOTE} characters`);
+    }
+    if (selection === "" && note.trim() === "") {
+      return refusal("malformed", `${key} carries neither a choice nor words`);
+    }
+    const label = item.label === undefined || item.label === null ? "" : item.label;
+    if (typeof label !== "string") {
+      return refusal("malformed", "a label must be text");
+    }
+    const close = item.close === undefined || item.close === null ? "" : item.close;
+    if (close !== "" && close !== "done" && close !== "release") {
+      return refusal("malformed", `${key} declares a close this board does not have`);
+    }
+    const value = selection !== "" ? selection : note;
+    // THE DISPATCH BAR'S VALUE IS A LIST OF IDS, so it is the one field
+    // carrying identifiers that does not arrive as `selection` - a comma list
+    // cannot, since an option value may not contain one. Riding in `note` is
+    // not a reason to skip the check every sibling field gets at the boundary
+    // that calls itself the sanitising one. The ack owner downstream refuses a
+    // bad id anyway, but it refuses it as "this did not land" on a message
+    // that looked well-formed here; checking it here makes the refusal say
+    // what is actually wrong.
+    if (key === DISPATCH_KEY) {
+      const ids = value.split(",");
+      if (ids.length > MAX_ANSWERS) {
+        return refusal("malformed", `at most ${MAX_ANSWERS} rows in one dispatch order`);
+      }
+      for (const one of ids) {
+        if (!KEY_RE.test(one)) {
+          return refusal("malformed", "a dispatch order names a row this board cannot address");
+        }
+      }
+    }
+    keys.push(key);
+    // `reconcile` is the board's standard "go re-check reality" choice and is
+    // never an answer. It is separated here only so it reaches its own intake;
+    // what it MEANS is owned by bin/fm-captain-hold.sh, which refuses it at
+    // the answer intake whatever any channel calls it.
+    if (selection === RECONCILE_VALUE) {
+      rows.push(["reconcile", key, oneLine(note, MAX_NOTE)].join("\t"));
+    } else {
+      rows.push([
+        "answer",
+        key,
+        oneLine(value, MAX_NOTE),
+        oneLine(label, MAX_LABEL),
+        close,
+      ].join("\t"));
+    }
+  }
+  return { rows, keys };
+}
+
+/* The captain's answer is on disk before anything is attempted with it, minus
+ * the token, which is a credential and belongs in no record. An answer the
+ * answer path then loses is still recoverable from here; an answer that was
+ * never written down is not. */
+function journalInbound(record) {
+  try {
+    if (!existsSync(STATE_DIR)) return false;
+    appendFileSync(INBOUND_PATH, JSON.stringify(record) + "\n", { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* One answer path at a time. Two clicks a second apart on two cards would
+ * otherwise read and rewrite the same backlog concurrently, and serialising
+ * here costs nothing a captain can perceive. */
+let answerChain = Promise.resolve();
+
+function runAnswerPath(rows, provenance) {
+  return new Promise((done) => {
+    let child;
+    try {
+      child = spawn(ANSWER_SCRIPT, ["apply", "--source", provenance], {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, FM_HOME },
+        // Its own process group, so a timeout can reach what it started. The
+        // answer path runs the backlog backend underneath it, and signalling
+        // only the direct child leaves that running: it would then land the
+        // captain's answer seconds after he was told it had not been
+        // recorded, and nothing would ever have woken firstmate.
+        detached: true,
+      });
+    } catch (e) {
+      done({ ok: false, reason: "answer-path-unavailable", detail: e.message });
+      return;
+    }
+    let out = "";
+    let settled = false;
+    const finish = (result) => { if (!settled) { settled = true; done(result); } };
+    // SIGTERM FIRST, AND THAT IS THE WHOLE POINT. The answer path guarantees
+    // it tells firstmate on every path out of it through an EXIT trap, and
+    // names SIGKILL as the one signal that defeats that guarantee. Killing it
+    // outright on a timeout would therefore use the one mechanism its own
+    // contract says destroys the thing the timeout exists to report. Bash
+    // runs an EXIT trap on SIGTERM even while blocked in a child, so the
+    // captain's answer still reaches firstmate; SIGKILL follows only for a
+    // group that ignored it.
+    const signalGroup = (signal) => {
+      try { process.kill(-child.pid, signal); } catch {
+        try { child.kill(signal); } catch { /* already gone */ }
+      }
+    };
+    const timer = setTimeout(() => {
+      signalGroup("SIGTERM");
+      const hard = setTimeout(() => signalGroup("SIGKILL"), ANSWER_GRACE_MS);
+      hard.unref?.();
+      finish({ ok: false, reason: "answer-path-timeout", detail: out.trim() });
+    }, ANSWER_TIMEOUT_MS);
+    timer.unref?.();
+    child.stdout.on("data", (d) => { out += d.toString("utf8"); });
+    child.stderr.on("data", (d) => { out += d.toString("utf8"); });
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      finish({ ok: false, reason: "answer-path-unavailable", detail: e.message });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      finish({
+        ok: code === 0,
+        reason: code === 0 ? "recorded" : "answer-path-refused",
+        detail: out.trim(),
+      });
+    });
+    try {
+      child.stdin.end(rows.map((r) => r + "\n").join(""));
+    } catch (e) {
+      clearTimeout(timer);
+      finish({ ok: false, reason: "answer-path-unavailable", detail: e.message });
+    }
+  });
 }
 
 /* ---- the server ---------------------------------------------------------- */
@@ -481,6 +815,84 @@ function serve(opts) {
     return true;
   }
 
+  function reply(conn, id, status, reason, detail) {
+    conn.send(JSON.stringify({
+      type: "inbound",
+      schema: INBOUND_RESULT_SCHEMA,
+      id: id || null,
+      status,
+      reason,
+      detail: detail || null,
+    }));
+  }
+
+  /* One inbound message, from the wire to the record. Every path out of here
+   * writes back to the socket, including every refusal: the captain pressing
+   * a button and learning nothing is the case this exists to remove. */
+  function receive(conn, text) {
+    let message = null;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      reply(conn, null, "refused", "malformed", "not JSON");
+      return;
+    }
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      reply(conn, null, "refused", "malformed", "not an object");
+      return;
+    }
+    const id = typeof message.id === "string" && CORRELATION_RE.test(message.id)
+      ? message.id
+      : null;
+    if (message.schema !== INBOUND_SCHEMA) {
+      reply(conn, id, "refused", "malformed", `not ${INBOUND_SCHEMA}`);
+      return;
+    }
+    // Authentication before anything the message asks for is read, and one
+    // reason for every way it can fail: which way it failed is the sender's
+    // business only when the sender is the captain.
+    if (!originAllowed(conn.origin) || !tokenMatches(message.token)) {
+      reply(conn, id, "refused", "unauthenticated",
+        "this message did not come from a board built in this home");
+      return;
+    }
+    const read = answerRows(message);
+    if (read.reason) {
+      reply(conn, id, "refused", read.reason, read.detail);
+      return;
+    }
+    const at = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    // REFUSED WHEN IT CANNOT BE WRITTEN DOWN, because three places tell the
+    // captain and firstmate to go read this file when something did not land:
+    // the answer path's fallback wake, its "part of this did NOT land"
+    // rewrite, and the bearings skill. An append that failed silently would
+    // point all three at a file that does not contain his answer, and nothing
+    // anywhere would have said so. Refusing hands him back a press he can
+    // repeat; proceeding hands him a recovery story that is false.
+    if (!journalInbound({
+      schema: INBOUND_SCHEMA,
+      at,
+      id,
+      origin: conn.origin,
+      type: message.type,
+      rows: read.rows,
+    })) {
+      reply(conn, id, "refused", "not-recorded",
+        `the captain's answer could not be written to ${INBOUND_PATH}, so nothing was attempted with it`);
+      return;
+    }
+    const provenance =
+      `the captain's own board over its live connection${id ? ` (message ${id})` : ""}`;
+    reply(conn, id, "accepted", "accepted", null);
+    answerChain = answerChain.then(() => runAnswerPath(read.rows, provenance))
+      .then((result) => {
+        reply(conn, id, result.ok ? "recorded" : "failed", result.reason, result.detail);
+      })
+      .catch((e) => {
+        reply(conn, id, "failed", "answer-path-unavailable", String(e && e.message));
+      });
+  }
+
   function reloadBase() {
     const fresh = readBase();
     if (fresh.at === base.at && fresh.reason === base.reason) return;
@@ -503,6 +915,18 @@ function serve(opts) {
       socket.destroy();
       return;
     }
+    const origin = req.headers.origin;
+    if (!originAllowed(origin)) {
+      // Said out loud, in the handshake, rather than dropped: a refusal
+      // nobody is told about is indistinguishable from a broken port.
+      socket.end(
+        "HTTP/1.1 403 Forbidden\r\n" +
+        "content-type: text/plain; charset=utf-8\r\n" +
+        "connection: close\r\n\r\n" +
+        "fm-board-live: this port answers the captain's own board, not another origin\n",
+      );
+      return;
+    }
     socket.write(
       "HTTP/1.1 101 Switching Protocols\r\n" +
       "Upgrade: websocket\r\n" +
@@ -510,7 +934,8 @@ function serve(opts) {
       `Sec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`,
     );
     socket.setNoDelay(true);
-    const conn = new Conn(socket);
+    const conn = new Conn(socket, typeof origin === "string" ? origin : null);
+    conn.onText = (text) => receive(conn, text);
     conns.add(conn);
     const drop = () => { conns.delete(conn); conn.open = false; };
     socket.on("data", (chunk) => { if (!conn.feed(chunk)) { conn.close(); drop(); } });

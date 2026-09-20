@@ -19,9 +19,12 @@
 //   dropped      the socket closes, and reopens with the current state
 //   went-quiet   a message lands and then the page stops receiving
 //   lang         the board's own language switch is used
+//   answer-sent     the captain's pick is carried back and lands
+//   answer-refused  the captain's pick is carried back and is refused
+//   answer-offline  the captain picks while the board is not connected
 //
 // Prints one JSON document:
-//   { link, behind, badgeHost, provenance, underway, calls, sockets, stack }
+//   { link, behind, sent, outbound, badgeHost, provenance, underway, calls, sockets }
 import { readFileSync } from "node:fs";
 
 const [pagePath, scenario] = process.argv.slice(2);
@@ -248,11 +251,23 @@ class FakeSocket {
   constructor(url) {
     this.url = url;
     this.closed = false;
+    /* CONNECTING until opened, exactly as a browser reports it, because the
+       page refuses to send an answer on a socket that is not open. */
+    this.readyState = 0;
+    this.sent = [];
     sockets.push(this);
   }
-  open() { if (this.onopen) this.onopen(); }
+  open() { this.readyState = 1; if (this.onopen) this.onopen(); }
   deliver(obj) { if (this.onmessage) this.onmessage({ data: JSON.stringify(obj) }); }
-  drop() { this.closed = true; if (this.onclose) this.onclose(); }
+  drop() {
+    this.closed = true;
+    this.readyState = 3;
+    if (this.onclose) this.onclose();
+  }
+  send(text) {
+    if (this.readyState !== 1) throw new Error("socket is not open");
+    this.sent.push(text);
+  }
 }
 globalThis.window = {
   WebSocket: function (url) { return new FakeSocket(url); },
@@ -376,6 +391,29 @@ switch (scenario) {
     socket().drop();
     waitMinutes(7);
     break;
+  /* The captain presses a button on a card and the page carries his pick
+     back. The board's own handler is not involved: this drives the seam the
+     board is given, which is what the server half publishes. */
+  case "answer-sent":
+    socket().open();
+    socket().deliver(next());
+    window.fmBoardLive.answer({ key: "pick-one", selection: "yes", label: "Yes", close: "done" });
+    socket().deliver({ type: "inbound", schema: "fm-board-inbound-result.v1", id: "a1", status: "accepted" });
+    socket().deliver({ type: "inbound", schema: "fm-board-inbound-result.v1", id: "a1", status: "recorded" });
+    break;
+  case "answer-refused":
+    socket().open();
+    socket().deliver(next());
+    window.fmBoardLive.answer({ key: "pick-one", selection: "yes", label: "Yes" });
+    socket().deliver({
+      type: "inbound", schema: "fm-board-inbound-result.v1", id: "a1",
+      status: "refused", reason: "unauthenticated",
+    });
+    break;
+  case "answer-offline":
+    /* Never opened: the page must say the answer did not go, not swallow it. */
+    window.fmBoardLive.answer({ key: "pick-one", selection: "yes", label: "Yes" });
+    break;
   case "lang": {
     socket().open();
     socket().deliver(next());
@@ -404,6 +442,10 @@ const call = findById(body, "bb-call");
 process.stdout.write(JSON.stringify({
   link: badge("bb-live-link"),
   behind: badge("bb-live-behind"),
+  sent: badge("bb-live-sent"),
+  // Every frame the page put on the wire, so what it sends is asserted from
+  // the wire rather than from a spy inside the code under test.
+  outbound: sockets.map((s) => s.sent).reduce((a, b) => a.concat(b), []),
   // Where the badges live matters: inside the fixed-height nav row they push a
   // phone screen sideways and cover the language switch.
   badgeHost: strip ? strip.parentNode.className : null,

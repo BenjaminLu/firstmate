@@ -9,10 +9,37 @@
  * freshness. Adding anything that renders board content here would recreate
  * the hand-written second copy that silently lost features last time.
  *
- * ANSWERS ARE NOT TOUCHED. The board sends every answer through
- * window.lavish.queuePrompt, which the surface serving this page provides, and
- * this file neither implements nor intercepts it. Carrying answers back to
- * firstmate is a separate owner's job and works exactly as it did before.
+ * ANSWERS GO BACK DOWN THE SAME SOCKET, AND THAT IS ALL THIS FILE DOES WITH
+ * THEM. The board used to hand every answer to window.lavish.queuePrompt,
+ * which the surface serving the page provided; when that surface is not there,
+ * the captain presses a button and nothing happens. So this file carries the
+ * answer itself, and exposes exactly one seam for the board to call:
+ *
+ *   window.fmBoardLive.canAnswer()
+ *       true when this board can reach firstmate right now.
+ *   window.fmBoardLive.answer(picks, whenSettled)
+ *       picks is one {key, selection, note, label, close} or a list of them.
+ *       key       the board's own routing key for the row
+ *       selection the option value the captain chose, or "" when he only typed
+ *       note      his typed words, or ""
+ *       label     what that option said on the board, so the durable record
+ *                 reads the way he read it
+ *       close     "done", "release", or omitted - the card's own declared mode
+ *       Returns false when it could not even be sent, so the board can say so
+ *       rather than looking like it worked. whenSettled, if given, is called
+ *       with {status, reason} as the server accepts it and again when it has
+ *       landed or failed; status is "accepted", "recorded", "refused" or
+ *       "failed".
+ *
+ * WHAT IT DOES NOT DECIDE. It does not know what a key means, what an answer
+ * does, or whether an answer may be given: it puts the captain's pick on the
+ * wire and shows him what came back. Everything an answer MEANS is settled
+ * where it always was, behind the connection.
+ *
+ * WHAT COMES BACK IS ALWAYS SHOWN. An answer that was refused, or that the
+ * fleet could not record, paints on this file's own status row. A press whose
+ * outcome the captain cannot see is the failure this seam exists to remove,
+ * and a silent refusal would be that same failure one layer further in.
  *
  * THE CAPTAIN'S UNSENT WORK OUTRANKS A FRESH PAYLOAD. Repainting runs the
  * shipped renderer, which throws away everything on the page, so an update is
@@ -49,6 +76,12 @@
      in a home with no server still renders: it paints from the payload built
      into it and says it is not updating. */
   var ENDPOINT = "__FM_BOARD_LIVE_ENDPOINT__";
+  /* What proves an answer sent from this page is the captain's. It is a
+     credential: it is injected into a board written at mode 0600, it is never
+     rendered, logged, or put in a link, and it leaves this page only inside a
+     message to the loopback endpoint above. */
+  var TOKEN = "__FM_BOARD_LIVE_TOKEN__";
+  var INBOUND_SCHEMA = "fm-board-inbound.v1";
   var SLOT_ID = "bearings-data";
   var SELF_ID = "fm-board-live";
 
@@ -71,6 +104,7 @@
   var STRIP_ID = "bb-live-status";
   var LINK_ID = "bb-live-link";
   var BEHIND_ID = "bb-live-behind";
+  var SENT_ID = "bb-live-sent";
   var linkState = "connecting";
   var arrivedAt = null;
   var lastSeq = -1;
@@ -112,6 +146,46 @@
   var AGE = {
     min: { en: "{n} min", hant: "{n} 分鐘", hans: "{n} 分钟" },
     hour: { en: "{n} h", hant: "{n} 小時", hans: "{n} 小时" }
+  };
+
+  /* What became of a press. Only the three outcomes the captain can act on:
+     it is on its way, it is recorded, or it is not - and the last one says so
+     rather than leaving the row looking answered. */
+  var SENT = {
+    sending: {
+      en: "sending your answer…",
+      hant: "正在送出你的回答…",
+      hans: "正在送出你的回答…"
+    },
+    accepted: {
+      en: "answer sent — recording it",
+      hant: "回答已送出 — 正在記錄",
+      hans: "回答已送出 — 正在记录"
+    },
+    recorded: {
+      en: "answer recorded",
+      hant: "回答已記錄",
+      hans: "回答已记录"
+    },
+    refused: {
+      en: "your answer was NOT recorded — firstmate refused it",
+      hant: "你的回答沒有被記錄 — firstmate 拒絕了它",
+      hans: "你的回答没有被记录 — firstmate 拒绝了它"
+    },
+    failed: {
+      en: "your answer was NOT recorded — tell firstmate",
+      hant: "你的回答沒有被記錄 — 請告訴 firstmate",
+      hans: "你的回答没有被记录 — 请告诉 firstmate"
+    },
+    unreachable: {
+      en: "your answer was NOT sent — this board is not connected",
+      hant: "你的回答沒有送出 — 這塊板沒有連上",
+      hans: "你的回答没有送出 — 这块板没有连上"
+    }
+  };
+  var SENT_TONE = {
+    sending: "neutral", accepted: "online", recorded: "online",
+    refused: "danger", failed: "danger", unreachable: "danger"
   };
 
   /* What a live board cannot do for itself, said plainly rather than implied
@@ -188,6 +262,8 @@
   }
 
   var behindCount = 0;
+  var sentState = null;
+  var sentDetail = "";
 
   /* Two facts, and neither may stand in for the other: whether the page is
      still being updated, and whether what it is showing is everything there
@@ -206,6 +282,25 @@
       var existing = document.getElementById(BEHIND_ID);
       if (existing) existing.hidden = true;
     }
+    /* Survives a repaint on purpose: the answer that caused the repaint is
+       exactly the one whose outcome he is waiting to read. */
+    if (sentState !== null) {
+      var sent = pin(SENT_ID, SENT_TONE[sentState] || "neutral");
+      if (sent) {
+        sent.textContent = say(SENT[sentState] || SENT.failed) +
+          (sentDetail ? " — " + sentDetail : "");
+        sent.hidden = false;
+      }
+    } else {
+      var wasSent = document.getElementById(SENT_ID);
+      if (wasSent) wasSent.hidden = true;
+    }
+  }
+
+  function setSent(next, detail) {
+    sentState = next;
+    sentDetail = detail || "";
+    paintStatus();
   }
 
   function setLink(next) {
@@ -344,7 +439,9 @@
       } catch (e) {
         return;
       }
-      if (!message || message.type !== "state") return;
+      if (!message) return;
+      if (message.type === "inbound") { settled(message); return; }
+      if (message.type !== "state") return;
       /* Every message is the whole board, so an older one arriving late can
          only take the page backwards. */
       if (typeof message.seq === "number" && message.seq <= lastSeq) return;
@@ -359,6 +456,83 @@
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 30000);
   }
+
+  /* ---- the answer, going the other way ---------------------------------
+   * The seam the board calls. It puts the captain's pick on the wire, shows
+   * him it is on its way, and shows him what came back - including, above
+   * all, that it did not land. It decides nothing about what his pick means.
+   */
+  var pending = {};
+  var nextId = 0;
+
+  function settled(message) {
+    var id = typeof message.id === "string" ? message.id : "";
+    var status = typeof message.status === "string" ? message.status : "failed";
+    var waiting = pending[id];
+    if (status === "accepted") {
+      setSent("accepted", "");
+    } else if (status === "recorded") {
+      setSent("recorded", "");
+      delete pending[id];
+    } else {
+      /* The reason is the server's stable machine word, not copy for the
+         captain: it is shown after this file's own sentence so he has
+         something exact to pass on, and the sentence carries the meaning. */
+      setSent(status === "refused" ? "refused" : "failed",
+        typeof message.reason === "string" ? message.reason : "");
+      delete pending[id];
+    }
+    if (typeof waiting === "function") waiting({ status: status, reason: message.reason });
+  }
+
+  /* An unfilled slot is not a token: a board derived by something that did not
+     inject one must say it cannot answer rather than send a message that will
+     be refused. */
+  function canAnswer() {
+    return !!(socket && socket.readyState === 1 && /^[0-9a-f]{64}$/.test(TOKEN));
+  }
+
+  function answer(picks, whenSettled) {
+    var list = Object.prototype.toString.call(picks) === "[object Array]" ? picks : [picks];
+    if (!list.length) return false;
+    if (!canAnswer()) {
+      setSent("unreachable", "");
+      if (typeof whenSettled === "function") {
+        whenSettled({ status: "failed", reason: "not-connected" });
+      }
+      return false;
+    }
+    nextId += 1;
+    var id = "a" + nextId;
+    var body = [];
+    for (var i = 0; i < list.length; i++) {
+      var pick = list[i] || {};
+      var one = { key: String(pick.key === undefined ? "" : pick.key) };
+      if (pick.selection !== undefined && pick.selection !== null) {
+        one.selection = String(pick.selection);
+      }
+      if (pick.note !== undefined && pick.note !== null) one.note = String(pick.note);
+      if (pick.label !== undefined && pick.label !== null) one.label = String(pick.label);
+      if (pick.close !== undefined && pick.close !== null) one.close = String(pick.close);
+      body.push(one);
+    }
+    try {
+      socket.send(JSON.stringify({
+        schema: INBOUND_SCHEMA, token: TOKEN, type: "answer", id: id, answers: body
+      }));
+    } catch (e) {
+      setSent("unreachable", "");
+      if (typeof whenSettled === "function") {
+        whenSettled({ status: "failed", reason: "not-connected" });
+      }
+      return false;
+    }
+    pending[id] = whenSettled;
+    setSent("sending", "");
+    return true;
+  }
+
+  window.fmBoardLive = { canAnswer: canAnswer, answer: answer };
 
   /* The shipped script runs between this file and DOMContentLoaded, so its
      source is read once the document is parsed - from the page, never from a

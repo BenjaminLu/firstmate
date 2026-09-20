@@ -143,7 +143,13 @@ Treat a board that says so as a `/bearings lavish` worth running, not as a board
 
 ### Handling a board wake
 
-A board answer arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake. Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, regardless of which answer kinds the result contains; then load `process-event-sources` and follow its contract for the result read, adapter classification, and the handled acknowledgement.
+A click on the live board arrives as a `check: the captain answered <key> on the board` wake, one per key he answered.
+It is already done when you read it: the answer is recorded, the call is closed or released, and the row he clicked is already acknowledged, all before the wake was appended.
+So there is nothing here to route - what remains is whatever his answer now asks for, which is ordinary work under the rules that already govern it.
+A wake saying part of it did NOT land names `state/board-inbound.jsonl`, where his exact answer is; reconcile that key by hand with a direct `answer` rather than asking him again.
+`dispatch.charted` is the one key that names no task: its wake carries the ids he ticked, and starting them is the ordinary dispatch decision.
+
+A board answer captured by the older review channel instead arrives as an ordinary `procevent lavish <source-id> <sequence>` check wake. Identify it by comparing the wake source id with `bin/fm-procevent-lavish.sh source-id "$(bin/fm-bearings-board.sh path)"`, regardless of which answer kinds the result contains; then load `process-event-sources` and follow its contract for the result read, adapter classification, and the handled acknowledgement.
 Decision answers need no routing from you: the runner feeds the board's binding into `bin/fm-captain-hold.sh`'s one keyed-answer intake, which closes or releases each answered captain-held task at answer time; reconcile any `skipped:` key yourself with a direct `answer`, and when the captain's answer is "later", record it as a deferral with `bin/fm-captain-hold.sh hold <id> --reason "<reason>" --until <date>` instead of a closure.
 A current structured Reconcile selection closes nothing: the versioned board context carries its exact selected option separately from any typed note, and the adapter routes that selection only into a durable re-check request while preserving the note as provenance.
 The rollout-compatible old context still feeds ordinary non-reconcile answers, but its bare or separator-annotated reconcile values and every structurally uncertain choice feed neither intake and remain announced for deliberate handling.
