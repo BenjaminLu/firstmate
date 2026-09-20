@@ -157,7 +157,9 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 ## Lint partitions and end-to-end latency
 
 `bin/fm-lint.sh` owns `<k>of<n>` canonical CI partitions, each running the same full source-aware ShellCheck analysis with two bounded workers, pinned versions, workflow validation, and backend-purity checks.
-The count belongs to the caller and `.github/workflows/ci.yml` derives it from `strategy.job-total`, so the matrix and the split cannot disagree; an index outside `1..n`, a count below one, and a malformed spec are all refused rather than linting an empty root set and reporting a clean result having checked nothing.
+The count belongs to the caller and `.github/workflows/ci.yml` derives it from `strategy.job-total`, so the matrix and the split cannot disagree.
+Four things are refused, and the fourth is the one that matters: an index outside `1..n`, a count below one, and a malformed spec are all rejected by the argument parser, but a valid index of a valid count can still select nothing once there are more partitions than roots - `--partition 424of424` against a 423-root inventory passes all three parser checks - so the produced root set is checked too and an empty partition is refused by name.
+That last check is the only defence against the outcome the other three are usually credited with preventing: a partition that lints nothing and reports a clean result, on the runner whose job it was to check its share.
 Its `--list-files` interface exposes partition membership; `tests/fm-lint.test.sh` verifies complete/disjoint executed roots at several counts and unchanged analysis flags.
 The workflow uploads each partition's quiet telemetry to distinguish analysis cost, memory use, and host contention.
 No fast mode, path skips, reduced checks, or paid runner provisioning is part of this layout.
