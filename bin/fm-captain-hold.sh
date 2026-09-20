@@ -1064,13 +1064,28 @@ apply_pending_retained_artifact() {  # <task-id>
 # first - cleanup keeps a captain-held row open and still held, so the
 # reconciliation lands unchanged afterwards. Every channel inherits the rule,
 # because the keyed intake resolves through `answer`.
-worker_record_live() {  # <task-id>
-  [ -f "$STATE/$1.meta" ] || return 1
-  [ ! -f "$STATE/$1.backlog-close" ]
+# The two records this reads are the transition library's own, so the library
+# reads them: fm_backlog_record_present authorizes the parent directory and
+# names by what it found. The distinction matters in the permissive direction
+# - anything it cannot vouch for would otherwise read as "no worker", which is
+# the answer that recreates the stranding - so a present-but-unusable record
+# is its own outcome (2) rather than a silent no.
+worker_record_live() {  # <task-id>; 0 live, 1 no live worker, 2 unreadable
+  local meta="$STATE/$1.meta" pending="$STATE/$1.backlog-close"
+  { [ -e "$meta" ] || [ -L "$meta" ]; } || return 1
+  fm_backlog_record_present "$meta" "task record" "$STATE" || return 2
+  { [ -e "$pending" ] || [ -L "$pending" ]; } || return 0
+  # Cleanup has already claimed this row's close; only its replay is pending.
+  fm_backlog_record_present "$pending" "pending-close record" "$STATE" || return 2
+  return 1
 }
 
 refuse_close_over_live_worker() {  # <task-id> <remedy>
-  worker_record_live "$1" || return 0
+  local status=0
+  worker_record_live "$1" || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "${FM_BACKLOG_TRANSITION_ERROR:-the worker record for task $1 cannot be read}; whether cleanup still owns this row's completion cannot be established, so the close is refused rather than risked"
+  [ "$status" -eq 0 ] || return 0
   fail "task $1 still has a live worker record at $STATE/$1.meta, and cleanup owns that row's completion; $2"
 }
 

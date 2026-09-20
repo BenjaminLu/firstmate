@@ -4228,6 +4228,22 @@ test_answer_will_not_close_a_row_whose_worker_is_still_up() {
     || fail "cleanup could not stand the worker down: $(cat "$home/live-teardown.err")"
   show=$(tasks_in "$home" show "$id" --full) || fail "cleanup lost the released row"
   assert_contains "$show" "state: done" "cleanup did not record the completion it owns"
+
+  # A worker record this reader cannot vouch for must not read as "no worker",
+  # because that is the permissive answer - the one that recreates exactly the
+  # stranding this guard exists to prevent.
+  id=sample-unusable-record
+  tasks_in "$home" add "$id" "Answer over an unusable worker record" --repo sample >/dev/null \
+    || fail "could not create the unusable-record fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the unusable-record fixture"
+  mkdir -p "$home/state/$id.meta"
+  err=$(run_captain "$home" answer "$id" --decision-file "$home/live-decision.txt" 2>&1) \
+    && fail "a worker record that is not a regular file read as no worker at all: $err"
+  assert_contains "$err" "$id.meta" "the refusal did not name the record it could not read: $err"
+  rmdir "$home/state/$id.meta"
+  run_captain "$home" answer "$id" --decision-file "$home/live-decision.txt" >/dev/null \
+    || fail "the call could not be answered once the unusable record was gone"
   pass "an answer will not close a row whose worker is still up"
 }
 
