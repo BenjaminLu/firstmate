@@ -1108,7 +1108,23 @@ refuse_close_over_live_worker() {  # <task-id> <remedy>
 }
 
 ANSWER_LIVE_WORKER_REMEDY="record the captain's answer with --release, which keeps the answer and lifts the hold while leaving the row for cleanup to close"
-RECONCILE_LIVE_WORKER_REMEDY="stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"
+
+# The reconcile remedy names standing the worker down, and on a SCOUT that
+# step has a prerequisite of its own: cleanup refuses until the captain-call
+# completion gate has passed. A scout is the one kind where that is true, and
+# the kind the stranding this guard exists to prevent actually happened to, so
+# the remedy names the gate there rather than sending the reader to a command
+# that refuses in turn. The kind comes from the worker record the guard has
+# already found; a record naming no kind gets the plain remedy.
+reconcile_live_worker_remedy() {  # <task-id>
+  local id=$1 kind=''
+  [ ! -f "$STATE/$id.meta" ] || kind=$(meta_value "$STATE/$id.meta" kind)
+  if [ "$kind" = scout ]; then
+    printf '%s' "pass this scout's captain-call completion gate with bin/fm-captain-hold.sh complete $id, then stand the worker down with bin/fm-teardown.sh - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"
+    return 0
+  fi
+  printf '%s' "stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"
+}
 
 close_answered() {  # <task-id> <release-0-or-1>
   if [ "$2" = 1 ]; then
@@ -1787,7 +1803,7 @@ reconcile_close() {
     occurrence=$(resolution_record_count "$body")
   else
     # New reconciliations only; an interrupted one finishes here as above.
-    refuse_close_over_live_worker "$id" "$RECONCILE_LIVE_WORKER_REMEDY"
+    refuse_close_over_live_worker "$id" "$(reconcile_live_worker_remedy "$id")"
     write_resolution_record "$id" reconciled "$body"
   fi
   close_answered "$id" 0 || fail "could not close reconciled captain-held task $id"

@@ -4327,7 +4327,7 @@ test_answer_will_not_close_a_row_whose_worker_is_still_up() {
 # mode, `reconcile close` has none and must stand the worker down first. Each
 # refusal is checked by running exactly what it told the reader to run.
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
-  local home id out show
+  local home id out show ship
   home=$(make_home live-worker-remedies)
   id=sample-live-reconcile
   mkdir -p "$home/data/$id" "$home/projects/sample" "$home/projects/$id"
@@ -4349,12 +4349,16 @@ test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
     "the reconcile refusal named a flag reconcile close rejects: $out"
   assert_contains "$out" "fm-teardown.sh" \
     "the reconcile refusal did not name the remedy that works here: $out"
+  # On a scout, cleanup has a prerequisite of its own, so a remedy that named
+  # only cleanup would be refused in turn. The refusal must name that step.
+  assert_contains "$out" "complete $id" \
+    "the scout refusal sent the reader to a command that refuses in turn: $out"
   assert_present "$home/state/reconcile-requests/$id.request" \
     "the refused reconciliation retired its own pending request"
 
-  # Run what the refusal said to run, then retry the reconciliation unchanged.
+  # Run what the refusal said to run, in the order it named, and nothing else.
   run_captain "$home" complete "$id" "$id" >/dev/null \
-    || fail "the completion gate refused the still-held call"
+    || fail "the completion gate the refusal named refused the still-held call"
   run_teardown "$home" "$id" >/dev/null 2> "$home/remedy-teardown.err" \
     || fail "the named remedy could not stand the worker down: $(cat "$home/remedy-teardown.err")"
   run_captain "$home" reconcile close "$id" --evidence-file "$home/live-evidence.txt" >/dev/null \
@@ -4363,6 +4367,23 @@ test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
   assert_contains "$show" "Resolution mode: reconciled" "the reconciliation lost its evidence record"
   assert_absent "$home/state/reconcile-requests/$id.request" \
     "the landed reconciliation left its pending request open"
+
+  # A ship has no such prerequisite, so its remedy must not name one.
+  ship=sample-live-reconcile-ship
+  tasks_in "$home" add "$ship" "Reconcile a ship with the worker still up" --kind ship \
+    --repo sample --start >/dev/null || fail "could not create the live ship fixture"
+  fm_write_meta "$home/state/$ship.meta" \
+    "window=firstmate:fm-$ship" "worktree=$home/projects/missing-$ship" \
+    "project=$home/projects/sample" "harness=codex" "kind=ship" "mode=direct-PR" \
+    "spawn_gen=fixture-$ship"
+  run_captain "$home" hold "$ship" --reason "captain must choose" >/dev/null \
+    || fail "could not hold the live ship fixture"
+  request_reconciles "$home" live-ship-src "$ship" || fail "could not file the ship request"
+  out=$(run_captain "$home" reconcile close "$ship" --evidence-file "$home/live-evidence.txt" 2>&1) \
+    && fail "reconcile close closed a ship row whose worker is still up: $out"
+  assert_contains "$out" "fm-teardown.sh" "the ship refusal did not name cleanup: $out"
+  assert_not_contains "$out" "completion gate" \
+    "the ship refusal named a scout-only prerequisite: $out"
   pass "each live-worker refusal names a remedy its own command accepts"
 }
 
