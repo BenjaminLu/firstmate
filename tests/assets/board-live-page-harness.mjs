@@ -233,6 +233,18 @@ globalThis.document = {
   activeElement: null,
   listeners: {},
   createElement: (tag) => new Node(tag),
+  // The board draws its decision map as SVG, which a page must build in the
+  // SVG namespace. This shim keeps no namespaces, so the node is the same one
+  // createElement makes - what matters is that the call EXISTS, because a page
+  // that cannot make one throws its whole render into its own catch and this
+  // harness reads that as "the board could not be rendered".
+  //
+  // It is here rather than in the board because the page is right and the shim
+  // was behind it: a real browser has createElementNS, and the map renders
+  // correctly everywhere that is true. A shim modelling only the DOM the page
+  // used to need will break again the moment the page needs more, so anything
+  // added here is added for the board as it is, never the board trimmed to fit.
+  createElementNS: (_ns, tag) => new Node(tag),
   // A LIVE lookup, walking the tree. A flat registry would keep answering with
   // a node the page has detached - and detaching is exactly what the board
   // does to its own sections when it refuses a payload, which is the signal
