@@ -527,29 +527,31 @@ add_target() {
 # did not cover. It now declines once the budget is spent, exactly as the forge
 # reads do, and the caller turns that into the ordinary budget note.
 #
-# Statuses, because the caller has to tell them apart:
-#   0  the command answered
-#   1  the command refused cleanly - a determinate no, such as a detached HEAD
-#   2  the read could not be established - it hit its bound, or answered
-#      nothing where an answer was required
-#   3  the sweep budget is spent and nothing was run
+# The four statuses the caller has to tell apart. They are named rather than
+# written as bare numbers at the six places that produce or match them, because
+# a "3" in a case arm says nothing about why that arm calls budget_note, and
+# because these names are then the one owner of the table instead of a comment
+# that can drift from the code.
+GIT_READ_OK=0            # the command answered
+GIT_READ_REFUSED=1       # a clean refusal - a determinate no, such as a detached HEAD
+GIT_READ_UNESTABLISHED=2 # it hit its bound, or answered nothing where an answer was required
+GIT_READ_BUDGET_SPENT=3  # the sweep budget is spent, and nothing was run
 GIT_OUT=
-GIT_READ_BUDGET_SPENT=3
 git_read() {
   local wt=$1 bound left status
   GIT_OUT=
   shift
-  budget_allows || return 3
+  budget_allows || return "$GIT_READ_BUDGET_SPENT"
   left=$(budget_left)
   bound=$LOCAL_READ_SECS
   [ "$left" -ge "$bound" ] || bound=$left
   [ "$bound" -ge "$CALL_MIN_SECS" ] || bound=$CALL_MIN_SECS
   GIT_OUT=$(fm_run_timed "$bound" git -C "$wt" "$@" 2>/dev/null)
   status=$?
-  [ "$status" -ne 124 ] || return 2
-  [ "$status" -eq 0 ] || return 1
-  [ -n "$GIT_OUT" ] || return 2
-  return 0
+  [ "$status" -ne 124 ] || return "$GIT_READ_UNESTABLISHED"
+  [ "$status" -eq 0 ] || return "$GIT_READ_REFUSED"
+  [ -n "$GIT_OUT" ] || return "$GIT_READ_UNESTABLISHED"
+  return "$GIT_READ_OK"
 }
 
 # owner/repo of a GitHub remote URL, in either the ssh or the https spelling.
@@ -610,10 +612,10 @@ discovery_other_remotes() {
   git_read "$wt" remote
   status=$?
   case "$status" in
-    0) ;;
+    "$GIT_READ_OK") ;;
     # No remote at all is not possible here - origin was just read - so a clean
     # refusal means git answered with an empty list, which is the same "none".
-    1) printf ''; return 0 ;;
+    "$GIT_READ_REFUSED") printf ''; return 0 ;;
     *) return "$status" ;;
   esac
   printf '%s' "$GIT_OUT" | grep -v '^origin$' | grep -v '^[[:space:]]*$' \
@@ -644,9 +646,9 @@ discover_task_pull_request() {
   # worse.
   git_read "$wt" rev-parse --git-dir
   case "$?" in
-    0) ;;
-    3) budget_note; return 0 ;;
-    2)
+    "$GIT_READ_OK") ;;
+    "$GIT_READ_BUDGET_SPENT") budget_note; return 0 ;;
+    "$GIT_READ_UNESTABLISHED")
       unknown "$id's worktree $wt did not answer in time, so whether it has a pull request of its own could not be established"
       return 0
       ;;
@@ -657,8 +659,8 @@ discover_task_pull_request() {
   esac
   git_read "$wt" symbolic-ref --quiet --short HEAD
   case "$?" in
-    0) branch=$GIT_OUT ;;
-    1)
+    "$GIT_READ_OK") branch=$GIT_OUT ;;
+    "$GIT_READ_REFUSED")
       # The repository answered and said it has no branch. bin/fm-brief.sh
       # starts every task at a detached HEAD and the worker creates its branch,
       # so this is a task that has not branched yet and therefore cannot have a
@@ -666,7 +668,7 @@ discover_task_pull_request() {
       # because the repository read above succeeded.
       return 0
       ;;
-    3) budget_note; return 0 ;;
+    "$GIT_READ_BUDGET_SPENT") budget_note; return 0 ;;
     *)
       unknown "the branch of $id's worktree $wt could not be read, so whether it has a pull request of its own could not be established"
       return 0
@@ -674,8 +676,8 @@ discover_task_pull_request() {
   esac
   git_read "$wt" remote get-url origin
   case "$?" in
-    0) remote=$GIT_OUT ;;
-    3) budget_note; return 0 ;;
+    "$GIT_READ_OK") remote=$GIT_OUT ;;
+    "$GIT_READ_BUDGET_SPENT") budget_note; return 0 ;;
     *)
       unknown "$id's worktree has no readable origin, so whether it has a pull request of its own could not be established"
       return 0
@@ -718,8 +720,8 @@ discover_task_pull_request() {
   # reported whenever there is somewhere else this branch could have gone.
   other_remotes=$(discovery_other_remotes "$wt")
   case "$?" in
-    3) budget_note; return 0 ;;
-    2)
+    "$GIT_READ_BUDGET_SPENT") budget_note; return 0 ;;
+    "$GIT_READ_UNESTABLISHED")
       unknown "$id's branch $branch has no open pull request in $slug, and its other remotes could not be listed, so whether it has one elsewhere could not be established"
       return 0
       ;;
