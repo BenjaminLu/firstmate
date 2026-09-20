@@ -175,6 +175,13 @@ fm_backlog_archive_file() {  # <data-dir>
   root=$(fm_backlog_root "$data") || return 1
   backend=$(fm_tasks_axi_backend "$root" 2>&1) || {
     FM_BACKLOG_TRANSITION_ERROR=$backend
+    # Printed as well as stored, for the reason the archive read below states:
+    # every caller reaches this through a command substitution, so the store
+    # dies with the subshell and only what went to stderr survives. Without
+    # it a backend-configuration error - which names .tasks.toml - reaches the
+    # operator as a generic sentence about the archive and the data directory,
+    # neither of which is the broken thing.
+    printf '%s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2
     return 2
   }
   [ "$backend" = markdown ] || return 1
@@ -232,14 +239,10 @@ fm_backlog_markdown_archive_from_toml() {  # <toml-path>
 # title mentioning another task cannot answer for it.
 fm_backlog_archived_row() {  # <data-dir> <task-id>
   local data=$1 id=$2 archive status=0
-  archive=$(fm_backlog_archive_file "$data") || {
-    status=$?
-    if [ "$status" -eq 2 ]; then
-      FM_BACKLOG_TRANSITION_ERROR=${FM_BACKLOG_TRANSITION_ERROR:-"backlog archive path cannot be resolved for $data"}
-      printf '%s\n' "$FM_BACKLOG_TRANSITION_ERROR" >&2
-    fi
-    return "$status"
-  }
+  # No fallback message here: fm_backlog_archive_file has already named what
+  # it could not read, on stderr. Inventing a second sentence only mislabels
+  # it, because this frame cannot see which of its inputs failed.
+  archive=$(fm_backlog_archive_file "$data") || return $?
   [ -e "$archive" ] || [ -L "$archive" ] || return 1
   if [ ! -f "$archive" ] || [ ! -r "$archive" ]; then
     FM_BACKLOG_TRANSITION_ERROR="backlog archive cannot be read at $archive"

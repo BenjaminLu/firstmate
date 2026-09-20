@@ -625,7 +625,7 @@ archived_without_answer() {  # <task-id>
   ! task_show "$id" || return 1
   archived=$(archived_row_body "$id") || status=$?
   [ "$status" -ne 2 ] \
-    || fail "the backlog archive could not be read while resolving captain-held task $id"
+    || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
   [ "$status" -eq 0 ] || return 1
   ! body_has_resolution_record "$archived"
 }
@@ -658,7 +658,7 @@ verify_hold_durable() {  # <task-id> [<attested-entry>] [<drop-remedy>]
     # on the strength of having disappeared.
     archived=$(archived_row_body "$id") || archived_status=$?
     [ "$archived_status" -ne 2 ] \
-      || fail "the backlog archive could not be read while resolving captain-held task $id"
+      || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
     [ "$archived_status" -eq 0 ] \
       || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
     body_has_resolution_record "$archived" \
@@ -987,7 +987,7 @@ refuse_archived_reuse() {  # <task-id>
   local id=$1 status=0
   archived_row_body "$id" >/dev/null || status=$?
   [ "$status" -ne 2 ] \
-    || fail "the backlog archive could not be read while checking whether task $id already exists"
+    || fail "this home's backlog archive could not be consulted while checking whether task $id already exists; the diagnostic above names what could not be read"
   [ "$status" -ne 0 ] \
     || fail "task $id is already closed and archived; a new captain call needs its own task"
 }
@@ -1241,7 +1241,7 @@ closed_row_present() {  # <task-id>; 0 active (sets TASK_SHOW_OUTPUT), 1 archive
   task_show "$id" && return 0
   archived_row_body "$id" >/dev/null || status=$?
   [ "$status" -ne 2 ] \
-    || fail "the backlog archive could not be read while confirming the close of $id"
+    || fail "this home's backlog archive could not be consulted while confirming the close of $id; the diagnostic above names what could not be read"
   [ "$status" -eq 0 ] \
     || fail "task $id disappeared after closing: it is in neither this home's configured backlog nor its archive (data directory $DATA)"
   return 1
@@ -1294,7 +1294,7 @@ replay_archived_answer() {  # <task-id> <release-0-or-1>
   local id=$1 release=$2 archived status=0 recorded_mode occurrence
   archived=$(archived_row_body "$id") || status=$?
   [ "$status" -ne 2 ] \
-    || fail "the backlog archive could not be read while resolving captain-held task $id"
+    || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
   [ "$status" -eq 0 ] \
     || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
   body_has_resolution_record "$archived" \
@@ -1635,7 +1635,7 @@ command_answers() {
       archived_status=0
       body=$(archived_row_body "$id") || archived_status=$?
       [ "$archived_status" -ne 2 ] \
-        || fail "the backlog archive could not be read while resolving $id"
+        || fail "this home's backlog archive could not be consulted for $id; the diagnostic above names what could not be read"
       if [ "$archived_status" -ne 0 ]; then
         printf 'skipped: %s (absent)\n' "$id"
         skipped=$((skipped + 1))
@@ -1797,7 +1797,7 @@ command_reconcile_requests() {
       archived_status=0
       archived_row_body "$id" >/dev/null || archived_status=$?
       [ "$archived_status" -ne 2 ] \
-        || fail "the backlog archive could not be read while resolving $id"
+        || fail "this home's backlog archive could not be consulted for $id; the diagnostic above names what could not be read"
       if [ "$archived_status" -eq 0 ]; then
         printf 'refused: %s (already closed)\n' "$id"
       else
@@ -1936,7 +1936,7 @@ replay_archived_reconciliation() {  # <task-id>
   local id=$1 archived status=0 occurrence
   archived=$(archived_row_body "$id") || status=$?
   [ "$status" -ne 2 ] \
-    || fail "the backlog archive could not be read while resolving captain-held task $id"
+    || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
   [ "$status" -eq 0 ] \
     || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
   if ! body_has_resolution_record "$archived"; then
@@ -2000,7 +2000,7 @@ reconcile_note() {
     note_archived_status=0
     archived_row_body "$id" >/dev/null || note_archived_status=$?
     [ "$note_archived_status" -ne 2 ] \
-      || fail "the backlog archive could not be read while resolving captain-held task $id"
+      || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
     [ "$note_archived_status" -ne 0 ] \
       || fail "captain-held task $id is closed and archived, so a note cannot be added to it (tasks-axi cannot write an archived row)"
     fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
@@ -2476,7 +2476,7 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
       # would answer a question this read did not settle. archived_row_body
       # has already named the archive on stderr, which is the only channel
       # that survives its command substitutions.
-      printf 'fm-captain-hold: the backlog archive could not be read while resolving %s\n' "$id" >&2
+      printf 'fm-captain-hold: this home'"'"'s backlog archive could not be consulted for %s; the diagnostic above names what could not be read\n' "$id" >&2
       exit 2
     fi
     [ "$archived_status" -ne 0 ] || return 1
