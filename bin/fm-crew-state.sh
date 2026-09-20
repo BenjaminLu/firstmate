@@ -175,25 +175,9 @@ fi
 
 # --- status log ------------------------------------------------------------
 
-# Map a status-log verb onto a canonical state for the fallback path. `paused` is
-# the deliberate-external-wait verb (fm-classify-lib.sh's FM_CLASSIFY_PAUSED_VERB):
-# a crew with no active run and an idle pane that declared a known external wait
-# reports `paused` distinctly, so a supervisor reading this sees a declared pause
-# and its reason rather than a wedge-suspect idle.
-map_log_state() {  # <line>
-  if status_is_paused "$1"; then
-    echo paused
-    return
-  fi
-  case "$(status_line_verb "$1")" in
-    working)        echo working ;;
-    needs-decision) echo parked ;;
-    blocked)        echo blocked ;;
-    done)           echo "done" ;;
-    failed)         echo failed ;;
-    *)              echo unknown ;;
-  esac
-}
+# The status-log verb to current-state mapping lives in fm-classify-lib.sh's
+# status_line_current_state, because the wake drain must compare a stale status
+# line against a current state with exactly the same mapping this fallback uses.
 
 LOG_LINE=$(status_current_line "$LOG" "$KIND")
 LOG_VERB=$(status_line_verb "$LOG_LINE")
@@ -218,7 +202,7 @@ if [ -n "$REMOTE_HOST" ]; then
   case "$REMOTE_STATE" in
     alive)
       if [ -n "$LOG_VERB" ]; then
-        LOG_STATE=$(map_log_state "$LOG_LINE")
+        LOG_STATE=$(status_line_current_state "$LOG_LINE")
         if [ "$LOG_STATE" != unknown ]; then
           emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")${SEP}remote endpoint alive on $REMOTE_HOST"
         fi
@@ -1029,11 +1013,12 @@ fi
 # resolved: must never become the current state or leak its resolution prose as the
 # detail. Skipping it lets a just-resolved idle crew (typically a secondmate, which
 # has no busy check above) fall through to the idle default instead of rendering
-# `unknown` with the resolution note as `doing`. map_log_state is the single owner of
-# the verb->state mapping (including the configurable paused verb), so reusing its
-# `unknown` verdict as the "not a state" test needs no second verb list here.
+# `unknown` with the resolution note as `doing`. fm-classify-lib.sh's
+# status_line_current_state is the single owner of the verb->state mapping
+# (including the configurable paused verb), so reusing its `unknown` verdict as the
+# "not a state" test needs no second verb list here.
 if [ -n "$LOG_VERB" ]; then
-  LOG_STATE=$(map_log_state "$LOG_LINE")
+  LOG_STATE=$(status_line_current_state "$LOG_LINE")
   if [ "$LOG_STATE" != unknown ]; then
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi

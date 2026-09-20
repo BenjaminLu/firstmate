@@ -233,6 +233,39 @@ status_is_paused() {  # <status-line>
   [ "$verb" = "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}" ]
 }
 
+# Map a status line onto the CURRENT-STATE vocabulary
+# (working|parked|blocked|paused|done|failed|unknown), which is deliberately not
+# the same word list as the status protocol's verbs: a crew that appended
+# `needs-decision:` reads as `parked`. Anything with no state meaning of its own -
+# a decision-closing `resolved:`, prose, an unknown verb - maps to `unknown`, so a
+# caller can reuse that verdict as the "this line makes no state claim" test
+# rather than keeping a second verb list.
+#
+# This is the single owner of that mapping, for every caller that has to compare
+# a status line against a current state: bin/fm-crew-state.sh resolves its own
+# status-log fallback through it, and bin/fm-wake-lib.sh compares a stale wake
+# annotation against the current state the same way. Two spellings of one mapping
+# would let the two disagree about whether a crew has changed state at all.
+#
+# `paused` is the deliberate-external-wait verb (FM_CLASSIFY_PAUSED_VERB): a crew
+# with no active run and an idle pane that declared a known external wait reports
+# `paused` distinctly, so a supervisor sees a declared pause and its reason rather
+# than a wedge-suspect idle.
+status_line_current_state() {  # <status-line>
+  if status_is_paused "$1"; then
+    echo paused
+    return
+  fi
+  case "$(status_line_verb "$1")" in
+    working)        echo working ;;
+    needs-decision) echo parked ;;
+    blocked)        echo blocked ;;
+    done)           echo "done" ;;
+    failed)         echo failed ;;
+    *)              echo unknown ;;
+  esac
+}
+
 # 0 if a status line's leading verb is the verified captain-held transfer verb.
 # The same pure verb read as status_is_paused, and the discriminator a supervisor
 # needs once a declared wait has already been recognized: the two declarations get
