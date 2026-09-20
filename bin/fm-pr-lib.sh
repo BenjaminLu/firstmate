@@ -1386,12 +1386,16 @@ fm_pr_lock_helpers() {
 #      just returned, and nothing about waiting longer would have helped.
 #
 # Only fm_lock_acquire_wait_bounded's 124 is that live-owner case: it returns
-# 124 only after re-reading the owner pid and confirming the process alive, and
-# returns 1 for a stale lock nothing will reclaim, for a timeout helper that
-# could not load, and for a failing pid read. Those are PERSISTENT - every later
-# poll meets the same thing and the head never re-binds - so they must not be
-# reported as the self-correcting case. Collapsing them here is what turns a
-# permanent failure into a line in a log AGENTS.md calls safe to delete.
+# 124 only after re-reading the owner pid and confirming the process alive.
+# Everything else it can return means something PERSISTENT - a stale lock
+# nothing will reclaim, a timeout helper that could not load, a failing pid
+# read, or 2 for a seconds argument that is not a positive number, which is
+# reachable here because the timeout below can come from the environment. Every
+# later poll meets the same thing and the head never re-binds, so none of them
+# may be reported as the self-correcting case. This maps by what 124 IS rather
+# than by listing what it is not, so a return this comment does not enumerate
+# still lands on the permanent side. Collapsing them was what turned a permanent
+# failure into a line in a log AGENTS.md calls safe to delete.
 fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <head>
   fm_pr_head_valid "${7-}" || return 1
   _fm_pr_meta_set_head "$@"
