@@ -100,6 +100,11 @@ bin/fm-test-run.sh --check-coverage
 
 Name the repository the hints are for on every call: an unqualified `gh`/`gh-axi` resolves to whichever remote the checkout defaults to, and run numbers collide between forks, so an unnamed repository silently measures a different fork's CI and the drift this table exists to correct stays invisible.
 A timed-out shard may upload no artifact, so include a complete green run or the slowest scripts go unmeasured in exactly the shard that needs them most.
+
+**Check that each run you measure actually completed, because a cancelled run still publishes artifacts and nothing in its summary says which of them are real.**
+Per-PR supersession cancels runs routinely here, and a cancelled run's artifacts are genuine for the jobs that finished and simply absent for the jobs that never started - so a refresh that includes one silently measures a subset while looking like a full sample, and the scripts it drops are the ones on the shards that had not finished, which are the slowest shards.
+Its job records mislead in the same direction: a queued-then-cancelled job still carries a `started_at`, so it reports a long wall that is entirely queue wait and never execution.
+Read `conclusion` on the run before using it (`gh run view <id> -R <owner>/firstmate --json conclusion`), take `success` only, and when a cancelled run is the only evidence for something, say which of its jobs completed and rely on nothing else from it.
 Completed shards from a partial run can supplement that complete baseline, but never treat missing tail scripts or the timeout duration as successful samples.
 Measure native-Windows-only scripts through the focused Git Bash runner and retain that `duration_ms` separately, because the portable CI shards skip them.
 
