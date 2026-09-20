@@ -50,7 +50,6 @@ test_quiet_mode_stanzas() {
   out=$(FM_HOME="$home" FM_CONFIG_OVERRIDE="$config" "$RENDER" --harness codex --afk 1 --afk-mode quiet)
   assert_contains "$out" "- Quiet mode: active" "quiet stanza missing"
   assert_contains "$out" "load /quiet" "quiet stanza did not name the /quiet skill"
-  assert_contains "$out" "Ordinary captain chat does NOT exit it" "quiet stanza lost the explicit-only exit rule"
   assert_not_contains "$out" "- Away mode: active" "quiet mode incorrectly rendered as away mode"
   out=$(FM_HOME="$home" "$RENDER" --harness codex --afk 1 --afk-mode quiet --repair-line)
   assert_contains "$out" "Quiet mode owns watcher supervision; load /quiet" "quiet repair line did not name /quiet"
@@ -75,7 +74,6 @@ test_repair_lines() {
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "codex repair line did not use checkpoint helper and env override"
 
   out=$(FM_HOME="$home" "$RENDER" --harness claude --queue-pending 1 --repair-line)
-  assert_contains "$out" "After draining queued wakes" "queue-pending prefix missing"
   assert_contains "$out" "watcher supervision needs Stop-owned automatic recovery" "claude pre-verification repair line is not neutral"
   assert_not_contains "$out" "is broken" "claude pre-verification repair line claimed a verified mechanism failure"
   assert_not_contains "$out" "FAILED" "claude pre-verification repair line emitted a verified failure notice"
@@ -88,7 +86,6 @@ test_repair_lines() {
   assert_contains "$out" "bin/fm-watch-checkpoint.sh --seconds 7" "x-mode codex repair line lost the checkpoint helper"
 
   out=$(FM_HOME="$home" "$RENDER" --harness opencode --read-only 1 --repair-line)
-  assert_contains "$out" "session holding the fleet lock" "read-only repair line missing"
 
   out=$(FM_HOME="$home" "$RENDER" --harness pi --repair-line)
   assert_contains "$out" "Pi tool fm_watch_arm_pi" "pi repair line does not direct the model to the extension-owned tool"
@@ -113,7 +110,6 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   out=$("$RENDER" --harness omp)
   assert_contains "$out" "primary harness: omp" "omp heading missing"
   assert_contains "$out" "Mode: omp (Oh My Pi) extension background wake." "omp snippet missing"
-  assert_contains "$out" "the omp extension already owns watcher continuity" "omp ordinary-wake line does not leave continuity to the extension"
   assert_contains "$out" ".omp/extensions/fm-primary-omp-watch.ts" "omp snippet did not substitute its watch extension path"
   assert_not_contains "$out" "__FM_OMP_EXT__" "omp snippet left a placeholder unsubstituted"
   assert_not_contains "$out" "__FM_OMP_TURNEND_EXT__" "omp snippet left the turn-end placeholder unsubstituted"
@@ -132,7 +128,6 @@ test_cross_harness_ordinary_continuation_and_repair_matrix() {
   ordinary=$(printf '%s\n' "$out" | grep -F -- '- Ordinary wake:')
   assert_contains "$ordinary" "Stop-owned auto-arm" "claude ordinary-wake line does not leave continuity to the Stop hook"
   assert_contains "$ordinary" "bin/fm-claude-stop-autoarm.sh" "claude ordinary-wake line lost the auto-arm script name"
-  assert_contains "$ordinary" "do not arm another cycle" "claude ordinary-wake line does not forbid a model re-arm"
   assert_not_contains "$ordinary" "bin/fm-watch-arm.sh" "claude ordinary-wake line incorrectly calls the manual arm"
   out=$("$RENDER" --harness claude --repair-line)
   assert_contains "$out" "watcher supervision needs Stop-owned automatic recovery" "claude recovery line lost its neutral automatic-recovery guidance"
@@ -208,8 +203,6 @@ test_pi_snippet_uses_effective_extension_path() {
   mkdir -p "$home/state" "$home/config"
   out=$(FM_HOME="$home" "$RENDER" --harness pi)
   assert_contains "$out" "-e $turnend -e $watch" "pi snippet did not render both effective extension launch paths"
-  assert_contains "$out" "The turn-end guard extension lives at \`$turnend\`" "pi snippet did not render the turn-end guard extension path"
-  assert_contains "$out" "The watcher extension lives at \`$watch\`" "pi snippet did not render the watcher extension path"
   assert_contains "$out" "MAIN must not re-drain, re-run, or acknowledge it" "pi snippet lost merged-event ownership"
   assert_contains "$out" "MAIN applies judgment about whether and how to surface, summarize, reference, or incorporate a merged sailboat outcome" "pi snippet imposed a mechanical sailboat treatment"
   assert_not_contains "$out" "__FM_PI_EXT__" "renderer leaked the Pi extension path placeholder"

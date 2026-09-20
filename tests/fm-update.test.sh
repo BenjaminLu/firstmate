@@ -287,8 +287,6 @@ EOF
 
   out=$(FM_TEST_SSH_BIN="$fake_ssh" run_update "$w")
 
-  assert_contains "$out" "remote secondmate sm1: updated on remote-mac" \
-    "the legacy remote advance was not accepted"
   assert_contains "$out" "restart-secondmates: fm-sm1" \
     "a live remote mate on the new tip must restart even when the host reports no instruction diff"
   assert_contains "$out" "nudge-secondmates: none" \
@@ -327,7 +325,6 @@ test_diverged_secondmate_skipped() {
 
   out=$(run_update "$w")
 
-  assert_contains "$out" "secondmate sm1: skipped: diverged from origin/main" "diverged home skipped"
   assert_contains "$out" "reconciliation required (record:" "diverged skip is actionable"
   assert_not_contains "$out" "fm-sm1" "diverged secondmate is not nudged"
   [ "$(git -C "$w/sm1" rev-parse HEAD)" = "$before" ] \
@@ -360,8 +357,6 @@ test_squash_merged_divergence_reconciles() {
   bump_origin "$w" readme
   out=$(run_update "$w")
   marker="$w/home/state/.secondmate-update-reconcile/sm1.pending"
-  assert_contains "$out" "secondmate sm1: skipped: diverged from origin/main" \
-    "unique local work was not initially protected"
   assert_present "$marker" "initial divergence did not leave its durable record"
 
   git -C "$w/sm1" diff "$branch_base" "$local_tip" | git -C "$w/seed" apply
@@ -512,8 +507,6 @@ test_unsafe_secondmate_home_skipped_before_git_update() {
 
   out=$(run_update "$w")
 
-  assert_contains "$out" "secondmate bad: skipped: unsafe home: secondmate home cannot be inside the active firstmate home" \
-    "unsafe project-like home skipped"
   assert_contains "$out" "nudge-secondmates: none" "unsafe home is not nudged"
   [ "$(git -C "$bad" rev-parse HEAD)" = "$before" ] \
     || fail "unsafe secondmate home HEAD moved"

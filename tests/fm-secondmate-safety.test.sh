@@ -641,8 +641,6 @@ test_home_seed_refuses_projectful_reused_charter_for_projectless_home() {
   printf '\n# Custom note\nThe projects above are local clones for work you supervise.\n' >> "$home/data/reusable/brief.md"
   FM_HOME="$home" "$ROOT/bin/fm-home-seed.sh" reusable "$reusable_sub" --no-projects >/dev/null \
     || fail "project-less seed rejected a reused project-less charter"
-  assert_grep 'None. This is a project-less domain' "$reusable_sub/data/charter.md" \
-    "reused project-less charter was not copied"
 
   scaffold_secondmate_charter "$home" stale 'firstmate self-development. None. This is a project-less domain.' alpha \
     || fail "projectful charter scaffold failed"

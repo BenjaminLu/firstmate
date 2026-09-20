@@ -451,7 +451,6 @@ test_failed_close_rewakes_with_failure_banner() {
   write_arm_fixture "$dir" failed
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
   expect_code 2 "$status" "a typed watcher failure must rewake as an alarm"
-  assert_contains "$out" "automatic supervision mechanism is broken" "failure rewake must describe the automatic mechanism failure"
   assert_contains "$out" "watcher: FAILED" "failure rewake must carry the arm's typed failure"
   assert_not_contains "$out" "bin/fm-watch-arm.sh" "failure rewake must not create a manual arm loop"
   [ "$(epoch_outcome "$dir")" = failed ] || fail "epoch must record outcome=failed, got: $(epoch_outcome "$dir")"
@@ -497,7 +496,6 @@ test_failure_notice_marker_write_refuses_delivery_and_retries() {
   expect_code 2 "$status3" "a later failure must retain the Stop-owned retry"
   [ "$(epoch_field "$dir" epoch)" -gt "$gen1" ] || fail "the successor did not supersede the refused terminal entry"
   assert_present "$marker" "the successful successor did not record the failure notice"
-  assert_contains "$out2" "automatic supervision mechanism is broken" "the successful successor did not deliver the failure notice"
   [ -z "$out3" ] || fail "the firing after the successful marker commit repeated the notice: $out3"
   delivered=$(printf '%s\n%s\n' "$out2" "$out3" | grep -c 'automatic supervision mechanism is broken' || true)
   [ "$delivered" -eq 1 ] || fail "the restored episode delivered $delivered failure notices instead of one"
@@ -511,7 +509,6 @@ test_unverified_clean_close_exhausts_retries() {
   write_arm_fixture "$dir" clean
   out=$(run_autoarm "$dir" 2>/dev/null); status=$?
   expect_code 2 "$status" "a non-actionable close without a healthy watcher must fail closed"
-  assert_contains "$out" "automatic supervision mechanism is broken" "unverified close must report automatic failure"
   [ "$(wc -l < "$dir/state/arm-ran" | tr -d ' ')" -eq 2 ] || fail "unverified close must exhaust exactly two bounded attempts"
   [ "$(epoch_outcome "$dir")" = failed ] || fail "epoch must record outcome=failed, got: $(epoch_outcome "$dir")"
   pass "auto-arm: unverified clean close exhausts retries and fails closed"

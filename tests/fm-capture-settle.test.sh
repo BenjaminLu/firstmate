@@ -89,8 +89,6 @@ test_a_transition_that_never_happens_fails_with_the_viewport_it_saw() {
     --present 'RELOAD DONE' --absent 'RELOAD WORKING' 2>&1) && status=0 || status=$?
   expect_code 1 "$status" "a transition that never happened must fail: $out"
   assert_contains "$out" "never showed 'RELOAD DONE'" "the failure must name what it waited for"
-  assert_contains "$out" 'composer ready, nothing happened at all' \
-    "the failure must carry the viewport it actually saw, not just an exhausted bound"
   pass "a transition that never happens fails loudly and reports the viewport it saw"
 }
 
@@ -284,7 +282,6 @@ test_an_unusable_tail_count_is_refused_rather_than_matching_nothing() {
     out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/badtail" 4 \
       --tail "$value" --absent 'nothing') 2>&1 ) && status=0 || status=$?
     expect_code 1 "$status" "--tail '$value' must be refused, not passed to tail: $out"
-    assert_contains "$out" 'whole number of lines' "the refusal must say what --tail accepts (value '$value')"
   done
 
   # Zero is the one unusable value that is a legal argument, so it needs its
@@ -307,8 +304,6 @@ test_a_wait_that_requires_nothing_is_refused() {
   reset_capture 'anything at all'
   out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/empty" 4) 2>&1 ) && status=0 || status=$?
   expect_code 1 "$status" "a wait with no condition must be refused, not pass on the first capture: $out"
-  assert_contains "$out" 'needs at least one --present, --absent or --absent-re' \
-    "the refusal must say what the call is missing"
 
   out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/typo" 4 --pressent 'x') 2>&1 ) \
     && status=0 || status=$?

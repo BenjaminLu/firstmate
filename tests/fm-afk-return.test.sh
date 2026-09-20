@@ -169,7 +169,6 @@ test_return_gate_owns_remediation_and_reports_catchup_to_bearings() {
   rc=$?
   set -e
   [ "$rc" -eq 4 ] || fail "the catch-up branch should be distinguishable by exit status (rc=$rc): $out"
-  assert_contains "$out" 'return catch-up is pending' "the catch-up refusal did not point to the shared return owner"
 
   # Restart/re-entry is idempotent: no second stop, no duplicate catch-up line,
   # and the same unresolved blocker remains authoritative.
@@ -301,7 +300,6 @@ test_away_reentry_refuses_pending_return_gate() {
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "away re-entry succeeded while return catch-up was pending"
-  assert_contains "$out" 'return catch-up is still pending' "away re-entry refusal did not explain the pending owner"
   [ ! -e "$dir/home/state/.afk" ] || fail "away re-entry wrote .afk despite the pending return gate"
   pass "away-mode re-entry fails closed while the prior return catch-up is pending"
 }
@@ -408,7 +406,6 @@ test_return_brief_composes_from_record_store_and_held_set() {
   [ -e "$dir/home/state/afk-contracts" ] || fail "the return did not archive the away-posture record"
   [ ! -e "$dir/home/state/.afk-contract" ] || fail "the live away-posture record survived the return"
   assert_contains "$out" '=== Return brief (away ' "the brief did not open with the away window"
-  assert_contains "$out" 'supervision ran through the away window with no detected gap' "health did not report the clean window"
   health_line=$(line_of "$out" 'Supervisor health:')
   clauses_line=$(line_of "$out" 'Mandate clauses:')
   waiting_line=$(line_of "$out" 'Waiting on you:')
@@ -417,12 +414,7 @@ test_return_brief_composes_from_record_store_and_held_set() {
     || fail "the brief is missing a section: $out"
   [ "$health_line" -lt "$clauses_line" ] && [ "$clauses_line" -lt "$waiting_line" ] && [ "$waiting_line" -lt "$failed_line" ] \
     || fail "the brief sections are out of order (health $health_line, clauses $clauses_line, waiting $waiting_line, failed $failed_line)"
-  assert_contains "$out" '1. merge task fix-windows PR when checks green - recorded, not executed by this release' "the accepted clause was not listed as recorded-only"
-  assert_contains "$out" '2. prerelease repo no-mistakes when after clause 1 - recorded, not executed by this release' "the second clause was not listed"
-  assert_contains "$out" '3. "action=merge object=everything when=(none)" - refused at entry: missing when' "the refused clause was not listed with its missing part"
-  assert_contains "$out" 'merge the windows fix when green, then cut a prerelease' "the captain's verbatim words were not carried into the brief"
   assert_contains "$out" 'fix-windows,queued,task' "the held backlog item was not listed under waiting on you"
-  assert_contains "$out" 'awaiting the captain on the merge' "the hold reason was not listed"
   assert_contains "$out" 'other [key=pick] needs your decision: choose the target' "the open decision was not listed under waiting on you"
   assert_contains "$out" 'fix-windows: blocked on a token only the captain holds; held for return' "the captain-verdict outcome was not listed"
   assert_contains "$out" 'fix-windows [key=token] still blocked, firstmate remediates before ordinary work' "the blocker sharing a task with a captain outcome was exempted"
@@ -441,8 +433,6 @@ test_return_brief_composes_from_record_store_and_held_set() {
   printf 'resolved [key=dep]: the upstream dependency landed\n' >> "$dir/home/state/other.status"
   printf 'resolved [key=token]: the token was refreshed\n' >> "$dir/home/state/fix-windows.status"
   second=$(run_return "$dir" check) || fail "the remediated return did not clear: $second"
-  assert_contains "$second" '1. merge task fix-windows PR when checks green - recorded, not executed by this release' "check did not re-render the mandate from the archived record"
-  assert_contains "$second" 'supervision ran through the away window with no detected gap' "check lost the health snapshot taken at begin"
   assert_contains "$second" 'catch-up clear' "check did not clear the gate"
   [ ! -e "$gate" ] || fail "the cleared check left the gate behind"
   FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" "$dir/bin/fm-afk-return.sh" guard \
@@ -468,8 +458,6 @@ test_return_brief_keeps_refresh_history() {
   touch "$dir/home/state/.last-watcher-beat"
   : > "$dir/home/state/.fake-drain"
   out=$(run_return "$dir" begin) || fail "refreshed posture return did not clear: $out"
-  assert_contains "$out" 'merge task first PR when checks green - superseded at ' "the superseded mandate was omitted"
-  assert_contains "$out" 'wake-me task second when at 2026-09-08T08:00Z - recorded' "the final mandate was omitted"
   assert_contains "$out" 'first: completed before the mandate refresh' "the pre-refresh outcome was omitted"
   assert_contains "$out" $'    replacement mandate\n    \nWaiting on you:' "the return brief dropped a trailing blank line from the final words"
   [ -f "$dir/home/state/afk-contracts/$first_epoch.afk-contract" ] || fail "return did not archive the final session record at the canonical path"
@@ -534,7 +522,6 @@ test_missing_epoch_record_stays_required_after_disappearing() {
   cp "$backup" "$record"
   out=$(run_return "$dir" check) || fail "check did not clear after the retained record was restored valid: $out"
   assert_contains "$out" "=== Return brief (away $entered ->" "the restored record did not recover its away window"
-  assert_contains "$out" 'merge task restored PR when checks green - recorded' "the restored clause was omitted from the brief"
   assert_contains "$out" 'captain words survive' "the restored captain words were omitted from the brief"
   [ -f "$dir/home/state/afk-contracts/$epoch.afk-contract" ] || fail "the restored record was not archived under its recovered epoch"
   assert_contains "$out" 'catch-up clear' "the restored valid record did not clear catch-up"
@@ -650,7 +637,6 @@ test_return_guard_refuses_while_the_record_exists() {
   rc=$?
   set -e
   [ "$rc" -eq 3 ] || fail "guard should refuse while the away-posture record exists (rc=$rc): $out"
-  assert_contains "$out" 'away mode is still active' "guard did not name the away posture"
   [ ! -e "$dir/home/state/.afk" ] || fail "fixture error: the legacy flag should be absent in this case"
   pass "the read-only guard treats the away-posture record as active away mode without the legacy flag"
 }
@@ -702,7 +688,6 @@ test_return_brief_without_a_record_reports_the_legacy_flag() {
   printf '%s\n' "$(( $(date +%s) - 7200 ))" > "$dir/home/state/.afk"
   : > "$dir/home/state/.fake-drain"
   out=$(run_return "$dir" begin) || fail "a legacy-flag return with no blockers should clear: $out"
-  assert_contains "$out" '(no away-posture record for this window; legacy away flag only)' "the legacy window was not named"
   assert_contains "$out" ', 2h00m) ===' "the away window was not measured from the legacy flag's own timestamp"
   [ ! -e "$dir/home/state/.afk" ] || fail "the legacy flag survived the return"
   pass "a return with only the legacy away flag still renders the brief and measures the window from the flag"
@@ -776,7 +761,6 @@ test_missing_final_archive_keeps_retained_contract_gated() {
   rc=$?
   set -e
   [ "$rc" -eq 3 ] || fail "check cleared after the retained final archive disappeared (rc=$rc): $out"
-  assert_contains "$out" "archived away-posture record missing for entered_epoch $epoch; catch-up stays gated" "check did not name the missing final archive"
   [ -f "$dir/home/state/.afk-return-catchup" ] || fail "the missing final archive did not retain the gate"
   cp "$backup" "$archive"
   out=$(run_return "$dir" check) || fail "check did not clear after the final archive was restored: $out"

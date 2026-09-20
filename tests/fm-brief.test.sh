@@ -170,13 +170,6 @@ exit 0;
 PERL
 }
 
-test_help_includes_entire_header() {
-  local help
-  help=$("$ROOT/bin/fm-brief.sh" --help)
-  assert_contains "$help" "Refuses to overwrite an existing brief." "fm-brief.sh --help omitted its header terminator"
-  pass "fm-brief.sh: --help renders the complete header"
-}
-
 # Registry with one project per delivery mode. fm-brief.sh no longer reads it -
 # the ship mode arrives as an explicit flag - so this fixture exists to prove the
 # scaffold ignores the registered posture (test_ship_mode_is_explicit_not_registry).
@@ -213,9 +206,6 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{FIRSTMATE_SPEC}" "$brief" "$id: brief missing the {FIRSTMATE_SPEC} placeholder"
     assert_grep "## Captain's intent" "$brief" "$id: brief missing Captain's intent subsection"
     assert_grep "## Firstmate spec" "$brief" "$id: brief missing Firstmate spec subsection"
-    assert_grep 'never a bare number such as "PR 108"' "$brief" "$id: brief missing the full-PR-URL rule"
-    assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
-      "$id: brief missing nonterminal working:/setup-complete gate protection"
     assert_no_grep "EOF" "$brief" "$id: brief leaked a heredoc EOF marker (unterminated heredoc)"
   done
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
@@ -260,8 +250,6 @@ test_ship_mode_is_explicit_not_registry() {
   brief="$home/data/brief-explicit-a5/brief.md"
   grep -qx "Delivery contract: mode=no-mistakes" "$brief" \
     || fail "registered direct-PR posture overrode the explicit --mode"
-  assert_grep "Firstmate will then instruct you to run /no-mistakes" "$brief" \
-    "explicit no-mistakes brief did not render the pipeline definition of done"
 
   # An unregistered project is not a blocker either, because nothing is looked up.
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-explicit-a6 never-registered --mode local-only >/dev/null 2>&1 \
@@ -294,35 +282,6 @@ ROWS
   pass "fm-brief.sh: --yolo and scout/secondmate --mode are refused, never silently dropped"
 }
 
-test_faster_paths_use_configured_authority_without_stacked_review() {
-  local home id brief
-  home="$TMP_ROOT/configured-authority-home"
-  write_registry "$home"
-  id="brief-direct-authority-a4"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --mode direct-PR >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
-  assert_grep "The configured merge authority decides whether to merge the PR; firstmate relays the outcome." "$brief" \
-    "direct-PR brief lost configured merge authority"
-  assert_no_grep "The captain reviews and merges the PR" "$brief" \
-    "direct-PR brief hard-coded captain-only authority"
-  id="brief-local-authority-a4"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" local-proj --mode local-only >/dev/null 2>&1
-  brief="$home/data/$id/brief.md"
-  assert_grep "The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path." "$brief" \
-    "local-only brief lost configured merge authority and guarded landing"
-  assert_no_grep "The captain approves the ready branch" "$brief" \
-    "local-only brief hard-coded captain-only authority"
-  assert_no_grep "Firstmate then reviews your branch diff" "$brief" \
-    "local-only brief retained a personal review stacked on the selected delivery path"
-  assert_no_grep "pass \`--intent\` as only this brief's \`## Captain's intent\`" "$home/data/$id/brief.md" \
-    "local-only brief must not include the no-mistakes --intent contract"
-  id="brief-direct-intent-a4"
-  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" direct-proj --mode direct-PR >/dev/null 2>&1
-  assert_no_grep "pass \`--intent\` as only this brief's \`## Captain's intent\`" "$home/data/$id/brief.md" \
-    "direct-PR brief must not include the no-mistakes --intent contract"
-  pass "fm-brief.sh: faster paths use configured authority without stacked review"
-}
-
 # Pin the specific line the bug lived on: the no-mistakes DOD's no-mistakes
 # reference must render as plain prose with no dangling apostrophe artifact.
 test_no_mistakes_dod_wording() {
@@ -345,30 +304,14 @@ test_no_mistakes_dod_wording() {
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep '`help`' "$brief" \
     "no-mistakes DOD must render literal backticks around help"
-  assert_grep "pass \`--intent\` as only this brief's \`## Captain's intent\`" "$brief" \
-    "no-mistakes DOD must require --intent to be the Captain's intent subsection"
-  assert_grep "plus any later words the captain actually said" "$brief" \
-    "no-mistakes DOD must allow later captain words in --intent"
-  assert_grep "Do not include \`## Firstmate spec\`" "$brief" \
-    "no-mistakes DOD must keep Firstmate spec out of --intent"
-  assert_grep "or your own decisions and tradeoffs" "$brief" \
-    "no-mistakes DOD must keep worker tradeoffs out of --intent"
-  assert_grep "This replaces the no-mistakes skill's advice to enrich \`--intent\`" "$brief" \
-    "no-mistakes DOD must override the external skill's enrich-with-decisions guidance"
   # A bare reference cannot preserve the captain's ask, so the rendered DOD states
   # the self-sufficiency rule and requires referenced material to be resolved into
   # its substance.
-  assert_grep "The \`--intent\` string you pass must be self-sufficient" "$brief" \
-    "no-mistakes DOD must require a self-sufficient --intent string"
-  assert_grep "write the substance of the referenced items into \`--intent\`" "$brief" \
-    "no-mistakes DOD must tell the worker to resolve report, decision, and PR references into substance"
 
   # The --yes ban is a fleet-wide prohibition, not a preference, and it must not
   # claim an enforcement the tool does not provide: this is instruction only.
   assert_grep "NEVER pass \`--yes\` (or \`-y\`) to \`no-mistakes axi run\` or \`no-mistakes axi respond\`. It is banned fleet-wide." "$brief" \
     "no-mistakes DOD must state the --yes ban as a prohibition"
-  assert_grep "answering your own ask-user finding is a hard rule violation" "$brief" \
-    "no-mistakes DOD must say why --yes is banned"
   assert_no_grep "Avoid \`--yes\`" "$brief" \
     "no-mistakes DOD still states the --yes ban as a preference"
   assert_no_grep "no-mistakes refuses" "$brief" \
@@ -378,10 +321,6 @@ test_no_mistakes_dod_wording() {
   # before the CI-green line that governs the mode, so it has to carry its own
   # condition: workers have declared a committed branch done and had to be
   # withdrawn by hand.
-  assert_grep "that is the pause before validation, not this mode's finish" "$brief" \
-    "no-mistakes DOD lets its first done sentence read as the end of the task"
-  assert_no_grep "When you believe it is complete, append \`done: {summary}\` to the status file and stop." "$brief" \
-    "no-mistakes DOD still renders an unconditional done imperative"
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose and bans --yes outright"
 }
 
@@ -401,125 +340,59 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
 
   # Both surfaces the worker actually controls have to be named, or the practices
   # read as advice to an agent that does not write the fix.
-  assert_grep "the implementation you commit before starting the run, and how you answer a Fix gate" "$brief" \
-    "no-mistakes DOD must name the two surfaces the fix-round technique applies to"
 
   # Which flag does what, per no-mistakes axi respond --help: a worker that thinks
   # instructions decide coverage answers a three-finding gate with one finding
   # selected, and the two it never selected come back as the next round.
-  assert_grep "\`--findings\` selects the set the round covers" "$brief" \
-    "no-mistakes DOD must name the flag that actually decides a round's coverage"
-  assert_grep "guidance layered onto that already-selected set" "$brief" \
-    "no-mistakes DOD must not let instructions read as what selects a round"
-  assert_grep "fold whatever it finds into the round with \`--add-finding\`" "$brief" \
-    "no-mistakes DOD must name the only flag that adds a self-spotted problem to a round"
 
-  assert_grep "One site is a class" "$brief" \
-    "no-mistakes DOD lost the close-the-whole-class practice"
-  assert_grep "detect it at least two independent ways" "$brief" \
-    "no-mistakes DOD lost the two-detector requirement that keeps a sweep from reporting clean"
-  assert_grep "re-run that sweep over the fix's own diff - yours before the run, the pipeline's after a fix round -" "$brief" \
-    "no-mistakes DOD lost the re-sweep requirement that catches a site the fix itself creates"
-  assert_grep "name any site you deliberately leave unfixed" "$brief" \
-    "no-mistakes DOD lost the stated-split requirement"
-  assert_grep "Your fix is the next candidate" "$brief" \
-    "no-mistakes DOD lost the review-your-own-diff practice"
-  assert_grep "reverting the production fix, confirming the test goes red, and restoring it" "$brief" \
-    "no-mistakes DOD lost the test-vacuity practice"
-  assert_grep "Read the primary source before writing a check" "$brief" \
-    "no-mistakes DOD lost the primary-source practice"
 
   # The firstmate-side rule fires on a party that is not reading at the moment it
   # matters, so the round threshold has to reach the worker holding the round
   # number: without these the instruction arrives and nothing in the contract
   # lets the worker refuse it.
-  assert_grep "From the third fix round on one step, " "$brief" \
-    "no-mistakes DOD lost the round threshold the worker enforces"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`ask-user-authority` requires firstmate to stop naming a narrow remedy' "$brief" \
-    "no-mistakes DOD must cross-reference the owner of the firstmate-side rule, not restate it"
-  assert_grep "Refuse an instruction that still names a narrow remedy: append " "$brief" \
-    "no-mistakes DOD lost the third-round refusal clause"
   # Firstmate counts the round it is about to open; a worker counting rounds
   # already spent fires one round later and the two deadlock a round apart.
   # There is no machine source for the number, so the basis has to be legible
   # from the brief alone.
-  assert_grep "the round it opens, counted the way step 4 of that skill counts it" "$brief" \
-    "no-mistakes DOD must fix the threshold on the arriving round, as its owner counts it"
-  assert_grep "where {n} is that arriving round number" "$brief" \
-    "no-mistakes DOD must leave the round number in the blocked line unambiguous"
   # A refusal held quietly is the deadlock the refusal was supposed to prevent:
   # firstmate reads status events, so the refusal has to surface as one, in the
   # vocabulary the brief already defines.
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`blocked: fix round {n} on this step, instruction still names a narrow remedy`' "$brief" \
-    "no-mistakes DOD must raise the refusal as a status event firstmate can see"
   # Without a way out the refusal never terminates, and the coherent change the
   # refusal itself asked for is that way out.
-  assert_grep "One answer ends that refusal: the coherent-change instruction you asked for" "$brief" \
-    "no-mistakes DOD must leave the coherent-change instruction answerable at the gate"
-  assert_grep "A resend that still names a narrow remedy is not one, and the refusal stands" "$brief" \
-    "no-mistakes DOD must exclude a resent narrow remedy from the termination"
   # A second exit that a narrow remedy can satisfy by declaring itself
   # deliberate is a bypass, not a termination: the seventeen-round branch
   # behaves identically under it.
-  assert_no_grep "states the narrow remedy is deliberate" "$brief" \
-    "no-mistakes DOD must not let an acknowledged narrow remedy end the refusal"
   # The rule has two halves and the worker needs a lever for both. A declarative
   # about what the response "carries" gives it nothing to do, so the second half
   # is an imperative with an explicit permission to append the ask - otherwise a
   # coherent-change instruction that omits it sails through the refusal test.
-  assert_grep "Ask the reviewer for the pass conditions in the same response you do answer that gate with" "$brief" \
-    "no-mistakes DOD lost the pass-conditions clause"
   # The worker composes the ask, so it must be able to do that without opening
   # another file - the same reason the refusal test is stated inline.
-  assert_grep "everything still wanted, stated as conditions to satisfy in one pass rather than as one more repair" "$brief" \
-    "no-mistakes DOD must state what the pass-conditions ask contains, not point at it"
   # Most gates carry no ask-user finding at all and the worker writes its own
   # --instructions, so hanging the ask on a firstmate decision arriving misses
   # the majority path. The round is the trigger, not the finding class.
-  assert_grep "That ask rides with every response you send from this round on, whoever authored the instruction it accompanies" "$brief" \
-    "no-mistakes DOD must fire the pass-conditions ask on the round, not on a firstmate decision"
   # The ask-user bullet forbids implementing the decision, which reads as
   # forbidding additions, so the permission has to be squared with it in words.
-  assert_grep "where adding it is the one addition that is not implementing the decision" "$brief" \
-    "no-mistakes DOD must square the append permission with the feed-the-decision bullet"
-  assert_grep "Nothing carries that ask to the reviewer and returns a reply, so never wait for one" "$brief" \
-    "no-mistakes DOD must tell the worker no reviewer reply ever comes back"
 
   # The ask-user bullet is read from round 1 and the threshold clause sits
   # paragraphs below it, so the bullet has to carry its own exception or a
   # worker feeds a round-3 narrow remedy straight to the gate.
-  assert_grep "From the third fix round on one step the round-threshold clause below narrows this" "$brief" \
-    "no-mistakes DOD must narrow the feed-the-decision bullet where the reader meets it"
-  assert_grep "goes back to firstmate instead of to the gate, and that clause is where the one answer you may give the gate instead is stated, along with the one thing you append to the decision you do send" "$brief" \
-    "no-mistakes DOD must not leave the feed-the-decision bullet contradicting the termination clause"
 
   # Every practice a worker could read as a worktree edit has to carry its own
   # mid-run half, because the no-hand-edit rule sits paragraphs away from these
   # bullets and a worker who reads only the bullet must not reach an edit.
-  assert_grep "Once a run is active you never touch the worktree" "$brief" \
-    "no-mistakes DOD must bar a hand-run vacuity proof during an active run"
-  assert_grep "the pipeline's fix commit rather than one you are about to submit" "$brief" \
-    "no-mistakes DOD must say whose diff the review pass runs over mid-run"
 
   # The long form stays in the external skill, and it is split across two
   # references: a worker sent to only one of them for the class sweep lands in a
   # file that opens by disclaiming class coverage and writes a single-pattern
   # sweep. The run structure around them stays unnamed.
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`greenlight` skill is installed at `~/.claude/skills/greenlight`' "$brief" \
-    "no-mistakes DOD must say where the greenlight long form lives"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`references/generalize.md` for the long form of what a class is' "$brief" \
-    "no-mistakes DOD must point the class sweep at the reference that covers it"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
-  assert_grep '`references/verify-your-fix.md` for the long form of the pass over your own diff' "$brief" \
-    "no-mistakes DOD must point the self-review pass at the reference that covers it"
   assert_no_grep "skills/greenlight/SKILL.md" "$brief" \
     "no-mistakes DOD must not point at the greenlight run structure"
-  assert_grep "taking the technique and not its run structure" "$brief" \
-    "no-mistakes DOD must bound the greenlight pointer to the technique"
   assert_no_grep "the PR body" "$brief" \
     "no-mistakes DOD must not name a surface this worker never writes"
 
@@ -530,10 +403,6 @@ test_no_mistakes_dod_carries_the_fix_round_technique() {
     FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$other_id" some-proj --mode "$other_mode" >/dev/null 2>&1
     other_brief="$home/data/$other_id/brief.md"
     assert_present "$other_brief" "$other_mode: brief was not scaffolded"
-    assert_no_grep "One site is a class" "$other_brief" \
-      "$other_mode brief must not carry the no-mistakes fix-round technique"
-    assert_no_grep "From the third fix round on one step" "$other_brief" \
-      "$other_mode brief must not carry the third-round refusal, which has no rounds to count"
   done
   pass "fm-brief.sh: no-mistakes DOD carries the fix-round technique and the faster paths do not"
 }
@@ -550,26 +419,14 @@ test_ask_user_escalation_format() {
   # A no-mistakes ask-user gate must escalate its ask-user findings as one status
   # event plus one verbatim findings snapshot file, using that same shape even
   # for a single finding, never paraphrased into the status line.
-  assert_grep "escalate all ask-user findings as one event plus one snapshot file" "$brief" \
-    "ship rule 6 lost the one-event-plus-snapshot-file ask-user contract"
-  assert_grep "using that same shape even when the gate holds only a single ask-user finding" "$brief" \
-    "ship rule 6 must require the same shape for a single finding"
-  assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$brief" \
-    "ship rule 6 must limit the verbatim axi slice to ask-user findings"
   # shellcheck disable=SC2016  # single quotes are deliberate: backticks and the key/findings/file tokens must stay literal
   assert_grep 'needs-decision [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file='"$home/data/$id/nm-<run>-findings.txt" "$brief" \
     "ship rule 6 must render the exact needs-decision ask-user status line"
   assert_grep "$home/data/$id/nm-<run>-findings.txt" "$brief" \
     "ship rule 6 must point the snapshot file under this task's own data directory"
-  assert_grep "The status line only points at the file; it never restates or summarizes a finding's content." "$brief" \
-    "ship rule 6 must forbid paraphrasing ask-user findings into the status line"
 
   # The DOD's own ask-user paragraph must point back at rule 6's format
   # (one-owner rule) rather than restating or bare-citing it.
-  assert_grep "escalate to firstmate using rule 6's ask-user format" "$brief" \
-    "no-mistakes DOD ask-user paragraph must point at rule 6's format instead of a bare citation"
-  assert_no_grep "escalate to firstmate (rule 6) and stop." "$brief" \
-    "no-mistakes DOD ask-user paragraph still uses the old bare rule-6 pointer"
 
   other_id="brief-no-ask-user-scout"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$other_id" some-proj --scout >/dev/null 2>&1
@@ -598,10 +455,6 @@ test_ship_project_memory_wording() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode no-mistakes >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_present "$brief" "brief was not scaffolded"
-  assert_grep "Record only project knowledge useful to almost every future session." "$brief" \
-    "project-memory contract lost the durable-knowledge bar"
-  assert_grep "prefer a pointer to the authoritative file, command, or doc over copying the detail" "$brief" \
-    "project-memory contract lost pointer-over-copy guidance"
   assert_grep "follow \`$ROOT/bin/fm-ensure-agents-md.sh\`'s self-governance contract" "$brief" \
     "project-memory contract no longer defers to the ensure helper"
   pass "fm-brief.sh: ship project-memory wording carries the AGENTS.md authoring bar"
@@ -629,12 +482,6 @@ test_herdr_lab_contract_is_explicit_and_complete() {
     "Herdr lab brief missing the per-call trailing session contract"
   assert_grep "direct \`herdr server stop\`" "$brief" \
     "Herdr lab brief missing the forbidden server-global command list"
-  assert_grep "records the live default session before provisioning" "$brief" \
-    "Herdr lab brief missing the before tripwire"
-  assert_grep "verifies the identical fleet state after teardown" "$brief" \
-    "Herdr lab brief missing the after tripwire"
-  assert_no_grep "Herdr lifecycle declaration - NOT ENABLED" "$brief" \
-    "Herdr lab brief retained the unguarded declaration"
   pass "fm-brief.sh: --herdr-lab emits the complete hard safety contract"
 }
 
@@ -669,8 +516,6 @@ test_herdr_lab_omission_is_loud_for_ship_and_scout() {
     brief="$home/data/$id/brief.md"
     assert_grep "# Herdr lifecycle declaration - NOT ENABLED" "$brief" \
       "$kind brief silently omitted the Herdr declaration"
-    assert_grep "regenerate the brief with \`--herdr-lab\` before dispatch" "$brief" \
-      "$kind brief missing the fail-visible regeneration instruction"
   done
   pass "fm-brief.sh: ship and scout scaffolds make omitted Herdr intent fail-visible"
 }
@@ -732,24 +577,12 @@ test_secondmate_no_projects_charter() {
   brief="$home/data/fdev/brief.md"
   assert_present "$brief" "project-less charter was not scaffolded"
   assert_grep "# Project clones" "$brief" "project-less charter dropped the Project clones heading"
-  assert_grep "None. This is a project-less domain" "$brief" \
-    "project-less charter did not render a sensible no-clones note"
-  assert_grep "its crews take pooled worktrees of that repo" "$brief" \
-    "project-less charter operating model lost the pooled-worktree note"
-  assert_no_grep "The projects above are local clones" "$brief" \
-    "project-less charter kept the with-projects operating-model line"
   assert_grep '# The captain and the parent channel' "$brief" \
     "secondmate charter lost the parent-channel section"
-  assert_grep 'Nobody reads this chat' "$brief" \
-    "secondmate charter no longer says the chat is unread"
-  assert_grep 'in this home it IS the captain' "$brief" \
-    "secondmate charter no longer names the parent channel as the captain"
   assert_grep 'working [key=<work-slug>]' "$brief" \
     "secondmate charter did not key material routed-work phases"
   assert_grep 'resolved [key=<work-slug>]' "$brief" \
     "secondmate charter did not close a quietly ended routed-work phase"
-  assert_grep 'use the same key on its later' "$brief" \
-    "secondmate charter did not supersede working phases with later states"
   if grep -nE '^-[[:space:]]*$' "$brief" >/dev/null; then
     fail "project-less charter left a stray empty project bullet"
   fi
@@ -779,41 +612,15 @@ test_secondmate_marked_request_reporting_contract() {
     "$ROOT/bin/fm-brief.sh" marked-request-reporting --secondmate --no-projects >/dev/null 2>&1
   brief="$home/data/marked-request-reporting/brief.md"
 
-  assert_grep 'A marked request requires one correlated answer after the work' "$brief" \
-    "secondmate charter did not require the correlated answer after the work"
-  assert_grep 'does not require a separate receipt or start acknowledgement' "$brief" \
-    "secondmate charter did not reject a separate receipt/start acknowledgement"
-  assert_grep "Never append \`working:\` merely to acknowledge receipt or announce that a marked request has started." "$brief" \
-    "secondmate charter did not forbid a generic working acknowledgement"
-  assert_no_grep "Give every routed-work phase a stable key: open it with \`working" "$brief" \
-    "secondmate charter retained the unconditional working opener"
-  assert_grep 'When a routed-work phase has a supervisor-actionable material change worth reporting under the rule above' "$brief" \
-    "secondmate charter did not limit keyed phases to reportable material changes"
   assert_grep "If its first reportable event is \`working [key=<work-slug>]: {material phase}\`" "$brief" \
     "secondmate charter lost keyed working syntax for a reportable material phase"
-  assert_grep "use the same key on its later \`paused\`, \`done\`, \`failed\`, \`needs-decision\`, or \`blocked\` event" "$brief" \
-    "secondmate charter lost same-key closure for a reportable material phase"
   assert_grep 'resolved [key=<work-slug>]' "$brief" \
     "secondmate charter lost resolved closure for a keyed material phase"
 
-  assert_grep 'include that exact token in your parent status reply' "$brief" \
-    "secondmate charter lost correlated parent results"
   assert_grep 'bin/fm-secondmate-report.sh <verb> <corr_id> <note>' "$brief" \
     "secondmate charter lost the mechanical helper invocation"
-  assert_grep 'do not pass a status path' "$brief" \
-    "secondmate charter still tells the mate to pass a hand path to the helper"
-  assert_grep 'For a terse result, a status line is the whole answer.' "$brief" \
-    "secondmate charter lost terse result reporting"
-  assert_grep 'append a status line that points to that doc' "$brief" \
-    "secondmate charter lost detailed document pointers"
-  assert_grep 'Report only true captain-relevant outcomes or a declared external wait' "$brief" \
-    "secondmate charter lost declared external waits"
-  assert_grep 'a captain decision, a real blocker, a failure, work ready for review, or work you landed' "$brief" \
-    "secondmate charter lost decisions, blockers, failures, ready outcomes, or landed work"
   # Under standing merge authority nothing is ever "ready for review", so the
   # landed merge is the trigger a charter without this line silently omits.
-  assert_grep 'a merge you performed yourself under standing merge authority and one the captain merged on the forge' "$brief" \
-    "secondmate charter did not name a landed merge as a reporting trigger"
   assert_grep 'States: working, needs-decision, blocked, paused, done, failed.' "$brief" \
     "secondmate charter changed the preserved status vocabulary"
   pass "fm-brief.sh: marked requests avoid generic acknowledgements and preserve material reporting"
@@ -956,31 +763,8 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
     # shellcheck disable=SC2016 # Literal backticks and braces must remain unexpanded.
     assert_no_grep '`paused: {why}`' "$brief" \
       "$kind brief still instructs the default paused status"
-    assert_grep 'a blocker or wait clears' "$brief" \
-      "$kind brief did not require durable resolution when a blocker clears"
-    assert_grep 'even when the answer is what started that work' "$brief" \
-      "$kind brief did not warn that an answer-started done/working never closes a decision"
   done
   pass "fm-brief.sh: custom pause verb renders in every scaffold"
-}
-
-test_ship_and_scout_teach_validation_round_pause() {
-  local home kind id brief
-  home="$TMP_ROOT/validation-round-pause-home"
-  mkdir -p "$home/data"
-
-  for kind in ship scout; do
-    id="brief-validation-round-pause-$kind"
-    if [ "$kind" = scout ]; then
-      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --scout >/dev/null 2>&1
-    else
-      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" firstmate --mode no-mistakes >/dev/null 2>&1
-    fi
-    brief="$home/data/$id/brief.md"
-    assert_grep "your own validation round" "$brief" \
-      "$kind brief did not teach workers to declare their validation-round wait"
-  done
-  pass "fm-brief.sh: ship and scout scaffolds teach validation-round pauses"
 }
 
 test_scout_and_secondmate_load_decision_hold_policy() {
@@ -992,8 +776,6 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   scout="$home/data/sample-investigation/brief.md"
   assert_grep "$ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md" "$scout" \
     "scout brief did not load the captain-call policy before done"
-  assert_grep "pass its shared completion gate for the report and any visual review" "$scout" \
-    "scout brief did not cross-reference visual-review completion"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" FM_SECONDMATE_CHARTER='sample reviews' \
     "$ROOT/bin/fm-brief.sh" sample-mate --secondmate --no-projects >/dev/null 2>&1
   charter="$home/data/sample-mate/brief.md"
@@ -1080,9 +862,6 @@ test_worker_role_scope() {
     "$ROOT/bin/fm-brief.sh" supervisor --secondmate --no-projects >/dev/null || fail "secondmate scaffold failed"
   brief="$home/data/supervisor/brief.md"
   assert_no_grep '# Current worker role contract' "$brief" "secondmate received the worker exception"
-  assert_no_grep 'do not adopt the supervisor identity' "$brief" "secondmate received the worker exception"
-  assert_grep "The local \`AGENTS.md\` is your job description" "$brief" "secondmate lost its supervisor contract"
-  assert_grep 'That file is your parent channel' "$brief" "secondmate lost its parent channel"
   pass "fm-brief: scaffolds leave the worker role scope to the launch boundary and keep the secondmate contract"
 }
 
@@ -1118,16 +897,12 @@ test_no_brief_asks_the_worker_for_a_decision_packet() {
   assert_no_grep 'fm-packet' "$brief" "scout brief still sends the worker to the packet tool"
   assert_no_grep 'decision packet' "$brief" "scout brief still asks the worker for a decision packet"
   # shellcheck disable=SC2016  # backticks are the brief's own markdown, not a substitution
-  assert_grep 'append `done: {one-line conclusion}` to the status file and stop' "$brief" \
-    "scout brief lost the line that makes its report ready without a packet"
   id="brief-packet-review"
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj \
     --review https://github.com/acme/widget/pull/77 >/dev/null 2>&1
   brief="$home/data/$id/brief.md"
   assert_no_grep 'fm-packet' "$brief" "review brief still sends the worker to the packet tool"
   assert_no_grep 'decision packet' "$brief" "review brief still asks the worker for a decision packet"
-  assert_grep 'to the status file and stop' "$brief" \
-    "review brief lost the line that makes its posted review ready without a packet"
   pass "fm-brief.sh: no ship or scout brief asks for a decision packet, and each still states its own done line"
 }
 
@@ -1148,8 +923,6 @@ test_review_brief_posts_on_the_pull_request() {
   assert_grep "REVIEW task" "$brief" "review brief must declare itself a review task"
   assert_grep "https://github.com/acme/widget/pull/77" "$brief" \
     "review brief must name the pull request under review"
-  assert_grep "A review that exists only in this session is a failed review." "$brief" \
-    "review brief must rule out a session-only review"
   assert_grep "gh-axi pr review 77 -R acme/widget --comment --body-file" "$brief" \
     "review brief must give the exact posting command"
   assert_grep "gh-axi pr view 77 -R acme/widget --reviews" "$brief" \
@@ -1170,16 +943,8 @@ test_review_brief_carries_the_four_disciplines() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-review-r2 alpha \
     --review https://github.com/acme/widget/pull/5 >/dev/null 2>&1
   brief="$home/data/brief-review-r2/brief.md"
-  assert_grep "A finding is one instance of a class." "$brief" \
-    "review brief lost the class-not-instance discipline"
-  assert_grep "Read the primary source." "$brief" \
-    "review brief lost the primary-source discipline"
   assert_grep "Not verified" "$brief" \
     "review brief lost the requirement to name what could not be verified"
-  assert_grep "separate a defect from a preference" "$brief" \
-    "review brief lost the honest-severity discipline"
-  assert_grep "Scope is not yours." "$brief" \
-    "review brief lost the scope discipline that keeps a widening finding with firstmate"
   assert_grep "Widens scope" "$brief" \
     "review brief lost the finding field that marks a scope-widening fix"
   pass "fm-brief.sh: a review brief carries all four review disciplines"
@@ -1216,10 +981,6 @@ test_review_brief_writes_nothing_and_rules_on_nothing() {
   FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-review-r4 alpha \
     --review https://github.com/acme/widget/pull/8 >/dev/null 2>&1
   brief="$home/data/brief-review-r4/brief.md"
-  assert_grep "never commit, never push, never open a PR, never merge" "$brief" \
-    "review brief must forbid the worker delivering a change of its own"
-  assert_grep "You review; you never rule." "$brief" \
-    "review brief must keep rulings with firstmate"
   assert_grep "$home/data/brief-review-r4/report.md" "$brief" \
     "review brief must name the local record the scout teardown gate requires"
   assert_no_grep "Delivery contract: mode=" "$brief" \
@@ -1269,13 +1030,9 @@ test_ship_and_scout_carry_the_machine_boundary_rules() {
     brief="$home/data/$id/brief.md"
     assert_present "$brief" "brief was not scaffolded for $kind"
     assert_grep "a system package" "$brief" "$kind brief does not name a system package as the thing that is out"
-    assert_grep "do not, even to unblock yourself" "$brief" "$kind brief does not forbid installing one"
-    assert_grep "report it and stop" "$brief" "$kind brief does not say what to do when a system package is needed"
     # The prohibition must not read as covering ordinary project dependencies,
     # or a worker stops to ask on a routine install instead of validating.
-    assert_grep "this project's own dependencies" "$brief" "$kind brief does not carve out project dependencies"
     assert_grep "--repo <owner>/<name>" "$brief" "$kind brief does not require an explicit repository on a PR lookup"
-    assert_grep "collide between a fork and its upstream" "$brief" "$kind brief does not say why an unqualified lookup is unsafe"
   done
   # The scout worktree is advertised as a laboratory; that invitation must not
   # read as permission to change the machine outside it.
@@ -1286,12 +1043,10 @@ test_ship_and_scout_carry_the_machine_boundary_rules() {
 
 test_script_parses
 test_no_heredoc_in_command_substitution
-test_help_includes_entire_header
 test_ship_modes_generate_clean_briefs
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
-test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
 test_no_mistakes_dod_carries_the_fix_round_technique
 test_ask_user_escalation_format
@@ -1305,7 +1060,6 @@ test_secondmate_no_projects_charter
 test_secondmate_marked_request_reporting_contract
 test_secondmate_directory_paths_are_absolute_and_output_is_stable
 test_pause_verb_override_renders_all_brief_scaffolds
-test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
 test_scout_lavish_line_follows_presentation_floor

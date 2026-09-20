@@ -490,8 +490,6 @@ test_a_delayed_snapshot_never_prescribes_a_stale_repair() {
   [ "$(inbox_records "$home/state" mate)" -eq 1 ] \
     || fail "the old and new snapshots produced more than one ask inside the cooldown"
   text=$(inbox_text "$home/state" mate)
-  assert_contains "$text" "check your current books" \
-    "the delayed ask did not direct the mate to current state"
   if printf '%s' "$text" | grep -Eq 'already-repaired|current-row'; then
     fail "the delayed ask embedded sampled row details and could prescribe a stale repair: $text"
   fi

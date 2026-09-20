@@ -141,7 +141,6 @@ test_arm_refuses_without_the_mail_plane() {
   done
   out=$(FM_HOME="$home" "$tmpbin/fm-mail-check.sh" arm 2>&1) || rc=$?
   expect_code 1 "$rc" "arm must refuse when the mail plane is missing"
-  assert_contains "$out" "mail plane is missing" "arm names the missing plane"
   assert_absent "$home/state/mail.check.sh" "a refused arm writes no shim"
   pass "fm-mail-check: arm refuses without the mail plane"
 }

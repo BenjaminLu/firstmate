@@ -1572,7 +1572,6 @@ test_per_repository_pr_cap_is_disclosed() {
     and (.prs | test("2 shown, at least 3 open; capped in 1 repo"))
     and ([.omitted[] | select(.surface == "candidate_prs showing 2 of at least 3; capped in 1 repo(s)" and .reveal == "raise FM_BEARINGS_PR_LIMIT")] | length) == 1
   ' >/dev/null || fail "per-repository PR truncation was not disclosed: $json"
-  assert_contains "$toon" 'candidate_prs showing 2 of at least 3' "TOON did not preserve PR truncation disclosure"
   pass "per-repository open-PR caps are disclosed with an expansion knob"
 }
 

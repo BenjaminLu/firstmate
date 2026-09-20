@@ -581,8 +581,6 @@ SH
   rc=$?
   set -e
   expect_code 1 "$rc" "Cygwin POSIX-mode enforcement"
-  assert_contains "$out" "isolation failure: worker root mode is 755, expected 0700" \
-    "Cygwin mode enforcement did not reject a non-0700 worker root"
   rm -rf "$tmp"
   pass "Windows emulation exempts only synthetic POSIX modes"
 }

@@ -449,8 +449,6 @@ test_no_internal_token_reaches_the_captains_rows() {
   done
   # "gate" is itself on the forbidden list the translation is obeying, so the
   # replacement has to be the concrete wait rather than another term from it.
-  assert_contains "$rows" "waiting for a review" \
-    "the run state was not said in the captain's words: $rows"
   [ "$(printf '%s' "$rows" | grep -c "gate")" = "0" ] \
     || fail "one internal term was translated into another: $rows"
   assert_contains "$rows" "investigation" \

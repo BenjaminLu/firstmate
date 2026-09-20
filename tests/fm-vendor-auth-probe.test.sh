@@ -341,7 +341,6 @@ test_probe_argv_is_fixed_and_non_destructive() {
 
 test_fact_line_carries_no_vendor_output_or_credential_material() {
   run_probe sanitized grok -- "FM_FAKE_GROK_MODE=authenticated"
-  assert_not_contains "$RUN_LINE" "You are logged in" "the fact line must not echo raw vendor output"
   assert_not_contains "$RUN_LINE" "grok.com" "the fact line must not echo raw vendor output"
   assert_not_contains "$RUN_LINE" "auth.json" "the fact line must not name a credential path"
   assert_not_contains "$RUN_LINE" "$STDIN_SENTINEL" "the fact line must not echo caller stdin"

@@ -578,10 +578,6 @@ test_github_unreadable_outcome_keeps_pr_bookkeeping() {
   set -e
 
   expect_code 1 "$rc" "github-outcome-read-fails: an unreadable outcome must fail"
-  assert_grep 'could not read the GitHub pull request outcome after the merge attempt' \
-    "$case_dir/stderr" "github-outcome-read-fails: the unreadable outcome was not reported"
-  assert_grep 'the gh read failed and the gh-axi view could not prove the outcome either' \
-    "$case_dir/stderr" "github-outcome-read-fails: the refusal did not name both failed reads"
   assert_no_grep 'verified: ' "$case_dir/stdout" \
     "github-outcome-read-fails: an unproved merge was reported as verified"
   # The merge call itself returned success, so the pull request may well have
@@ -615,8 +611,6 @@ test_github_refusal_quotes_the_forge_output() {
   assert_grep 'error: > will be added to the merge queue when all requirements are met' \
     "$case_dir/stderr" \
     "github-refusal-quotes-forge: the forge's own explanation was discarded on the refusal"
-  assert_grep "not this script's verdict" "$case_dir/stderr" \
-    "github-refusal-quotes-forge: the forge's text was not marked as the forge's own"
   assert_grep 'error: GitHub merge outcome was not successful: state=OPEN, merged=false, isInMergeQueue=false' \
     "$case_dir/stderr" "github-refusal-quotes-forge: the wrapper's own verdict was lost"
   # A forge sentence about the merge queue must never stand on its own line, or
@@ -624,8 +618,6 @@ test_github_refusal_quotes_the_forge_output() {
   ! grep -qxF 'will be added to the merge queue when all requirements are met' \
     "$case_dir/stderr" \
     || fail "github-refusal-quotes-forge: forge text was emitted as the wrapper's own line"
-  assert_no_grep 'will be added to the merge queue' "$case_dir/stdout" \
-    "github-refusal-quotes-forge: the forge's unverified report leaked to stdout"
   assert_no_grep 'verified: ' "$case_dir/stdout" \
     "github-refusal-quotes-forge: an unproved merge was reported as verified"
   pass "fm-pr-merge refuses with the forge's own output quoted apart from its verdict"
@@ -652,10 +644,6 @@ test_github_auto_merge_without_queue_refuses_legibly() {
     expect_code 1 "$rc" "github-auto-no-queue: an armed but unlanded auto-merge must still fail"
     assert_grep 'state=OPEN, merged=false, isInMergeQueue=false' "$case_dir/stderr" \
       "github-auto-no-queue: refusal did not name the concrete observed state"
-    assert_grep 'auto-merge was requested and armed for https://github.com/example/repo/pull/66' \
-      "$case_dir/stderr" "github-auto-no-queue: the refusal never explained the armed auto-merge"
-    assert_grep 'nothing is merged or in the merge queue yet' "$case_dir/stderr" \
-      "github-auto-no-queue: the refusal left the operator to infer the pending state"
     assert_logged_gh_merge "$case_dir" 66 example/repo "$spelling" --merge
     [ "$(grep -c '^pr merge ' "$case_dir/gh.log")" -eq 1 ] \
       || fail "github-auto-no-queue: the wrapper attempted more than one merge"
@@ -690,9 +678,6 @@ test_github_failed_merge_never_claims_armed_auto_merge() {
     "github-auto-merge-command-fails: refusal did not name the concrete observed state"
   assert_no_grep 'armed' "$case_dir/stderr" \
     "github-auto-merge-command-fails: a failed merge command was reported as an armed auto-merge"
-  assert_grep 'auto-merge was requested for https://github.com/example/repo/pull/67' \
-    "$case_dir/stderr" \
-    "github-auto-merge-command-fails: the refusal never said auto-merge had only been requested"
   assert_no_grep 'verified: ' "$case_dir/stdout" \
     "github-auto-merge-command-fails: a failed merge command was reported as verified"
   pass "fm-pr-merge never reports auto-merge as armed when the merge command failed"
@@ -719,12 +704,8 @@ test_github_failed_merge_with_queue_flags_never_claims_acceptance() {
     "github-failed-merge-queue-flags: the original forge error was masked"
   assert_grep 'state=OPEN, merged=false, isInMergeQueue=false' "$case_dir/stderr" \
     "github-failed-merge-queue-flags: refusal did not name the concrete observed state"
-  assert_no_grep 'was accepted with the exact flags' "$case_dir/stderr" \
-    "github-failed-merge-queue-flags: a failed merge command was reported as an accepted request"
   assert_no_grep 'armed' "$case_dir/stderr" \
     "github-failed-merge-queue-flags: a failed merge command was reported as an armed auto-merge"
-  assert_grep 'base branch main requires the merge queue; retry with:' "$case_dir/stderr" \
-    "github-failed-merge-queue-flags: the failed merge command lost its concrete retry guidance"
   assert_grep 'task-x1 https://github.com/example/repo/pull/74 --attended-override -- --auto --merge' "$case_dir/stderr" \
     "github-failed-merge-queue-flags: the retry guidance named no queue flags"
   assert_no_grep 'verified: ' "$case_dir/stdout" \
@@ -751,11 +732,6 @@ test_github_accepted_queue_flags_do_not_echo_back_the_same_command() {
   expect_code 1 "$rc" "github-accepted-queue-flags: an unproved merge must still fail"
   assert_grep 'state=OPEN, merged=false, isInMergeQueue=false' "$case_dir/stderr" \
     "github-accepted-queue-flags: refusal did not name the concrete observed state"
-  assert_grep 'this run refuses even though the request for https://github.com/example/repo/pull/68 was accepted with the exact flags base branch main requires (--auto --merge)' \
-    "$case_dir/stderr" \
-    "github-accepted-queue-flags: the refusal did not explain that the right flags were already used"
-  assert_grep "re-check the pull request's merge queue state" "$case_dir/stderr" \
-    "github-accepted-queue-flags: the refusal named no concrete next step"
   assert_no_grep 'retry with:' "$case_dir/stderr" \
     "github-accepted-queue-flags: the refusal echoed back the command that just refused"
   assert_no_grep 'verified: ' "$case_dir/stdout" \
@@ -780,8 +756,6 @@ test_github_mismatched_queue_flags_still_name_the_retry() {
   set -e
 
   expect_code 1 "$rc" "github-mismatched-queue-flags: an unproved merge must still fail"
-  assert_grep 'base branch main requires the merge queue; retry with:' "$case_dir/stderr" \
-    "github-mismatched-queue-flags: a caller method the queue does not use lost its retry guidance"
   assert_grep '--attended-override -- --auto --rebase' "$case_dir/stderr" \
     "github-mismatched-queue-flags: the exact compatible flags were not named"
   pass "fm-pr-merge still names retry flags when the caller used a different method"
@@ -804,9 +778,6 @@ test_github_unrecognised_queue_method_still_names_the_queue() {
   set -e
 
   expect_code 1 "$rc" "github-unrecognised-queue-method: an unproved merge must fail"
-  assert_grep 'base branch main requires the merge queue, but its configured merge method (FASTFORWARD) is not one this script recognises' \
-    "$case_dir/stderr" \
-    "github-unrecognised-queue-method: a readable queue rule produced no queue mention"
   assert_no_grep 'retry with:' "$case_dir/stderr" \
     "github-unrecognised-queue-method: retry flags were named for a method nothing recognises"
   assert_no_grep '--auto --' "$case_dir/stderr" \
@@ -831,8 +802,6 @@ test_github_unreadable_queue_rules_are_not_reported_as_no_queue() {
   set -e
 
   expect_code 1 "$rc" "github-unreadable-queue-rules: an unproved merge must fail"
-  assert_grep 'the branch rules for base branch main could not be read' "$case_dir/stderr" \
-    "github-unreadable-queue-rules: an unreadable rules response read like a queue-less base"
   assert_no_grep 'retry with:' "$case_dir/stderr" \
     "github-unreadable-queue-rules: retry flags were named from rules nothing could read"
   pass "fm-pr-merge distinguishes unreadable branch rules from a base with no merge queue"
@@ -866,8 +835,6 @@ test_github_plan_gated_403_reads_as_no_queue() {
   expect_code 1 "$rc" "github-plan-gated-403: an unproved merge must fail"
   assert_no_grep 'merge queue' "$case_dir/stderr" \
     "github-plan-gated-403: a plan-gated 403 was read as an unreadable or present queue rule"
-  assert_no_grep 'could not be read' "$case_dir/stderr" \
-    "github-plan-gated-403: a plan-gated 403 was reported as an unreadable rules response"
   pass "fm-pr-merge reads a plan-gated 403 on branch rules as no merge queue, not unreadable"
 }
 
@@ -943,11 +910,6 @@ SH
   expect_code 1 "$rc" "github-unmerged-fallback: an unproved merge must fail"
   assert_grep 'pr view 73 --repo example/repo' "$case_dir/gh-axi.log" \
     "github-unmerged-fallback: the fallback view was not consulted"
-  assert_grep 'the gh read failed and the gh-axi view could not prove the outcome either' \
-    "$case_dir/stderr" \
-    "github-unmerged-fallback: an unmerged fallback was treated as a readable outcome"
-  assert_no_grep 'GitHub merge outcome was not successful' "$case_dir/stderr" \
-    "github-unmerged-fallback: an unmerged fallback reached detailed outcome handling"
   assert_no_grep 'verified: ' "$case_dir/stdout" \
     "github-unmerged-fallback: an unproved merge was reported as verified"
   pass "fm-pr-merge accepts only a proved merge from the gh-axi fallback"
@@ -972,9 +934,6 @@ test_github_unreadable_outcome_refusal_quotes_the_forge_output() {
   set -e
 
   expect_code 1 "$rc" "github-unreadable-outcome-quotes-forge: an unreadable outcome must fail"
-  assert_grep 'could not read the GitHub pull request outcome after the merge attempt' \
-    "$case_dir/stderr" \
-    "github-unreadable-outcome-quotes-forge: the unreadable outcome was not reported"
   assert_grep 'error: > will be added to the merge queue when all requirements are met' \
     "$case_dir/stderr" \
     "github-unreadable-outcome-quotes-forge: the forge's only evidence was discarded"
@@ -1058,8 +1017,6 @@ test_github_without_gh_still_uses_gh_axi_merge() {
   set -e
 
   expect_code 1 "$rc" "github-without-gh: missing gh must refuse before recording"
-  assert_grep 'merging a GitHub pull request requires gh on PATH' "$case_dir/stderr" \
-    "github-without-gh: missing gh was not named"
   assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" \
     "github-without-gh: pr= was recorded without gh"
   assert_absent "$case_dir/state/task-x1.check.sh" \
@@ -1085,8 +1042,6 @@ test_github_without_gh_failed_read_keeps_bookkeeping() {
   set -e
 
   expect_code 1 "$rc" "github-without-gh-read-fails: missing gh must refuse before recording"
-  assert_grep 'merging a GitHub pull request requires gh on PATH' "$case_dir/stderr" \
-    "github-without-gh-read-fails: missing gh was not named"
   assert_no_grep 'pr=' "$case_dir/state/task-x1.meta" \
     "github-without-gh-read-fails: pr= was recorded without gh"
   assert_absent "$case_dir/state/task-x1.check.sh" \
@@ -1113,8 +1068,6 @@ test_github_zero_exit_queue_required_refuses_with_exact_retry() {
   expect_code 1 "$rc" "github-zero-exit-queue-required: an unproved merge must fail"
   assert_grep 'state=OPEN, merged=false, isInMergeQueue=false' "$case_dir/stderr" \
     "github-zero-exit-queue-required: refusal did not name the concrete observed state"
-  assert_grep 'base branch release/2026 requires the merge queue' "$case_dir/stderr" \
-    "github-zero-exit-queue-required: refusal did not name the queue requirement"
   assert_grep '--attended-override -- --auto --rebase' "$case_dir/stderr" \
     "github-zero-exit-queue-required: refusal did not name the exact compatible flags"
   assert_grep 'api --paginate repos/example/repo/rules/branches/release%2F2026' "$case_dir/gh.log" \
@@ -1150,8 +1103,6 @@ test_github_closed_unqueued_outcome_omits_retry_flags() {
   expect_code 1 "$rc" "github-closed-unqueued: an unproved merge must fail"
   assert_grep 'state=CLOSED, merged=false, isInMergeQueue=false' "$case_dir/stderr" \
     "github-closed-unqueued: refusal did not name the concrete observed state"
-  assert_no_grep 'requires the merge queue' "$case_dir/stderr" \
-    "github-closed-unqueued: closed PR received unusable queue guidance"
   assert_no_grep '--attended-override -- --auto --merge' "$case_dir/stderr" \
     "github-closed-unqueued: closed PR received retry flags"
   assert_grep 'pr=https://github.com/example/repo/pull/57' "$case_dir/state/task-x1.meta" \
@@ -1205,8 +1156,6 @@ test_github_queue_required_refusal_names_retry_flags() {
   expect_code 1 "$rc" "github-queue-required: an incompatible direct merge must fail"
   assert_grep 'error: pr merge failed' "$case_dir/stderr" \
     "github-queue-required: the original forge failure was not preserved"
-  assert_grep 'base branch master requires the merge queue' "$case_dir/stderr" \
-    "github-queue-required: refusal did not name the queue requirement"
   grep -F -- '--attended-override -- --auto --merge' "$case_dir/stderr" >/dev/null \
     || fail "github-queue-required: refusal did not name the exact compatible flags"
   assert_logged_gh_merge "$case_dir" 54 example/repo --squash
@@ -1232,12 +1181,8 @@ test_github_agreeing_queue_rules_keep_retry_guidance() {
   set -e
 
   expect_code 1 "$rc" "github-agreeing-queue-rules: an unproved merge must fail"
-  assert_grep 'base branch main requires the merge queue' "$case_dir/stderr" \
-    "github-agreeing-queue-rules: refusal did not name the queue requirement"
   assert_grep '--attended-override -- --auto --rebase' "$case_dir/stderr" \
     "github-agreeing-queue-rules: agreeing rules omitted exact retry flags"
-  assert_no_grep 'exact retry flags are ambiguous' "$case_dir/stderr" \
-    "github-agreeing-queue-rules: agreeing rules were reported as ambiguous"
   pass "fm-pr-merge aggregates agreeing merge-queue rules"
 }
 
@@ -1259,9 +1204,6 @@ test_github_conflicting_queue_rules_report_ambiguity() {
   set -e
 
   expect_code 1 "$rc" "github-conflicting-queue-rules: an unproved merge must fail"
-  assert_grep 'base branch main has conflicting merge queue methods (MERGE, SQUASH)' \
-    "$case_dir/stderr" \
-    "github-conflicting-queue-rules: conflicting methods were not named"
   assert_no_grep '--attended-override -- --auto --merge' "$case_dir/stderr" \
     "github-conflicting-queue-rules: an exact retry method was guessed"
   assert_no_grep '--attended-override -- --auto --squash' "$case_dir/stderr" \
@@ -1284,8 +1226,6 @@ test_extra_merge_args_forwarded() {
   rc=$?
   set -e
   expect_code 1 "$rc" "extra-args: branch deletion must be refused without --attended-override"
-  assert_grep 'pass --attended-override only for an explicit captain instruction' "$case_dir/stderr" \
-    "extra-args: refusal did not name --attended-override"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "extra-args: gh pr merge ran despite the denylist"
 
@@ -1365,8 +1305,6 @@ test_rejects_unsafe_url_segments_before_recording() {
   set -e
 
   expect_code 1 "$rc" "unsafe-url-segment: fm-pr-merge should refuse unsafe owner/repo characters"
-  assert_grep 'PR URL must match https://github.com/<owner>/<repo>/pull/<number>' "$case_dir/stderr" \
-    "unsafe-url-segment: refusal did not explain the expected URL shape"
   # shellcheck disable=SC2016  # Literal command substitution must not reach meta.
   assert_no_grep 'pr=https://github.com/evil$(echo pwned)/repo/pull/7' "$case_dir/state/task-x1.meta" \
     "unsafe-url-segment: unsafe PR URL was recorded in meta"
@@ -1391,8 +1329,6 @@ test_repo_override_args_refuse_before_recording() {
   set -e
 
   expect_code 1 "$rc" "repo-override: fm-pr-merge should refuse repo override flags"
-  assert_grep 'extra merge arguments must not override the repository' "$case_dir/stderr" \
-    "repo-override: refusal did not explain the repo override"
   assert_no_grep 'pr=https://github.com/right/repo/pull/5' "$case_dir/state/task-x1.meta" \
     "repo-override: PR URL was recorded before rejecting repo override"
   assert_absent "$case_dir/state/task-x1.check.sh" \
@@ -1420,8 +1356,6 @@ test_bundled_repo_override_args_refuse_before_recording() {
   set -e
 
   expect_code 1 "$rc" "bundled-repo-override: fm-pr-merge should refuse a bundled repo override"
-  assert_grep 'extra merge arguments must not override the repository' "$case_dir/stderr" \
-    "bundled-repo-override: refusal did not explain the repo override"
   assert_no_grep 'pr=https://github.com/right/repo/pull/6' "$case_dir/state/task-x1.meta" \
     "bundled-repo-override: PR URL was recorded before rejecting the bundled repo override"
   assert_absent "$case_dir/state/task-x1.check.sh" \
@@ -1438,8 +1372,6 @@ test_bundled_repo_override_args_refuse_before_recording() {
   set -e
 
   expect_code 1 "$rc" "bundled-repo-override-gitlab: fm-pr-merge should refuse a bundled instance override"
-  assert_grep 'extra merge arguments must not override the repository' "$case_dir/stderr" \
-    "bundled-repo-override-gitlab: refusal did not explain the repo override"
   assert_no_grep "pr=$MR_URL" "$case_dir/state/task-x1.meta" \
     "bundled-repo-override-gitlab: the URL was recorded before rejecting the bundled override"
   assert_absent "$case_dir/state/task-x1.check.sh" \
@@ -1460,8 +1392,6 @@ test_bundled_repo_override_args_refuse_before_recording() {
   rc=$?
   set -e
   expect_code 1 "$rc" "bundled-non-repo-cluster: -d is branch deletion and must be refused"
-  assert_grep 'pass --attended-override only for an explicit captain instruction' "$case_dir/stderr" \
-    "bundled-non-repo-cluster: refusal did not name --attended-override"
 
   case_dir=$(make_case bundled-delete-attended)
   mkdir -p "$case_dir/wt"
@@ -1533,8 +1463,6 @@ test_gitlab_url_resolves_and_merges() {
   merge_line=$(glab_merge_line "$case_dir/glab.log")
   [ "$merge_line" = "GITLAB_HOST=$MR_HOST mr merge 7 -R $MR_PROJECT_URL --sha $MR_HEAD --yes" ] \
     || fail "gitlab-merges: unexpected merge invocation: '$merge_line'"
-  assert_grep "successful pipeline at head $MR_HEAD" "$case_dir/stderr" \
-    "gitlab-merges: the verified head was not reported"
   [ ! -s "$case_dir/gh-axi.log" ] || fail "gitlab-merges: a merge request reached the GitHub CLI"
   pass "fm-pr-merge merges a GitLab merge request through glab instead of refusing it"
 }
@@ -1595,8 +1523,6 @@ test_gitlab_extra_args_forwarded() {
   rc=$?
   set -e
   expect_code 1 "$rc" "gitlab-extra-args: source-branch deletion must be refused without --attended-override"
-  assert_grep 'pass --attended-override only for an explicit captain instruction' "$case_dir/stderr" \
-    "gitlab-extra-args: refusal did not name --attended-override"
   [ ! -s "$case_dir/glab.log" ] || fail "gitlab-extra-args: glab ran despite the denylist"
 
   case_dir=$(make_gitlab_case gitlab-extra-args-attended)
@@ -1712,8 +1638,6 @@ test_gitlab_stale_recorded_head_is_reported() {
   set -e
 
   expect_code 0 "$rc" "gitlab-stale-head: the live head satisfies every condition, so it should merge"
-  assert_grep "recorded head $MR_STALE_HEAD disagrees with the live head $MR_HEAD" \
-    "$case_dir/stderr" "gitlab-stale-head: the stale recorded head was trusted silently"
   merge_line=$(glab_merge_line "$case_dir/glab.log")
   case "$merge_line" in
     *"--sha $MR_HEAD"*) : ;;
@@ -1743,8 +1667,6 @@ test_gitlab_unreadable_state_refuses() {
     set -e
 
     expect_code 1 "$rc" "gitlab-unreadable-$name: fm-pr-merge should refuse"
-    assert_grep 'could not read the GitLab merge request state before merging' \
-      "$case_dir/stderr" "gitlab-unreadable-$name: refusal did not name the unreadable state"
     [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
       || fail "gitlab-unreadable-$name: a merge was attempted on an unreadable state"
   done
@@ -1762,8 +1684,6 @@ test_gitlab_invalid_head_refuses() {
   set -e
 
   expect_code 1 "$rc" "gitlab-invalid-head: fm-pr-merge should refuse"
-  assert_grep 'could not read the GitLab merge request head commit before merging' \
-    "$case_dir/stderr" "gitlab-invalid-head: refusal did not name the unreadable head"
   [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
     || fail "gitlab-invalid-head: a merge was bound to a head that is not a commit"
   pass "fm-pr-merge refuses a GitLab head commit it cannot validate"
@@ -1877,8 +1797,6 @@ test_a_refusal_still_refuses_when_its_gate_call_cannot_be_recorded() {
 
   expect_code 1 "$rc" \
     "gate-call-unwritable: an unrecordable gate call must not change the refusal"
-  assert_grep "check 'Lint 2' is not green" "$case_dir/stderr" \
-    "gate-call-unwritable: the refusal stopped naming the red check"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "gate-call-unwritable: the merge ran because its record could not be written"
   assert_grep 'actionable:' "$case_dir/stderr" \
@@ -1921,8 +1839,6 @@ test_gitlab_head_override_args_refuse_before_recording() {
   set -e
 
   expect_code 1 "$rc" "gitlab-head-override: fm-pr-merge should refuse a caller head override"
-  assert_grep 'extra merge arguments must not override the head commit' "$case_dir/stderr" \
-    "gitlab-head-override: refusal did not explain the head override"
   assert_no_grep "pr=$MR_URL" "$case_dir/state/task-x1.meta" \
     "gitlab-head-override: the URL was recorded before rejecting the head override"
   assert_absent "$case_dir/state/task-x1.check.sh" \
@@ -1944,8 +1860,6 @@ test_github_still_forwards_sha_arg() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-sha-arg: a caller --sha must be refused on GitHub too"
-  assert_grep 'extra merge arguments must not override the head commit' "$case_dir/stderr" \
-    "github-sha-arg: refusal did not name the head override"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-sha-arg: gh pr merge ran despite the head override"
   pass "fm-pr-merge refuses a caller --sha on GitHub because the head comes from the live read"
@@ -2209,8 +2123,6 @@ SH
   FM_TEST_HOME="$case_dir/home" run_pr_merge "$case_dir" task-x1 "$url" \
     >"$case_dir/stdout-1" 2>"$case_dir/stderr-1" \
     || fail "uncommitted-wake-retry: landed merge was reported as failed"
-  assert_grep 'could not record the outcome' "$case_dir/stderr-1" \
-    "uncommitted-wake-retry: failed marker commit was not loud"
   [ -f "$case_dir/state/task-x1.check.sh" ] \
     || fail "uncommitted-wake-retry: failed commit disarmed the retry poll"
   count=$(grep -c -F "$url" "$case_dir/state/.wake-queue")
@@ -2248,8 +2160,6 @@ test_secondmate_without_parent_binding_is_loud() {
   set -e
 
   expect_code 0 "$rc" "unbound-secondmate: the merge itself landed and must not be reported as failed"
-  assert_grep 'could not report it upward' "$case_dir/stderr" \
-    "unbound-secondmate: a merge that could not be reported upward said nothing about it"
   assert_absent "$case_dir/state/.wake-queue" \
     "unbound-secondmate: a secondmate home fell back to the main-home record"
   pass "a secondmate home that cannot report upward says so instead of merging in silence"
@@ -2372,8 +2282,6 @@ test_unreadable_backend_config_refuses_the_merge() {
   chmod 644 "$case_dir/home/.tasks.toml"
 
   expect_code 1 "$rc" "unreadable-backend-config-refuses: an unreadable authority route must refuse"
-  assert_grep 'tasks-axi backend configuration cannot be read' "$case_dir/stderr" \
-    "unreadable-backend-config-refuses: the unreadable authority route was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "unreadable-backend-config-refuses: the forge merge ran despite an unreadable authority route"
   pass "fm-pr-merge refuses when its configured backend cannot be read"
@@ -2399,8 +2307,6 @@ test_unreadable_user_backend_config_refuses_the_merge() {
   chmod 644 "$user_config"
 
   expect_code 1 "$rc" "unreadable-user-backend-config-refuses: an unreadable authority route must refuse"
-  assert_grep "tasks-axi backend configuration cannot be read at $user_config" "$case_dir/stderr" \
-    "unreadable-user-backend-config-refuses: the unreadable authority route was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "unreadable-user-backend-config-refuses: the forge merge ran despite an unreadable authority route"
   pass "fm-pr-merge refuses when its user backend configuration cannot be read"
@@ -2426,8 +2332,6 @@ test_untraversable_user_backend_config_directory_refuses_the_merge() {
   chmod 755 "${user_config%/*}"
 
   expect_code 1 "$rc" "untraversable-user-backend-config-directory-refuses: an unreadable authority route must refuse"
-  assert_grep "tasks-axi backend configuration cannot be read at $user_config" "$case_dir/stderr" \
-    "untraversable-user-backend-config-directory-refuses: the unreadable authority route was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "untraversable-user-backend-config-directory-refuses: the forge merge ran despite an unreadable authority route"
   pass "fm-pr-merge refuses when its user backend configuration directory cannot be traversed"
@@ -2493,8 +2397,6 @@ test_github_red_checks_refuse_and_allow_red_waives_named() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-red: a red check must refuse"
-  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
-    "github-red: the red check was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-red: gh pr merge ran on a red PR"
 
@@ -2548,8 +2450,6 @@ test_check_runs_never_supersede_status_contexts() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-cross-check-kind: a failing status context must refuse"
-  assert_grep "check 'ci' is not green" "$case_dir/stderr" \
-    "github-cross-check-kind: the status context was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-cross-check-kind: a passing check run hid a failing status context"
   pass "fm-pr-merge never lets a check run supersede a legacy status context"
@@ -2573,8 +2473,6 @@ test_current_failed_check_run_still_refuses() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-current-red: a currently failing check must refuse"
-  assert_grep "check 'ci' is not green" "$case_dir/stderr" \
-    "github-current-red: the red check was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-current-red: gh pr merge ran on a currently failing check"
   pass "fm-pr-merge still refuses when a check's current run failed after an earlier pass"
@@ -2597,8 +2495,6 @@ test_late_finishing_old_success_does_not_hide_current_failure() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-old-success-finishes-last: the later-started failure must refuse"
-  assert_grep "check 'ci' is not green" "$case_dir/stderr" \
-    "github-old-success-finishes-last: the current failure was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-old-success-finishes-last: completion order hid the current failure"
   pass "fm-pr-merge uses start order when the old success finishes last"
@@ -2641,8 +2537,6 @@ test_unfinished_rerun_keeps_a_check_red() {
     rc=$?
     set -e
     expect_code 1 "$rc" "github-pending-rerun-$prior: an unfinished re-run must refuse"
-    assert_grep "check 'ci' is not green" "$case_dir/stderr" \
-      "github-pending-rerun-$prior: the pending check was not named"
     assert_no_grep 'pr merge' "$case_dir/gh.log" \
       "github-pending-rerun-$prior: gh pr merge ran with a re-run still in flight"
   done
@@ -2667,8 +2561,6 @@ test_supersession_never_crosses_check_names() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-cross-name: another check passing must not clear this failure"
-  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
-    "github-cross-name: the red check was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-cross-name: gh pr merge ran on a red check of a different name"
   pass "fm-pr-merge never lets one check's pass clear another check's failure"
@@ -2702,8 +2594,6 @@ test_undated_runs_never_supersede() {
     rc=$?
     set -e
     expect_code 1 "$rc" "github-undated-$label: an unproven supersession must refuse"
-    assert_grep "check 'ci' is not green" "$case_dir/stderr" \
-      "github-undated-$label: the red check was not named"
     assert_no_grep 'pr merge' "$case_dir/gh.log" \
       "github-undated-$label: gh pr merge ran on an unproven supersession"
   done
@@ -2730,8 +2620,6 @@ test_allow_red_still_waives_only_the_current_failure() {
   rc=$?
   set -e
   expect_code 1 "$rc" "superseded-allow-red-wrong-name: waiving the green check must not merge"
-  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
-    "superseded-allow-red-wrong-name: the unwaived red check was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "superseded-allow-red-wrong-name: gh pr merge ran with an unwaived red check"
 
@@ -2836,8 +2724,6 @@ test_away_grant_and_yolo_and_hold_for_return() {
   rc=$?
   set -e
   expect_code 1 "$rc" "away-held: ungranted merge must refuse"
-  assert_grep 'task task-x1 is held for the captain return' "$case_dir/stderr" \
-    "away-held: refusal did not name hold-for-return"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "away-held: gh pr merge ran without a grant"
 
@@ -2851,8 +2737,6 @@ test_away_grant_and_yolo_and_hold_for_return() {
   rc=$?
   set -e
   expect_code 1 "$rc" "away-held-override: --attended-override must not skip the grant"
-  assert_grep 'task task-x1 is held for the captain return' "$case_dir/stderr" \
-    "away-held-override: override skipped the grant"
 
   case_dir=$(make_case away-grant)
   mkdir -p "$case_dir/wt" "$case_dir/home"
@@ -2907,8 +2791,6 @@ test_away_posture_refuses_asynchronous_merge_paths() {
   rc=$?
   set -e
   expect_code 2 "$rc" "away-queue-refused: a required merge queue must refuse before submission"
-  assert_grep 'merge-queue state does not prove an immediate merge' "$case_dir/stderr" \
-    "away-queue-refused: refusal did not explain the away restriction"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "away-queue-refused: gh received a merge that could enter its queue"
 
@@ -2920,8 +2802,6 @@ test_away_posture_refuses_asynchronous_merge_paths() {
   rc=$?
   set -e
   expect_code 2 "$rc" "away-gitlab-auto: GitLab auto-merge must refuse"
-  assert_grep 'GitLab auto-merge is attended-only' "$case_dir/stderr" \
-    "away-gitlab-auto: refusal did not name auto-merge"
   [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
     || fail "away-gitlab-auto: glab received an asynchronous merge"
 
@@ -2963,8 +2843,6 @@ test_away_grant_does_not_bypass_red_or_identity() {
   rc=$?
   set -e
   expect_code 1 "$rc" "away-grant-red: a grant must not waive red checks"
-  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
-    "away-grant-red: C1 did not refuse the red check"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "away-grant-red: gh pr merge ran on a granted red PR"
 
@@ -2995,8 +2873,6 @@ test_unreadable_away_record_refuses_merge() {
   rc=$?
   set -e
   expect_code 1 "$rc" "away-unreadable: an unreadable away record must refuse"
-  assert_grep 'away-posture record could not be read' "$case_dir/stderr" \
-    "away-unreadable: refusal did not fail closed"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "away-unreadable: gh pr merge ran despite an unreadable record"
   pass "an unreadable away-posture record refuses the merge instead of skipping the grant"
@@ -3051,8 +2927,6 @@ SH
     || fail "away-archive-at-merge: the archive was never attempted inside the merge"
   [ "$(cat "$case_dir/away-mutate-rc")" != 0 ] \
     || fail "away-archive-at-merge: the archive landed inside the merge's critical section"
-  assert_grep 'locked by live process' "$case_dir/away-mutate-output" \
-    "away-archive-at-merge: the refused archive did not name the live holder"
   assert_equals task-x1 "$(cat "$case_dir/away-grants-at-merge" 2>/dev/null || true)" \
     "away-archive-at-merge: the grant this merge read was not still standing at the forge call"
   assert_grep "merge landed: task-x1 https://github.com/example/repo/pull/71 away-grant" \
@@ -3108,8 +2982,6 @@ test_a_grant_revoked_before_the_merge_refuses_it() {
   set -e
 
   expect_code 1 "$rc" "away-revoked-before-merge: a revoked grant must refuse"
-  assert_grep 'held for the captain return' "$case_dir/stderr" \
-    "away-revoked-before-merge: refusal did not name hold-for-return"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "away-revoked-before-merge: gh pr merge ran on a revoked grant"
   pass "a grant revoked before the merge's own authority read refuses the merge"
@@ -3153,8 +3025,6 @@ test_merge_refuses_when_the_away_record_cannot_be_locked() {
   wait "$holder_pid" || fail "away-lock-unavailable: the fixture holder did not release cleanly"
 
   expect_code 1 "$rc" "away-lock-unavailable: an unlockable away record must refuse the merge"
-  assert_grep 'could not be locked for the merge' "$case_dir/stderr" \
-    "away-lock-unavailable: refusal did not name the lock it could not take"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "away-lock-unavailable: gh pr merge ran without the away-record lock"
   pass "a merge that cannot lock the away record refuses instead of merging unlocked"

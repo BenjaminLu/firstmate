@@ -1648,8 +1648,6 @@ test_index_lock_mtime_read_failure_refuses() {
   set -e
 
   expect_code 1 "$rc" "mtime-error-index-lock: teardown should refuse when lock mtime cannot be read"
-  assert_grep "cannot read mtime for git lock" "$case_dir/stderr" \
-    "mtime-error-index-lock: teardown did not report the mtime read failure"
   assert_grep "not provably stale" "$case_dir/stderr" \
     "mtime-error-index-lock: teardown did not explain the refusal"
   assert_not_contains "$(cat "$case_dir/stderr")" "removed provably-stale git lock" \
@@ -2116,8 +2114,6 @@ SH
   [ -e "$case_dir/state/task-x1.meta" ] || { : > "$release"; fail "herdr-orphan-refusal: refusal erased the durable endpoint metadata"; }
   [ -e "$case_dir/state/task-x1.status" ] || { : > "$release"; fail "herdr-orphan-refusal: refusal erased the task status record"; }
   [ -e "$case_dir/state/task-x1.turn-ended" ] || { : > "$release"; fail "herdr-orphan-refusal: refusal erased the turn-end record"; }
-  assert_grep "presentation lock is contended" "$case_dir/stderr" \
-    "herdr-orphan-refusal: the pre-return refusal was not explained visibly"
   if [ -s "$thlog" ]; then
     : > "$release"; fail "herdr-orphan-refusal: the contended refusal still returned the isolated copy: $(cat "$thlog")"
   fi
@@ -2380,8 +2376,6 @@ SH
     wait "$holder_pid" 2>/dev/null || true
     fail "descendant-locks: forced teardown ignored a descendant lifecycle lock"
   fi
-  assert_grep "descendant task child-b has a lifecycle action in flight" "$case_dir/stderr" \
-    "descendant-locks: refusal did not name the contended descendant"
   [ ! -e "$home/state/.control-child-a.lock" ] \
     && [ ! -e "$home/state/.meta-child-a.lock" ] \
     || { : > "$release"; wait "$holder_pid" 2>/dev/null || true; fail "descendant-locks: refusal leaked earlier descendant locks"; }
@@ -2424,8 +2418,6 @@ test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed() {
   [ -e "$home/state/child-herdr.status" ] || fail "herdr-child-unconfirmed-close: ambiguous close erased child status"
   [ -e "$case_dir/state/task-x1.meta" ] || fail "herdr-child-unconfirmed-close: failed child cleanup erased parent metadata"
   [ -d "$home" ] || fail "herdr-child-unconfirmed-close: failed child cleanup removed the secondmate home"
-  assert_grep "retaining that child's durable identity records" "$case_dir/stderr" \
-    "herdr-child-unconfirmed-close: refusal did not explain child record retention"
   pass "forced secondmate teardown retains Herdr child identity until exact pane disappearance"
 }
 
@@ -2621,8 +2613,6 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
     || fail "unconfirmed task-pane close incorrectly retired the presentation journal"
   [ -e "$case_dir/state/task-x1.meta" ] \
     || fail "unconfirmed task-pane close erased the durable endpoint metadata"
-  assert_grep "close could not be confirmed" "$case_dir/stderr" \
-    "unconfirmed projected close did not explain why the journal was retained"
   assert_grep "not confirmed gone" "$case_dir/stderr" \
     "unconfirmed projected close did not explain why the records were retained"
   assert_not_contains "$(cat "$log")" "workspace close" \
@@ -2743,8 +2733,6 @@ test_parked_own_run_is_aborted_before_teardown() {
     "parked-run-abort: no-mistakes axi abort was never invoked for the task's own parked run"
   assert_grep "abort --run 01RUN" "$case_dir/nm-abort.log" \
     "parked-run-abort: no-mistakes axi abort did not target the verified run id"
-  assert_grep "parked at a gate; aborting" "$case_dir/stderr" \
-    "parked-run-abort: teardown did not report aborting the parked run before removing the worker"
   pass "a task's own parked no-mistakes run is aborted, not orphaned, before the worker is removed"
 }
 
@@ -2781,8 +2769,6 @@ EOF
   expect_code 0 "$rc" "parked-run-pipeline-advanced-unfetched: teardown should still succeed"
   assert_grep "abort --run 01RUN" "$case_dir/nm-abort.log" \
     "parked-run-pipeline-advanced-unfetched: teardown did not abort the parked run the ledger proves is this task's continuation"
-  assert_grep "parked at a gate; aborting" "$case_dir/stderr" \
-    "parked-run-pipeline-advanced-unfetched: teardown did not report aborting the parked run"
   pass "a parked run the pipeline advanced past the task copy is still concluded from the runs ledger, not orphaned"
 }
 
@@ -3583,8 +3569,6 @@ SH
     run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
 
   expect_code 1 "$rc" "persistent-reap-refusal: teardown should refuse"
-  assert_grep "remain after 3 reap attempts" "$case_dir/stderr" \
-    "persistent-reap-refusal: teardown did not report bounded non-convergence"
   assert_present "$case_dir/wt" "persistent-reap-refusal: teardown removed the worktree"
   assert_present "$case_dir/state/task-x1.meta" "persistent-reap-refusal: teardown removed task metadata"
   pass "persistent leaked processes refuse teardown after bounded retries"

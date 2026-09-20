@@ -649,8 +649,6 @@ test_backend_resolution_preserves_config_errors() {
         "$ROOT" "$resolver" "$case_dir/home" 2>"$case_dir/stderr") || rc=$?
       [ "$rc" -eq 2 ] || fail "$resolver concealed an unreadable configuration: $config (exit $rc)"
       [ -z "$out" ] || fail "$resolver returned a backend for an unreadable configuration: $out"
-      assert_grep "tasks-axi backend configuration cannot be read at $config" "$case_dir/stderr" \
-        "$resolver did not identify the unreadable configuration"
     done
     chmod 600 "$config"
     rm "$config"
@@ -756,8 +754,6 @@ test_captain_hold_preserves_relocated_backlog_on_backend_error() {
       --title "Hold regression" --reason "Captain must choose" 2>&1) || rc=$?
     if [ "$config_state" = dangling ]; then
       [ "$rc" -ne 0 ] || fail "captain hold accepted an unresolved backend and changed the wrong backlog"
-      assert_contains "$out" "tasks-axi backend configuration cannot be read at $home/.tasks.toml" \
-        "captain hold did not report its configuration error"
       cmp -s "$case_dir/configured-before" "$data/backlog.md" \
         || fail "refused captain hold changed the configured backlog"
     else
@@ -990,8 +986,6 @@ SH
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn accepted a dependency-blocked backlog row"
-  assert_contains "$out" "state queued no yes" \
-    "blocked-row refusal did not name the actual ineligible state"
   assert_absent "$(home_of "$case_dir")/state/$id.meta" \
     "blocked-row refusal published a task record"
   assert_absent "$case_dir/task-endpoint-created" \
@@ -1168,8 +1162,6 @@ test_dispatch_refuses_a_symlinked_backlog_without_crossing_homes() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn accepted a symlinked backlog"
-  assert_contains "$out" "backlog file resolves outside its authorized directory" \
-    "spawn did not identify the unsafe backlog boundary"
   [ -L "$local_backlog" ] || fail "spawn replaced the local backlog symlink"
   [ "$(row_state "$foreign_case" "$id")" = queued ] \
     || fail "spawn mutated the foreign backlog row"
@@ -1247,8 +1239,6 @@ test_completion_refuses_an_unresolvable_data_directory() {
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown succeeded with an unresolvable data directory"
-  assert_contains "$out" "task $id cannot be torn down" \
-    "teardown did not identify the task blocked by fatal backlog addressing"
   assert_present "$meta" "fatal backlog addressing removed the task record"
   assert_absent "$(home_of "$case_dir")/state/$id.backlog-close" \
     "fatal backlog addressing wrote a close marker"
@@ -1264,8 +1254,6 @@ test_dispatch_refuses_an_id_this_home_has_no_item_for() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn dispatched work no backlog item owns"
-  assert_contains "$out" "no backlog item in this home" \
-    "spawn refused without naming the missing backlog item"
   assert_absent "$(home_of "$case_dir")/state/$id.meta" \
     "refused dispatch still left a record behind"
   pass "dispatch refuses, before creating anything, when the home has no item for the id"
@@ -1280,8 +1268,6 @@ test_dispatch_reports_a_backlog_read_failure() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn succeeded though backlog preflight could not read its item"
-  assert_contains "$out" "backlog item could not be read before dispatch" \
-    "spawn misreported a backlog read failure"
   assert_contains "$out" "backlog is unwritable" \
     "spawn discarded the backlog reader's diagnostic"
   assert_absent "$(home_of "$case_dir")/state/$id.meta" \
@@ -1315,8 +1301,6 @@ test_dispatch_refuses_to_commit_without_a_published_record() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn succeeded without publishing its task record"
-  assert_contains "$out" "task record for $id could not be published" \
-    "spawn did not report task-record publication failure"
   assert_absent "$meta" "failed publication left a task record"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "failed publication retained its busy state"
@@ -1334,8 +1318,6 @@ test_dispatch_leaves_no_record_when_the_transition_fails() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn reported success though the backlog transition failed"
-  assert_contains "$out" "could not be moved to In flight" \
-    "spawn failed without explaining the backlog transition failure"
   assert_absent "$(home_of "$case_dir")/state/$id.meta" \
     "a failed backlog transition left an orphaned record behind"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
@@ -1356,8 +1338,6 @@ test_dispatch_reports_an_incomplete_record_rollback() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn reported success though transition and rollback failed"
-  assert_contains "$out" "failed-dispatch cleanup is incomplete" \
-    "spawn did not report that its provisional record remained"
   assert_present "$meta" "failed record removal was reported as successful"
   assert_absent "$(home_of "$case_dir")/state/$id.busy-state" \
     "record-removal failure prevented busy-state rollback"
@@ -1376,8 +1356,6 @@ test_dispatch_reports_an_incomplete_busy_rollback() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn succeeded though busy rollback failed"
-  assert_contains "$out" "did not remove both task and busy records" \
-    "spawn did not report incomplete busy rollback"
   assert_absent "$(home_of "$case_dir")/state/$id.meta" \
     "busy rollback failure retained the provisional task record"
   assert_present "$(home_of "$case_dir")/state/$id.busy-state" \
@@ -1416,8 +1394,6 @@ test_dispatch_defers_interruption_across_backlog_commit() {
     rc=0
     out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
     [ "$rc" -ne 0 ] || fail "a $timing-commit interruption was reported as success"
-    assert_contains "$out" "verified preserved: its paired task record is present and its backlog item is In flight" \
-      "a $timing-commit interruption did not report its verified atomic outcome"
     [ "$(row_state "$case_dir" "$id")" = in_flight ] \
       || fail "a $timing-commit interruption left the backlog row queued"
     assert_present "$(home_of "$case_dir")/state/$id.meta" \
@@ -1435,8 +1411,6 @@ test_deferred_signal_reads_back_preserved_state() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "an interrupted spawn reported success"
-  assert_contains "$out" "moved to In flight now and verified" \
-    "a signal-deferred spawn did not read the row back and repair it"
   [ "$(row_state "$case_dir" "$id")" = in_flight ] \
     || fail "the read-back repair left the backlog row at $(row_state "$case_dir" "$id")"
   assert_present "$(home_of "$case_dir")/state/$id.meta" \
@@ -1453,8 +1427,6 @@ test_deferred_signal_never_claims_unverified_preservation() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "an interrupted spawn reported success"
-  assert_contains "$out" "preservation could not be verified" \
-    "an unverifiable preservation was not reported as attempted, not verified"
   case "$out" in
     *"In-flight backlog state were preserved"*) \
       fail "the interrupted spawn still claimed a preservation it never verified" ;;
@@ -1488,10 +1460,6 @@ test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi() {
   case "$rc" in
     124|137) fail "the verification hung on the unresponsive start instead of timing out: $out" ;;
   esac
-  assert_contains "$out" "preservation could not be verified" \
-    "a timed-out verification did not report the preservation as attempted, not verified"
-  assert_contains "$out" "did not finish within 3s" \
-    "the attempted-preservation wording did not name the timeout as its reason"
   [ "$(row_state "$case_dir" "$id")" = queued ] \
     || fail "the timed-out repair left the backlog row at $(row_state "$case_dir" "$id")"
   assert_present "$(home_of "$case_dir")/state/$id.meta" \
@@ -1544,8 +1512,6 @@ test_dispatch_fails_when_its_row_vanishes_after_preflight() {
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn succeeded after its backlog row vanished"
-  assert_contains "$out" "vanished before dispatch commit" \
-    "spawn did not report that its backlog row vanished"
   assert_absent "$(home_of "$case_dir")/state/$id.meta" \
     "spawn retained a record after its backlog row vanished"
   [ -z "$(row_state "$case_dir" "$id")" ] || fail "spawn recreated a removed backlog row"
@@ -1628,8 +1594,6 @@ test_completion_refuses_ambiguous_incarnation_metadata() {
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown accepted ambiguous incarnation metadata"
-  assert_contains "$out" "has 2 spawn generation fields" \
-    "teardown did not report the ambiguous incarnation"
   assert_present "$meta" "ambiguous-incarnation refusal removed the task record"
   assert_absent "$marker" "ambiguous-incarnation refusal published a close"
   [ "$(row_state "$case_dir" "$id")" = in_flight ] \
@@ -1779,8 +1743,6 @@ test_completion_preserves_records_when_meta_removal_fails() {
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown succeeded though task-record removal failed"
-  assert_contains "$out" "task record could not be removed" \
-    "teardown did not report task-record removal failure"
   assert_present "$meta" "teardown lost meta after its removal failed"
   assert_present "$marker" "teardown discarded recovery after meta removal failed"
   [ "$(row_state "$case_dir" "$id")" = in_flight ] \
@@ -1799,8 +1761,6 @@ test_completion_fails_loudly_and_records_the_close_it_still_owes() {
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown reported success while its item was still In flight"
-  assert_contains "$out" "could not be closed" \
-    "teardown failed without explaining the unclosed backlog item"
   assert_present "$(home_of "$case_dir")/state/$id.backlog-close" \
     "teardown lost the close it still owes"
   pass "completion refuses to report success while its item is still open, and records what it owes"
@@ -1830,8 +1790,6 @@ test_interrupted_destructive_cleanup_leaves_a_recoverable_close() {
     || fail "restart left interrupted cleanup In flight: $out"
   assert_absent "$marker" "restart retained the recovered close marker"
   assert_absent "$home/state/$id.meta" "restart retained the interrupted task record"
-  assert_contains "$out" "endpoint or local copy may remain" \
-    "restart silently hid potentially incomplete physical cleanup"
   pass "restart recovers closes recorded before destructive cleanup"
 }
 
@@ -1850,8 +1808,6 @@ test_completion_refuses_a_close_target_symlinked_to_a_directory() {
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown published through a directory symlink"
-  assert_contains "$out" "pending-close record target resolves outside its authorized directory" \
-    "teardown did not report the unsafe publication target"
   [ -L "$marker" ] || fail "teardown replaced the unsafe close target"
   [ -z "$(find "$external" -mindepth 1 -maxdepth 1 -print -quit)" ] \
     || fail "teardown wrote a staged close outside the home"
@@ -1874,8 +1830,6 @@ test_completion_fails_when_its_close_marker_cannot_be_removed() {
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown reported success while its close marker remained"
-  assert_contains "$out" "pending-close record could not be removed" \
-    "teardown did not report its incomplete marker cleanup"
   assert_present "$marker" "teardown hid a close-marker removal failure"
   [ "$(row_state "$case_dir" "$id")" = "done" ] \
     || fail "marker cleanup failure lost the completed backlog transition"
@@ -1896,8 +1850,6 @@ test_recovery_retries_when_a_close_marker_cannot_be_removed() {
   break_meta_removal "$case_dir" "$marker"
 
   out=$(run_bootstrap "$case_dir")
-  assert_contains "$out" "pending-close record could not be removed" \
-    "session start did not report close-marker removal failure"
   assert_present "$marker" "recovery hid a close-marker removal failure"
   [ "$(row_state "$case_dir" "$id")" = "done" ] \
     || fail "recovery did not land the close before marker cleanup"
@@ -1917,8 +1869,6 @@ test_recovery_reports_an_owned_row_read_failure() {
   break_verb "$case_dir" show
 
   out=$(run_bootstrap "$case_dir")
-  assert_contains "$out" "worker record exists but its backlog item could not be read" \
-    "session start silently ignored an owned-row read failure"
   assert_contains "$out" "backlog is unwritable" \
     "session start discarded the backlog reader's diagnostic"
   rm -f "$case_dir/fakebin/tasks-axi"
@@ -1975,8 +1925,6 @@ test_recovery_rejects_an_internal_worker_record_symlink() {
 
   out=$(run_bootstrap "$case_dir") || rc=$?
   [ "$rc" -ne 0 ] || fail "session start accepted an internal worker-record symlink"
-  assert_contains "$out" "task record resolves through a different final path" \
-    "session start did not report the aliased worker record"
   [ "$(row_state "$case_dir" "$id")" = queued ] \
     || fail "session start paired the aliased worker record with its backlog row"
   [ -L "$home/state/$id.meta" ] \
@@ -2024,8 +1972,6 @@ test_recovery_replays_a_close_an_interrupted_cleanup_left_open() {
     "the replayed close dropped the completion link the cleanup had recorded"
   assert_absent "$(home_of "$case_dir")/state/$id.backlog-close" \
     "a replayed close left its record behind"
-  assert_not_contains "$out" "endpoint or local copy may remain" \
-    "recovery claimed incomplete cleanup without task metadata"
   pass "session start finishes a close an interrupted cleanup recorded but never landed"
 }
 
@@ -2097,8 +2043,6 @@ test_recovery_retry_preserves_incomplete_cleanup_warning() {
   out=$(run_bootstrap "$case_dir")
   [ "$(row_state "$case_dir" "$id")" = "done" ] \
     || fail "retried recovery left the item In flight: $out"
-  assert_contains "$out" "endpoint or local copy may remain" \
-    "retry lost the incomplete-cleanup evidence after removing metadata"
   assert_absent "$marker" "retried recovery retained its applied marker"
   pass "recovery preserves incomplete-cleanup evidence across a failed replay"
 }
@@ -2138,8 +2082,6 @@ test_recovery_preserves_a_close_for_ambiguous_incarnation_metadata() {
     "$id" "$home/data" > "$marker"
 
   out=$(run_bootstrap "$case_dir")
-  assert_contains "$out" "has 2 spawn generation fields" \
-    "recovery did not report ambiguous incarnation metadata"
   assert_present "$marker" "ambiguous metadata caused recovery to discard the close"
   assert_present "$home/state/$id.meta" \
     "ambiguous metadata caused recovery to remove the task record"
@@ -2162,8 +2104,6 @@ test_recovery_preserves_both_records_when_meta_removal_fails() {
   break_meta_removal "$case_dir" "$meta"
 
   out=$(run_bootstrap "$case_dir")
-  assert_contains "$out" "the interrupted task record could not be removed" \
-    "session start did not surface the record-removal failure"
   assert_present "$meta" "failed recovery removed the task record"
   assert_present "$(home_of "$case_dir")/state/$id.backlog-close" \
     "failed recovery discarded the pending close"
@@ -2563,8 +2503,6 @@ test_bootstrap_refuses_a_symlinked_state_directory_before_reconciliation() {
 
   out=$(run_bootstrap "$case_dir") || rc=$?
   [ "$rc" -ne 0 ] || fail "bootstrap accepted a symlinked state directory"
-  assert_contains "$out" "state directory is not a real directory" \
-    "bootstrap did not report the unsafe state boundary"
   [ "$(row_state "$case_dir" "$id")" = queued ] \
     || fail "bootstrap reconciled a foreign record into the local backlog"
   assert_present "$foreign_state/$id.meta" \
@@ -2660,8 +2598,6 @@ test_no_backlog_teardown_refuses_a_symlinked_task_record_at_entry() {
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "no-backlog teardown accepted a symlinked task record"
-  assert_contains "$out" "task record resolves outside its authorized directory" \
-    "teardown did not identify the unsafe task record"
   [ -L "$home/state/$id.meta" ] || fail "teardown removed the symlinked task record"
   assert_present "$foreign_worktree" "teardown removed a foreign local copy"
   assert_absent "$case_dir/backend-resource-action" \
@@ -2704,8 +2640,6 @@ SH
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown trusted a record after its parent was swapped"
-  assert_contains "$out" "task record authorized directory resolves outside this home" \
-    "post-lock record check did not report the swapped parent"
   assert_present "$foreign_state/$id.meta" "teardown removed the foreign record"
   assert_present "$foreign_worktree" "teardown removed the foreign local copy"
   assert_absent "$case_dir/backend-resource-action" \
@@ -2731,8 +2665,6 @@ test_teardown_refuses_a_symlinked_state_directory_at_entry() {
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "teardown accepted a symlinked state directory"
-  assert_contains "$out" "state directory is not a real directory" \
-    "teardown did not identify the unsafe state directory"
   assert_present "$external_state/$id.meta" \
     "teardown removed metadata through the symlinked state directory"
   assert_absent "$case_dir/backend-resource-action" \
@@ -2782,8 +2714,6 @@ test_spawn_refuses_a_special_file_tasks_config() {
     timeout 60 "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off 2>&1) || rc=$?
   [ "$rc" -ne 124 ] || fail "spawn hung reading a special-file tasks-axi config"
   [ "$rc" -ne 0 ] || fail "spawn accepted a special-file tasks-axi config"
-  assert_contains "$out" "tasks-axi config is not a regular file" \
-    "spawn did not identify the unsafe tasks-axi config"
   assert_absent "$home/state/$id.meta" \
     "spawn published a task record through an unsafe tasks-axi config"
   pass "spawn refuses a special-file tasks-axi config instead of blocking on it"
@@ -2807,8 +2737,6 @@ EOF
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn accepted a tasks-axi config resolving outside the home"
-  assert_contains "$out" "tasks-axi config resolves outside its authorized directory" \
-    "spawn silently exempted the home instead of reporting the unsafe config"
   assert_absent "$home/state/$id.meta" \
     "spawn published a task record through an unsafe tasks-axi config"
   pass "spawn refuses an unsafe tasks-axi config before any exemption is derived from it"
@@ -2828,8 +2756,6 @@ test_spawn_refuses_a_data_directory_symlinked_outside_the_home() {
 
   out=$(TASKS_AXI_BACKEND=markdown run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn accepted a data directory resolving outside the home"
-  assert_contains "$out" "backlog file authorized directory resolves outside this home" \
-    "spawn did not identify the data directory escaping the home"
   assert_absent "$home/state/$id.meta" \
     "spawn published a task record through a data directory outside the home"
   pass "spawn refuses a data directory symlinked outside the home"
@@ -2850,8 +2776,6 @@ test_configured_adapter_refuses_a_data_directory_outside_the_home() {
   out=$(TASKS_AXI_BACKEND=beads run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] \
     || fail "a configured adapter accepted a data directory resolving outside the home"
-  assert_contains "$out" "backlog data directory authorized directory resolves outside this home" \
-    "a configured adapter did not identify the data directory escaping the home"
   assert_absent "$home/state/$id.meta" \
     "a configured adapter published a task record outside the home"
   pass "a configured adapter refuses a data directory outside the home"

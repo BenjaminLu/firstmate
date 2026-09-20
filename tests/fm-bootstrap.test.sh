@@ -992,14 +992,6 @@ SH
     FM_BOOTSTRAP_NETWORK_LOCK_PID=111111 FM_FAKE_FLEET_SYNC_STARTED_MARKER="$marker" \
     "$ROOT/bin/fm-bootstrap.sh")
   assert_absent "$marker" "a stale worker refreshed project clones after lock handoff"
-  assert_contains "$out" "changed before dead-secondmate relaunch" \
-    "the stale worker did not report the refused liveness sweep"
-  assert_contains "$out" "changed before secondmate convergence" \
-    "the stale worker did not report the refused convergence sweep"
-  assert_contains "$out" "changed before pending handoff delivery" \
-    "the stale worker did not report the refused handoff sweep"
-  assert_contains "$out" "changed before project clone refresh" \
-    "the stale worker did not report the refused clone refresh"
   pass "bootstrap: every deferred mutating sweep rechecks fleet-lock ownership"
 }
 

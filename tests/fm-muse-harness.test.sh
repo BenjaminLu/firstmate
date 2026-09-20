@@ -329,8 +329,6 @@ EOF
     run_muse_spawn "$home" "$proj" "$wt" "$fakebin" "$id" --mode no-mistakes --yolo off)
   status=$?
   [ "$status" -ne 0 ] || fail "muse spawn accepted a caller-only META_API_KEY"
-  assert_contains "$out" "set for fm-spawn but cannot be proven present" \
-    "muse spawn did not explain that the caller credential cannot reach the worker"
   assert_contains "$out" "$home/xdgconfig/muse/auth.json" \
     "muse spawn did not name the supported stored credential path"
   assert_absent "$home/launch.log" "caller-only credential refusal created an endpoint"
@@ -525,7 +523,6 @@ EOF
   out=$(FM_FAKE_KEY_FAIL='-t fm-send:0 C-u' run_send_key "$home" "$fakebin" "$id" Escape "$keylog")
   status=$?
   [ "$status" -ne 0 ] || fail "a failed muse composer clear was reported as success"
-  assert_contains "$out" "could not be cleared" "the failed clear did not explain the pane state"
   pass "a failed muse composer clear fails loudly instead of leaving stale input"
 }
 

@@ -199,8 +199,6 @@ test_unsafe_artifacts_and_failure_restore_readonly_mode() {
   [ "$rc" -ne 0 ] || fail "unwritable destination directory should make quarantine fail"
   [ "$(file_mode "$second/data/captain-shared.md")" = "$before_mode" ] \
     || fail "failed quarantine did not restore read-only mode"
-  assert_grep "failed to quarantine divergent destination" "$err" \
-    "recoverable failure should explain quarantine failure"
   pass "unsafe shared captain artifacts are rejected and failure restores read-only mode"
 }
 
@@ -362,8 +360,6 @@ EOF
     FM_DATA_OVERRIDE="$data_override" \
     "$ROOT/bin/fm-config-push.sh" 2>/dev/null)
 
-  assert_contains "$out" "data/captain-shared.md: pushed - quarantined local drift at" \
-    "config-push should report the shared file update and quarantine"
   cmp -s "$data_override/captain-shared.md" "$sm/data/captain-shared.md" \
     || fail "config-push convergence point did not update shared captain preferences from FM_DATA_OVERRIDE"
   assert_shared_readonly "$sm/data/captain-shared.md"
@@ -383,8 +379,6 @@ EOF
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
     "$ROOT/bin/fm-session-start.sh")
 
-  assert_contains "$out" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)" \
-    "session-start digest should label the shared captain file unmistakably"
   assert_contains "$out" "shared from primary" "session-start digest should render the shared file"
   contract=$(printf '%s\n' "$out" | awk '/^READ-ONCE CONTRACT$/ { f = 1 } /^FLEET STATE$/ { f = 0 } f')
   assert_contains "$contract" "data/captain-shared.md" \

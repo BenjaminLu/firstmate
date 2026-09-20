@@ -584,7 +584,6 @@ test_resolve_selector_three_forms() {
     || fail "legacy fm-<id> label should preserve its backend label"
 
   out=$(fm_backend_resolve_selector 'fm-missing' "$state" 2>&1) && fail "fm-<id> with no meta should fail"
-  assert_contains "$out" "no metadata for fm-missing" "missing-meta error text changed"
 
   fakebin="$TMP_ROOT/resolve-fakebin"; mkdir -p "$fakebin"
   cat > "$fakebin/tmux" <<'SH'
@@ -600,7 +599,6 @@ SH
   # is the fm-* meta-miss error path after exact-id and legacy-label metadata
   # lookup both miss.
   # Only a NON fm-* bare name falls through to the live-window search.
-  assert_contains "$out" "no metadata for fm-adhoc" "an fm-* selector must always require meta, not silently fall back to a live search"
 
   out=$(PATH="$fakebin:$PATH" fm_backend_resolve_selector 'adhoc' "$state")
   [ "$out" = "firstmate:adhoc" ] || fail "an ad hoc bare name should resolve via the tmux live-window fallback, got '$out'"

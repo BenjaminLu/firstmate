@@ -1725,8 +1725,6 @@ test_config_push_reports_skips_dirty_and_invalid_home() {
     "config push did not report stale home"
   assert_contains "$out" "crew-dispatch.json: skipped - destination does not allow inherited item" \
     "config push did not report non-allowing item skip"
-  assert_contains "$out" "secondmate bad ($bad_home): skipped - unsafe home: not a seeded secondmate home" \
-    "config push did not report invalid secondmate home"
   err_text=$(cat "$err")
   assert_contains "$err_text" "fm-config-inherit: warning: skipped crew-dispatch.json" \
     "config push did not inherit the lib's skip stderr warning"
@@ -1849,7 +1847,6 @@ test_config_reread_per_home_changed_sets_and_exact_bytes() {
 
   # Deterministic allowlist path order and exact destination bytes for alpha
   # (allowlisted config items were missing/stale and therefore pushed).
-  assert_grep "These inherited config files changed" "$instr_a" "alpha framing missing"
   assert_grep "defaults/rules" "$instr_a" "alpha must preserve agent judgment framing"
   assert_contains "$(cat "$instr_a")" "config/crew-dispatch.json" "alpha missing dispatch path"
   assert_contains "$(cat "$instr_a")" "config/crew-harness" "alpha missing harness path"

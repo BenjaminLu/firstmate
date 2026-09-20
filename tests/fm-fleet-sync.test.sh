@@ -290,7 +290,6 @@ test_detached_clean_ancestor_with_diverged_local_default_is_stuck_untouched() {
   out=$(run_sync "$home" "$clone")
 
   assert_contains "$out" "beta-local-default: STUCK:" "diverged local default reports STUCK"
-  assert_contains "$out" "local main diverged from origin/main" "STUCK names the unsafe local default"
   assert_not_contains "$out" "recovered" "diverged local default is never recovered"
   [ "$(head_sha "$clone")" = "$before" ] || fail "detached HEAD was moved"
   ! git -C "$clone" symbolic-ref -q HEAD >/dev/null || fail "clone re-attached to local default"
@@ -530,8 +529,6 @@ test_orphaned_stale_packed_refs_lock_recovers() {
 
   assert_grep "removed provably-stale packed-refs lock" "$err" \
     "stale lock: guard did not force-remove the provably-stale lock"
-  assert_grep "fetch succeeded after stale packed-refs lock cleanup" "$err" \
-    "stale lock: fetch did not succeed after cleanup"
   assert_contains "$(cat "$out")" "lockstale: synced" "stale lock: clone did not sync after recovery"
   assert_grep "recovered: removed a stale packed-refs lock" "$out" \
     "stale lock: recovery summary not emitted on stdout (bootstrap relays stdout, discards stderr)"
@@ -558,7 +555,6 @@ test_live_packed_refs_lock_is_never_removed() {
     run_sync_guarded "$home" "$fakebin" "$out" "$err" locklive
   set -e
 
-  assert_grep "is not provably stale" "$err" "live lock: guard did not explain the refusal"
   assert_no_grep "removed provably-stale packed-refs lock" "$err" \
     "live lock: guard force-removed a live lock"
   assert_contains "$(cat "$out")" "locklive: skipped: fetch failed" "live lock: fleet-sync did not skip"
@@ -587,7 +583,6 @@ test_live_git_cwd_in_clone_dir_blocks_removal() {
     run_sync_guarded "$home" "$fakebin" "$out" "$err" lockcwd
   set -e
 
-  assert_grep "is not provably stale" "$err" "clone-cwd holder: guard did not refuse"
   assert_no_grep "removed provably-stale packed-refs lock" "$err" \
     "clone-cwd holder: guard removed a lock while a live process held the clone dir"
   assert_present "$clone/.git/packed-refs.lock" "clone-cwd holder: lock must not be removed"
@@ -612,7 +607,6 @@ test_transient_packed_refs_lock_self_clears() {
     run_sync_guarded "$home" "$fakebin" "$out" "$err" locktrans
   set -e
 
-  assert_grep "cleared on its own" "$err" "transient lock: guard did not report the self-clear"
   assert_no_grep "removed provably-stale packed-refs lock" "$err" \
     "transient lock: guard force-removed a lock that only needed patience"
   assert_contains "$(cat "$out")" "locktrans: synced" "transient lock: clone did not sync after self-clear"

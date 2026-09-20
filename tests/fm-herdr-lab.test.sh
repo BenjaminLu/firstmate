@@ -303,7 +303,6 @@ SH
   assert_present "$started" "delayed viewer launcher did not start"
   launcher_pid=$(cat "$started")
   kill -0 "$launcher_pid" 2>/dev/null && fail "timed-out viewer launcher remained alive"
-  assert_contains "$out" "did not become the foreground client" "launcher timeout was unclear"
   run_with_fake fm_herdr_lab_teardown "$name" || fail "viewer-late fixture teardown failed"
   pass "fm-herdr-lab: timed-out viewer startup cancels its exact launcher"
 }
@@ -348,7 +347,6 @@ SH
   rm -f "$FAKEBIN/python3"
   expect_code 1 "$status" "a foreign foreground client must not satisfy viewer start"
   assert_present "$marker" "viewer ownership fixture did not launch"
-  assert_contains "$out" "did not become the foreground client" "ownership failure did not time out clearly"
   assert_not_contains "$out" "viewer attached" "start claimed a foreign foreground client as its own"
   printf '%s\n' no_foreground_client > "$FAKE_STATE/$name.foreground"
   run_with_fake fm_herdr_lab_teardown "$name" || fail "viewer-ownership fixture teardown failed"

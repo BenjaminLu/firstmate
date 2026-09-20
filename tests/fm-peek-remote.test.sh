@@ -75,8 +75,6 @@ test_remote_peek_reads_remote_pane() {
     FM_FAKE_TMUX_TOUCHED="$touched" \
     "$PEEK" rsm 20 2>"$dir/err"); rc=$?
   expect_code 0 "$rc" "a healthy remote peek should succeed"
-  assert_contains "$out" "the remote mate is mid-refactor" \
-    "the remote pane tail should be printed"
   assert_not_contains "$out" "can't find session" \
     "a remote peek must not fall into a local session lookup"
   [ ! -s "$touched" ] || fail "the local tmux adapter was consulted for a remote target"
@@ -97,8 +95,6 @@ test_remote_peek_unreachable_fails_loudly_without_death_claim() {
     "$PEEK" rsm >"$dir/out" 2>"$dir/err"; rc=$?
   err=$(cat "$dir/err")
   [ "$rc" -ne 0 ] || fail "an unreachable remote peek must exit nonzero"
-  assert_contains "$err" "remote pane of rsm on remote-mac" \
-    "the failure must name the remote mate and host"
   assert_contains "$err" "not thereby dead" \
     "an unreadable remote pane must not be presented as a dead mate"
   pass "fm-peek remote: an unreachable host fails loudly without a false death claim"

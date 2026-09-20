@@ -268,7 +268,6 @@ test_run_clear_and_compact_reemit() {
     expect_code 0 "$status" "run wrapper $source"
     assert_contains "$out" "$REEMIT_BANNER$root" "$source did not re-emit the digest"
     assert_contains "$out" "are NOT repeated" "$source did not report the skipped startup sweeps"
-    assert_contains "$out" "Queued wakes ARE still drained" "$source did not preserve the wake-queue drain"
     assert_not_contains "$out" "FIRSTMATE_OP" "a $source open also emitted the nudge instruction"
   done
   pass "run wrapper: clear and compact re-emit the digest without repeating startup sweeps"

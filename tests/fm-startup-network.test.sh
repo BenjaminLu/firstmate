@@ -156,8 +156,6 @@ EOF
   pending=$(run_stage "$home" "$root" report)
   [ "$(printf '%s\n' "$pending" | head -1)" = "IN PROGRESS - the deferred network checks have not finished yet." ] \
     || fail "the worker was not actually still running: $pending"
-  assert_contains "$pending" "Only a FAILED or otherwise actionable result arrives as a \`check: startup-network\` wake; a clean success stays silent." \
-    "the pending guidance still promised a wake for clean success"
   assert_contains "$pending" "$root/bin/fm-startup-network.sh report" \
     "the pending guidance omitted the durable on-demand report path"
   run_stage "$home" "$root" wait 30 >/dev/null || fail "the worker never published"

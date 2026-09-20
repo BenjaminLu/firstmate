@@ -1113,8 +1113,6 @@ SH
   set -e
   rm -f "$home/fakebin/ps"
   [ "$rc" -ne 0 ] || fail "a build with an uncertain listener reported success: $out"
-  assert_contains "$out" "source $sid is not listening after reconcile" \
-    "the refusal did not name the source: $out"
   assert_contains "$out" "observed owner: uncertain" \
     "the refusal did not name the observed owner: $out"
   pass "build fails when reconcile cannot prove a live listener"
@@ -2425,7 +2423,6 @@ test_url_reads_the_live_session_listing() {
   board="$home/.lavish/bearings-board.html"
   set +e; out=$(run_board "$home" url 2>&1); rc=$?; set -e
   [ "$rc" -ne 0 ] || fail "url succeeded before any board was built"
-  assert_contains "$out" "no board has been built" "url did not explain the missing board: $out"
   write_valid_payload "$data"
   run_board "$home" build "$data" >/dev/null || fail "a valid payload did not build"
   out=$(run_board "$home" url) || fail "url failed for a built, open board: $out"

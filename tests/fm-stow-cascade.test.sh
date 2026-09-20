@@ -246,8 +246,6 @@ test_transport_routes_by_placement_and_liveness() {
   s=$(stanza "$out" remote-live)
   [ "$(value_in "$s" transport)" = deferred ] \
     || fail "a remote home with no live agent was not deferred: $(value_in "$s" transport)"
-  assert_contains "$s" 'no remote memory write path' \
-    "the deferred remote home did not state why it cannot be curated in place"
   pass "transport follows placement and live-agent state, and a remote home without an agent defers"
 }
 

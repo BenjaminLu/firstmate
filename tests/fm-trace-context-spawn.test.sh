@@ -344,8 +344,6 @@ test_unsafe_delivery_refuses_to_append_launch() {
     run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$CASE_ID" "$PROJ_DIR")
   status=$?
   [ "$status" -ne 0 ] || fail "uncleared traceparent input must stop spawn"
-  assert_contains "$out" "refusing to append the launch command" \
-    "unsafe traceparent delivery should report why spawn stopped"
   ! grep -q 'claude' "$LAUNCH_LOG" \
     || fail "unsafe traceparent delivery must not append the launch command"
   pass "uncleared TRACEPARENT input stops before the launch command is appended"

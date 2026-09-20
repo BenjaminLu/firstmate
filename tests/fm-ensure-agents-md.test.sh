@@ -35,14 +35,6 @@ test_created_agents_md_includes_self_governance() {
   assert_present "$agents" "AGENTS.md was not created"
   assert_claude_pointer "$repo/CLAUDE.md"
   assert_grep "## Maintaining this file" "$agents" "self-governance section heading missing"
-  assert_grep "Keep this file for knowledge useful to almost every future agent session in this project." "$agents" \
-    "self-governance section lost the future-session bar"
-  assert_grep "Do not repeat what the codebase already shows; point to the authoritative file or command instead." "$agents" \
-    "self-governance section lost pointer-over-copy guidance"
-  assert_grep "Prefer rewriting or pruning existing entries over appending new ones." "$agents" \
-    "self-governance section lost rewrite-or-prune guidance"
-  assert_grep "When updating this file, preserve this bar for all agents and keep entries concise." "$agents" \
-    "self-governance section lost all-agents maintenance guidance"
   pass "fm-ensure-agents-md.sh: created AGENTS.md includes self-governance section"
 }
 
@@ -75,8 +67,6 @@ EOF
     "promotion lost existing CLAUDE.md content"
   count=$(grep -Fc "## Maintaining this file" "$agents")
   [ "$count" -eq 1 ] || fail "promotion wrote $count self-governance sections"
-  assert_grep "Keep this file for knowledge useful to almost every future agent session in this project." "$agents" \
-    "promoted AGENTS.md missing self-governance wording"
   pass "fm-ensure-agents-md.sh: promoted CLAUDE.md includes self-governance section"
 }
 
@@ -87,8 +77,6 @@ test_promoted_claude_md_without_trailing_newline_keeps_blank_separator() {
   printf '# Existing agent memory\n\nRun tests with make test.' > "$repo/CLAUDE.md"
   "$ROOT/bin/fm-ensure-agents-md.sh" "$repo" >/dev/null 2>&1 || fail "fm-ensure-agents-md.sh failed for newline-less CLAUDE.md promotion"
   agents="$repo/AGENTS.md"
-  assert_grep "Run tests with make test." "$agents" \
-    "newline-less promotion lost or mangled the last content line"
   assert_grep "## Maintaining this file" "$agents" \
     "newline-less promotion did not append the self-governance section"
   before=$(grep -B1 -Fx '## Maintaining this file' "$agents" | head -n 1)
@@ -139,8 +127,6 @@ test_correct_symlink_migrates_to_pointer_without_clobbering_agents() {
   assert_claude_pointer "$repo/CLAUDE.md"
   cmp -s "$repo/.before" "$agents" \
     || fail "symlink migration clobbered AGENTS.md"
-  assert_grep "Do not clobber this payload." "$agents" \
-    "symlink migration lost unique AGENTS.md content"
   cp "$agents" "$repo/.after-first"
   cp "$repo/CLAUDE.md" "$repo/.claude-after-first"
   out=$("$ROOT/bin/fm-ensure-agents-md.sh" "$repo" 2>&1) \

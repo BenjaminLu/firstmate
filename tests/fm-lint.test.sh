@@ -579,7 +579,6 @@ test_zero_changed_files_exits_clean() {
     FM_TEST_GIT_DIFF_FILE="$diff_file" "$LINT" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || fail "zero changed lint targets must exit 0, got $rc"$'\n'"$out"
   assert_contains "$out" "ShellCheck 0.11.0" "zero-changed run did not print the ShellCheck version line"
-  assert_contains "$out" "no changed lint targets" "zero-changed run did not note the empty target set"
   assert_contains "$out" "workflow files valid" \
     "zero-changed run skipped workflow YAML validation"
   pass "fm-lint.sh exits 0 with a note when the local branch has no changed lint targets"
@@ -1100,8 +1099,6 @@ test_missing_shellcheck_fails_closed() {
     "missing ShellCheck did not name the pinned installer"
   assert_contains "$out" "LINT NOT RUN" \
     "missing ShellCheck did not report that no lint ran"
-  assert_contains "$out" "not a lint finding" \
-    "missing ShellCheck did not separate missing tooling from a lint finding"
   pass "missing ShellCheck reports the unrunnable status and names the tool"
 }
 

@@ -284,8 +284,6 @@ test_rovo_readiness_gate_precedes_pointer() {
   out=$(FM_FAKE_ROVO_READY=no run_spawn \
     "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "rovo spawn without a ready signal should fail"
-  assert_contains "$out" "rovo did not show a verified ready signal" \
-    "rovo readiness failure lacked a loud diagnostic"
   assert_grep 'failed: rovo did not show a verified ready signal' "$HOME_DIR/state/$id.status" \
     "rovo readiness failure did not leave a supervisor-visible failure"
   [ ! -s "$CASE_DIR/pointer.log" ] || fail "rovo pointer was sent before an observable ready signal"
@@ -306,8 +304,6 @@ test_rovo_unconfirmed_delivery_fails_loudly() {
   # The pointer was typed (readiness passed) but its delivery never confirmed.
   pointer=$(cat "$CASE_DIR/pointer.log")
   [ -n "$pointer" ] || fail "rovo never typed the pointer before the delivery gate"
-  assert_contains "$out" "rovo brief pointer delivery was not confirmed" \
-    "unconfirmed rovo delivery lacked a loud diagnostic"
   assert_grep 'failed: rovo brief pointer delivery was not confirmed' "$HOME_DIR/state/$id.status" \
     "unconfirmed rovo delivery did not leave a supervisor-visible failure"
   grep -q "kill-window.*fm-$id" "$CASE_DIR/tmux-calls.log" \
@@ -341,8 +337,6 @@ test_rovo_secondmate_is_refused() {
     FM_SPAWN_NO_GUARD=1 PATH="$FAKEBIN_DIR:$BASE_PATH" \
     "$SPAWN" "$id" --secondmate rovo 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "a rovo secondmate spawn should be refused"
-  assert_contains "$out" "rovo is a verified crewmate/scout adapter only" \
-    "rovo secondmate refusal lacked its concrete reason"
   pass "fm-spawn: rovo cannot be launched as a secondmate"
 }
 

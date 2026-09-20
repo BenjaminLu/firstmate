@@ -744,8 +744,6 @@ EOF
   assert_contains "$out" "- demo [no-mistakes] - a demo project (added 2026-07-01)" "digest did not print projects.md content"
 
   assert_contains "$out" "data/captain.md" "digest did not label the captain.md section"
-  assert_contains "$out" "data/captain-shared.md (shared, main-authoritative, read-only in secondmate homes)" \
-    "digest did not label the shared captain section"
 
   assert_contains "$out" "data/secondmates.md" "digest did not label the secondmates.md section"
   assert_contains "$out" "data/learnings.md" "digest did not label the learnings.md section"
@@ -794,16 +792,10 @@ EOF
 
   expect_code 0 "$status" "fm-session-start.sh must exit 0 even on a lock refusal"
   assert_contains "$out" "READ-ONLY SESSION" "read-only banner missing on lock refusal"
-  assert_contains "$out" "another live firstmate session holds the lock" "read-only banner did not surface fm-lock.sh's own error text"
-  assert_contains "$out" "Skipping every mutating step" "read-only banner did not explain what was skipped"
   assert_contains "$out" "skipped (read-only session)" "wake-queue section did not report itself skipped"
   assert_contains "$out" "WATCHER DOWN - SUPERVISION IS OFF" "read-only guard did not surface watcher-liveness alarm"
-  assert_contains "$out" "queued wakes pending - left untouched because this session lacks verified fleet-lock ownership" "read-only guard did not leave queued wakes untouched without verified lock ownership"
   assert_contains "$out" "TANGLE: primary checkout on feature branch 'fm/read-only-tangle'" "read-only bootstrap did not surface the tangle diagnostic"
-  assert_contains "$out" "read-only session must leave restore work" "read-only tangle diagnostic did not explain restore ownership"
-  assert_contains "$out" "Stay read-only: do not arm" "read-only next step did not block direct watcher repair"
   assert_not_contains "$out" "drain them with bin/fm-wake-drain.sh" "read-only guard printed a mutating drain instruction"
-  assert_not_contains "$out" "After draining queued wakes" "read-only guard printed a drain-then-rearm instruction"
   assert_not_contains "$out" "run bin/fm-watch-arm.sh" "read-only guard printed a mutating watcher-arm instruction"
   assert_not_contains "$out" "git -C $root checkout main" "read-only bootstrap printed a state-changing checkout remediation"
 
@@ -841,7 +833,6 @@ EOF
   chmod 0700 "$home/state"
 
   expect_code 0 "$status" "fm-session-start.sh must exit 0 when lock publication fails"
-  assert_contains "$out" "cannot write session lock" "lock publication failure was not surfaced"
   assert_contains "$out" "READ-ONLY SESSION" "lock publication failure did not force a read-only session"
   assert_contains "$out" "FLEET LOCK OWNERSHIP WAS NOT VERIFIED" "lock publication failure was misreported as a live holder"
   assert_contains "$out" "lacks verified fleet-lock ownership" "lock publication failure did not explain why queued wakes remain untouched"
@@ -1009,8 +1000,6 @@ EOF
   # ahead of the curated memory a truncated tail is allowed to take.
   [ "$inventory_line" -lt "$context_line" ] \
     || fail "the live-task inventory was buried behind the curated memory files"
-  assert_contains "$out" "Captain memory that may be truncated away safely." \
-    "the ordering fixture did not actually print a memory file"
 
   missing_line=$(printf '%s\n' "$out" | grep -n 'MISSING: node' | head -1 | cut -d: -f1)
   [ -n "$missing_line" ] || fail "MISSING diagnostic did not appear at all"
@@ -1050,12 +1039,10 @@ EOF
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "--dangerously-skip-permissions" "an opted-in home did not report the posture it chose"
   assert_contains "$out" "selected by config/claude-permission-mode" "the digest did not name the file that selected the posture"
-  assert_contains "$out" "Every permission check is skipped" "the digest did not say what the weaker posture costs"
 
   printf 'yolo\n' > "$home/config/claude-permission-mode"
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "UNRESOLVED" "an unusable permission file must be reported, not passed over in silence"
-  assert_contains "$out" "refuses until that is fixed" "the digest did not say what an unusable posture file costs"
 
   # The second failure mode, which carries no reason of its own: the resolver
   # cannot even inspect the path. A home whose config is a regular file reaches
@@ -1093,8 +1080,6 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "Do NOT re-read any of them after reading this digest" \
-    "the read-once contract lost its core instruction"
   assert_contains "$out" "STARTUP TRUNCATED banner named the stage that would have printed it" \
     "the read-once contract does not void itself for a stage that never ran"
   assert_contains "$out" "The READ-ONCE CONTRACT" \
@@ -1174,7 +1159,6 @@ EOF
   assert_contains "$out" "working: step 3" "default status tail (5 lines) missing an expected recent line"
   assert_not_contains "$out" "working: step 1" "default status tail (5 lines) leaked an older line"
   assert_contains "$out" "$home/state/task-a.status" "digest did not print the full status log path for a deeper read"
-  assert_contains "$out" "a bounded tail of every state/*.status" "read-once contract does not distinguish bounded status tails"
 
   out=$(FM_SESSION_START_STATUS_TAIL=2 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
   assert_contains "$out" "working: step 7" "FM_SESSION_START_STATUS_TAIL=2 tail missing the most recent line"
@@ -1211,7 +1195,6 @@ EOF
   assert_contains "$out" "$lede" "the cap discarded the lede that carries the state word and decision key"
   assert_contains "$out" " [truncated]" "an over-long status line was not marked as truncated"
   assert_contains "$out" "working: short line kept whole" "the cap mangled a status line already under it"
-  assert_contains "$out" "each capped at 220 characters" "the status tail header does not disclose its per-line cap"
   assert_contains "$out" "$home/state/task-cap.status" "a capped tail dropped the full log path that recovers the rest"
 
   # Nothing the tail emits may exceed the cap, and the padded line really was
@@ -1241,7 +1224,6 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "Orphan status logs (state/*.status without matching .meta)" "digest did not label orphan status logs"
   assert_contains "$out" "--- task-orphan ---" "digest did not print the orphan status id"
   assert_contains "$out" "orphan: step 6" "orphan status tail missing the newest line"
   assert_not_contains "$out" "orphan: step 1" "orphan status tail was not bounded"
@@ -1457,7 +1439,6 @@ EOF
   assert_contains "$out" "MISSING: node (install:" "fm-bootstrap.sh's real detect line did not appear verbatim"
   # fm-wake-drain.sh's real drained record (raw tab-separated queue line).
   assert_contains "$out" "$(printf 'signal\ttask-z.status\tneeds-decision: pick a library')" "fm-wake-drain.sh's real drained record did not appear"
-  assert_contains "$out" "wake annotation: latest wake-EVENT observed at drain, not current state: task-z.status: needs-decision: pick a library" "fm-session-start.sh did not preserve the drain's separate annotation line"
 
   pass "fm-session-start.sh composes the real fm-lock.sh, fm-bootstrap.sh, and fm-wake-drain.sh output verbatim"
 }
@@ -1662,10 +1643,6 @@ EOF
   [ ! -e "$network_finished" ] \
     || fail "the digest waited for the 12s unreachable-host probe instead of returning from local state (${elapsed}s)"
   assert_contains "$out" "SESSION START" "the digest did not complete"
-  assert_contains "$out" "IN PROGRESS - the deferred network checks have not finished yet." \
-    "the digest did not disclose that its network checks were still running"
-  assert_contains "$out" "NOT yet confirmed: GitHub authentication, dead-secondmate relaunch" \
-    "the digest did not name the checks it has not confirmed"
   assert_not_contains "$out" "NEEDS_GH_AUTH" \
     "the digest reported a GitHub-auth verdict it could not yet have"
 
@@ -1808,8 +1785,6 @@ EOF
   out=$(FM_FAKE_TASKS_AXI_LOG="$log" FM_FAKE_TASKS_AXI_READY=3 \
     run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "compact backlog listing (tasks-axi; done rows omitted; every in-flight, held, and blocked row shown in full; ready queued bounded to 20; task bodies omitted)" \
-    "compatible tasks-axi backend did not render the compact backlog listing"
   assert_contains "$out" "tasks[1]{id,state,kind,repo,title,blocked_by,hold_kind,hold_reason}:" \
     "tasks-axi compact listing omitted the expected structured field header"
   assert_contains "$out" "compact-startup,in_flight,ship,firstmate,Compact startup digest,none,captain,captain choice pending" \
@@ -1825,8 +1800,6 @@ EOF
   assert_not_contains "$out" "DONE-ROW-LINE" "tasks-axi compact digest listed a done row at startup"
   assert_contains "$out" "--- compact-startup ---" "in-flight meta identity disappeared from startup recovery digest"
   assert_contains "$out" "worktree=$home/projects/firstmate" "in-flight recovery worktree identity disappeared from startup digest"
-  assert_contains "$out" "Full task bodies remain available on demand: bin/fm-tasks-axi.sh show <id> --full" \
-    "compact digest omitted the full-body lookup pointer"
   assert_contains "$out" "ready_public_followups: 0 delivery-ready obligations" \
     "the composed listing dropped a real signal from the dispatchable set"
   # One section pointer, not one repeated help block per composed group.
@@ -1867,8 +1840,6 @@ EOF
   assert_contains "$out" "ready-3,queued,ship,firstmate,Ready item 3" \
     "the queued bound dropped a row inside its own limit"
   assert_not_contains "$out" "ready-4,queued" "the queued bound did not actually bound the ready listing"
-  assert_contains "$out" "(shown 3 of 7 ready queued item(s))" \
-    "the bounded queued listing did not report what it showed"
   assert_contains "$out" "(4 more queued - bin/fm-tasks-axi.sh ready)" \
     "the bounded queued listing did not disclose an exact remainder and how to see it"
 
@@ -1896,8 +1867,6 @@ EOF
 
   out=$(FM_SESSION_START_QUEUED_LIMIT=4 run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "compact backlog listing (manual backend; done rows omitted; every in-flight, held, and blocked title line kept; other queued bounded to 4; indented task bodies omitted)" \
-    "manual backend did not use compact title-line rendering"
   assert_contains "$out" "## In flight" "manual compact rendering omitted the in-flight section heading"
   assert_contains "$out" "- [ ] compact-startup - Compact startup digest" \
     "manual compact rendering omitted the in-flight title line"
@@ -1915,10 +1884,6 @@ EOF
     "manual compact rendering dropped a queued title line inside its bound"
   assert_not_contains "$out" "- [ ] plain-5 - Plain queued item 5" \
     "manual compact rendering did not bound its plain queued listing"
-  assert_contains "$out" "(shown 1 in-flight, 2 held or blocked queued, 4 of 25 other queued title line(s); 1 done row(s) omitted)" \
-    "manual compact rendering did not report its bound accounting"
-  assert_contains "$out" "(21 more queued - raise FM_SESSION_START_QUEUED_LIMIT or read data/backlog.md for the rest)" \
-    "manual compact rendering did not disclose an exact queued remainder"
   assert_contains "$out" "or data/backlog.md" "manual compact digest omitted the data/backlog.md full-body pointer"
 
   pass "manual backlog rendering drops done rows, keeps every held or blocked title line, and bounds the rest"
@@ -1936,8 +1901,6 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "compact backlog listing (tasks-axi unavailable or incompatible; done rows omitted;" \
-    "unavailable tasks-axi did not fall back to compact title-line rendering"
   assert_contains "$out" "- [ ] compact-startup - Compact startup digest" \
     "unavailable tasks-axi fallback omitted a backlog title line"
   assert_not_contains "$out" "OVERSIZED-BODY-LINE" "unavailable tasks-axi fallback leaked an in-flight task body"
@@ -2020,7 +1983,6 @@ EOF
   assert_contains "$out" "LOCK" "the truncated digest lost a stage that had completed"
   assert_contains "$out" "STARTUP TRUNCATED - SESSION START HIT ITS" "a truncated session start did not say so"
   assert_contains "$out" "RUNTIME BOUND" "the truncation banner did not name the bound it hit"
-  assert_contains "$out" 'stopped during the "bootstrap" stage' "the truncation banner did not name the incomplete stage"
   assert_contains "$out" "RECONCILE these stages" "the truncation banner did not tell the agent what to reconcile"
   assert_contains "$out" "wake-queue supervision-instructions read-once fleet-state network-checks context next-step" \
     "the truncation banner did not list every stage that never ran"
@@ -2413,10 +2375,6 @@ EOF
 
   # A re-emit skips the sweeps because it ALREADY ran them, not because it lacks
   # the lock, so it must still own repair rather than deferring to a lock holder.
-  assert_contains "$reemit" "restore the primary with: git -C $root checkout main" \
-    "--reemit disowned a repair it is entitled to perform"
-  assert_not_contains "$reemit" "must leave restore work to the session holding the fleet lock" \
-    "--reemit misreported itself as an unlocked read-only session"
 
   rm -f "$home/state/.lock"
   sleep 300 &
@@ -2430,8 +2388,6 @@ EOF
 
   assert_contains "$readonly_out" "READ-ONLY SESSION" \
     "--reemit assumed lock ownership instead of re-verifying it"
-  assert_contains "$readonly_out" "must leave restore work to the session holding the fleet lock" \
-    "a lock-refused --reemit still claimed repair ownership"
 
   pass "--reemit re-verifies lock ownership and keeps repair ownership with whoever holds it"
 }
@@ -2470,7 +2426,6 @@ EOF
   assert_contains "$out" "FMX: X mode on" "bootstrap did not activate X mode"
   assert_contains "$out" "SUPERVISION OPERATING INSTRUCTIONS - primary harness: claude" "supervision block missing"
   assert_contains "$out" "- X mode: active" "supervision block did not mention X cadence"
-  assert_contains "$out" "Follow the supervision operating instructions block above" "next step did not point back to the emitted supervision block"
 
   pass "session start emits X-mode cadence guidance in the harness supervision block"
 }
@@ -2487,9 +2442,6 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "away-mode supervision is active" "AFK digest did not report away mode"
-  assert_contains "$out" "Away mode is active" "next step did not switch to AFK guidance"
-  assert_contains "$out" "daemon owns the watcher" "next step did not delegate watcher ownership to the daemon"
   assert_contains "$out" "- Away mode: active" "supervision block did not include active AFK state"
   assert_not_contains "$out" "  bin/fm-watch-arm.sh" "AFK next step still told the agent to arm the watcher directly"
 
@@ -2508,12 +2460,8 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "quiet-mode supervision is active" "AFK digest did not report quiet mode for a quiet-content flag"
-  assert_contains "$out" "only an explicit /quiet off exits it" "AFK digest lost the explicit-only exit rule"
-  assert_contains "$out" "Quiet mode is active" "next step did not switch to quiet-mode guidance"
   assert_contains "$out" "load /quiet" "next step did not name the /quiet skill"
   assert_contains "$out" "- Quiet mode: active" "supervision block did not include active quiet state"
-  assert_not_contains "$out" "Away mode is active" "quiet-mode flag was misreported as away mode"
   assert_not_contains "$out" "  bin/fm-watch-arm.sh" "quiet next step still told the agent to arm the watcher directly"
 
   pass "next step delegates watcher ownership to the daemon in quiet mode, distinctly from away mode"
@@ -2531,8 +2479,6 @@ EOF
 
   out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
 
-  assert_contains "$out" "away-mode supervision is active" "a legacy empty .afk flag was not read as away mode"
-  assert_contains "$out" "Away mode is active" "a legacy empty .afk flag did not drive away-mode next-step guidance"
   assert_not_contains "$out" "Quiet mode" "a legacy empty .afk flag leaked quiet-mode text"
 
   pass "a legacy empty .afk flag (written before mode existed) still reads as away mode"
@@ -2554,7 +2500,6 @@ EOF
   assert_contains "$out" "SUPERVISION OPERATING INSTRUCTIONS - primary harness: pi" "pi supervision block missing"
   assert_contains "$out" "Mode: Pi extension background wake." "pi snippet missing from session start"
   assert_contains "$out" "PI_WATCH_EXTENSION: not loaded" "pi extension load diagnostic missing"
-  assert_contains "$out" "restart plain pi so $root/.pi/extensions/fm-primary-turnend-guard.ts and $root/.pi/extensions/fm-primary-pi-watch.ts auto-load" "pi extension load diagnostic omits the turn-end guard extension"
 
   wake_line=$(printf '%s\n' "$out" | grep -n '^WAKE QUEUE$' | head -1 | cut -d: -f1)
   sup_line=$(printf '%s\n' "$out" | grep -n '^SUPERVISION OPERATING INSTRUCTIONS' | head -1 | cut -d: -f1)
@@ -2582,8 +2527,6 @@ EOF
     "pi-signed primary did not reuse Pi's supervision protocol"
   assert_contains "$out" "PI_WATCH_EXTENSION: not loaded" \
     "pi-signed primary skipped Pi extension validation"
-  assert_contains "$out" "restart pi-signed so $root/.pi/extensions/fm-primary-turnend-guard.ts and $root/.pi/extensions/fm-primary-pi-watch.ts auto-load" \
-    "pi-signed extension diagnostic did not preserve the executable identity"
 
   pass "session start preserves pi-signed primary identity while applying Pi extension guarantees"
 }

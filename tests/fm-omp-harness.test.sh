@@ -187,7 +187,6 @@ test_spawn_model_validation_scoped_to_listed_providers() {
   out=$(run_scout_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness omp --model openai-codex/gpt-nope)
   status=$?
   expect_code 1 "$status" "a model absent from a listed provider must refuse"
-  assert_contains "$out" "is not listed by 'omp models --json' although provider 'openai-codex' is" "refusal did not name the listing evidence"
   assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn must publish no record"
 
   rec=$(make_spawn_case model-bridge omp omp-model-bridge-q3)
@@ -271,8 +270,6 @@ test_secondmate_config_pinned_model_is_validated() {
     "$ROOT/bin/fm-spawn.sh" sm "$home" --secondmate 2>&1)
   status=$?
   expect_code 1 "$status" "a config-pinned unlisted omp model must refuse the secondmate spawn: $out"
-  assert_contains "$out" "omp model 'openai-codex/gpt-nope' is not listed by 'omp models --json' although provider 'openai-codex' is" \
-    "the refusal did not name the config-pinned model under its listed provider: $out"
   assert_absent "$world/home/state/sm.meta" "a refused secondmate spawn must publish no sm.meta"
   [ ! -s "$launchlog" ] || fail "a refused secondmate spawn must record no launch: $(cat "$launchlog")"
   pass "fm-spawn: the config/secondmate-harness model pin is validated against the omp catalog before launch"

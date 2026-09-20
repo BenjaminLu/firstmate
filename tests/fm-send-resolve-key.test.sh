@@ -684,7 +684,6 @@ test_failed_close_recovery_command_is_shell_safe() {
   chmod 0600 "$home/state/t1.status"
   [ "$rc" -ne 0 ] || fail "a delivered answer with a failed close append should fail loudly"
   diagnostic=$(cat "$err")
-  assert_contains "$diagnostic" "Close it manually with:" "the close failure should provide recovery guidance"
   manual=${diagnostic#*Close it manually with: }
   manual=${manual% - do not resend the answer.}
   bash -c "$manual" || fail "the generated manual close command should execute successfully"

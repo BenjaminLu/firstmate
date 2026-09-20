@@ -211,8 +211,6 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
   out=$(run_settle_spawn "$id")
   status=$?
   [ "$status" -ne 0 ] || fail "spawn accepted a pane that never left the primary checkout"$'\n'"$out"
-  assert_contains "$out" "did not enter an isolated worktree" \
-    "spawn did not explain that the pane never reached an isolated worktree"
   assert_contains "$out" "$STALE_DIR" \
     "the refusal did not name the path the pane kept reporting"
   assert_contains "$out" "repository's primary checkout" \

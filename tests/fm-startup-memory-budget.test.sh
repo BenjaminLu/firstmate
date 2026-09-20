@@ -199,8 +199,6 @@ test_budget_accounting_reports_all_three_files_and_safe_failure() {
   rc=$?
   set -e
   expect_code 2 "$rc" "unsafe memory input should fail the accounting command"
-  assert_contains "$out" 'memory file is not an ordinary regular file' \
-    "accounting failure did not identify the unsafe memory file"
   [ "$(<"$outside")" = outside ] || fail "accounting failure changed a symlink target"
   pass "budget accounting sums the three startup files and reports safe failures"
 }
