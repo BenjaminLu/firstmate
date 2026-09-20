@@ -757,6 +757,14 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # sentence is still read, which cannot resurface that risk: a UUID or a dashed
 # date carries its dashes on the inside, where nothing strips them.
 #
+# A net is not a proof, and what it misses is part of its contract: an
+# uppercase sha (git resolves those), one embedded in a forge URL (inner
+# slashes are not stripped), and a 7-character abbreviation (below the floor)
+# all pass unchecked. Two of those usually mean the value came off the forge
+# and was therefore read, which is why the misses are cheaper than the false
+# refusals that closing them would cost - but read the boundary as a net, not
+# as coverage.
+#
 # The candidate scan runs before any of that, so the overwhelmingly common
 # steer - one that names no sha at all - pays a text pipeline and no git
 # process on a path every steer in the fleet crosses.
