@@ -489,7 +489,9 @@ It must be the LAST non-empty line so that a verdict quoted anywhere earlier in 
 
 APPROVED means: you would merge this as it stands. Unresolved defects mean NOT APPROVED. A finding you marked as widening scope does not by itself block approval - that one is firstmate's call, so say so beside it and let your verdict follow from the rest.
 
-You approve someone else's work, never your own: if this is a pull request you opened, you are in the wrong role - append \`blocked: asked to review my own change\` and stop.
+You approve someone else's work, never your own. Do not try to establish that from the pull request's author field: one fleet account opens and reviews everything here, so that field says your own account name on every pull request you will ever be asked to review, and reading it as \"this is mine\" would stop every review this fleet dispatches.
+
+The separation rests on who was dispatched, not on who pushed. You were dispatched to review this change and you are not the worker who wrote it. The only case that is genuinely yours is the one you know from this session: if YOU did the work on this branch, append \`blocked: asked to review my own change\` and stop.
 
 Post it with \`gh-axi pr review $PR_NUMBER $PR_REPO_FLAG --comment --body-file <your file>\`.
 Use \`--comment\`. Do not use \`--approve\` or \`--request-changes\`: GitHub refuses both on a pull request opened by the same account (\`Review Can not approve your own pull request\`), and one fleet account opens and reviews these, which is exactly why the verdict is that line of body text and why the merge gate reads it there.

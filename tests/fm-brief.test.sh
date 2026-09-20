@@ -1316,3 +1316,28 @@ test_review_brief_names_the_repository_on_every_gh_axi_call
 test_review_brief_writes_nothing_and_rules_on_nothing
 test_review_refuses_what_it_cannot_post_to
 test_ship_and_scout_carry_the_machine_boundary_rules
+
+# The reviewer brief must not tell a reviewer to stop because the pull request's
+# author field carries its own account name: one fleet account opens and reviews
+# everything, so that reading halts every review this fleet dispatches.
+test_review_brief_rests_separation_on_dispatch_not_authorship() {
+  local home brief
+  home="$TMP_ROOT/review-separation-home"
+  write_registry "$home"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-review-sep some-proj \
+    --review https://github.com/example/repo/pull/95 >/dev/null 2>&1 \
+    || fail "review-separation: scaffolding a review brief failed"
+  brief="$home/data/brief-review-sep/brief.md"
+  assert_present "$brief" "review-separation: no review brief was written"
+
+  assert_grep 'rests on who was dispatched' "$brief" \
+    "review-separation: the brief does not say what the separation actually rests on"
+  assert_grep "one fleet account opens and reviews everything here" "$brief" \
+    "review-separation: the brief does not warn against reading the author field"
+  grep -q 'if this is a pull request you opened' "$brief" \
+    && fail "review-separation: the brief still resolves self-review by authorship, which stops every reviewer"
+  pass "the review brief rests reviewer separation on dispatch rather than on the author field"
+}
+
+test_review_brief_rests_separation_on_dispatch_not_authorship

@@ -50,6 +50,8 @@ Three consequences are yours:
   This is not a round counter - nothing here counts attempts - it is the same single question asked of the head that would actually merge.
 - **The worker never approves, and never reviews its own pull request.**
   A worker that reports its own work approved has not been reviewed.
+  Nothing on the forge shows you this: one account opens and reviews everything, so the pull request's author field names that account whoever did the work.
+  It is true because you dispatched a reviewer that is not the worker, which makes it your obligation rather than a fact anyone can read off the pull request.
 - **A reviewer that declines is an answer, not a failure.**
   Rule on its findings as below, steer the fixes, and dispatch the next review against the new head.
 
