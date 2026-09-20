@@ -408,9 +408,15 @@ const errorText = [...byId.entries()]
   .flatMap(([, n]) => n.children.map((c) => c.textContent))
   .join(" ");
 const dispatchBar = byId.get("bb-dispatch") || new Node("div");
+const dispatchLimit = byId.get("bb-dispatch-limit");
 const dispatch = {
   is_queued: dispatchBar.className.split(/\s+/).includes("is-queued"),
   count: byId.get("bb-dispatch-count")?.textContent ?? "",
+  /* The bar's own refusal: its text, whether it is actually shown, and
+     whether anything would announce it. A refusal routed into the counter
+     slot would show up here as an empty limit with a wordy count. */
+  limit: dispatchLimit?.className?.includes("is-visible") ? dispatchLimit.textContent : "",
+  limit_role: dispatchLimit?.attributes?.role ?? "",
 };
 const empty = ch.children.filter((c) => c.className.includes("bb-empty")).map((c) => c.textContent);
 const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map((c) => c.textContent);

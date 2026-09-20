@@ -195,8 +195,16 @@ test_the_dispatch_bar_refuses_visibly_when_it_cannot_send() {
 
   [ "$(printf '%s' "$out" | jq -r '.dispatch.is_queued')" = "false" ] \
     || fail "the bar reported a dispatch it could not send: $out"
-  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.count')" "not recorded" \
-    "the bar did not say the dispatch was not recorded: $out"
+  # The refusal must be in the bar's OWN alert element, not written into the
+  # counter slot where it renders as muted uppercase micro-type and nothing
+  # announces it. Asserting the counter's text was green either way, which is
+  # why the first version of this test could not see the finding.
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "nothing was dispatched" \
+    "the bar's refusal is not in its own visible alert element: $out"
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit_role')" = "alert" ] \
+    || fail "the bar's refusal would not be announced: $out"
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.count')" = "1 picked for dispatch" ] \
+    || fail "the refusal was written into the counter slot instead of the alert: $out"
   [ "$(printf '%s' "$out" | jq -r '[.charted[].ack] | map(select(. != null)) | length')" = "0" ] \
     || fail "a row was acknowledged for a dispatch that was never sent: $out"
 

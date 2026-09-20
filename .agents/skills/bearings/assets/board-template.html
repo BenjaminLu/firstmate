@@ -475,6 +475,11 @@ body {
       <div class="bb-rows" id="bb-charted"></div>
       <div class="bb-dispatch" id="bb-dispatch" hidden>
         <span class="bb-dispatch__count" id="bb-dispatch-count">nothing picked</span>
+        <!-- A refusal is not a count. It gets the same dedicated element, alert
+             role and danger colour the card's refusal gets, because a refusal
+             the captain does not notice is the complaint this board exists to
+             answer arriving one layer up. -->
+        <span class="bb-limit" id="bb-dispatch-limit"></span>
         <span class="bb-queued" id="bb-dispatch-queued">
           <svg class="fm-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
           queued
@@ -548,6 +553,7 @@ __FM_BEARINGS_BOARD_DATA__
       freeform: "or answer in your own words…", queue_answer: "Queue answer", queued: "queued",
       too_long: "Answer is too long to queue (512 bytes maximum).",
       no_channel: "Not sent. This board has no way to reach firstmate from here, so your answer was not recorded.",
+      no_channel_dispatch: "Not sent. This board has no way to reach firstmate from here, so nothing was dispatched.",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
       empty_landed: "No recent completions are in the current baseline.", empty_charted: "Nothing is queued.",
@@ -578,6 +584,7 @@ __FM_BEARINGS_BOARD_DATA__
       freeform: "或用你自己的話回答…", queue_answer: "送出回答", queued: "已排入",
       too_long: "回答太長，無法排入（上限 512 bytes）。",
       no_channel: "沒有送出。這個看板從這裡連不到 firstmate，所以你的回答沒有被記錄。",
+      no_channel_dispatch: "沒有送出。這個看板從這裡連不到 firstmate，所以沒有派工。",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
       empty_landed: "目前基準內沒有最近完成的項目。", empty_charted: "沒有排隊中的工作。",
@@ -608,6 +615,7 @@ __FM_BEARINGS_BOARD_DATA__
       freeform: "或用你自己的话回答…", queue_answer: "提交回答", queued: "已排入",
       too_long: "回答太长，无法排入（上限 512 bytes）。",
       no_channel: "没有送出。这个看板从这里连不到 firstmate，所以你的回答没有被记录。",
+      no_channel_dispatch: "没有送出。这个看板从这里连不到 firstmate，所以没有派工。",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
       empty_landed: "目前基准内没有最近完成的项目。", empty_charted: "没有排队中的工作。",
@@ -1464,16 +1472,30 @@ __FM_BEARINGS_BOARD_DATA__
     var bar = document.getElementById("bb-dispatch");
     var barCount = document.getElementById("bb-dispatch-count");
     var barBtn = document.getElementById("bb-dispatch-btn");
+    var barLimit = document.getElementById("bb-dispatch-limit");
+    /* Roled here rather than in the markup, the same way the card roles its
+       own refusal, so a refusal has ONE shape on this page and a test can
+       prove it would be announced rather than trusting the markup. */
+    if (barLimit) barLimit.setAttribute("role", "alert");
     var anyPickable = false;
     clear(ch);
 
     function pickedIds() {
       return Array.prototype.map.call(ch.querySelectorAll(".bb-pick:checked"), function (c) { return c.value; });
     }
+    /* The counter says how many rows are picked. A refusal is a different
+       statement and goes to the bar's own alert element, never into the
+       counter slot: muted uppercase micro-type in a counter is not a refusal
+       the captain will see. */
     function refreshBar(limitMessage) {
       var n = pickedIds().length;
       barCount.textContent = limitMessage || (n ? t("pick_n", { n: n }) : t("pick_none"));
       barBtn.disabled = !n;
+    }
+    function barRefuse(message) {
+      if (!barLimit) return;
+      barLimit.textContent = message;
+      barLimit.className = "bb-limit" + (message ? " is-visible" : "");
     }
 
     if (!chartedQueued(data.charted).length && !chartedMoreQueued) {
@@ -1536,9 +1558,10 @@ __FM_BEARINGS_BOARD_DATA__
            not send, and no row may be acknowledged for one. */
         var sendDispatch = answerChannel();
         if (!sendDispatch) {
-          refreshBar(t("no_channel"));
+          barRefuse(t("no_channel_dispatch"));
           return;
         }
+        barRefuse("");
         sendDispatch(
           "Dispatch order - start this queued work now: " + ids.join(", "),
           { tag: "choice", text: "Dispatch: " + ids.join(", "), element: bar,
