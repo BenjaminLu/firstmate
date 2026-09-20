@@ -1161,6 +1161,94 @@ test_portable_serial_shards_partition_the_serial_lane() {
   pass "portable serial shards are a deterministic disjoint cover of the serial lane"
 }
 
+# The Herdr lane is required and hard-fails on a missing pin, so a script that
+# falls out of every shard is lost coverage on an otherwise green run. Same
+# disjoint-cover contract the serial shards carry, asserted the same way.
+test_real_herdr_shards_partition_the_herdr_family() {
+  local lanes count family shard shard_lane listed union dups
+  lanes=$("$RUNNER" --list-lanes)
+  count=$(printf '%s\n' "$lanes" | grep -c '^real-herdr-gated-[0-9]*of[0-9]*$')
+  [ "$count" -ge 2 ] || fail "expected at least two real-Herdr shard lanes, got $count"
+  printf '%s\n' "$lanes" | grep -q "^real-herdr-gated-1of${count}\$" \
+    || fail "Herdr shard lane names must carry the shard count ${count}: $lanes"
+
+  family=$("$RUNNER" --list --family real-herdr-gated | LC_ALL=C sort)
+  [ -n "$family" ] || fail "real-herdr-gated family selected no tests"
+  union=""
+  shard=1
+  while [ "$shard" -le "$count" ]; do
+    shard_lane="real-herdr-gated-${shard}of${count}"
+    listed=$("$RUNNER" --list --lane "$shard_lane")
+    [ -n "$listed" ] || fail "$shard_lane selected no tests"
+    union=$(printf '%s\n%s' "$union" "$listed")
+    shard=$((shard + 1))
+  done
+  union=$(printf '%s\n' "$union" | grep -v '^$' || true)
+
+  dups=$(printf '%s\n' "$union" | LC_ALL=C sort | uniq -d || true)
+  [ -z "$dups" ] || fail "real-Herdr shards run the same script twice: $dups"
+  [ "$(printf '%s\n' "$union" | LC_ALL=C sort)" = "$family" ] \
+    || fail "real-Herdr shards must exactly cover the real-herdr-gated family"
+
+  # Assignment is deterministic across invocations, so a rerun of one shard
+  # runs the same scripts the matrix believed it would.
+  [ "$("$RUNNER" --list --lane "real-herdr-gated-1of${count}")" = \
+    "$("$RUNNER" --list --lane "real-herdr-gated-1of${count}")" ] \
+    || fail "real-Herdr shard membership must be deterministic"
+  pass "real-Herdr shards are a deterministic disjoint cover of the required Herdr family"
+}
+
+test_real_herdr_shard_lane_refusals() {
+  local tmp count rc other
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-herdr-lane.XXXXXX")
+  count=$("$RUNNER" --list-lanes | grep -c '^real-herdr-gated-[0-9]*of[0-9]*$')
+  other=$((count + 1))
+
+  # A CI matrix grown or shrunk without the runner's own count must fail the
+  # lane loudly rather than run part of a required suite and report success.
+  set +e
+  "$RUNNER" --list --lane "real-herdr-gated-1of${other}" >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "mismatched Herdr shard count must refuse (exit 2), got $rc"
+  [ ! -s "$tmp/out" ] || fail "mismatched Herdr shard count must not list tests"
+  grep -Fq "configured for $count" "$tmp/err" \
+    || fail "Herdr mismatch refusal must name the configured count: $(cat "$tmp/err")"
+
+  set +e
+  "$RUNNER" --list --lane "real-herdr-gated-$((count + 1))of${count}" >"$tmp/out2" 2>"$tmp/err2"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "out-of-range Herdr shard index must refuse (exit 2), got $rc"
+  grep -Fq "outside 1..$count" "$tmp/err2" \
+    || fail "Herdr range refusal message missing: $(cat "$tmp/err2")"
+
+  rm -rf "$tmp"
+  pass "real-Herdr shard lanes refuse a count or index the runner is not configured for"
+}
+
+test_real_herdr_hint_coverage_is_reported_and_bounded() {
+  local out herdr unhinted shards
+  # The Herdr lane is small and extremely top-heavy, so one unmeasured script is
+  # a large share of it and lands on a guess. Assert the guard reports that
+  # share rather than trusting the hint table to stay fresh on its own.
+  out=$("$RUNNER" --check-coverage)
+  assert_contains "$out" "herdr_shards=" "coverage guard must report the Herdr shard count"
+  assert_contains "$out" "herdr_unhinted=" "coverage guard must report the unmeasured Herdr share"
+  herdr=$(printf '%s\n' "$out" | sed -n 's/.*[^_]herdr=\([0-9][0-9]*\).*/\1/p')
+  unhinted=$(printf '%s\n' "$out" | sed -n 's/.*herdr_unhinted=\([0-9][0-9]*\).*/\1/p')
+  shards=$(printf '%s\n' "$out" | sed -n 's/.*herdr_shards=\([0-9][0-9]*\).*/\1/p')
+  [ -n "$herdr" ] && [ -n "$unhinted" ] && [ -n "$shards" ] \
+    || fail "coverage summary must carry numeric Herdr counts: $out"
+  [ "$herdr" -gt 0 ] || fail "real-Herdr family must be non-empty, got $herdr"
+  [ "$shards" -ge 2 ] || fail "Herdr lane must be split across at least two shards, got $shards"
+  [ "$unhinted" -le "$herdr" ] \
+    || fail "unmeasured count $unhinted exceeds the Herdr family size $herdr"
+  [ "$((unhinted * 100))" -le "$((herdr * 15))" ] \
+    || fail "$unhinted of $herdr real-Herdr scripts lack a measured hint; refresh them"
+  pass "coverage guard reports and bounds the unmeasured real-Herdr share"
+}
+
 test_portable_serial_hint_coverage_is_reported_and_bounded() {
   local out serial unhinted
   # Shards are packed from measured duration hints, so an unmeasured script is
@@ -1675,11 +1763,17 @@ test_herdr_ci_family_run_has_a_step_timeout() {
   json=$(ruby -ryaml -rjson -e '
 doc = YAML.load_file(ARGV[0])
 job = doc.fetch("jobs").fetch("tests-herdr")
-step = job.fetch("steps").find { |s|
-  s.is_a?(Hash) && s["name"] == "Run real-Herdr family (serial, required)"
+# The step name carries the shard number, so match its stable prefix rather
+# than a literal that a matrix rename would silently break. Only top-level
+# step names are considered, so a nested with.name artifact key cannot
+# masquerade as the step contract.
+steps = job.fetch("steps").select { |s|
+  s.is_a?(Hash) && s["name"].to_s.start_with?("Run real-Herdr shard")
 }
-raise "missing family-run step" if step.nil?
-raise "family-run step has no timeout-minutes" unless step.key?("timeout-minutes")
+raise "missing suite-run step" if steps.empty?
+raise "more than one suite-run step" unless steps.length == 1
+step = steps.first
+raise "suite-run step has no timeout-minutes" unless step.key?("timeout-minutes")
 puts JSON.generate(
   "job_timeout" => job.fetch("timeout-minutes"),
   "step_timeout" => step.fetch("timeout-minutes")
@@ -1693,9 +1787,9 @@ puts JSON.generate(
   [ "$job_timeout" = 75 ] \
     || fail "tests-herdr job backstop must stay 75 minutes, got $job_timeout"
   [ "$step_timeout" = 20 ] \
-    || fail "family-run step timeout must be 20 minutes, got $step_timeout"
+    || fail "Herdr suite-run step timeout must be 20 minutes, got $step_timeout"
   [ "$step_timeout" -lt "$job_timeout" ] \
-    || fail "family-run step timeout must be below the job backstop"
+    || fail "Herdr suite-run step timeout must be below the job backstop"
   pass "Herdr CI family-run step times out at 20 min under a 75 min job backstop"
 }
 
@@ -1770,6 +1864,9 @@ test_portable_parallel_lanes_stay_duration_balanced
 test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_hint_coverage_is_reported_and_bounded
 test_portable_serial_shard_lane_refusals
+test_real_herdr_shards_partition_the_herdr_family
+test_real_herdr_shard_lane_refusals
+test_real_herdr_hint_coverage_is_reported_and_bounded
 test_jobs_requires_proven_isolated
 test_jobs_admits_a_concurrent_safe_family
 test_unmapped_new_test_never_inherits_family_concurrency

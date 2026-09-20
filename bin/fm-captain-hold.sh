@@ -28,7 +28,7 @@
 #   fm-captain-hold.sh bind <source-id> [<legacy-origin> | --any-origin]
 #   fm-captain-hold.sh unbind <source-id>
 #   fm-captain-hold.sh binding <source-id>
-#   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...)
+#   fm-captain-hold.sh complete <origin-id> (--none | <task-id>...) [--drop-unrecoverable <task-id>]...
 #   fm-captain-hold.sh verify <origin-id>
 #   fm-captain-hold.sh open <task-id> [--identity] [--distinguish-absent]
 #   fm-captain-hold.sh diverged
@@ -72,12 +72,26 @@
 # question gates over minting a new row. The command records a UTC `Captain
 # hold set:` timestamp in the task body: repeating an active hold preserves the
 # existing timestamp, while re-holding released work starts a new lifecycle.
-# A task already closed is refused rather than reopened. `--until` records the
+# A task already closed is refused rather than reopened, whether the active
+# backlog still lists it or done_keep has retired it to the archive. `--until` records the
 # captain's own deferral date through `tasks-axi hold --until`, so a "revisit
 # later" answer is stored as a date instead of a live card.
 #
 # `answer` records the captain's exact words and resolves the call in the same
-# act. It requires a non-empty captain decision file of at most 8192 bytes and
+# act. It will not CLOSE a row whose worker record is still live, because
+# bin/fm-teardown.sh owns that row's completion transition and a row closed
+# ahead of it strands the worker outside the ordinary lifecycle; the refusal
+# names `--release`, which records the same answer, lifts the hold, and leaves
+# the row for cleanup; `reconcile close` is held to the same rule but has no
+# second mode, so its refusal names standing the worker down first. Both guard
+# only a NEW close: an interrupted one always finishes, or it could be neither
+# completed nor unblocked. Every channel inherits the rule, because `answers`
+# resolves through this same command.
+# When done_keep has already retired the row, `answer` resolves it out of the
+# archive and replays the recorded answer idempotently, since tasks-axi cannot
+# reopen or update an archived row and reading the active file alone reported
+# a landed answer as absent.
+# It requires a non-empty captain decision file of at most 8192 bytes and
 # writes a resolution block while preserving the leading hold-set stamp until
 # the close succeeds (the previous body is preserved and archived through
 # tasks-axi --archive-body). It closes a question with `tasks-axi done` - or,
@@ -151,6 +165,28 @@
 # stores. `binding` prints the stored value verbatim and `answers` accepts it,
 # so the process-event runner's feed seam is unchanged.
 #
+# THE ONE UNREPAIRABLE STATE. A captain-held row closed outside this owner
+# records no answer, and once done_keep retires it the row is read-only to
+# tasks-axi, so the captain's words can never be added afterwards. Both
+# consumers of a recorded answer are stuck at once: the completion gate can
+# never pass, and a pending reconcile request points at a row no command can
+# act on. Nothing here repairs it - manufacturing a record, or letting the
+# gate skip what it cannot find, would clear a call nobody answered. Instead
+# every refusal says so plainly and names the same ending: raise the call
+# again as its own task, and retire the stranded obligations deliberately -
+# `reconcile close` retires a request whose subject is unrecoverable (a
+# request points at a call, it is never the call), and
+# `complete --drop-unrecoverable <task-id>` removes an attested key, refusing
+# unless the row that entry resolves to is archived with no captain answer.
+# A drop is deliberate, narrow, and recorded - as `decision_dropped=` beside
+# the keys it leaves, and as a `dropped` event in the fleet event log, which
+# outlives the cleanup that removes that metadata - while the archived row
+# afterwards retains the closure but not, by itself, the fact that it was
+# retired deliberately. That is the opposite of the silent skip the filed
+# reasoning ruled out, and strictly safer than the `--force` cleanup that was
+# previously the only way out, because that skips every other entry in the
+# same inventory too.
+#
 # `complete` is the shared investigation and visual-review completion gate.
 # It attests, in the origin task's metadata, the reviewed inventory of
 # captain-held tasks that carry the origin's unresolved captain calls.
@@ -163,6 +199,13 @@
 # `captain-held [key=...]` status close naming the inventory. Later review
 # passes may add ids. A post-teardown visual review can complete against the
 # surviving report and tasks without recreating task state.
+# Durability is read across BOTH halves of a markdown backlog, because
+# done_keep retires a closed row out of the active file into the archive beside
+# it and a reader of the active file alone would report an answered call as
+# simply gone. Retention is not a resolution, though: an archived row counts
+# only through the captain answer recorded in it, while an archived row with no
+# answer, and an id in neither file, both stay refusals - nothing passes this
+# gate merely by having disappeared.
 # `verify` is read-only and is called by scout teardown, so teardown cannot
 # erase a source before this gate has succeeded: every recorded inventory
 # entry must still be durable and no keyed status decision may be open.
@@ -556,11 +599,145 @@ resolution_block() {  # <mode>
     "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
 }
 
+# The archived half of this home's backlog, for a row done_keep has retired out
+# of the active file. Absence here is still absence: it resolves NOTHING on its
+# own and only ever supplies the closed row's own recorded body.
+# 0 prints the body, 1 means the id is not archived here, and 2 means the
+# archive could not be read at all - kept distinct from 1 all the way up,
+# because a store this reader cannot open must never be spent as proof that
+# the row it was asked about does not exist. The unreadable path names itself
+# on stderr, which is the only channel that survives the command substitutions
+# every caller reaches it through.
+archived_row_body() {  # <task-id>; prints the archived row's body
+  local data status=0 body
+  data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
+  body=$(fm_backlog_archived_row "$data" "$1") || status=$?
+  [ "$status" -eq 0 ] || return "$status"
+  printf '%s' "$body"
+}
+
+# THE ONE STATE NOTHING CAN REPAIR, AND WHERE IT ENDS.
+#
+# A captain-held row closed outside this owner records no answer, and once
+# done_keep retires it the row is read-only to tasks-axi - update, reopen and
+# show all refuse it. So the captain's words can never be added afterwards,
+# and every consumer that keys off a recorded answer is stuck at once: the
+# gate can never pass, and a pending reconcile request points at a row no
+# command can act on. One state, several consumers; the ending has to be
+# shared, honest, and reachable, and it must not be silence.
+#
+# What it is NOT is repairable. Manufacturing a record here, or letting the
+# gate skip what it cannot find, would clear a captain call nobody answered -
+# the one remedy the filed reasoning ruled out. So the ending is: raise the
+# call again as its own task, and retire the unrecoverable obligations
+# DELIBERATELY - `reconcile close` retires a request whose subject is gone
+# (the request is a pointer to a call, never the call itself), and
+# `complete --drop-unrecoverable` removes an attested key, refusing unless
+# the row that entry resolves to really is archived without an answer. A drop
+# is deliberate, narrow, and recorded - in the origin's metadata, and as a
+# `dropped` event in the fleet event log, which outlives the cleanup it
+# unblocks - while the archived row afterwards retains the closure but not,
+# by itself, the fact that it was retired deliberately.
+ARCHIVED_UNANSWERABLE="was closed outside this owner with no captain answer recorded, and retention has archived its row, so the answer can no longer be recorded on it (tasks-axi cannot write an archived row)"
+
+# Raising the call again is the ending every refusal above points at, so the
+# command it prints has to be the one that works. `hold` needs --reason
+# always and --title to create, and an ellipsis after --title hides the
+# mandatory flag behind what reads like optional detail, so both are printed
+# with what each is FOR - the shape the scout remedy settled on.
+RAISE_AGAIN_REMEDY="raise the call again as its own task with bin/fm-captain-hold.sh hold <new-id> --title \"<the question>\" --reason \"<why the captain owns it>\", where --title creates the new row and --reason is what the board shows as the call"
+
+# 0 when <task-id> is exactly that state: archived, carrying no resolution
+# record. 1 for anything else, so every caller keeps its ordinary refusal.
+archived_without_answer() {  # <task-id>
+  local id=$1 archived status=0
+  ! task_show "$id" || return 1
+  archived=$(archived_row_body "$id") || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
+  [ "$status" -eq 0 ] || return 1
+  ! body_has_resolution_record "$archived"
+}
+
 # Durable state of one captain call: an active captain hold (annotations
-# surviving even when a date gate has expired) or a recorded captain answer.
-verify_hold_durable() {  # <task-id>
-  local id=$1 show state hold_kind body
-  task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+# surviving even when a date gate has expired) or a recorded captain answer,
+# wherever this home's backlog keeps the row - the active file or its archive.
+# The command that retires an unrecoverable entry differs by WHERE the
+# refusal is raised. From `verify` the inventory is already stored, so
+# `complete <origin> --drop-unrecoverable <entry>` is complete in itself.
+# From inside `complete`'s own durability loop the metadata has not been
+# written yet - that happens after the loop this refusal aborts - so the
+# entry lives only in the argument list the caller just typed, and the
+# remedy has to repeat it. Printing the shorter form there names a command
+# guaranteed to answer "there is nothing to drop", which is the whole of R20
+# and R25.
+#
+# BUILT WHERE THE STATE IS, AND ONLY THERE. The command is evaluated against
+# the whole of the origin's state - every unrecoverable entry, the entries
+# that survive, and whether an open status decision remains - and none of
+# that is visible from the single entry a durability check aborted on. Built
+# there, it named one entry at a time (so two of them printed each other
+# forever) and it could empty the inventory into a refusal about `--none`
+# nobody typed. So the durability checks no longer fail on this state at all:
+# they report it, and the two commands that own the whole inventory compose
+# one remedy once, from everything they can see.
+# A RECONSTRUCTION MUST BE A SUPERSET OF THE INVOCATION IT ANSWERS, EXCEPT
+# FOR ARGUMENTS WHOSE INCLUSION WOULD CHANGE WHAT THE REMEDY MEANS. Every
+# argument it omits for any other reason is work that following the message
+# undoes, and when the omitted argument is what made progress the sequence
+# cannot converge. The drops this very run already resolved and validated are
+# exactly that: enter through the singular form the tracked documentation
+# names, with two stranded calls, and a reply that forgot the flag just typed
+# printed the other one, forever.
+#
+# The one exception this command takes, stated here rather than only where it
+# is taken: `--none` is accepted beside a drop and is never carried into the
+# reconstruction. It does not mean "as you were" - it attests that nothing
+# further is waiting on the captain - so repeating it would turn a remedy for
+# one stranded entry into a claim about the whole inventory, and in the state
+# where the inventory ends up empty the guard refuses it outright. The
+# reasoning for that refusal lives with command_verify's transfer remedy,
+# which declines to name `--none` for the same reason.
+drop_remedy_command() {  # <origin> <supplied-ids> <already-dropped> <entries> <survivors> <open>
+  local origin=$1 supplied=$2 already=$3 entries=$4 survivors=$5 open=$6 flags='' entry extra=''
+  for entry in $already $entries; do
+    case "$flags" in
+      *" --drop-unrecoverable $entry"|*" --drop-unrecoverable $entry "*) continue ;;
+    esac
+    flags="$flags --drop-unrecoverable $entry"
+  done
+  # Dropping every attested entry while a status decision is still open
+  # leaves the inventory empty, which the empty-inventory guard refuses. The
+  # way through is to raise the question again and attest the new row in the
+  # same command - and the dead ids must stay as positional arguments, or
+  # they are in neither the metadata nor this command line and cannot be
+  # dropped at all. Nothing said that before; it was discoverable only by
+  # reading the source.
+  if [ -z "$survivors" ] && [ -n "$open" ]; then
+    extra=' <new-id>'
+  fi
+  printf 'bin/fm-captain-hold.sh complete %s%s%s%s' \
+    "$origin" "${supplied:+ $supplied}" "$extra" "$flags"
+}
+
+# 3 = this entry is archived with no captain answer: the one state no command
+# can repair. Reported rather than failed, so the caller can collect every
+# such entry before composing a single remedy that retires all of them.
+verify_hold_durable() {  # <task-id> [<attested-entry>]
+  local id=$1 entry=${2:-$1} show state hold_kind body archived archived_status=0
+  if ! task_show "$id"; then
+    # Retention is not a resolution. An archived row proves durability only
+    # through the captain answer recorded in it; an archived row without one,
+    # and an id in neither file, both stay refusals, so nothing is cleaned away
+    # on the strength of having disappeared.
+    archived=$(archived_row_body "$id") || archived_status=$?
+    [ "$archived_status" -ne 2 ] \
+      || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
+    [ "$archived_status" -eq 0 ] \
+      || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+    body_has_resolution_record "$archived" || return 3
+    return 0
+  fi
   show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
@@ -791,11 +968,27 @@ resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
     2) return 2 ;;
     124) return 124 ;;
   esac
+  # Every live lookup has been tried, so a row retention retired can now answer
+  # without ever shadowing one still listed. verify_hold_durable still decides
+  # whether what it found is durable, and an archive that cannot be read stops
+  # the resolution rather than reading as an unknown id.
+  rc=0
+  archived_row_body "$entry" >/dev/null || rc=$?
+  case "$rc" in
+    0) printf '%s archived' "$entry"; return 0 ;;
+    2) return 2 ;;
+  esac
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
     legacy=$(legacy_hold_id "$origin" "$entry")
-    fail "no captain-held task $entry and no migrated hold for it in this home's configured backlog (data directory $DATA); the nearest legacy identity $legacy also resolves to nothing"
+    rc=0
+    archived_row_body "$legacy" >/dev/null || rc=$?
+    case "$rc" in
+      0) printf '%s archived' "$legacy"; return 0 ;;
+      2) return 2 ;;
+    esac
+    fail "no captain-held task $entry in this home's configured backlog or its archive, and no migrated hold for it (data directory $DATA); the nearest legacy identity $legacy also resolves to nothing"
   fi
-  fail "no captain-held task $entry and no migrated hold for it in this home's configured backlog (data directory $DATA)"
+  fail "no captain-held task $entry in this home's configured backlog or its archive, and no migrated hold for it (data directory $DATA)"
 }
 
 body_hold_set_timestamp() {  # <decoded-task-body>
@@ -844,6 +1037,8 @@ write_hold_set_stamp() {  # <task-id> <shown-body> <timestamp> <preserve-existin
 # answered, which is not the same as an unknown entry and must not be spent
 # as absence. On success prints "<id> <how>" so the caller can keep the
 # attestation evidence.
+# 3 means the entry is unrecoverable; the caller collects those and composes
+# one remedy. Every other failure still stops the command where it happens.
 verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
   local origin=$1 entry=$2 resolved resolve_status=0
   resolved=$(resolve_entry "$origin" "$entry") || resolve_status=$?
@@ -853,7 +1048,30 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
     exit "$resolve_status"
   fi
   printf '%s\n' "$resolved"
-  verify_hold_durable "${resolved%% *}"
+  # The attested spelling travels with the resolved row, so a refusal names
+  # the entry the metadata actually holds rather than an identity the caller
+  # cannot find there.
+  verify_hold_durable "${resolved%% *}" "$entry"
+}
+
+# The one refusal both inventory owners raise for unrecoverable entries, from
+# everything they can see rather than from the entry that tripped first.
+fail_unrecoverable_entries() {  # <origin> <supplied> <already-dropped> <entries> <survivors> <open>
+  local entries=$4 label
+  label=$(printf '%s' "$entries" | tr ' ' ',')
+  fail "attested captain call(s) $label $ARCHIVED_UNANSWERABLE; they are not durable captain calls and never can be. To carry each question forward, $RAISE_AGAIN_REMEDY; then retire them from the inventory with $(drop_remedy_command "$@"), which records the drops rather than skipping them"
+}
+
+# The closed-task refusal above, for a row the active backlog no longer lists.
+# Without it that refusal held only where Done entries are kept, so a home
+# with retention off got a second row under an id the archive already owns.
+refuse_archived_reuse() {  # <task-id>
+  local id=$1 status=0
+  archived_row_body "$id" >/dev/null || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "this home's backlog archive could not be consulted while checking whether task $id already exists; the diagnostic above names what could not be read"
+  [ "$status" -ne 0 ] \
+    || fail "task $id is already closed and archived; a new captain call needs its own task"
 }
 
 # --- the stored board card ---------------------------------------------------
@@ -973,6 +1191,11 @@ command_hold() {
       [ "$existing_title" = "$title" ] || fail "existing task $id has a different title"
     fi
   else
+    # A closed row done_keep has retired is still that id's row. Creating a
+    # second one here would put one id in both halves of the backlog and
+    # silently skip the refusal above, which this file publishes as a
+    # guarantee rather than as a retention-dependent one.
+    refuse_archived_reuse "$id"
     [ -n "$title" ] || fail "--title is required to create task $id"
     validate_one_line title "$title"
     if [ -z "$repo" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then
@@ -1079,6 +1302,85 @@ apply_pending_retained_artifact() {  # <task-id>
   esac
 }
 
+# --- cleanup owns a live worker's completion transition ----------------------
+#
+# bin/fm-backlog-transition-lib.sh states the invariant: while `state/<id>.meta`
+# exists, that row is In flight and the script holding the worker's record owns
+# the paired backlog transition; `state/<id>.backlog-close` marks the one window
+# where cleanup has already claimed the close and only its replay is pending.
+# Closing such a row here takes that transition away from cleanup, and the
+# worker is then unreachable by the ordinary lifecycle: it cannot be cleaned up,
+# it holds its isolated copy, and it re-alarms as stale indefinitely.
+#
+# What is refused is the CLOSE, never what the captain or the evidence said.
+# Each caller supplies its OWN remedy, because the two have different ways out
+# and a shared sentence would send one of them to do something that command
+# rejects: `answer` has a second close mode and names `--release`, while
+# `reconcile close` has only one outcome and names standing the worker down
+# first - cleanup keeps a captain-held row open and still held, so the
+# reconciliation lands unchanged afterwards. Every channel inherits the rule,
+# because the keyed intake resolves through `answer`.
+# The two records this reads are the transition library's own, so the library
+# reads them: fm_backlog_record_present authorizes the parent directory and
+# names by what it found. The distinction matters in the permissive direction
+# - anything it cannot vouch for would otherwise read as "no worker", which is
+# the answer that recreates the stranding - so a present-but-unusable record
+# is its own outcome (2) rather than a silent no.
+worker_record_live() {  # <task-id>; 0 live, 1 no live worker, 2 unreadable
+  local meta="$STATE/$1.meta" pending="$STATE/$1.backlog-close"
+  { [ -e "$meta" ] || [ -L "$meta" ]; } || return 1
+  fm_backlog_record_present "$meta" "task record" "$STATE" || return 2
+  { [ -e "$pending" ] || [ -L "$pending" ]; } || return 0
+  # Cleanup has already claimed this row's close; only its replay is pending.
+  fm_backlog_record_present "$pending" "pending-close record" "$STATE" || return 2
+  return 1
+}
+
+refuse_close_over_live_worker() {  # <task-id> <remedy>
+  local status=0
+  worker_record_live "$1" || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "${FM_BACKLOG_TRANSITION_ERROR:-the worker record for task $1 cannot be read}; whether cleanup still owns this row's completion cannot be established, so the close is refused rather than risked"
+  [ "$status" -eq 0 ] || return 0
+  fail "task $1 still has a live worker record at $STATE/$1.meta, and cleanup owns that row's completion; $2"
+}
+
+ANSWER_LIVE_WORKER_REMEDY="record the captain's answer with --release, which keeps the answer and lifts the hold while leaving the row for cleanup to close"
+
+# The reconcile remedy names standing the worker down, and on a SCOUT that
+# step has a prerequisite of its own: cleanup refuses until the captain-call
+# completion gate has passed. A scout is the one kind where that is true, and
+# the kind the stranding this guard exists to prevent actually happened to.
+# The kind comes from the worker record the guard has already found; a record
+# naming no kind gets the plain remedy.
+#
+# WHY THE SCOUT REMEDY NAMES NO COMMAND LINE. It used to, and it was rewritten
+# three times: the gate's form is `complete <origin-id> <task-id>` with both
+# ids the same value here, which reads like a typo and needed explaining, and
+# the steps after it are cleanup and then the reconciliation. A refusal naming
+# another command is a claim about a second program's reachable states, made
+# from a place that cannot see them - and every refusal on this path that
+# named a command with its own argument grammar has been wrong at least once,
+# while every one that named a flag on the command in hand has been right
+# first time. So this one names the state and the owner of the procedure, the
+# way bin/fm-teardown.sh's own refusal in the same area does; that one has
+# never needed correcting.
+#
+# The steps are stated in the order they must be run, because a reader works
+# left to right: naming cleanup first and its prerequisite afterwards sends
+# that reader into bin/fm-teardown.sh's own refusal before they reach the
+# sentence telling them not to, which is what rule 3 exists to prevent -
+# arrived at through prose instead of a command line.
+reconcile_live_worker_remedy() {  # <task-id>
+  local id=$1 kind=''
+  [ ! -f "$STATE/$id.meta" ] || kind=$(meta_value "$STATE/$id.meta" kind)
+  if [ "$kind" = scout ]; then
+    printf '%s' "this is a scout, so cleanup has a prerequisite of its own: inventory its report and any visual review through bin/fm-captain-hold.sh, then stand the worker down with bin/fm-teardown.sh - cleanup keeps this row open and still held for the captain - and then reconcile close it with the same evidence"
+    return 0
+  fi
+  printf '%s' "stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"
+}
+
 close_answered() {  # <task-id> <release-0-or-1>
   if [ "$2" = 1 ]; then
     tasks_axi unhold "$1" >/dev/null
@@ -1088,9 +1390,39 @@ close_answered() {  # <task-id> <release-0-or-1>
   fi
 }
 
+# Where the backlog keeps a row this command just closed. done_keep can retire
+# it in the same breath as the close - a home that keeps no Done entries
+# retires it immediately - so reading only the active file turns a completed
+# answer into a false failure. A row in NEITHER file is real corruption and
+# still stops the command.
+closed_row_present() {  # <task-id>; 0 active (sets TASK_SHOW_OUTPUT), 1 archived
+  local id=$1 status=0
+  task_show "$id" && return 0
+  archived_row_body "$id" >/dev/null || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "this home's backlog archive could not be consulted while confirming the close of $id; the diagnostic above names what could not be read"
+  [ "$status" -eq 0 ] \
+    || fail "task $id disappeared after closing: it is in neither this home's configured backlog nor its archive (data directory $DATA)"
+  return 1
+}
+
+# The decoded body of that row, from whichever half of the backlog holds it.
+closed_row_body() {  # <task-id>
+  local id=$1
+  if closed_row_present "$id"; then
+    decode_shown_value "$(show_field "$TASK_SHOW_OUTPUT" body)" \
+      || fail "could not decode the closed body for $id"
+    return 0
+  fi
+  archived_row_body "$id"
+}
+
 remove_interrupted_answer_stamp() {  # <task-id>
   local id=$1 show body existing tmp
-  task_show_or_fail "$id" "task $id disappeared after closing"
+  # An archived row keeps its recorded body and tasks-axi cannot update it, so
+  # there is no ordering left to normalize once retention has retired it.
+  closed_row_present "$id" || return 0
+  show=$TASK_SHOW_OUTPUT
   body=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the closed body for $id"
   existing=$(body_hold_set_timestamp "$body")
@@ -1110,6 +1442,38 @@ remove_interrupted_answer_stamp() {  # <task-id>
   rm -f -- "$tmp"
 }
 
+# An answer whose row done_keep already retired. The close landed and the
+# record is durable in the archive, so the honest reply is the very same
+# idempotent replay the active-row branch gives - and only for the same
+# decision and the same close. tasks-axi cannot reopen or update an archived
+# row, so nothing else is offered here. Reading the active file alone instead
+# reported a landed answer as absent from the backlog, which is the exact
+# shape of the bug this whole change is about.
+replay_archived_answer() {  # <task-id> <release-0-or-1>
+  local id=$1 release=$2 archived status=0 recorded_mode occurrence
+  archived=$(archived_row_body "$id") || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
+  [ "$status" -eq 0 ] \
+    || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+  body_has_resolution_record "$archived" \
+    || fail "task $id $ARCHIVED_UNANSWERABLE; $RAISE_AGAIN_REMEDY, and record the captain's answer there"
+  [ "$(recorded_decision_digest "$archived" || true)" = "$DECISION_DIGEST" ] \
+    || fail "archived task $id records a different captain decision"
+  recorded_mode=$(recorded_resolution_mode "$archived" || true)
+  closed_answer_replay_mode_compatible "$recorded_mode" "$archived" \
+    || fail "archived task $id records this resolution with mode ${recorded_mode:-unknown}; it is not a captain-answer replay"
+  [ "$release" = 0 ] \
+    || fail "archived task $id is already closed; --release cannot reopen it"
+  occurrence=$(resolution_record_count "$archived")
+  if [ "$recorded_mode" = repaired ]; then
+    publish_parent_resolution_then_retire "$id" "$occurrence" "answered (repaired)"
+  else
+    publish_parent_resolution_then_retire "$id" "$occurrence" answered
+  fi
+  printf 'answered: %s\n' "$id"
+}
+
 command_answer() {
   local id=${1:-} decision_file='' release=0 show state hold_kind body outcome recorded_mode occurrence
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
@@ -1126,7 +1490,10 @@ command_answer() {
   load_decision "$decision_file"
   acquire_task_control_lock "$id"
   require_tasks_axi
-  task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  if ! task_show "$id"; then
+    replay_archived_answer "$id" "$release"
+    return $?
+  fi
   show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
@@ -1196,14 +1563,18 @@ command_answer() {
       printf '%s: %s\n' "$outcome" "$id"
       return 0
     fi
+    # Only a NEW close is guarded, and only here - below the replay above.
+    # A close already recorded and interrupted has nowhere else to finish, and
+    # its recorded mode also refuses the remedy, so guarding it would leave a
+    # task that can be neither completed nor unblocked: exactly the dead end
+    # this whole change exists to remove.
+    [ "$release" = 1 ] || refuse_close_over_live_worker "$id" "$ANSWER_LIVE_WORKER_REMEDY"
     write_resolution_record "$id" "$outcome" "$body"
     if ! close_answered "$id" "$release"; then
       fail "could not close answered captain-held task $id"
     fi
     remove_interrupted_answer_stamp "$id"
-    task_show "$id" || fail "task $id disappeared after closing"
-    show=$TASK_SHOW_OUTPUT
-    body_has_resolution_record "$(show_field "$show" body)" \
+    body_has_resolution_record "$(closed_row_body "$id")" \
       || fail "captain-held task $id did not retain its durable resolution record"
     publish_parent_resolution_then_retire "$id" "$occurrence" "$outcome"
     printf '%s: %s\n' "$outcome" "$id"
@@ -1323,6 +1694,7 @@ sanitize_reconcile_provenance() {
 command_answers() {
   local origin='' source='' row rest key answer label mode id show state hold_kind body digest legacy_digest legacy_key
   local recorded_digest recorded_mode occurrence tmp err closed=0 skipped=0 reason release_flag tab=$'\t'
+  local archived_status
   local resolve_rc
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1379,7 +1751,7 @@ command_answers() {
     id=${id%% *}
     if [ "$resolve_rc" = 2 ]; then
       reason=$(tr -d '\n' < "$err")
-      printf 'skipped: %s (migrated-hold scan refused%s)\n' "$key" "${reason:+: $reason}"
+      printf 'skipped: %s (resolution refused%s)\n' "$key" "${reason:+: $reason}"
       skipped=$((skipped + 1))
       continue
     fi
@@ -1409,11 +1781,28 @@ command_answers() {
     if [ -n "$legacy_key" ]; then
       legacy_digest=$(sha256_text "$(legacy_keyed_decision_text "$source" "$legacy_key" "$answer" "$label")")
     fi
-    task_show "$id" || { printf 'skipped: %s (absent)\n' "$id"; skipped=$((skipped + 1)); continue; }
-    show=$TASK_SHOW_OUTPUT
-    state=$(show_field "$show" state)
-    hold_kind=$(show_field_value "$show" hold_kind)
-    body=$(show_field "$show" body)
+    if task_show "$id"; then
+      show=$TASK_SHOW_OUTPUT
+      state=$(show_field "$show" state)
+      hold_kind=$(show_field_value "$show" hold_kind)
+      body=$(show_field "$show" body)
+    else
+      # Retention already retired this row. Its recorded body is the durable
+      # one, and reading it here is what makes a re-delivered answer the
+      # idempotent `closed:` it is on any other home instead of a skipped
+      # count for work that is already recorded.
+      archived_status=0
+      body=$(archived_row_body "$id") || archived_status=$?
+      [ "$archived_status" -ne 2 ] \
+        || fail "this home's backlog archive could not be consulted for $id; the diagnostic above names what could not be read"
+      if [ "$archived_status" -ne 0 ]; then
+        printf 'skipped: %s (absent)\n' "$id"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      state='done'
+      hold_kind=''
+    fi
     recorded_digest=$(recorded_decision_digest "$body" || true)
     recorded_mode=$(recorded_resolution_mode "$body" || true)
     if body_has_resolution_record "$body" \
@@ -1527,6 +1916,7 @@ publish_parent_resolution_then_retire() {  # <task-id> <occurrence> <note>
 
 command_reconcile_requests() {
   local source_id='' source='' origin row id note provenance show show_status=0 created=0 skipped=0 tab=$'\t'
+  local archived_status
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --source-id) shift; source_id=${1:-} ;;
@@ -1559,7 +1949,19 @@ command_reconcile_requests() {
       fail "the backlog backend exceeded its read bound reading $id"
     fi
     if [ -z "$show" ]; then
-      printf 'refused: %s (absent)\n' "$id"
+      # A row done_keep has retired is closed, not absent. Both outcomes are a
+      # refusal, so nothing changes about what the board gets - but the reason
+      # is what the reader acts on, and "absent" sends them to look where the
+      # row is not.
+      archived_status=0
+      archived_row_body "$id" >/dev/null || archived_status=$?
+      [ "$archived_status" -ne 2 ] \
+        || fail "this home's backlog archive could not be consulted for $id; the diagnostic above names what could not be read"
+      if [ "$archived_status" -eq 0 ]; then
+        printf 'refused: %s (already closed)\n' "$id"
+      else
+        printf 'refused: %s (absent)\n' "$id"
+      fi
       skipped=$((skipped + 1))
     elif [ "$(show_field "$show" state)" = "done" ]; then
       printf 'refused: %s (already closed)\n' "$id"
@@ -1632,7 +2034,11 @@ reconcile_close() {
   reconcile_request_read "$id" \
     || fail "task $id has no pending board-created reconcile request"
   require_tasks_axi
-  task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  if ! task_show "$id"; then
+    replay_archived_reconciliation "$id"
+    return $?
+  fi
+  show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
   body=$(show_field "$show" body)
@@ -1664,13 +2070,51 @@ reconcile_close() {
       || fail "task $id records this resolution with mode ${recorded_mode:-unknown}; it is not a reconciliation retry"
     occurrence=$(resolution_record_count "$body")
   else
+    # New reconciliations only; an interrupted one finishes here as above.
+    refuse_close_over_live_worker "$id" "$(reconcile_live_worker_remedy "$id")"
     write_resolution_record "$id" reconciled "$body"
   fi
   close_answered "$id" 0 || fail "could not close reconciled captain-held task $id"
   remove_interrupted_answer_stamp "$id"
-  task_show_or_fail "$id" "task $id disappeared after closing"
-  body_has_resolution_record "$(show_field "$show" body)" \
+  body_has_resolution_record "$(closed_row_body "$id")" \
     || fail "captain-held task $id did not retain its durable resolution record"
+  publish_parent_hold "$id" "$occurrence" resolved reconciled
+  [ "$PARENT_HOLD_PUBLISHED" = 1 ] \
+    || fail "could not publish the reconciled captain-held task $id to its parent"
+  reconcile_request_retire "$id"
+  printf 'reconciled: %s\n' "$id"
+}
+
+# The reconciliation twin of replay_archived_answer, for the same reason and
+# with the same limits: a close that landed and whose request retirement did
+# not leaves a row done_keep may already have retired, and reading the active
+# file alone reported it absent - which left the pending request with no
+# command able to retire it and a person with nothing to do but delete a
+# private state file by hand.
+replay_archived_reconciliation() {  # <task-id>
+  local id=$1 archived status=0 occurrence
+  archived=$(archived_row_body "$id") || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
+  [ "$status" -eq 0 ] \
+    || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+  if ! body_has_resolution_record "$archived"; then
+    # The third terminal outcome of verify-then-decide: the re-check found the
+    # subject unrecoverable. Neither `close` nor `note` can be honest about a
+    # row nothing can write, so the obligation is retired rather than left
+    # pointing at it - the request is a pointer to a captain call, never the
+    # call itself, and the gate goes on refusing that call independently.
+    # Nonzero, because a person still owes the call a new task.
+    reconcile_request_retire "$id" \
+      || fail "could not retire the reconcile request for unrecoverable task $id"
+    printf 'unrecoverable: %s\n' "$id"
+    fail "task $id $ARCHIVED_UNANSWERABLE; its reconcile request is retired because nothing can act on that row. To carry the question forward, $RAISE_AGAIN_REMEDY"
+  fi
+  [ "$(recorded_decision_digest "$archived" || true)" = "$DECISION_DIGEST" ] \
+    || fail "archived task $id records a different resolution; it cannot be reconciled again"
+  [ "$(recorded_resolution_mode "$archived" || true)" = reconciled ] \
+    || fail "archived task $id was not closed by reconciliation"
+  occurrence=$(resolution_record_count "$archived")
   publish_parent_hold "$id" "$occurrence" resolved reconciled
   [ "$PARENT_HOLD_PUBLISHED" = 1 ] \
     || fail "could not publish the reconciled captain-held task $id to its parent"
@@ -1681,7 +2125,7 @@ reconcile_close() {
 # The still-active outcome. The hold survives, so the call stays the captain's
 # and stays on Captain's Call, now carrying what the re-check found.
 reconcile_note() {
-  local id=${1:-} note_file='' note show body stamp tmp note_digest marker
+  local id=${1:-} note_file='' note show body stamp tmp note_digest marker note_archived_status
   [ "$#" -ge 1 ] || { usage >&2; exit 2; }
   shift
   while [ "$#" -gt 0 ]; do
@@ -1704,7 +2148,23 @@ reconcile_note() {
   require_tasks_axi
   command_open "$id" \
     || fail "task $id is not an open captain call; a note cannot keep a closed call open"
-  task_show_or_fail "$id" "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  # command_open refuses a closed row one line above, so a retired row cannot
+  # reach this read today - but an unreachable wrong message is a wrong
+  # message waiting for its guard to move, and the previous attempt at this
+  # one claimed both halves had been read when only the active file had. So
+  # the archive is actually consulted here, and the two outcomes are told
+  # apart: a retired row cannot take a note, because tasks-axi will not write
+  # an archived row, and a row in neither half is gone.
+  if ! task_show "$id"; then
+    note_archived_status=0
+    archived_row_body "$id" >/dev/null || note_archived_status=$?
+    [ "$note_archived_status" -ne 2 ] \
+      || fail "this home's backlog archive could not be consulted for captain-held task $id; the diagnostic above names what could not be read"
+    [ "$note_archived_status" -ne 0 ] \
+      || fail "captain-held task $id is closed and archived, so a note cannot be added to it (tasks-axi cannot write an archived row)"
+    fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
+  fi
+  show=$TASK_SHOW_OUTPUT
   body=$(decode_shown_value "$(show_field "$show" body)") \
     || fail "could not decode the existing body for $id"
   note_digest=$(sha256_text "$note")
@@ -1736,9 +2196,76 @@ reconcile_note() {
   printf 'still-open: %s\n' "$id"
 }
 
+# The attested entry a --drop-unrecoverable argument names. Every refusal that
+# sends a reader here names the entry the metadata holds, but a caller may
+# equally pass the row id that entry resolves to, so both spellings are
+# accepted and the ENTRY is what is judged and removed. An argument matching
+# two candidate entries is refused rather than guessed at.
+#
+# The candidate list is the inventory this command is BUILDING - the metadata
+# it already holds plus whatever ids this same command line supplied - not
+# the metadata alone. The gate refuses at the first attestation of an
+# unrecoverable call and tells the reader to drop it, but `complete` writes
+# decision_keys= only after the loop that refusal aborts, so on that path the
+# entry is never in the metadata yet. Matching the metadata alone made the
+# printed remedy guaranteed to answer "there is nothing to drop" on exactly
+# the path it was printed for.
+# Exit 0 prints the entry, 1 means nothing here names that row, and 2 means
+# the question could not be settled - a backend that never answered, or an
+# archive that cannot be read. Those three stay apart all the way up: spending
+# an unreadable store as "not attested" is the defect this whole branch
+# exists to stop, and it would tell a reader their entry is not attested when
+# it is. Nothing is silenced either: resolve_entry and archived_row_body
+# already name the archive on stderr, which their own contract calls the only
+# channel surviving these command substitutions, so it reaches the operator.
+attested_entry_for_drop() {  # <origin> <candidate-comma-list> <given>; prints the entry
+  local origin=$1 previous=$2 given=$3 given_row entry entry_row match='' rc
+  if list_has_key "$previous" "$given"; then
+    printf '%s' "$given"
+    return 0
+  fi
+  rc=0
+  given_row=$(resolve_entry "$origin" "$given") || rc=$?
+  case "$rc" in
+    0) ;;
+    2|124) return 2 ;;
+    *) return 1 ;;
+  esac
+  given_row=${given_row%% *}
+  for entry in $(printf '%s\n' "$previous" | tr ',' ' '); do
+    rc=0
+    entry_row=$(resolve_entry "$origin" "$entry") || rc=$?
+    case "$rc" in
+      0) ;;
+      2|124) return 2 ;;
+      *) continue ;;
+    esac
+    entry_row=${entry_row%% *}
+    [ "$entry_row" = "$given_row" ] || continue
+    [ -z "$match" ] || return 1
+    match=$entry
+  done
+  [ -n "$match" ] || return 1
+  printf '%s' "$match"
+}
+
+# Remove <drop> from a comma-separated key list, exactly.
+keys_without() {  # <comma-list> <space-separated-drops>
+  local keys=$1 drops=$2 kept='' entry drop found
+  for entry in $(printf '%s\n' "$keys" | tr ',' ' '); do
+    found=0
+    for drop in $drops; do
+      [ "$entry" != "$drop" ] || { found=1; break; }
+    done
+    [ "$found" = 1 ] || kept="${kept}${kept:+,}$entry"
+  done
+  printf '%s' "$kept"
+}
+
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc resolved
-  local resolved_how attested_by_prefix=''
+  local resolved_how attested_by_prefix='' drops='' none=0 dropped_previous='' drop dropped_entries=''
+  local drop_candidates='' drop_status=0 entry_status=0 unrecoverable=''
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -1752,24 +2279,67 @@ command_complete() {
   fi
   require_tasks_axi
   origin_exists_here "$origin" || fail "origin $origin is not owned by the active home $FM_HOME"
-  if [ "$#" -eq 1 ] && [ "$1" = --none ]; then
-    supplied=''
-  else
-    while [ "$#" -gt 0 ]; do
-      [ "$1" != --none ] || fail "--none cannot be combined with task ids"
-      validate_slug task-id "$1"
-      supplied="${supplied}${supplied:+ }$1"
-      shift
-    done
-  fi
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --none) none=1 ;;
+      --drop-unrecoverable)
+        shift
+        [ -n "${1:-}" ] || fail "--drop-unrecoverable needs the attested task id to remove"
+        validate_slug task-id "$1"
+        drops="${drops}${drops:+ }$1"
+        ;;
+      -*) usage >&2; exit 2 ;;
+      *)
+        validate_slug task-id "$1"
+        supplied="${supplied}${supplied:+ }$1"
+        ;;
+    esac
+    shift
+  done
+  [ "$none" = 0 ] || [ -z "$supplied" ] || fail "--none cannot be combined with task ids"
+  [ "$none" = 1 ] || [ -n "$supplied" ] || [ -n "$drops" ] || { usage >&2; exit 2; }
   if [ "$has_meta" = 1 ]; then
     previous=$(meta_value "$meta" decision_keys)
+    dropped_previous=$(meta_value "$meta" decision_dropped)
   fi
+  # A drop is refused unless the entry is attested here AND the row it
+  # RESOLVES to is the unrepairable state: archived, carrying no captain
+  # answer. Resolving first is what keeps the drop judging the same row the
+  # gate judges - an attested entry can be a pre-collapse identity that names
+  # one row while the raw string names another or none, and judging the raw
+  # string either refuses a real dead end or drops a call that is still open,
+  # held and unanswered while recording that it was unrecoverable.
+  drop_candidates=$(sorted_key_union "$previous" "$supplied")
+  for drop in $drops; do
+    drop_status=0
+    entry=$(attested_entry_for_drop "$origin" "$drop_candidates" "$drop") || drop_status=$?
+    [ "$drop_status" -ne 2 ] \
+      || fail "whether task $drop names an entry of origin $origin's captain-call inventory could not be established (the diagnostic above names what could not be read); nothing is dropped on a read that did not answer"
+    [ "$drop_status" -eq 0 ] \
+      || fail "task $drop is neither in origin $origin's attested captain-call inventory nor supplied on this command line; there is nothing to drop"
+    resolved=$(resolve_entry "$origin" "$entry") || exit $?
+    resolved=${resolved%% *}
+    archived_without_answer "$resolved" \
+      || fail "attested captain call $entry (row $resolved) is not an unrecoverable archived row; only a row the archive holds with no captain answer can be dropped, and every other entry must be answered or stay"
+    dropped_entries="${dropped_entries}${dropped_entries:+ }$entry"
+  done
   keys=$(sorted_key_union "$previous" "$supplied")
+  [ -z "$dropped_entries" ] || keys=$(keys_without "$keys" "$dropped_entries")
+  status_file="$STATE/$origin.status"
+  open=$(status_open_decisions "$status_file")
   if [ -n "$keys" ]; then
+    # Every entry is checked before anything is refused, so the remedy below
+    # names all the unrecoverable ones at once. Composing it from the first
+    # one alone is what made two of them print each other forever.
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
-      resolved=$(verify_entry_durable "$origin" "$entry") || exit $?
+      entry_status=0
+      resolved=$(verify_entry_durable "$origin" "$entry") || entry_status=$?
+      if [ "$entry_status" -eq 3 ]; then
+        unrecoverable="${unrecoverable}${unrecoverable:+ }$entry"
+        continue
+      fi
+      [ "$entry_status" -eq 0 ] || exit "$entry_status"
       resolved_how=${resolved##* }
       resolved=${resolved%% *}
       if [ "$resolved_how" = migrated-prefix ]; then
@@ -1778,18 +2348,35 @@ command_complete() {
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
+    [ -z "$unrecoverable" ] \
+      || fail_unrecoverable_entries "$origin" "$supplied" "$dropped_entries" \
+        "$unrecoverable" "$(keys_without "$keys" "$unrecoverable")" "$open"
   fi
 
-  status_file="$STATE/$origin.status"
-  open=$(status_open_decisions "$status_file")
   if [ -n "$open" ] && [ -z "$keys" ]; then
     fail "origin $origin still has open captain decisions in its status stream; hold a captain task for what remains, or answer them, before attesting --none"
   fi
 
   if [ "$has_meta" = 1 ]; then
+    if [ -n "$dropped_entries" ]; then
+      # The drop is recorded beside the keys it leaves, so an inventory that
+      # shrank says why and when rather than simply being shorter than it was.
+      # It records the ATTESTED spelling, which is what decision_keys held.
+      dropped_previous=$(sorted_key_union "$dropped_previous" "$dropped_entries")
+      printf 'decision_dropped=%s\n' "$dropped_previous" >> "$meta"
+    fi
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
       printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$meta"
     fi
+    # The metadata record above is removed by the very cleanup a drop
+    # unblocks, and the archive is byte-identical across a drop - a retired
+    # call and one nobody ever noticed are indistinguishable there. So the
+    # durable trace is one event per dropped entry in the fleet event log,
+    # which survives cleanup. It is published after the record it describes,
+    # and like every other publication here it can never fail this command.
+    for drop in $dropped_entries; do
+      publish_board_event 0 dropped "$drop" --owner "$origin" || true
+    done
     fm_lock_release "$CAPTAIN_META_LOCK"
     CAPTAIN_META_LOCK_HELD=0
 
@@ -1811,12 +2398,13 @@ $open
 EOF
     fi
   fi
-  printf 'complete: %s captain-call inventory reviewed%s%s\n' "$origin" "${keys:+ ($keys)}" \
+  printf 'complete: %s captain-call inventory reviewed%s%s%s\n' "$origin" "${keys:+ ($keys)}" \
+    "${dropped_entries:+ [dropped as unrecoverable: $(printf '%s' "$dropped_entries" | tr ' ' ',')]}" \
     "${attested_by_prefix:+ [attested through the configured prefix: $attested_by_prefix]}"
 }
 
 command_verify() {
-  local origin=${1:-} meta reviewed keys entry key open resolved
+  local origin=${1:-} meta reviewed keys entry key open resolved entry_status=0 unrecoverable=
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   meta="$STATE/$origin.meta"
@@ -1825,18 +2413,42 @@ command_verify() {
   reviewed=$(meta_value "$meta" decisions_reviewed)
   [ "$reviewed" = 1 ] || fail "origin $origin has no completed captain-call inventory"
   keys=$(meta_value "$meta" decision_keys)
+  open=$(status_open_decisions "$STATE/$origin.status")
   if [ -n "$keys" ]; then
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
-      verify_entry_durable "$origin" "$entry" >/dev/null
+      entry_status=0
+      verify_entry_durable "$origin" "$entry" >/dev/null || entry_status=$?
+      if [ "$entry_status" -eq 3 ]; then
+        unrecoverable="${unrecoverable}${unrecoverable:+ }$entry"
+        continue
+      fi
+      [ "$entry_status" -eq 0 ] || exit "$entry_status"
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
+    # Nothing is supplied or dropped on a verify, so the remedy names only
+    # what the metadata holds.
+    [ -z "$unrecoverable" ] \
+      || fail_unrecoverable_entries "$origin" "" "" "$unrecoverable" \
+        "$(keys_without "$keys" "$unrecoverable")" "$open"
   fi
-  open=$(status_open_decisions "$STATE/$origin.status")
   while IFS=$'\t' read -r key _verb _summary; do
     [ -n "$key" ] || continue
-    fail "open captain decision $origin/$key is not transferred to the captain-held inventory; re-run complete"
+    # "re-run complete" names no form that works: complete requires two
+    # arguments and answers one with its whole usage block. So the remedy is
+    # the command with its arguments filled in, and the two states this fires
+    # in need different ones. With an inventory stored, re-attesting it
+    # records the transfer. With nothing stored there is nothing to transfer
+    # INTO, and the empty-inventory guard above refuses `--none` in exactly
+    # that state, so the only way forward is to hold a call first.
+    # `--none` is not named in either branch: in the empty state it is
+    # refused, and in the stored state it would attest the stored inventory
+    # rather than the one the reader is looking at.
+    if [ -n "$keys" ]; then
+      fail "open captain decision $origin/$key is not transferred to the captain-held inventory; re-run bin/fm-captain-hold.sh complete $origin $(printf '%s' "$keys" | tr ',' ' ') - the first id names the worker whose inventory is attested and the rest are the captain calls already in it, and re-running records the transfer"
+    fi
+    fail "open captain decision $origin/$key is not transferred to the captain-held inventory, and this origin has attested no captain call to transfer it to; hold one with bin/fm-captain-hold.sh hold <new-id> --title \"<the question>\" --reason \"<why the captain owns it>\", then bin/fm-captain-hold.sh complete $origin <new-id>"
   done <<EOF
 $open
 EOF
@@ -1972,7 +2584,7 @@ EOF
 # printed to stderr, because a mechanical closer must never read "cannot tell"
 # as permission to close.
 command_open() {  # <task-id> [--identity] [--distinguish-absent]
-  local id='' identity=0 distinguish_absent=0 data state root file backend show shown_body
+  local id='' identity=0 distinguish_absent=0 data state root file backend show shown_body archived_status
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --identity) identity=1 ;;
@@ -2030,6 +2642,26 @@ command_open() {  # <task-id> [--identity] [--distinguish-absent]
     return 1
   fi
   if [ "$FM_BACKLOG_ROW_RESULT" = not_found ]; then
+    # Not listed is not the same as not there. A row done_keep has retired is
+    # a CLOSED row, so the honest answer is 1, "no longer an open captain
+    # call" - and the difference is visible: bin/fm-bearings-board.sh keeps a
+    # card on a 3 precisely because absent might still hide a live call, so an
+    # archived row answered as absent leaves the captain a card he can never
+    # dismiss.
+    archived_status=0
+    archived_row_body "$id" >/dev/null || archived_status=$?
+    if [ "$archived_status" -eq 2 ]; then
+      # This predicate's own contract, twelve lines up: 2 means the answer
+      # could not be established, so a caller that must never close a live
+      # call can treat "cannot tell" as its own case. An archive that cannot
+      # be read is exactly that, and collapsing it into "not an open call"
+      # would answer a question this read did not settle. archived_row_body
+      # has already named the archive on stderr, which is the only channel
+      # that survives its command substitutions.
+      printf 'fm-captain-hold: this home'"'"'s backlog archive could not be consulted for %s; the diagnostic above names what could not be read\n' "$id" >&2
+      exit 2
+    fi
+    [ "$archived_status" -ne 0 ] || return 1
     [ "$distinguish_absent" = 0 ] || return 3
     return 1
   fi

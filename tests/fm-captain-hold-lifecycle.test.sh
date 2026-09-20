@@ -188,6 +188,37 @@ run_shim() {  # <home> <command args...>
     FM_CONFIG_OVERRIDE="$home/config" "$ROOT/bin/fm-decision-hold.sh" "$@"
 }
 
+# The bin/fm-captain-hold.sh command a refusal names, as its own argument list
+# and nothing more: everything from the FIRST mention of the script to
+# whichever clause ends the step - a comma or a dashed aside. Read back
+# rather than retyped, so a test cannot quietly pass while the refusal names
+# a prefix of the command that actually works.
+named_captain_hold_command() {  # <refusal text> [<phrase the command follows>]
+  local named
+  named=$(printf '%s\n' "$1" | LC_ALL=C awk -v after="${2:-}" '
+    {
+      if (after != "") {
+        a = index($0, after)
+        if (a == 0) next
+        $0 = substr($0, a + length(after))
+      }
+      lead = "bin/fm-captain-hold.sh "
+      i = index($0, lead)
+      if (i == 0) next
+      rest = substr($0, i + length(lead))
+      cut = 0
+      c = index(rest, ",")
+      d = index(rest, " - ")
+      if (c > 0) cut = c - 1
+      if (d > 0 && (cut == 0 || d - 1 < cut)) cut = d - 1
+      if (cut > 0) rest = substr(rest, 1, cut)
+      print rest
+      exit
+    }')
+  [ -n "$named" ] || return 1
+  printf '%s\n' "$named"
+}
+
 write_origin_meta() {  # <home> <id> [kind]
   local home=$1 id=$2 kind=${3:-scout}
   fm_write_meta "$home/state/$id.meta" \
@@ -4123,15 +4154,1162 @@ test_retained_body_keeps_its_utf8_bytes() {
   pass "cleanup preserves every byte of a retained body's non-ASCII characters"
 }
 
+# --- a closed captain call the backlog has archived --------------------------
+#
+# Retention moves a closed row out of the active backlog into the archive the
+# backlog itself writes. A gate that reads only the active backlog then reports
+# an answered call as simply gone, and a finished scout it was attested for can
+# never be cleaned up. The archive is the same durable store, so the gate reads
+# it; what it must NOT do is treat absence as a pass, because that would let a
+# genuine unresolved call be cleaned away in silence.
+test_completion_gate_reads_an_answered_call_out_of_the_archive() {
+  local home id call plain show
+  home=$(make_home archived-answer)
+  id=sample-archived-origin
+  call=sample-archived-call
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate the archived answer" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the archived-answer origin"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Archived answer\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose the archived option" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not hold the archived call"
+  printf 'Fund the clock seam.\n' > "$home/archived-decision.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/archived-decision.txt" >/dev/null \
+    || fail "could not answer the archived call"
+
+  # An ordinary finished task, closed with no captain answer at all, archived
+  # beside it. Nothing about being archived may make it look durable.
+  plain=sample-archived-plain
+  tasks_in "$home" add "$plain" "Ordinary finished work" --kind ship --repo sample >/dev/null \
+    || fail "could not create the plain archived fixture"
+  tasks_in "$home" "done" "$plain" >/dev/null || fail "could not close the plain fixture"
+  tasks_in "$home" prune --keep 0 >/dev/null || fail "could not archive the answered call"
+
+  if tasks_in "$home" show "$call" --full >/dev/null 2>&1; then
+    fail "the fixture did not archive the answered call out of the active backlog"
+  fi
+  assert_grep "$call" "$home/data/done-archive.md" "the answered call never reached the archive"
+
+  run_captain "$home" complete "$id" "$call" > "$home/complete.out" 2> "$home/complete.err" \
+    || fail "the completion gate lost an answered call to retention: $(cat "$home/complete.err")"
+  run_captain "$home" verify "$id" >/dev/null 2> "$home/verify.err" \
+    || fail "the completion gate could not verify an archived answer: $(cat "$home/verify.err")"
+  run_teardown "$home" "$id" >/dev/null 2> "$home/archived-teardown.err" \
+    || fail "cleanup stayed blocked behind an archived answer: $(cat "$home/archived-teardown.err")"
+
+  write_origin_meta "$home" "$id"
+  if run_captain "$home" complete "$id" "$plain" > "$home/plain.out" 2> "$home/plain.err"; then
+    fail "the completion gate attested an archived close that carries no captain answer"
+  fi
+  assert_contains "$(cat "$home/plain.err")" "no captain answer recorded" \
+    "the archived ordinary close was refused for some other reason than the missing answer"
+  if run_captain "$home" complete "$id" sample-never-existed \
+    > "$home/absent.out" 2> "$home/absent.err"; then
+    fail "the completion gate attested a task that exists in neither the backlog nor the archive"
+  fi
+  assert_contains "$(cat "$home/absent.err")" "sample-never-existed" \
+    "the refusal did not name the entry it could not resolve"
+
+  # The archive is prose as well as records: an archived row whose TITLE names
+  # another id must not answer for that id, or a report that merely mentions a
+  # call would attest it.
+  tasks_in "$home" add sample-archived-mention \
+    "Follow up on sample-ghost-call once the captain answers" --kind ship \
+    --repo sample >/dev/null || fail "could not create the mentioning fixture"
+  printf 'Proceed.\n' > "$home/mention-decision.txt"
+  run_captain "$home" hold sample-archived-mention --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the mentioning fixture"
+  run_captain "$home" answer sample-archived-mention \
+    --decision-file "$home/mention-decision.txt" >/dev/null \
+    || fail "could not answer the mentioning fixture"
+  tasks_in "$home" prune --keep 0 >/dev/null || fail "could not archive the mentioning fixture"
+  assert_grep "sample-ghost-call" "$home/data/done-archive.md" \
+    "the fixture did not put the other id in an archived title"
+  if run_captain "$home" complete "$id" sample-ghost-call \
+    > "$home/ghost.out" 2> "$home/ghost.err"; then
+    fail "an archived title mentioning an id attested that id as a durable captain call"
+  fi
+  assert_contains "$(cat "$home/ghost.err")" "no captain-held task sample-ghost-call" \
+    "the mentioned id was refused for some other reason than being unresolvable"
+  pass "the completion gate reads an answered call out of the backlog's archive"
+}
+
+# The archive is wherever the backlog's own configuration puts it. A home that
+# keeps no Done entries retires a row in the same breath as the close, so every
+# read after a close has to look there too or a landed answer reports failure.
+# And a store
+# this reader cannot open is reported by name rather than spent as proof that
+# the row does not exist - the one way an archive-aware gate could quietly
+# start passing everything it can no longer check.
+test_archive_follows_its_configuration_and_reports_an_unreadable_store() {
+  local home id call archive out
+  home=$(make_home archive-configuration)
+  id=sample-archive-config-origin
+  call=sample-archive-config-call
+  archive="$home/data/attic/retired.md"
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/attic/retired.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate the configured archive" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the configured-archive origin"
+  write_origin_meta "$home" "$id"
+  printf '# Configured archive\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$call" --title "Choose the configured option" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not hold the configured-archive call"
+  printf 'Fund the clock seam.\n' > "$home/configured-decision.txt"
+  run_captain "$home" answer "$call" --decision-file "$home/configured-decision.txt" \
+    > "$home/configured-answer.out" 2> "$home/configured-answer.err" \
+    || fail "a close that retention retired in the same breath reported failure: $(cat "$home/configured-answer.err")"
+  assert_contains "$(cat "$home/configured-answer.out")" "answered: $call" \
+    "the zero-retention close did not report the answer it recorded"
+  assert_present "$archive" "zero retention did not write the configured archive path"
+  assert_grep "Fund the clock seam." "$archive" \
+    "the zero-retention close lost the captain's recorded words"
+  run_captain "$home" complete "$id" "$call" >/dev/null 2> "$home/configured.err" \
+    || fail "the gate did not follow the configured archive path: $(cat "$home/configured.err")"
+
+  chmod 0000 "$archive"
+  if [ -r "$archive" ]; then
+    chmod 0644 "$archive"
+    echo "skip: this filesystem ignores mode 0000, so an unreadable archive cannot be staged"
+  else
+    out=$(run_captain "$home" complete "$id" sample-unreadable-probe 2>&1) \
+      && fail "an unreadable archive resolved a task as simply absent: $out"
+    assert_contains "$out" "$archive" "the refusal did not name the archive it could not read: $out"
+    chmod 0644 "$archive"
+  fi
+  pass "the archive follows its configuration, survives zero retention, and reports an unreadable store"
+}
+
+# A replayed answer is documented as an idempotent no-op, and a board that
+# re-delivers one must get `closed:`, not a skipped count for work already
+# recorded. On a home that keeps no Done entries the row is in the archive by
+# then, so both commands have to read it there or they report the captain's
+# landed answer as absent from the backlog - the very shape of the bug this
+# change is about.
+test_a_replayed_answer_stays_idempotent_after_retention() {
+  local home call board out show
+  home=$(make_home replay-after-retention)
+  call=sample-zero-replay
+  board=sample-zero-board
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$call" "Choose the zero-retention option" --repo sample >/dev/null \
+    || fail "could not create the replay fixture"
+  tasks_in "$home" add "$board" "Choose the zero-retention board option" --repo sample >/dev/null \
+    || fail "could not create the board replay fixture"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the replay fixture"
+  run_captain "$home" hold "$board" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the board replay fixture"
+  printf 'Fund the clock seam.\n' > "$home/replay-decision.txt"
+
+  run_captain "$home" answer "$call" --decision-file "$home/replay-decision.txt" >/dev/null \
+    || fail "could not answer the replay fixture"
+  out=$(run_captain "$home" answer "$call" --decision-file "$home/replay-decision.txt" 2>&1) \
+    || fail "a replayed answer reported failure once retention retired the row: $out"
+  assert_contains "$out" "answered: $call" "the replay did not report the recorded answer: $out"
+  printf 'A different answer entirely.\n' > "$home/drifted.txt"
+  out=$(run_captain "$home" answer "$call" --decision-file "$home/drifted.txt" 2>&1) \
+    && fail "a drifted answer replayed against an archived record: $out"
+  assert_contains "$out" "different captain decision" \
+    "the archived replay accepted drift instead of naming it: $out"
+  out=$(run_captain "$home" answer "$call" --release \
+    --decision-file "$home/replay-decision.txt" 2>&1) \
+    && fail "--release reopened an archived closed task: $out"
+
+  out=$(printf '%s\tgo\tFund it\tdone\n' "$board" \
+    | run_captain "$home" answers --source "board fixture" 2>&1) \
+    || fail "the keyed intake could not answer the board replay fixture: $out"
+  assert_contains "$out" "closed: $board" "the first keyed answer was not recorded: $out"
+  out=$(printf '%s\tgo\tFund it\tdone\n' "$board" \
+    | run_captain "$home" answers --source "board fixture" 2>&1) \
+    || fail "a re-delivered keyed answer reported failure after retention: $out"
+  assert_contains "$out" "closed: $board" "the re-delivered keyed answer was not the idempotent replay: $out"
+  assert_contains "$out" "skipped=0" "the re-delivered keyed answer was counted as skipped: $out"
+
+  # An archived row with no recorded captain answer is still not answerable.
+  tasks_in "$home" add sample-zero-plain "Ordinary finished work" --repo sample >/dev/null \
+    || fail "could not create the plain zero-retention fixture"
+  tasks_in "$home" "done" sample-zero-plain >/dev/null \
+    || fail "could not close the plain zero-retention fixture"
+  out=$(run_captain "$home" answer sample-zero-plain \
+    --decision-file "$home/replay-decision.txt" 2>&1) \
+    && fail "an archived ordinary close was dressed up as an answered captain call: $out"
+  assert_contains "$out" "no captain answer recorded" \
+    "the archived ordinary close was refused for some other reason: $out"
+  show=$(cat "$home/data/done-archive.md")
+  assert_contains "$show" "Fund the clock seam." "the archive lost the captain's recorded words"
+  pass "a replayed answer stays idempotent once retention has archived the row"
+}
+
+# The reconciliation half of the same rule. A close that landed while its
+# request retirement did not leaves the row in the archive on a home that
+# keeps no Done entries, and a reader of the active file alone left the
+# pending request with no command able to retire it - the dead end where the
+# only action left is deleting a private state file by hand.
+test_a_reconciliation_retires_its_request_after_retention() {
+  local home id out
+  home=$(make_home reconcile-after-retention)
+  id=sample-zero-reconcile
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$id" "Reconcile under zero retention" --repo sample >/dev/null \
+    || fail "could not create the zero-retention reconcile fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the zero-retention reconcile fixture"
+  request_reconciles "$home" zero-reconcile-src "$id" \
+    || fail "could not file the reconcile request"
+  printf 'The release it asked about shipped on its own, so the call is moot.\n' \
+    > "$home/zero-evidence.txt"
+  cp "$home/state/reconcile-requests/$id.request" "$home/zero-request.backup"
+
+  run_captain "$home" reconcile close "$id" --evidence-file "$home/zero-evidence.txt" >/dev/null \
+    || fail "could not reconcile the zero-retention fixture"
+  # The crash window R2 was ruled on: the close landed, the retirement did not.
+  cp "$home/zero-request.backup" "$home/state/reconcile-requests/$id.request"
+  out=$(run_captain "$home" reconcile close "$id" --evidence-file "$home/zero-evidence.txt" 2>&1) \
+    || fail "an interrupted reconciliation could not be finished after retention: $out"
+  assert_contains "$out" "reconciled: $id" "the archived reconciliation did not replay: $out"
+  assert_absent "$home/state/reconcile-requests/$id.request" \
+    "the replayed reconciliation left its pending request with no command able to retire it"
+
+  # Drift and a non-reconciliation mode are still refused by name.
+  cp "$home/zero-request.backup" "$home/state/reconcile-requests/$id.request"
+  printf 'Different evidence entirely.\n' > "$home/zero-drift.txt"
+  out=$(run_captain "$home" reconcile close "$id" --evidence-file "$home/zero-drift.txt" 2>&1) \
+    && fail "drifted evidence replayed against an archived reconciliation: $out"
+  assert_contains "$out" "different resolution" \
+    "the archived reconciliation replay accepted drift instead of naming it: $out"
+  pass "a reconciliation retires its request even once retention has archived the row"
+}
+
+# `hold` refuses to reopen a closed task, and this file publishes that refusal
+# as a guarantee. It held only where Done entries are kept: with retention off
+# the row is in the archive, the active read saw nothing, and a second row was
+# created under an id the archive already owned.
+test_hold_refuses_an_id_the_archive_already_owns() {
+  local home id out
+  home=$(make_home hold-after-retention)
+  id=sample-zero-rehold
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$id" "Original call" --repo sample >/dev/null \
+    || fail "could not create the re-hold fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the re-hold fixture"
+  printf 'Fund the clock seam.\n' > "$home/rehold-decision.txt"
+  run_captain "$home" answer "$id" --decision-file "$home/rehold-decision.txt" >/dev/null \
+    || fail "could not answer the re-hold fixture"
+  assert_grep "$id" "$home/data/done-archive.md" "the fixture did not archive the answered call"
+
+  out=$(run_captain "$home" hold "$id" --reason "second call" --title "Original call" 2>&1) \
+    && fail "hold created a second row under an id the archive already owns: $out"
+  assert_contains "$out" "already closed" "the refusal did not name the closed row: $out"
+  assert_no_grep "$id" "$home/data/backlog.md" \
+    "the refused hold still put the archived id back in the active backlog"
+
+  # A genuinely unused id still creates normally on the same home.
+  run_captain "$home" hold sample-zero-fresh --title "A fresh call" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "the archive check refused an id nothing owns"
+  pass "hold refuses an id the archive already owns"
+}
+
+# One state, two consumers. A captain-held row closed outside this owner - the
+# sanctioned backlog command does exactly that - records no answer, and once
+# retention archives it tasks-axi will not write it again, so the answer can
+# never be added. The gate then can never pass and a pending reconcile request
+# points at a row nothing can act on. Neither is repairable at its own site;
+# both must end somewhere a person can act, without ever clearing a call
+# nobody answered.
+test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act() {
+  local home origin call other out meta raise show
+  home=$(make_home unanswerable-archived)
+  origin=sample-unrecoverable-origin
+  call=sample-unrecoverable-call
+  other=sample-durable-call
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate the unrecoverable call" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the unrecoverable origin"
+  write_origin_meta "$home" "$origin"
+  printf '# Unrecoverable\n\nTwo captain choices remain.\n' > "$home/data/$origin/report.md"
+  tasks_in "$home" add "$call" "Choose the unrecoverable option" --repo sample >/dev/null \
+    || fail "could not create the unrecoverable call"
+  tasks_in "$home" add "$other" "Choose the durable option" --repo sample >/dev/null \
+    || fail "could not create the durable call"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the unrecoverable call"
+  run_captain "$home" hold "$other" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the durable call"
+  run_captain "$home" complete "$origin" "$call" "$other" >/dev/null \
+    || fail "could not attest the inventory"
+  request_reconciles "$home" unrecoverable-src "$call" \
+    || fail "could not file the reconcile request"
+
+  # The state, made the way the fleet actually makes it: the sanctioned
+  # backlog command closes a captain-held row with no answer recorded.
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the call outside this owner"
+  assert_grep "$call" "$home/data/done-archive.md" "the fixture did not archive the closed call"
+  printf 'Any answer at all.\n' > "$home/unrecoverable.txt"
+
+  # Consumer one: the pending reconcile request. It is retired deliberately,
+  # because it points at a row nothing can act on - and the command still
+  # reports failure, because a person owes the call a new task.
+  out=$(run_captain "$home" reconcile close "$call" --evidence-file "$home/unrecoverable.txt" 2>&1) \
+    && fail "reconcile close reported success over an unanswerable row: $out"
+  assert_contains "$out" "unrecoverable: $call" "the reconciliation did not name the state: $out"
+  assert_contains "$out" "raise the call again as its own task" "the refusal ended nowhere a person can act: $out"
+  assert_absent "$home/state/reconcile-requests/$call.request" \
+    "the pending request was left pointing at a row no command can act on"
+
+  # The answer path says the same thing and points the same way.
+  out=$(run_captain "$home" answer "$call" --decision-file "$home/unrecoverable.txt" 2>&1) \
+    && fail "answer recorded a captain answer on an archived row: $out"
+  assert_contains "$out" "raise the call again as its own task" "the answer refusal ended nowhere: $out"
+
+  # Every refusal that says to raise the call again prints the form that
+  # works. `hold` requires --reason always, and the earlier text hid it behind
+  # an ellipsis after --title, so the flag set is checked by running it: the
+  # named pair creates the new call, and dropping either one is refused.
+  assert_contains "$out" '--title "<the question>"' \
+    "the refusal did not say what --title is for: $out"
+  assert_contains "$out" '--reason "<why the captain owns it>"' \
+    "the refusal hid the mandatory --reason: $out"
+  # Run what it PRINTS, placeholders substituted and nothing else changed.
+  # The previous version retyped an equivalent and added --repo, which the
+  # printed form omits - so it tested a flag set the message does not name.
+  raise=$(named_captain_hold_command "$out" "raise the call again as its own task with ") \
+    || fail "the refusal named no runnable hold command: $out"
+  raise=${raise//<new-id>/sample-raised-again}
+  raise=${raise//\"<the question>\"/The-question-again}
+  raise=${raise//\"<why the captain owns it>\"/captain-owns-it}
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  run_captain "$home" $raise >/dev/null 2> "$home/raise.err" \
+    || fail "the hold command the refusal printed was refused: $raise ($(cat "$home/raise.err"))"
+  show=$(tasks_in "$home" show sample-raised-again --full) \
+    || fail "the printed hold command created no row"
+  assert_contains "$show" "held: yes" "the printed hold command did not hold the new call"
+  out=$(run_captain "$home" hold sample-raised-twice --title "Another question" --repo sample 2>&1) \
+    && fail "hold created a call with no reason, so the named --reason was not mandatory after all: $out"
+  assert_contains "$out" "reason" "the refusal for a missing reason did not name it: $out"
+
+  # Consumer two: the gate. It refuses, names the drop, and the drop is the
+  # only thing that clears it.
+  out=$(run_captain "$home" verify "$origin" 2>&1) \
+    && fail "the gate passed an unanswered captain call: $out"
+  assert_contains "$out" "--drop-unrecoverable $call" "the gate refusal named no exit: $out"
+
+  # A drop is refused for anything that is not that exact state.
+  out=$(run_captain "$home" complete "$origin" --drop-unrecoverable "$other" 2>&1) \
+    && fail "a durable captain call was dropped from the inventory: $out"
+  assert_contains "$out" "not an unrecoverable archived row" \
+    "the durable call was refused for some other reason: $out"
+  out=$(run_captain "$home" complete "$origin" --drop-unrecoverable sample-never-attested 2>&1) \
+    && fail "an id that was never attested was dropped: $out"
+  assert_contains "$out" "nothing to drop" "the unattested drop was refused for some other reason: $out"
+
+  # The drop itself: narrow, recorded, and it leaves the durable call attested.
+  out=$(run_captain "$home" complete "$origin" --drop-unrecoverable "$call" 2>&1) \
+    || fail "the exit the gate named did not work: $out"
+  assert_contains "$out" "dropped as unrecoverable: $call" "the drop was not reported: $out"
+  meta=$(cat "$home/state/$origin.meta")
+  assert_contains "$meta" "decision_dropped=$call" "the drop was not recorded in the metadata"
+  assert_contains "$(grep '^decision_keys=' "$home/state/$origin.meta" | tail -1)" "$other" \
+    "the drop took the durable call with it"
+  assert_not_contains "$(grep '^decision_keys=' "$home/state/$origin.meta" | tail -1)" "$call" \
+    "the dropped key stayed in the attested inventory"
+
+  # The trace has to outlive the cleanup it unblocks. The metadata record does
+  # not - cleanup removes it - and the archive is byte-identical across a
+  # drop, so a retired call and one nobody noticed cannot be told apart there.
+  # The fleet event log is what survives, and the drop is in it.
+  assert_grep '"kind":"dropped"' "$home/state/board-live.jsonl" \
+    "the drop left no durable trace in the fleet event log"
+  assert_grep "\"task\":\"$call\"" "$home/state/board-live.jsonl" \
+    "the dropped event did not name the entry that was retired"
+  assert_grep "\"owner\":\"$origin\"" "$home/state/board-live.jsonl" \
+    "the dropped event did not name the origin whose inventory it left"
+
+  # The gate now passes on the remaining durable call, and cleanup proceeds.
+  run_captain "$home" verify "$origin" >/dev/null 2> "$home/verify-after-drop.err" \
+    || fail "the gate still could not pass after the named exit: $(cat "$home/verify-after-drop.err")"
+  run_teardown "$home" "$origin" >/dev/null 2> "$home/drop-teardown.err" \
+    || fail "cleanup stayed blocked after the named exit: $(cat "$home/drop-teardown.err")"
+  assert_absent "$home/state/$origin.meta" "cleanup left the origin's metadata behind"
+  assert_grep '"kind":"dropped"' "$home/state/board-live.jsonl" \
+    "the only durable trace of the drop went with the cleanup it unblocked"
+  pass "an unanswerable archived call ends somewhere a person can act, in both consumers"
+}
+
+# The documentation claims every read of a possibly-retired row sees the
+# archive, and that claim has now been published ahead of the code three
+# times. These are the two reads that were still blind. The board one is not
+# cosmetic: bin/fm-bearings-board.sh keeps a decision card whenever `open`
+# answers "absent", because absent might hide a live call - so an archived row
+# answered as absent is a card the captain can never dismiss.
+test_the_remaining_reads_see_the_archive_too() {
+  local home id rc out
+  home=$(make_home archive-blind-reads)
+  id=sample-blind-read
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$id" "A call that retention retires" --repo sample >/dev/null \
+    || fail "could not create the blind-read fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the blind-read fixture"
+  printf 'Fund the clock seam.\n' > "$home/blind-decision.txt"
+  run_captain "$home" answer "$id" --decision-file "$home/blind-decision.txt" >/dev/null \
+    || fail "could not answer the blind-read fixture"
+  assert_grep "$id" "$home/data/done-archive.md" "the fixture did not archive the answered call"
+
+  # The board's reconcile intake: a retired row is closed, not absent.
+  run_captain "$home" bind blind-src >/dev/null || fail "could not bind the source"
+  out=$(printf '%s\n' "$id" \
+    | run_captain "$home" reconcile-requests --source-id blind-src --source "captured board" 2>&1) \
+    && fail "the intake filed a request against a closed row: $out"
+  assert_contains "$out" "refused: $id (already closed)" \
+    "the intake called an archived row absent: $out"
+  assert_absent "$home/state/reconcile-requests/$id.request" \
+    "the intake recorded a request it refused"
+
+  # `open`: 1 is "no longer an open captain call"; 3 is "absent from this
+  # backlog", which is what makes the board keep the card.
+  rc=0
+  run_captain "$home" open "$id" --distinguish-absent >/dev/null 2>&1 || rc=$?
+  assert_equals 1 "$rc" "an archived row answered as absent, so its board card can never be dismissed"
+  rc=0
+  run_captain "$home" open sample-genuinely-absent --distinguish-absent >/dev/null 2>&1 || rc=$?
+  assert_equals 3 "$rc" "a genuinely absent id stopped being reported as absent"
+
+  # 2 is this predicate's "cannot tell", and an archive it cannot read is
+  # exactly that. Collapsing it into "not an open call" would answer a
+  # question the read did not settle, for the callers that must never close a
+  # live call on a guess.
+  chmod 0000 "$home/data/done-archive.md"
+  if [ -r "$home/data/done-archive.md" ]; then
+    chmod 0644 "$home/data/done-archive.md"
+    echo "skip: this filesystem ignores mode 0000, so an unreadable archive cannot be staged"
+  else
+    rc=0
+    out=$(run_captain "$home" open sample-genuinely-absent --distinguish-absent 2>&1) || rc=$?
+    chmod 0644 "$home/data/done-archive.md"
+    assert_equals 2 "$rc" "an unreadable archive answered a question the read could not settle"
+    assert_contains "$out" "done-archive.md" "the unreadable archive was not named: $out"
+  fi
+  pass "the board intake and the open predicate see the archive too"
+}
+
+# The gate resolves an attested entry before judging it - a pre-collapse
+# attestation records a SHORT key that names a composed row. A drop that
+# judged the raw string instead would look at a different row, or at none,
+# and that goes wrong in both directions: it refuses a real dead end, and it
+# drops an entry whose row is open, held and unanswered while recording that
+# the call was unrecoverable.
+test_a_drop_judges_the_row_the_gate_judges() {
+  local home id short composed out meta
+  home=$(make_home drop-resolves-entry)
+  id=sample-drop-legacy
+  short=pick-one
+  composed="$id-decision-$short"
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Legacy-shaped review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the legacy drop origin"
+  write_origin_meta "$home" "$id"
+  printf '# Legacy drop\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_shim "$home" hold "$id" "$short" --title "Pick one" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not create the composed captain call"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$short" >> "$home/state/$id.meta"
+  run_captain "$home" verify "$id" >/dev/null \
+    || fail "the short key did not verify through its composed identity"
+
+  # A DECOY: a row whose id is the raw attested string, archived with no
+  # answer. Judging the raw string would drop the real call by looking here.
+  tasks_in "$home" add "$short" "An unrelated row that happens to be named for the key" \
+    --repo sample >/dev/null || fail "could not create the decoy row"
+  tasks_in "$home" "done" "$short" >/dev/null || fail "could not close the decoy"
+  assert_grep "$short" "$home/data/done-archive.md" "the decoy was not archived"
+
+  out=$(run_captain "$home" complete "$id" --drop-unrecoverable "$short" 2>&1) \
+    && fail "a still-open, held, unanswered captain call was dropped by judging the raw entry: $out"
+  assert_contains "$out" "not an unrecoverable archived row" \
+    "the drop was refused for some other reason than the row it resolves to: $out"
+  assert_contains "$out" "$composed" "the refusal did not name the row the entry resolves to: $out"
+  assert_no_grep "decision_dropped=" "$home/state/$id.meta" \
+    "a refused drop recorded that a live captain call was unrecoverable"
+  run_captain "$home" verify "$id" >/dev/null \
+    || fail "the refused drop disturbed the attested inventory"
+
+  # Instance one, the other direction, in a home with no decoy so the entry
+  # resolves to its composed row: the gate refuses and names the attested
+  # spelling, and the drop works from either spelling.
+  home=$(make_home drop-resolves-entry-clean)
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  composed="$id-decision-$short"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Legacy-shaped review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the clean legacy origin"
+  write_origin_meta "$home" "$id"
+  printf '# Legacy drop\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_shim "$home" hold "$id" "$short" --title "Pick one" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not create the clean composed captain call"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$short" >> "$home/state/$id.meta"
+  tasks_in "$home" "done" "$composed" >/dev/null \
+    || fail "could not close the composed call outside this owner"
+  out=$(run_captain "$home" verify "$id" 2>&1) \
+    && fail "the gate passed an unanswered composed call: $out"
+  assert_contains "$out" "--drop-unrecoverable $short" \
+    "the gate named an identity the metadata does not hold: $out"
+  # The verify branch of the same helper, driven to a fixed point rather than
+  # substring-matched and then retyped with a different final argument. This
+  # is the branch R1 came through: the covered branch was the one an earlier
+  # round had already forced correct.
+  out=$(run_to_fixed_point "$home" "$id" "$out" "retire them from the inventory with ") \
+    || fail "the verify branch's printed drop never resolved: $out"
+  assert_contains "$out" "dropped as unrecoverable: $short" \
+    "the converged run recorded no drop: $out"
+  # The row spelling still resolves to the same entry, which is what makes
+  # the two spellings interchangeable.
+  run_captain "$home" verify "$id" >/dev/null 2> "$home/legacy-drop-verify.err" \
+    || fail "the gate still could not pass after the drop: $(cat "$home/legacy-drop-verify.err")"
+  meta=$(cat "$home/state/$id.meta")
+  assert_contains "$meta" "decision_dropped=$short" \
+    "the converged drop was not recorded under the attested entry the metadata holds"
+
+  # An archive this read cannot open must not be spent as "not attested" -
+  # that is this branch's own principle, and it would tell a reader their
+  # entry is not attested when it is. Both spellings the previous commit made
+  # interchangeable have to behave the same way, and the archive has to be
+  # named rather than swallowed.
+  # The drop is asked for by the ROW spelling, which is not in the candidate
+  # list, so the answer has to come from resolution - the path that read the
+  # archive and then spent a failure to read it as "not attested".
+  run_shim "$home" hold "$id" second-key --title "A second call" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not create the second composed call"
+  printf 'decision_keys=second-key\n' >> "$home/state/$id.meta"
+  tasks_in "$home" "done" "$id-decision-second-key" >/dev/null \
+    || fail "could not close the second composed call"
+  chmod 0000 "$home/data/done-archive.md"
+  if [ -r "$home/data/done-archive.md" ]; then
+    chmod 0644 "$home/data/done-archive.md"
+    echo "skip: this filesystem ignores mode 0000, so an unreadable archive cannot be staged"
+  else
+    out=$(run_captain "$home" complete "$id" \
+      --drop-unrecoverable "$id-decision-second-key" 2>&1) \
+      && fail "an unreadable archive let a drop through: $out"
+    assert_contains "$out" "done-archive.md" \
+      "the operator was never told the archive could not be read: $out"
+    assert_not_contains "$out" "there is nothing to drop" \
+      "an unreadable archive was spent as proof the entry is not attested: $out"
+    chmod 0644 "$home/data/done-archive.md"
+  fi
+  pass "a drop judges the row the gate judges, under either spelling of the entry"
+}
+
+# The path the filed bug actually describes: the FIRST attestation of an
+# inventory that contains an unrecoverable call. The gate refuses and names
+# the drop, and the drop has to work from there - `complete` writes
+# decision_keys= only after the loop that refusal aborts, so matching the
+# metadata alone made the printed remedy certain to answer "nothing to drop".
+# What is lost when it does is the record: --none is the only remaining exit
+# and it leaves no decision_dropped= and no dropped event, which is exactly
+# the trace this branch built.
+test_the_drop_works_on_a_first_attestation() {
+  local home origin call good out gate
+  home=$(make_home drop-first-attestation)
+  origin=sample-first-attest
+  call=sample-first-unrecoverable
+  good=sample-first-durable
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate on a first attestation" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the first-attestation origin"
+  write_origin_meta "$home" "$origin"
+  printf '# First attestation\n\nTwo captain choices remain.\n' > "$home/data/$origin/report.md"
+  tasks_in "$home" add "$call" "Choose the unrecoverable option" --repo sample >/dev/null \
+    || fail "could not create the unrecoverable call"
+  tasks_in "$home" add "$good" "Choose the durable option" --repo sample >/dev/null \
+    || fail "could not create the durable call"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the unrecoverable call"
+  run_captain "$home" hold "$good" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the durable call"
+  # Closed through the fleet's sanctioned backlog command, never attested.
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the call outside this owner"
+  assert_no_grep "decision_keys=" "$home/state/$origin.meta" \
+    "the fixture attested an inventory before the first attestation"
+
+  out=$(run_captain "$home" complete "$origin" "$call" "$good" 2>&1) \
+    && fail "the first attestation passed an unanswered captain call: $out"
+  assert_contains "$out" "--drop-unrecoverable $call" "the gate named no exit: $out"
+
+  # Exactly what the refusal named, read back out of it rather than retyped.
+  # Retyping is how the previous round's version of this test came to run a
+  # shape the message does not print, and pass while the printed one failed.
+  gate=$(named_captain_hold_command "$out" "retire them from the inventory with ") \
+    || fail "the gate refusal named no runnable drop command: $out"
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  out=$(run_captain "$home" $gate 2>&1) \
+    || fail "the drop the gate printed was refused on the path it printed it for: $gate ($out)"
+  assert_contains "$out" "dropped as unrecoverable: $call" "the drop was not reported: $out"
+  assert_grep "decision_dropped=$call" "$home/state/$origin.meta" \
+    "the retired call left no record in the origin's metadata"
+  assert_grep '"kind":"dropped"' "$home/state/board-live.jsonl" \
+    "the retired call left no durable trace, which is what --none already did"
+  assert_contains "$(grep '^decision_keys=' "$home/state/$origin.meta" | tail -1)" "$good" \
+    "the drop took the durable call with it"
+  run_captain "$home" verify "$origin" >/dev/null 2> "$home/first-verify.err" \
+    || fail "the gate did not pass after the drop it named: $(cat "$home/first-verify.err")"
+
+  # A drop still has to be a real one: an id supplied on this command line
+  # whose row is perfectly durable is refused exactly as an attested one is.
+  out=$(run_captain "$home" complete "$origin" "$good" --drop-unrecoverable "$good" 2>&1) \
+    && fail "supplying an id on the command line let a durable call be dropped: $out"
+  assert_contains "$out" "not an unrecoverable archived row" \
+    "the durable call was refused for some other reason: $out"
+  pass "the drop works on a first attestation, and still refuses a durable call"
+}
+
+# `reconcile note` refuses a row it cannot read, and its refusal names the
+# archive. That claim has to be true rather than decorative: command_open
+# guards the path today, so the message is reached only in the window between
+# that guard and the read - which is exactly the window a future change to
+# the guard would widen. The window is staged here rather than reasoned
+# about, by retiring the row between the two reads.
+test_the_note_refusal_reads_what_it_says_it_read() {
+  local home id out
+  home=$(make_home note-archive-claim)
+  id=sample-note-window
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$id" "A call that retires mid-command" --repo sample >/dev/null \
+    || fail "could not create the note-window fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the note-window fixture"
+  request_reconciles "$home" note-window-src "$id" || fail "could not file the request"
+  printf 'Still open: nothing has shipped and the choice is unchanged.\n' > "$home/note.txt"
+
+  # The row is retired between the guard's read and the read the message is
+  # attached to, so that message is the one that fires.
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = show ] && [ "${2:-}" = sample-note-window ]; then
+  if [ -e "$FM_HOME/show-once" ] && [ ! -e "$FM_HOME/retired" ]; then
+    : > "$FM_HOME/retired"
+    "$REAL_TASKS_AXI" done sample-note-window >/dev/null 2>&1
+  else
+    : > "$FM_HOME/show-once"
+  fi
+fi
+exec "$REAL_TASKS_AXI" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+  out=$(run_captain "$home" reconcile note "$id" --note-file "$home/note.txt" 2>&1) \
+    && fail "a note was recorded on a row that had been archived: $out"
+  assert_present "$home/retired" "the fixture never reached the window it exists to stage"
+  assert_grep "$id" "$home/data/done-archive.md" "the fixture did not archive the row"
+  assert_contains "$out" "closed and archived" \
+    "the refusal did not say what the archive actually holds: $out"
+  assert_not_contains "$out" "absent from this home's configured backlog and its archive" \
+    "the refusal claimed the row is in neither half when the archive holds it: $out"
+  assert_present "$home/state/reconcile-requests/$id.request" \
+    "the refused note retired its own pending request"
+  pass "the note refusal reads the archive it says it read"
+}
+
+# `verify` is read by cleanup's caller, not by someone who remembers what
+# they typed, and "re-run complete" named no form that works: complete
+# rejects one argument with its entire usage, and `--none` is refused while a
+# status decision is open, which is the only state this fires in. Both
+# remedies are run rather than read.
+test_verify_names_a_complete_that_works() {
+  local home origin call out gate raise then_cmd probe
+  home=$(make_home verify-remedy)
+  origin=sample-verify-remedy
+  call=sample-verify-call
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate the verify remedy" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the verify-remedy origin"
+  write_origin_meta "$home" "$origin"
+  printf '# Verify remedy\n\nOne captain choice remains.\n' > "$home/data/$origin/report.md"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  tasks_in "$home" add "$call" "Choose the option" --repo sample >/dev/null \
+    || fail "could not create the call"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the call"
+  run_captain "$home" complete "$origin" "$call" >/dev/null || fail "could not attest"
+
+  # A status decision opens after the attestation, which is what verify flags.
+  printf 'needs-decision [key=later-one]: a second question opened\n' >> "$home/state/$origin.status"
+  out=$(run_captain "$home" verify "$origin" 2>&1) && fail "verify passed an untransferred decision: $out"
+  gate=$(named_captain_hold_command "$out") \
+    || fail "the verify refusal named no runnable bin/fm-captain-hold.sh command: $out"
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  run_captain "$home" $gate >/dev/null 2> "$home/verify-remedy.err" \
+    || fail "the command verify named was refused: $gate ($(cat "$home/verify-remedy.err"))"
+  run_captain "$home" verify "$origin" >/dev/null \
+    || fail "the remedy verify named did not clear what it was named for"
+
+  # The other branch: an origin with nothing attested yet cannot transfer to
+  # an inventory that does not exist, and the empty-inventory guard refuses
+  # --none in that state, so the refusal must name holding a call first
+  # rather than re-running complete. The guard is checked here rather than
+  # assumed, because the previous round's comment claimed it applied to both
+  # branches and it applies only to this one.
+  origin=sample-verify-empty
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate with nothing attested" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the empty origin"
+  write_origin_meta "$home" "$origin"
+  printf 'needs-decision [key=only-one]: a question opened\n' > "$home/state/$origin.status"
+  printf 'decisions_reviewed=1\ndecision_keys=\n' >> "$home/state/$origin.meta"
+  out=$(run_captain "$home" verify "$origin" 2>&1) && fail "verify passed with nothing attested: $out"
+  assert_contains "$out" "hold <new-id>" "the empty-inventory refusal named no way to create one: $out"
+  assert_not_contains "$out" "--none" \
+    "the refusal named --none, which the empty-inventory guard refuses in this very state: $out"
+  # Checked while the inventory is still empty, which is the state the guard
+  # applies to and the reason the refusal must not name --none here.
+  probe=$(run_captain "$home" complete "$origin" --none 2>&1) \
+    && fail "--none was accepted in the empty-inventory state the refusal fires in: $probe"
+  assert_contains "$probe" "before attesting" \
+    "the --none refusal in this state was something other than the empty-inventory guard: $probe"
+  # Two commands in one remedy, both run as printed with the placeholder
+  # substituted, in the order named - not substring-matched and left there.
+  raise=$(named_captain_hold_command "$out" "hold one with ") \
+    || fail "the empty-inventory refusal named no runnable hold command: $out"
+  raise=${raise//<new-id>/sample-verify-raised}
+  raise=${raise//\"<the question>\"/The-question}
+  raise=${raise//\"<why the captain owns it>\"/captain-owns-it}
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  run_captain "$home" $raise >/dev/null 2> "$home/empty-raise.err" \
+    || fail "the hold command the refusal printed was refused: $raise ($(cat "$home/empty-raise.err"))"
+  then_cmd=$(named_captain_hold_command "$out" "then ") \
+    || fail "the empty-inventory refusal named no second command: $out"
+  then_cmd=${then_cmd//<new-id>/sample-verify-raised}
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  run_captain "$home" $then_cmd >/dev/null 2> "$home/empty-complete.err" \
+    || fail "the complete command the refusal printed was refused: $then_cmd ($(cat "$home/empty-complete.err"))"
+  run_captain "$home" verify "$origin" >/dev/null 2> "$home/empty-verify.err" \
+    || fail "the printed sequence did not clear what it was named for: $(cat "$home/empty-verify.err")"
+  pass "verify names a complete that works, in both states it fires in"
+}
+
+# Rule 2 with the clause R1 forced: one extract-and-execute certifies the
+# printed string in ONE state. Both states below print a command that works
+# on the first run and then refuses, so each is driven to a FIXED POINT - run
+# what it prints, then what THAT prints, until the sequence converges.
+#
+# Three failure modes, and each says which it is: named no command, looped,
+# or ran out of iterations. A caller that renders all three as "did not
+# converge" throws that distinction away at the point of use, which is the
+# same defect as never printing it - so callers report what the driver said
+# rather than asserting which mode it was.
+run_to_fixed_point() {  # <home> <origin> <first-output> [<lead>]
+  local home=$1 origin=$2 out=$3 lead=${4:-} cmd seen='' i=0
+  while [ "$i" -lt 6 ]; do
+    cmd=$(named_captain_hold_command "$out" "$lead") || {
+      # Named nothing runnable is a different failure from did not converge,
+      # and its two sibling paths below each say which they are.
+      printf 'named no command: %s\n' "$out"
+      return 1
+    }
+    case " $seen " in
+      *" $cmd "*) printf 'loop: %s\n' "$cmd"; return 2 ;;
+    esac
+    seen="$seen $cmd"
+    # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+    if out=$(run_captain "$home" $cmd 2>&1); then
+      printf '%s\n' "$out"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  printf 'did not converge: %s\n' "$out"
+  return 3
+}
+
+# Instance A: the drop empties the inventory while a status decision is still
+# open, so the empty-inventory guard refuses with a sentence about --none the
+# reader never typed. The escape - raise the call again AND keep the dead id
+# positional - existed but no message named it.
+test_the_drop_remedy_reaches_a_fixed_point() {
+  local home origin call second out meta
+  home=$(make_home drop-fixed-point)
+  origin=sample-fixpoint-origin
+  call=sample-fixpoint-call
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate to a fixed point" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the fixed-point origin"
+  write_origin_meta "$home" "$origin"
+  printf '# Fixed point\n\nOne captain choice remains.\n' > "$home/data/$origin/report.md"
+  printf 'needs-decision [key=still-open]: a question the status stream still holds\n' \
+    > "$home/state/$origin.status"
+  tasks_in "$home" add "$call" "Choose the option" --repo sample >/dev/null \
+    || fail "could not create the call"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the call"
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the call outside this owner"
+
+  out=$(run_captain "$home" complete "$origin" "$call" 2>&1) \
+    && fail "the first attestation passed an unanswered captain call: $out"
+  assert_contains "$out" "<new-id>" \
+    "the refusal did not name the new row the empty-inventory guard requires: $out"
+  assert_contains "$out" "complete $origin $call <new-id> --drop-unrecoverable $call" \
+    "the refusal did not keep the dead id positional, so its own drop cannot find it: $out"
+
+  # Raise the call again, as the refusal's first step says, then run what it
+  # prints with the placeholder filled in - and keep running.
+  run_captain "$home" hold sample-fixpoint-raised --title "The question again" \
+    --reason "captain owns the re-raised call" --repo sample >/dev/null \
+    || fail "the raise step the refusal names was refused"
+  out=${out//<new-id>/sample-fixpoint-raised}
+  out=$(run_to_fixed_point "$home" "$origin" "$out" "retire them from the inventory with ") \
+    || fail "the drop remedy never resolved: $out"
+  assert_contains "$out" "dropped as unrecoverable: $call" "the converged run recorded no drop: $out"
+  meta=$(cat "$home/state/$origin.meta")
+  assert_contains "$meta" "decision_dropped=$call" "the drop left no record"
+  run_captain "$home" verify "$origin" >/dev/null 2> "$home/fixpoint-verify.err" \
+    || fail "the gate did not pass after the converged remedy: $(cat "$home/fixpoint-verify.err")"
+
+  # Instance B: two unrecoverable entries. One remedy has to name both, or
+  # each round prints the other and the sequence never terminates.
+  home=$(make_home drop-fixed-point-two)
+  origin=sample-fixpoint-two
+  call=sample-fixpoint-a
+  second=sample-fixpoint-b
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate two dead calls" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the two-call origin"
+  write_origin_meta "$home" "$origin"
+  printf '# Two dead calls\n\nTwo captain choices remain.\n' > "$home/data/$origin/report.md"
+  for out in "$call" "$second"; do
+    tasks_in "$home" add "$out" "Choose an option" --repo sample >/dev/null \
+      || fail "could not create $out"
+    run_captain "$home" hold "$out" --reason "captain choice pending" >/dev/null \
+      || fail "could not hold $out"
+  done
+  # Attested while both were durable, which is how an inventory comes to hold
+  # entries that are only later closed outside this owner - the canonical
+  # shape, and the one where the documented singular drop is enterable.
+  run_captain "$home" complete "$origin" "$call" "$second" >/dev/null \
+    || fail "could not attest the two calls while they were still durable"
+  for out in "$call" "$second"; do
+    tasks_in "$home" "done" "$out" >/dev/null || fail "could not close $out"
+  done
+  # SEEDED FROM THE DOCUMENTED ENTRY POINT, not from the shape the code makes
+  # convenient. .agents/skills/captain-hold-lifecycle/SKILL.md and
+  # docs/captain-hold-lifecycle.md both name the singular form with no
+  # positional ids, so that is what an agent following this repository's own
+  # instructions types - and entering that way is what left the reconstruction
+  # with a flag to lose.
+  out=$(run_captain "$home" verify "$origin" 2>&1) \
+    && fail "the gate passed two unanswered captain calls: $out"
+  out=$(run_captain "$home" complete "$origin" --drop-unrecoverable "$call" 2>&1) \
+    && fail "the documented singular drop passed two unanswered captain calls: $out"
+  out=$(run_to_fixed_point "$home" "$origin" "$out" "retire them from the inventory with ") \
+    || fail "the documented singular drop never resolved: $out"
+  assert_contains "$out" "$call" "the converged run did not drop the first entry: $out"
+  assert_contains "$out" "$second" "the converged run did not drop the second entry: $out"
+  run_captain "$home" verify "$origin" >/dev/null \
+    || fail "the gate did not pass after both entries were retired"
+  pass "the drop remedy reaches a fixed point in both states it fires in"
+}
+
+# THE DOCUMENTED DEFERRAL FORM, driven exactly as the skill writes it:
+# `hold <id> --reason "<reason>" --until <date>` is a RE-hold of a task that
+# already exists, with no --title and no --repo. Every other --until case in
+# this file is a create, which is the shape the code makes convenient rather
+# than the one the tracked documentation names - and an entry shape nothing
+# drives is how a defect survives a round that was ruled to have fixed it.
+# The next --until case belongs beside this one, not beside a create.
+test_the_documented_deferral_rehold_form_works() {
+  local home show
+  home=$(make_home documented-deferral)
+  tasks_in "$home" add sample-later-rehold "Decide the route" --repo sample >/dev/null \
+    || fail "could not create the re-hold fixture"
+  run_captain "$home" hold sample-later-rehold --reason "captain choice pending" >/dev/null \
+    || fail "could not place the initial hold"
+  run_captain "$home" hold sample-later-rehold \
+    --reason "captain says later" --until 2027-03-01 >/dev/null \
+    || fail "the re-hold form the skill documents was refused"
+  show=$(tasks_in "$home" show sample-later-rehold --full) || fail "the re-held task disappeared"
+  assert_contains "$show" "held: yes" "the documented re-hold did not leave the task held"
+  assert_contains "$show" "hold_until: 2027-03-01" \
+    "the documented re-hold did not record the captain's date"
+  assert_contains "$show" "hold_kind: captain" "the documented re-hold lost the captain hold kind"
+  assert_contains "$show" "hold_reason: captain says later" \
+    "the documented re-hold did not replace the reason the board shows"
+  pass "the deferral re-hold form the skill documents works as written"
+}
+
+# --- cleanup owns the close of a row whose worker is still up ----------------
+#
+# The captain's answer arriving while the work it gates is still running is
+# ordinary. Closing that row is not: cleanup owns the completion transition,
+# and a row closed ahead of it leaves the worker with no lifecycle left - it
+# cannot be cleaned up, holds its isolated copy, and re-alarms forever. So the
+# answer is recorded and the hold is lifted; only the close is refused, and the
+# refusal names the flag that does exactly that.
+test_answer_will_not_close_a_row_whose_worker_is_still_up() {
+  local home id err show
+  home=$(make_home live-worker-answer)
+  id=sample-live-worker
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate with the worker still up" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the live-worker fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Live worker\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id" --reason "captain must choose before the worker stands down" \
+    >/dev/null || fail "could not hold the live worker's own row"
+  printf 'Fund the clock seam.\n' > "$home/live-decision.txt"
+
+  if run_captain "$home" answer "$id" --decision-file "$home/live-decision.txt" \
+    > "$home/live.out" 2> "$home/live.err"; then
+    fail "the captain's answer closed a row whose worker is still up"
+  fi
+  err=$(cat "$home/live.err")
+  assert_contains "$err" "--release" "the refusal did not name the flag that records the answer"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the refused answer lost the row"
+  assert_contains "$show" "held: yes" "the refused answer released the captain hold anyway"
+  assert_not_contains "$show" "Resolution recorded by fm-captain-hold" \
+    "the refused answer recorded a resolution it did not complete"
+
+  run_captain "$home" answer "$id" --release --decision-file "$home/live-decision.txt" >/dev/null \
+    || fail "the named remedy did not record the captain's answer"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the released row disappeared"
+  assert_contains "$show" "state: in_flight" "the released row was completed anyway"
+  assert_contains "$show" "Resolution mode: released" "the released row lost the captain's answer"
+
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "the completion gate refused the released call"
+  run_teardown "$home" "$id" >/dev/null 2> "$home/live-teardown.err" \
+    || fail "cleanup could not stand the worker down: $(cat "$home/live-teardown.err")"
+  show=$(tasks_in "$home" show "$id" --full) || fail "cleanup lost the released row"
+  assert_contains "$show" "state: done" "cleanup did not record the completion it owns"
+
+  # A worker record this reader cannot vouch for must not read as "no worker",
+  # because that is the permissive answer - the one that recreates exactly the
+  # stranding this guard exists to prevent.
+  id=sample-unusable-record
+  tasks_in "$home" add "$id" "Answer over an unusable worker record" --repo sample >/dev/null \
+    || fail "could not create the unusable-record fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the unusable-record fixture"
+  mkdir -p "$home/state/$id.meta"
+  err=$(run_captain "$home" answer "$id" --decision-file "$home/live-decision.txt" 2>&1) \
+    && fail "a worker record that is not a regular file read as no worker at all: $err"
+  assert_contains "$err" "$id.meta" "the refusal did not name the record it could not read: $err"
+  rmdir "$home/state/$id.meta"
+  run_captain "$home" answer "$id" --decision-file "$home/live-decision.txt" >/dev/null \
+    || fail "the call could not be answered once the unusable record was gone"
+  pass "an answer will not close a row whose worker is still up"
+}
+
+# A refusal's whole job is to say what would work, and the two commands held to
+# the live-worker rule have different ways out: `answer` has a second close
+# mode, `reconcile close` has none and must stand the worker down first. Each
+# refusal is checked by carrying out what it told the reader to do - and the
+# scout branch deliberately describes that in states and owners rather than in
+# a command line, so what is checked there is the sequence, not a string.
+test_each_live_worker_refusal_describes_a_way_out_that_works() {
+  local home id out show ship
+  home=$(make_home live-worker-remedies)
+  id=sample-live-reconcile
+  mkdir -p "$home/data/$id" "$home/projects/sample" "$home/projects/$id"
+  tasks_in "$home" add "$id" "Reconcile with the worker still up" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the live-reconcile fixture"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Live reconcile\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold "$id" --reason "captain must choose before the worker stands down" \
+    >/dev/null || fail "could not hold the live-reconcile fixture"
+  request_reconciles "$home" live-reconcile-src "$id" \
+    || fail "could not file the reconcile request"
+  printf 'The release it asked about shipped on its own, so the call is moot.\n' \
+    > "$home/live-evidence.txt"
+
+  out=$(run_captain "$home" reconcile close "$id" --evidence-file "$home/live-evidence.txt" 2>&1) \
+    && fail "reconcile close closed a row whose worker is still up: $out"
+  assert_not_contains "$out" "--release" \
+    "the reconcile refusal named a flag reconcile close rejects: $out"
+  assert_contains "$out" "fm-teardown.sh" \
+    "the reconcile refusal did not name the remedy that works here: $out"
+  # On a scout, cleanup has a prerequisite of its own, so a remedy naming only
+  # cleanup would be refused in turn. This one names that step by its state
+  # and its owner rather than by a command line - the shape bin/fm-teardown.sh
+  # uses in the same area, adopted here after the command-line version was
+  # rewritten three times. So what is asserted is that the owner is named and
+  # no argument list is, and then the described sequence is driven to prove
+  # the state it describes is real.
+  assert_contains "$out" "bin/fm-captain-hold.sh" \
+    "the scout refusal did not name the owner of the step cleanup requires: $out"
+  assert_not_contains "$out" "complete $id" \
+    "the scout refusal went back to printing a command line with its own grammar: $out"
+  # Stated in the order it must be run. A reader works left to right, and
+  # naming cleanup before its prerequisite walks them into cleanup's own
+  # refusal - the thing rule 3 exists to prevent, reached through prose.
+  case "$out" in
+    *"bin/fm-captain-hold.sh"*"bin/fm-teardown.sh"*) : ;;
+    *) fail "the scout refusal names cleanup before the step cleanup requires: $out" ;;
+  esac
+  assert_present "$home/state/reconcile-requests/$id.request" \
+    "the refused reconciliation retired its own pending request"
+
+  # The sequence the refusal describes, in the order it describes it.
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "the inventory step the refusal describes was refused"
+  run_teardown "$home" "$id" >/dev/null 2> "$home/remedy-teardown.err" \
+    || fail "the named remedy could not stand the worker down: $(cat "$home/remedy-teardown.err")"
+  run_captain "$home" reconcile close "$id" --evidence-file "$home/live-evidence.txt" >/dev/null \
+    || fail "the reconciliation the refusal promised would land did not"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the reconciled row disappeared"
+  assert_contains "$show" "Resolution mode: reconciled" "the reconciliation lost its evidence record"
+  assert_absent "$home/state/reconcile-requests/$id.request" \
+    "the landed reconciliation left its pending request open"
+
+  # A ship has no such prerequisite, so its remedy must not name one.
+  ship=sample-live-reconcile-ship
+  tasks_in "$home" add "$ship" "Reconcile a ship with the worker still up" --kind ship \
+    --repo sample --start >/dev/null || fail "could not create the live ship fixture"
+  fm_write_meta "$home/state/$ship.meta" \
+    "window=firstmate:fm-$ship" "worktree=$home/projects/missing-$ship" \
+    "project=$home/projects/sample" "harness=codex" "kind=ship" "mode=direct-PR" \
+    "spawn_gen=fixture-$ship"
+  run_captain "$home" hold "$ship" --reason "captain must choose" >/dev/null \
+    || fail "could not hold the live ship fixture"
+  request_reconciles "$home" live-ship-src "$ship" || fail "could not file the ship request"
+  out=$(run_captain "$home" reconcile close "$ship" --evidence-file "$home/live-evidence.txt" 2>&1) \
+    && fail "reconcile close closed a ship row whose worker is still up: $out"
+  assert_contains "$out" "fm-teardown.sh" "the ship refusal did not name cleanup: $out"
+  assert_not_contains "$out" "bin/fm-captain-hold.sh" \
+    "the ship refusal named the scout-only inventory step: $out"
+  pass "each live-worker refusal describes a way out that works"
+}
+
+# A close already recorded and interrupted must still be finishable. The guard
+# sits below that replay for exactly that reason: the recorded mode also
+# refuses the guard's own remedy, so guarding the replay too would leave a task
+# that can be neither completed nor unblocked - the dead end this change exists
+# to remove, reintroduced by the fix for it.
+test_an_interrupted_close_still_finishes_when_a_worker_appears() {
+  local home id show
+  home=$(make_home interrupted-close-live-worker)
+  id=sample-interrupted-live
+  tasks_in "$home" add "$id" "Finish an interrupted close" --kind ship --repo sample >/dev/null \
+    || fail "could not create the interrupted-close fixture"
+  run_captain "$home" hold "$id" --reason "captain must choose" >/dev/null \
+    || fail "could not hold the interrupted-close fixture"
+  printf 'Go.\n' > "$home/interrupted-live.txt"
+  cat > "$home/fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = done ] && [ "${2:-}" = sample-interrupted-live ] \
+  && [ ! -e "$FM_HOME/close-failed-once" ]; then
+  : > "$FM_HOME/close-failed-once"
+  exit 92
+fi
+exec "$REAL_TASKS_AXI" "$@"
+SH
+  chmod +x "$home/fakebin/tasks-axi"
+  if run_captain "$home" answer "$id" --decision-file "$home/interrupted-live.txt" \
+    > "$home/interrupted.out" 2> "$home/interrupted.err"; then
+    fail "the forced close failure reported success"
+  fi
+  show=$(tasks_in "$home" show "$id" --full) || fail "the interrupted row disappeared"
+  assert_contains "$show" "Resolution mode: answered" "the interrupted close recorded no answer"
+  assert_contains "$show" "held: yes" "the interrupted close released the hold"
+
+  # Now a worker record appears for that id - a partial cleanup followed by a
+  # relaunch. The recorded close must still be completable.
+  write_origin_meta "$home" "$id"
+  run_captain "$home" answer "$id" --decision-file "$home/interrupted-live.txt" >/dev/null \
+    2> "$home/interrupted-retry.err" \
+    || fail "an interrupted close could not be finished once a worker record existed: $(cat "$home/interrupted-retry.err")"
+  show=$(tasks_in "$home" show "$id" --full) || fail "the finished row disappeared"
+  assert_contains "$show" "state: done" "the interrupted close never completed"
+  pass "an interrupted close still finishes when a worker record appears"
+}
+
+# The same rule reaches every channel, because the keyed intake resolves through
+# the same `answer` path: a card that declared a close on a live worker's row is
+# reported skipped with the reason, never quietly closed or quietly downgraded.
+test_keyed_intake_reports_a_live_workers_row_as_skipped() {
+  local home id out
+  home=$(make_home live-worker-intake)
+  id=sample-live-intake
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate through the keyed intake" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the keyed-intake fixture"
+  write_origin_meta "$home" "$id"
+  run_captain "$home" hold "$id" --reason "captain must choose before the worker stands down" \
+    >/dev/null || fail "could not hold the keyed-intake fixture"
+  out=$(printf '%s\tgo\tFund it\tdone\n' "$id" \
+    | run_captain "$home" answers --source "board fixture" 2>&1) \
+    && fail "the keyed intake closed a row whose worker is still up: $out"
+  assert_contains "$out" "skipped: $id" "the keyed intake did not report the refusal: $out"
+  assert_contains "$out" "--release" "the skipped line lost the remedy: $out"
+  out=$(printf '%s\tgo\tFund it\trelease\n' "$id" \
+    | run_captain "$home" answers --source "board fixture" 2>&1) \
+    || fail "the keyed intake could not release the live worker's row: $out"
+  assert_contains "$out" "closed: $id" "the released keyed answer was not recorded: $out"
+  pass "the keyed intake reports a live worker's row as skipped, with the remedy"
+}
+
 test_uninventoried_report_decision_refuses_completion
 test_hold_decodes_a_bare_scalar_body_without_the_nonref_default
 test_retained_body_keeps_its_utf8_bytes
 test_completion_gate_attests_and_transfers
+test_completion_gate_reads_an_answered_call_out_of_the_archive
+test_archive_follows_its_configuration_and_reports_an_unreadable_store
+test_a_replayed_answer_stays_idempotent_after_retention
+test_a_reconciliation_retires_its_request_after_retention
+test_hold_refuses_an_id_the_archive_already_owns
+test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act
+test_a_drop_judges_the_row_the_gate_judges
+test_the_drop_works_on_a_first_attestation
+test_the_drop_remedy_reaches_a_fixed_point
+test_the_remaining_reads_see_the_archive_too
+test_the_note_refusal_reads_what_it_says_it_read
+test_verify_names_a_complete_that_works
+test_answer_will_not_close_a_row_whose_worker_is_still_up
+test_each_live_worker_refusal_describes_a_way_out_that_works
+test_an_interrupted_close_still_finishes_when_a_worker_appears
+test_keyed_intake_reports_a_live_workers_row_as_skipped
 test_answer_records_and_closes
 test_release_frees_held_work
 test_hold_stamp_precedes_hold_visibility
 test_interrupted_answer_preserves_hold_age
 test_deferral_leaves_captains_call_until_due
+test_the_documented_deferral_rehold_form_works
 test_out_of_band_close_is_recordable
 test_visual_review_uses_shared_completion_owner
 test_none_inventory_and_resolved_prose_do_not_create_holds
