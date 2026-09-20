@@ -238,13 +238,13 @@ else
           "$FM_REVIEW_VERDICT_DECLINED") DECLINED_AT_HEAD=1 ;;
         esac
         ;;
-      A) STANDING_AT_HEAD=1; APPROVED_AT_HEAD=1 ;;
+      A) STANDING_AT_HEAD=$((STANDING_AT_HEAD + 1)); APPROVED_AT_HEAD=1 ;;
       T*)
         # The verdict literals are compared here rather than inside the jq
         # program, so bin/fm-review-verdict-lib.sh stays their only owner. A
         # review that declined is not one that stated no verdict: it wants
         # findings fixed and a new review, not a verdict line added.
-        STANDING_AT_HEAD=1
+        STANDING_AT_HEAD=$((STANDING_AT_HEAD + 1))
         case "${row_verdict#T}" in
           "$FM_REVIEW_VERDICT_APPROVED") APPROVED_AT_HEAD=1 ;;
           "$FM_REVIEW_VERDICT_DECLINED") DECLINED_AT_HEAD=1 ;;
@@ -267,8 +267,13 @@ APPROVAL_ROWS
       printf 'NO APPROVAL AT HEAD: %s (no review has been posted)\n' "$HEAD"
     elif [ "$OUTSIDE_AT_HEAD" -eq 1 ]; then
       printf 'NO APPROVAL AT HEAD: %s (an approval at this head is from an account with no standing)\n' "$HEAD"
-    elif [ "$STANDING_AT_HEAD" -eq 1 ]; then
-      printf 'NO APPROVAL AT HEAD: %s (the review at this head states no verdict)\n' "$HEAD"
+    elif [ "$STANDING_AT_HEAD" -ge 1 ]; then
+      if [ "$STANDING_AT_HEAD" -eq 1 ]; then
+        printf 'NO APPROVAL AT HEAD: %s (the review at this head states no verdict)\n' "$HEAD"
+      else
+        printf 'NO APPROVAL AT HEAD: %s (none of the %s reviews at this head states a verdict)\n' \
+          "$HEAD" "$STANDING_AT_HEAD"
+      fi
     elif [ "$NONSTANDING_AT_HEAD" -eq 1 ]; then
       printf 'NO APPROVAL AT HEAD: %s (a review at this head is from an account with no standing)\n' "$HEAD"
     elif [ "$WITHDRAWN_AT_HEAD" -eq 1 ]; then

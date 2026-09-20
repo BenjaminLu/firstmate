@@ -998,8 +998,17 @@ APPROVAL
 "
       fi
     elif [ "$at_head_standing" -gt 0 ]; then
-      refusals="$refusals  - the review at the current head $live_head states no verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
+      # Guarded on a count, so several verdictless reviews are reachable. This
+      # line names no account, so unlike the two R20 corrected there is no
+      # "which one" to mislead about - but it should not claim a singularity it
+      # did not check either, and the remedy is the same for one or for five.
+      if [ "$at_head_standing" -eq 1 ]; then
+        refusals="$refusals  - the review at the current head $live_head states no verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
 "
+      else
+        refusals="$refusals  - none of the $at_head_standing reviews at the current head $live_head states a verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
+"
+      fi
     elif [ "$nonstanding" -gt 0 ]; then
       # A review from an account with no standing, whatever it says. Telling
       # this operator to add a verdict line would be the wrong remedy: adding

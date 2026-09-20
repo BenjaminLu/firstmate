@@ -4516,3 +4516,41 @@ test_the_gitlab_approvals_read_names_which_problem_it_hit() {
 }
 
 test_the_gitlab_approvals_read_names_which_problem_it_hit
+
+# The last singular claim in the chain R20 corrected. It names no account, so
+# there is no "which one" to mislead about, but it should not assert a count it
+# did not check - and both surfaces must say the same thing.
+test_several_verdictless_reviews_are_not_called_the_review() {
+  local case_dir rc head=2626262626262626262626262626262626262626
+  case_dir=$(make_case github-two-verdictless)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" r1 'Notes.' 2026-09-20T08:00:00Z),$(review_entry COMMENTED "$head" r2 'More notes.' 2026-09-20T09:00:00Z)"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-two-verdictless: it must not merge"
+  assert_grep 'none of the 2 reviews' "$case_dir/stderr" \
+    "github-two-verdictless: the refusal did not say how many lacked a verdict"
+
+  # One keeps the singular wording, which is true for it.
+  case_dir=$(make_case github-one-verdictless)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" r1 'Notes.')"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-one-verdictless: it must not merge"
+  assert_grep 'the review at the current head' "$case_dir/stderr" \
+    "github-one-verdictless: a single verdictless review lost its singular wording"
+  pass "several verdictless reviews are counted rather than called the review"
+}
+
+test_several_verdictless_reviews_are_not_called_the_review

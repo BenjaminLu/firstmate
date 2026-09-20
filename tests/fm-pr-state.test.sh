@@ -266,6 +266,15 @@ test_a_missing_approval_is_a_blocker() {
     *) fail "a CHANGES_REQUESTED review must not be reported as stating no verdict, got: $out" ;;
   esac
 
+  # Several verdictless reviews are counted, matching the gate rather than
+  # asserting a singularity neither surface checked.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r1"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T08:00:00Z","body":"Notes."},{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"r2"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"More notes."}]}' run_state) \
+    || fail "two-verdictless fixture was refused"
+  case "$out" in
+    *'(none of the 2 reviews at this head states a verdict)'*) ;;
+    *) fail "several verdictless reviews were called the review, got: $out" ;;
+  esac
+
   # A standing review at the head that reached no verdict.
   out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Some notes, no verdict."}]}' run_state) \
     || fail "no-verdict fixture was refused"
