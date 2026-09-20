@@ -826,6 +826,39 @@ test_design_fill_is_bounded_to_the_decisions_section() {
   pass "fm-dispatch: the fill replaces the real ## Decisions placeholder and leaves a fenced example alone"
 }
 
+# The detector strips whitespace before comparing, so a placeholder carrying
+# stray whitespace reads as intact. An exact match in the fill then found no such
+# line, and that combination hit an `exit` inside a `{ ... } > file` group, which
+# unwinds past the handler attached to that group: firstmate got a bare status
+# with nothing said and one .design.md.dispatch.<pid> per attempt. Both sides now
+# compare the same way, so the case fills instead of reaching any refusal, and the
+# refusal that remains returns rather than exiting.
+test_design_fill_matches_what_the_detector_accepted() {
+  local case_dir id record out status leftovers
+  case_dir=$(make_case design-fill-refusal)
+  id=dispatch-design-refusal
+  mkdir -p "$case_dir/home/data/$id"
+  record="$case_dir/home/data/$id/design.md"
+  # A placeholder with stray whitespace: intact to the detector, and the case the
+  # fill must now match too rather than refusing.
+  printf '%s\n' '# Design - whitespace around the placeholder' '' \
+    '## Decisions' '  {DESIGN}  ' > "$record"
+  out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
+    --mode direct-PR --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" \
+    --design "$case_dir/design.md")
+  status=$?
+  expect_code 0 "$status" "a placeholder with stray whitespace should fill, not refuse: $out"
+  assert_grep 'Render the toggle from the existing view state; no new store.' "$record" \
+    "the detector accepted the padded placeholder and the fill did not replace it"
+  assert_no_grep '{DESIGN}' "$record" "the padded placeholder survived the fill"
+
+  # The visible consequence of that unwind was a temp file per attempt. Nothing
+  # this dispatch did may leave one, on the path that fills or any other.
+  leftovers=$(find "$case_dir/home/data" -name '.design.md.dispatch.*' -o -name '.brief.md.dispatch.*' | wc -l | tr -d ' ')
+  assert_equals "0" "$leftovers" "a dispatch left a .design.md.dispatch temp file behind"
+  pass "fm-dispatch: the fill matches what the detector accepted and leaves no temp file"
+}
+
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had() {
   local case_dir id out status brief record
   case_dir=$(make_case design-legacy)
@@ -880,3 +913,4 @@ test_design_record_choice_is_required_and_exclusive
 test_design_record_is_filled_from_the_plan_or_the_declaration
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had
 test_design_fill_is_bounded_to_the_decisions_section
+test_design_fill_matches_what_the_detector_accepted

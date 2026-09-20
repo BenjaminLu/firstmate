@@ -268,9 +268,12 @@ fm_brief_heading_body() {  # <file> <heading>
 # Rewrite <file> on stdout with the one placeholder line inside <heading>'s body
 # replaced by whatever <emit-cmd> prints. The section is decided by mark mode
 # above, so this shares the detectors' parser rather than being a second opinion
-# about headings and fences. Returns 1 without writing a usable result when that
-# body holds no such line, so the caller refuses instead of saving a record it
-# never filled.
+# about headings and fences. A line matches when its whitespace-stripped form is
+# the placeholder, which is exactly what the intactness checks compare: an exact
+# match here would let a placeholder carrying stray whitespace be accepted by the
+# detector and rejected by the fill, which is the same two-opinions defect in the
+# small. Returns 1 without writing a usable result when that body holds no such
+# line, so the caller refuses instead of saving a record it never filled.
 fm_brief_replace_placeholder_in_heading() {  # <file> <heading> <placeholder> <emit-cmd> [args...]
   local file=$1 heading=$2 placeholder=$3
   shift 3
@@ -278,7 +281,8 @@ fm_brief_replace_placeholder_in_heading() {  # <file> <heading> <placeholder> <e
   while IFS= read -r marked; do
     flag=${marked:0:1}
     line=${marked:1}
-    if [ "$found" -eq 0 ] && [ "$flag" = 1 ] && [ "$line" = "$placeholder" ]; then
+    if [ "$found" -eq 0 ] && [ "$flag" = 1 ] &&
+      [ "$(printf '%s' "$line" | tr -d '[:space:]')" = "$placeholder" ]; then
       found=1
       "$@"
       continue
