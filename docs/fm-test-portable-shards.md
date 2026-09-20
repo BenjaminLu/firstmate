@@ -73,9 +73,8 @@ Refresh the hints whenever the serial lane gains scripts, rather than waiting fo
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size and coverage rather than a copied inventory.
 Nine serial runners pack the refreshed measurements into 748.7 s (12m29s) on every shard, which is also the ideal: no script is now long enough to set the makespan on its own.
 That figure is derived over a 188-script serial lane, and packing is longest-processing-time over the whole lane, so it moves whenever the lane gains or loses a script rather than only when a hint changes: re-derive it from `--list --lane portable-serial` and the hint table rather than quoting it after the lane has grown.
-The rest of this paragraph is the record of that refresh and is stated at the 178-script lane it was measured on, not at the current one.
-Scored against the same measurements, the previous hints left shard 3 carrying 983s of real work against the 722s ideal of the day, and the refresh alone cut the modeled makespan to 819s.
-The remaining 97s came from splitting the longest script.
+Scored against the same measurements at the 178-script lane that refresh was measured on, the previous hints left shard 3 carrying 983s of real work against that day's 722s ideal, and the refresh alone cut the modeled makespan to 819s.
+The remaining 97s of that cut came from splitting the longest script.
 `tests/fm-watch-triage.test.sh` used to run 819s as one file, occupied a whole shard, and stayed the makespan at every shard count, so it was recorded here as this layout's indivisible floor.
 It was not indivisible: its 122 cases are hermetic - each mints its own state directory and its own stubs through `make_case` - and they now run as 95 in that file and 27 in `tests/fm-watch-triage-waits.test.sh`, which owns the wake someone has already explained (a declared pause or dated wait, a captain-held item, the away-posture record, and the wedge threshold that must consult them).
 Their shared fixtures live in `tests/watch-triage-helpers.sh`.
@@ -167,7 +166,8 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 
 `bin/fm-lint.sh` owns `<k>of<n>` canonical CI partitions, each running the same full source-aware ShellCheck analysis with two bounded workers, pinned versions, workflow validation, and backend-purity checks.
 The count belongs to the caller and `.github/workflows/ci.yml` derives it from `strategy.job-total`, so the matrix and the split cannot disagree.
-Four things are refused, and the fourth is the one that matters: an index outside `1..n`, a count below one, and a malformed spec are all rejected by the argument parser, but a valid index of a valid count can still select nothing once there are more partitions than roots - asking for one more partition than `--list-files` reports roots passes all three parser checks - so the produced root set is checked too and an empty partition is refused by name.
+Four things are refused, and the fourth is the one that matters: an index outside `1..n`, a count below one, and a malformed spec are all rejected by the argument parser, but a valid index of a valid count can still select nothing once there are more partitions than the canonical inventory has roots, which passes all three parser checks - so the produced root set is checked too and an empty partition is refused by name.
+Read that count as `bin/fm-lint.sh --partition 1of1 --list-files`, not as a bare `--list-files`: with no explicit paths the reported set depends on the invocation, so on a branch it is the changed files and under `--partition <k>of<n>` it is that partition's share, and only the canonical count is the one the refusal is measured against.
 That last check is the only defence against the outcome the other three are usually credited with preventing: a partition that lints nothing and reports a clean result, on the runner whose job it was to check its share.
 Its `--list-files` interface exposes partition membership; `tests/fm-lint.test.sh` verifies complete/disjoint executed roots at several counts and unchanged analysis flags.
 The workflow uploads each partition's quiet telemetry to distinguish analysis cost, memory use, and host contention.
