@@ -676,7 +676,10 @@ test_a_poll_record_that_is_a_symlink_is_unknown_not_clean() {
   poll "$home" beta "$PR_BASE/8"
   assert_poll_control_is_owed "$home"
   rm -f "$home/state/beta.pr-poll"
-  ln -s /etc/hosts "$home/state/beta.pr-poll"
+  # The target must NOT exist. A symlink to a real file is caught by the -e
+  # test, so it never reaches the -L test that exists for this shape, and the
+  # case would pass against code with that test deleted.
+  ln -s "$home/state/beta.pr-poll.gone" "$home/state/beta.pr-poll"
   out="$home/out.txt"
   run "$home" "$out"
   report=$(cat "$out")
@@ -854,6 +857,28 @@ test_a_task_record_with_an_unusable_id_is_unknown_not_clean() {
   assert_contains "$report" "does not carry a usable task id" "the unusable id was not named"
   assert_contains "$report" "unknown:" "an unusable task id did not produce an unknown answer"
   pass "a task record whose id cannot be used is unknown, not clean"
+}
+
+test_a_task_record_that_is_a_dangling_symlink_is_unknown_not_clean() {
+  local home out report
+  # The record path exists only as a link. Without the -L test beside -e the
+  # whole task disappears from obligations 1, 2 and 4 in silence, which is the
+  # one thing this check may never do.
+  home=$(make_home meta-dangling)
+  task "$home" epsilon "kind=ship"
+  steer "$home" epsilon 2
+  out="$home/control.txt"
+  run "$home" "$out"
+  assert_contains "$(cat "$out")" "epsilon has been steered" "the control did not report, so this case proves nothing about silence"
+  rm -f "$home/state/.fleet-obligations" "$home/state/epsilon.meta"
+  ln -s "$home/state/epsilon.meta.gone" "$home/state/epsilon.meta"
+  out="$home/out.txt"
+  run "$home" "$out"
+  report=$(cat "$out")
+  [ -s "$out" ] || fail "a task record that is a dangling symlink vanished in silence"
+  assert_contains "$report" "the task record for epsilon cannot be read" \
+    "a dangling task record symlink was dropped instead of reported"
+  pass "a task record that is a dangling symlink is unknown, not clean"
 }
 
 test_a_task_that_records_no_worktree_is_unknown_not_clean() {
@@ -1569,6 +1594,14 @@ test_report_declines_a_record_it_cannot_use() {
 
   rm -f "$home/state/.fleet-obligations"
   assert_report_declines "$home" "no check has recorded a reading" "absent record"
+
+  # A record path that exists only as a dangling link is a record this home
+  # cannot read, not a home with no reading yet. Without the -L test beside -e
+  # it reports the wrong one of those two, so the distinct wording is the
+  # assertion.
+  ln -s "$home/state/.fleet-obligations.gone" "$home/state/.fleet-obligations"
+  assert_report_declines "$home" "cannot be read" "dangling record symlink"
+  rm -f "$home/state/.fleet-obligations"
   pass "report declines a record it cannot use instead of answering all four met"
 }
 
@@ -1730,6 +1763,7 @@ test_a_steered_scout_with_a_report_is_silent
 test_a_task_that_was_never_steered_is_silent
 test_a_secondmate_is_not_a_work_item
 test_a_task_record_with_an_unusable_id_is_unknown_not_clean
+test_a_task_record_that_is_a_dangling_symlink_is_unknown_not_clean
 test_a_task_that_records_no_worktree_is_unknown_not_clean
 test_a_worktree_with_no_origin_is_unknown_not_clean
 test_discovery_with_no_gh_is_unknown_not_clean
