@@ -189,13 +189,27 @@ run_shim() {  # <home> <command args...>
 }
 
 # The bin/fm-captain-hold.sh command a refusal names, as its own argument list
-# and nothing more: everything between the script name and the clause that
-# ends the step. Read back rather than retyped, so a test cannot quietly pass
-# while the refusal names a prefix of the command that actually works.
+# and nothing more: everything from the FIRST mention of the script to
+# whichever clause ends the step - a comma or a dashed aside. Read back
+# rather than retyped, so a test cannot quietly pass while the refusal names
+# a prefix of the command that actually works.
 named_captain_hold_command() {  # <refusal text>
   local named
-  named=$(printf '%s\n' "$1" \
-    | sed -n 's/.*completion gate with bin\/fm-captain-hold\.sh \([^,]*\),.*/\1/p' | head -1)
+  named=$(printf '%s\n' "$1" | LC_ALL=C awk '
+    {
+      lead = "bin/fm-captain-hold.sh "
+      i = index($0, lead)
+      if (i == 0) next
+      rest = substr($0, i + length(lead))
+      cut = 0
+      c = index(rest, ",")
+      d = index(rest, " - ")
+      if (c > 0) cut = c - 1
+      if (d > 0 && (cut == 0 || d - 1 < cut)) cut = d - 1
+      if (cut > 0) rest = substr(rest, 1, cut)
+      print rest
+      exit
+    }')
   [ -n "$named" ] || return 1
   printf '%s\n' "$named"
 }
@@ -4666,6 +4680,56 @@ SH
   pass "the note refusal reads the archive it says it read"
 }
 
+# `verify` is read by cleanup's caller, not by someone who remembers what
+# they typed, and "re-run complete" named no form that works: complete
+# rejects one argument with its entire usage, and `--none` is refused while a
+# status decision is open, which is the only state this fires in. Both
+# remedies are run rather than read.
+test_verify_names_a_complete_that_works() {
+  local home origin call out gate
+  home=$(make_home verify-remedy)
+  origin=sample-verify-remedy
+  call=sample-verify-call
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate the verify remedy" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the verify-remedy origin"
+  write_origin_meta "$home" "$origin"
+  printf '# Verify remedy\n\nOne captain choice remains.\n' > "$home/data/$origin/report.md"
+  printf 'done: report complete\n' > "$home/state/$origin.status"
+  tasks_in "$home" add "$call" "Choose the option" --repo sample >/dev/null \
+    || fail "could not create the call"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the call"
+  run_captain "$home" complete "$origin" "$call" >/dev/null || fail "could not attest"
+
+  # A status decision opens after the attestation, which is what verify flags.
+  printf 'needs-decision [key=later-one]: a second question opened\n' >> "$home/state/$origin.status"
+  out=$(run_captain "$home" verify "$origin" 2>&1) && fail "verify passed an untransferred decision: $out"
+  gate=$(named_captain_hold_command "$out") \
+    || fail "the verify refusal named no runnable bin/fm-captain-hold.sh command: $out"
+  # shellcheck disable=SC2086  # Deliberate: the refusal's own argument list.
+  run_captain "$home" $gate >/dev/null 2> "$home/verify-remedy.err" \
+    || fail "the command verify named was refused: $gate ($(cat "$home/verify-remedy.err"))"
+  run_captain "$home" verify "$origin" >/dev/null \
+    || fail "the remedy verify named did not clear what it was named for"
+
+  # The other branch: an origin with nothing attested yet cannot transfer to
+  # an inventory that does not exist, and --none is refused there, so the
+  # refusal must name holding a call first rather than re-running complete.
+  origin=sample-verify-empty
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate with nothing attested" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the empty origin"
+  write_origin_meta "$home" "$origin"
+  printf 'needs-decision [key=only-one]: a question opened\n' > "$home/state/$origin.status"
+  printf 'decisions_reviewed=1\ndecision_keys=\n' >> "$home/state/$origin.meta"
+  out=$(run_captain "$home" verify "$origin" 2>&1) && fail "verify passed with nothing attested: $out"
+  assert_contains "$out" "hold <new-id>" "the empty-inventory refusal named no way to create one: $out"
+  assert_not_contains "$out" "--none" \
+    "the refusal named --none, which is refused while a status decision is open: $out"
+  pass "verify names a complete that works, in both states it fires in"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4881,6 +4945,7 @@ test_a_drop_judges_the_row_the_gate_judges
 test_the_drop_works_on_a_first_attestation
 test_the_remaining_reads_see_the_archive_too
 test_the_note_refusal_reads_what_it_says_it_read
+test_verify_names_a_complete_that_works
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
 test_an_interrupted_close_still_finishes_when_a_worker_appears

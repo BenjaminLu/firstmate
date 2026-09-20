@@ -2233,7 +2233,15 @@ EOF
   open=$(status_open_decisions "$STATE/$origin.status")
   while IFS=$'\t' read -r key _verb _summary; do
     [ -n "$key" ] || continue
-    fail "open captain decision $origin/$key is not transferred to the captain-held inventory; re-run complete"
+    # "re-run complete" names no form that works: complete requires two
+    # arguments and prints its whole usage for one, and `--none` is refused
+    # while a status decision is open - which is the only state this fires
+    # in. So the remedy is the command with its arguments filled in, and it
+    # differs by whether an inventory exists to re-attest yet.
+    if [ -n "$keys" ]; then
+      fail "open captain decision $origin/$key is not transferred to the captain-held inventory; re-run bin/fm-captain-hold.sh complete $origin $(printf '%s' "$keys" | tr ',' ' ') - the first id names the worker whose inventory is attested and the rest are the captain calls already in it, and re-running records the transfer"
+    fi
+    fail "open captain decision $origin/$key is not transferred to the captain-held inventory, and this origin has attested no captain call to transfer it to; hold one with bin/fm-captain-hold.sh hold <new-id> --title \"<the question>\" --reason \"<why the captain owns it>\", then bin/fm-captain-hold.sh complete $origin <new-id>"
   done <<EOF
 $open
 EOF
