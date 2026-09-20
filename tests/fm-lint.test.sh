@@ -213,7 +213,7 @@ test_canonical_partitions_preserve_full_lint() {
     [ "$(LC_ALL=C sort -u "$mode")" = on ] || fail "partition $part disabled full analysis"
   done
   [ "$(LC_ALL=C sort "$tmp/union")" = "$all" ] || fail "lint partitions lose or duplicate canonical roots"
-  for option in 0of2 3of2 1of3; do
+  for option in 0of2 3of2 1of0 2of0 bogus 1of 'of2' -1of2; do
     rc=0
     "$LINT" --partition "$option" --list-files > "$tmp/refused" 2>&1 || rc=$?
     [ "$rc" = 2 ] || fail "invalid partition $option was not refused"
@@ -225,6 +225,38 @@ test_canonical_partitions_preserve_full_lint() {
   "$LINT" --partition 1of2 bin/fm-lint.sh > "$tmp/refused" 2>&1 || rc=$?
   [ "$rc" = 2 ] || fail "partition accepted an explicit subset"
   pass "two canonical lint partitions preserve complete source-aware coverage and reject weakened modes"
+}
+
+# The partition count is the caller's, so the split has to stay complete and
+# disjoint at every count rather than only at the two CI happens to run today.
+# A count that silently dropped roots would report a clean lint having checked
+# nothing on the runner whose job it was to check them, which is the failure
+# the whole partition contract exists to prevent.
+test_partition_count_generalises_past_two() {
+  local tmp all count k part selected first
+  tmp=$(fm_test_tmproot fm-lint-partition-counts)
+  all=$(CI=true "$LINT" --list-files | LC_ALL=C sort)
+  for count in 1 3 4 7; do
+    : > "$tmp/union.$count"
+    k=1
+    while [ "$k" -le "$count" ]; do
+      part="${k}of${count}"
+      selected=$(CI=false GITHUB_ACTIONS=false "$LINT" --partition "$part" --list-files) \
+        || fail "partition $part must select canonical roots"
+      [ -n "$selected" ] || fail "partition $part selected no roots"
+      first=$(printf '%s\n' "$selected" | LC_ALL=C sort)
+      [ "$first" = "$("$LINT" --partition "$part" --list-files | LC_ALL=C sort)" ] \
+        || fail "partition $part is nondeterministic"
+      printf '%s\n' "$selected" >> "$tmp/union.$count"
+      k=$((k + 1))
+    done
+    [ "$(LC_ALL=C sort "$tmp/union.$count")" = "$all" ] \
+      || fail "the $count-way lint split loses or duplicates canonical roots"
+    [ "$(LC_ALL=C sort -u "$tmp/union.$count" | wc -l | tr -d ' ')" \
+      = "$(wc -l < "$tmp/union.$count" | tr -d ' ')" ] \
+      || fail "the $count-way lint split assigns a root to more than one partition"
+  done
+  pass "lint partitions stay complete and disjoint at any count, not just two"
 }
 
 # fm_lint_stub_git <fakebin-dir>: install a git stub for the changed-file mode
@@ -1583,6 +1615,7 @@ SH
 test_help_reports_the_complete_interface
 test_list_files_reports_the_shell_inventory
 test_canonical_partitions_preserve_full_lint
+test_partition_count_generalises_past_two
 test_fast_mode_disables_extended_analysis
 test_ci_defaults_to_full_analysis
 test_ci_rejects_explicit_fast_mode

@@ -116,7 +116,13 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          bin/fm-test-run.sh --lane portable-parallel-1 \
+          # --jobs 2 costs no extra runner: this lane is exactly the set
+          # bin/fm-test-isolation-proof.sh proved safe to run concurrently, and
+          # the runner refuses --jobs > 1 on anything else, so the proof - not
+          # this file - is what admits the concurrency. Standard public
+          # ubuntu-latest runners have 4 cores; two workers leave headroom for
+          # the tests' own subprocesses.
+          bin/fm-test-run.sh --lane portable-parallel-1 --jobs 2 \
             --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-1.json"
       - name: Upload shard 1 timing artifact
@@ -155,7 +161,8 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          bin/fm-test-run.sh --lane portable-parallel-2 \
+          # Same proof-admitted concurrency as shard 1 above.
+          bin/fm-test-run.sh --lane portable-parallel-2 --jobs 2 \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-parallel-2.json"
       - name: Upload shard 2 timing artifact
         if: always()
@@ -245,14 +252,24 @@ jobs:
   # hard-fail on "skip: herdr not found". Starts on Linux x86_64; if a genuine
   # platform invariant fails (focus, cleanup, default-session tripwire), keep
   # the failure evidence and move the job to macOS rather than skip assertions.
+  # Split across separate runners on the same contract as the serial shards:
+  # each shard is still strictly serial in itself and installs its own pinned
+  # Herdr, starts its own default session, and snapshots and tears down its own
+  # labs, so no two Herdr scripts ever share a machine. Shard membership and the
+  # count belong to bin/fm-test-run.sh (docs/fm-test-portable-shards.md).
   tests-herdr:
-    name: Behavior tests (Herdr)
+    name: Behavior tests (Herdr) ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Healthy runs finish around 7 minutes. This job cap is a last-resort hang
     # tripwire, not the expected end of the lane. The family-run step owns the
     # tighter bound so a wedged suite fails fast with always() cleanup and
     # timing artifacts still uploaded (docs/fm-test-portable-shards.md).
     timeout-minutes: 75
+    strategy:
+      # Every shard reports so one failure never hides another shard's result.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -307,7 +324,7 @@ jobs:
           # default-session tripwire can arm. Start it headless; never use it
           # for lab work (tests still refuse default and use fm-lab-* only).
           mkdir -p "$RUNNER_TEMP/fm-herdr"
-          nohup herdr server >"$RUNNER_TEMP/fm-herdr/default-server.log" 2>&1 &
+          nohup herdr server >"$RUNNER_TEMP/fm-herdr/default-server-${{ matrix.shard }}.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/fm-herdr/default-server.pid"
           attempt=0
           while [ "$attempt" -lt 150 ]; do
@@ -324,30 +341,35 @@ jobs:
             attempt=$((attempt + 1))
           done
           echo "::error::default Herdr server did not become ready"
-          cat "$RUNNER_TEMP/fm-herdr/default-server.log" || true
+          cat "$RUNNER_TEMP/fm-herdr/default-server-${{ matrix.shard }}.log" || true
           exit 1
       - name: Snapshot pre-suite Herdr sessions
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-herdr"
-          bin/fm-herdr-ci-cleanup.sh snapshot "$RUNNER_TEMP/fm-herdr/sessions-before.json"
-      - name: Run real-Herdr family (serial, required)
+          bin/fm-herdr-ci-cleanup.sh snapshot "$RUNNER_TEMP/fm-herdr/sessions-before-${{ matrix.shard }}.json"
+      - name: Run real-Herdr shard ${{ matrix.shard }} (serial, required)
         # Comfortably above the ~7 min healthy wall and far below the 75 min
         # job backstop. A hang must fail this step so cleanup still runs.
         timeout-minutes: 20
+        env:
+          # Derived from job-total rather than a literal, so growing or
+          # shrinking the matrix without the runner's own count fails the lane
+          # loudly instead of leaving part of the required family unrun.
+          FM_HERDR_LANE: real-herdr-gated-${{ matrix.shard }}of${{ strategy.job-total }}
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
           # Serial only. Fail if any script reports herdr not found. Live
           # harness credential tests stay outside this family (opt-in env only).
-          bin/fm-test-run.sh --family real-herdr-gated \
+          bin/fm-test-run.sh --lane "$FM_HERDR_LANE" \
             --fail-on-gate-skip 'herdr not found' \
-            --json "$RUNNER_TEMP/fm-test/fm-test-timing-herdr.json"
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-herdr-${{ matrix.shard }}.json"
       - name: Cleanup job-owned Herdr lab sessions
         if: always()
         run: |
           set -eu
-          bin/fm-herdr-ci-cleanup.sh teardown "$RUNNER_TEMP/fm-herdr/sessions-before.json" || {
+          bin/fm-herdr-ci-cleanup.sh teardown "$RUNNER_TEMP/fm-herdr/sessions-before-${{ matrix.shard }}.json" || {
             echo "::warning::lab session cleanup reported a problem; see logs"
             # Surface diagnostics without weakening the suite result above.
             herdr session list --json || true
@@ -357,11 +379,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fm-test-timing-herdr
+          name: fm-test-timing-herdr-${{ matrix.shard }}
           path: |
-            ${{ runner.temp }}/fm-test/fm-test-timing-herdr.json
-            ${{ runner.temp }}/fm-herdr/sessions-before.json
-            ${{ runner.temp }}/fm-herdr/default-server.log
+            ${{ runner.temp }}/fm-test/fm-test-timing-herdr-${{ matrix.shard }}.json
+            ${{ runner.temp }}/fm-herdr/sessions-before-${{ matrix.shard }}.json
+            ${{ runner.temp }}/fm-herdr/default-server-${{ matrix.shard }}.log
           if-no-files-found: warn
 
   # Aggregate per-lane timing into one summary artifact for critical-path review.

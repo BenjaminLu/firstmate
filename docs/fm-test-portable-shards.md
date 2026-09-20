@@ -103,11 +103,48 @@ A timed-out shard may upload no artifact, so include a complete green run or the
 Completed shards from a partial run can supplement that complete baseline, but never treat missing tail scripts or the timeout duration as successful samples.
 Measure native-Windows-only scripts through the focused Git Bash runner and retain that `duration_ms` separately, because the portable CI shards skip them.
 
+## Real-Herdr CI shards
+
+`real-herdr-gated-<k>of<n>` splits the required Herdr family across `n` separate CI runners on the same contract as the serial shards: each shard is strictly serial in itself, `bin/fm-test-run.sh` owns `n` and refuses any lane whose `of<n>` disagrees with it, and `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal.
+Each shard installs its own pinned Herdr and Treehouse, starts its own default session for the fleet-state tripwire, and snapshots and tears down its own labs, so no two Herdr scripts ever share a machine.
+That per-shard setup measured about four seconds against a ten-minute lane on green run [35479482522](https://github.com/BenjaminLu/firstmate/actions/runs/35479482522), so a shard costs a runner slot rather than meaningful duplicated work.
+
+Assignment is longest-processing-time bin packing over `real_herdr_weight_hints` in `bin/fm-test-run.sh`, refreshed the same way and on the same evidence rule as the serial hints: the slowest completed `duration_ms` per script.
+The retained values are the slowest each script reached across six green runs on this repository on 2026-09-20: [35479482522](https://github.com/BenjaminLu/firstmate/actions/runs/35479482522), [35482088244](https://github.com/BenjaminLu/firstmate/actions/runs/35482088244), [35481800435](https://github.com/BenjaminLu/firstmate/actions/runs/35481800435), [35470206371](https://github.com/BenjaminLu/firstmate/actions/runs/35470206371), [35469685248](https://github.com/BenjaminLu/firstmate/actions/runs/35469685248), and [35465280840](https://github.com/BenjaminLu/firstmate/actions/runs/35465280840).
+All sixteen scripts completed in all six runs, so every hint carries six samples.
+
+Two shards is the whole win available here, and the reason is worth recording so the count is not raised in the hope of more.
+`tests/fm-backend-herdr-presentation-e2e.test.sh` is 433530 ms of a 638722 ms lane - 68% of it in one script - and it is one flat script that builds a single real lab session across its whole length, so it sets the makespan at every count above one:
+
+| shards | modelled makespan |
+|---:|---|
+| 1 | 638.7 s |
+| 2 | **433.5 s** |
+| 3 | 433.5 s |
+| 4 | 433.5 s |
+
+A third runner is a slot spent for nothing until that script is divisible, and splitting it means paying real lab setup again per piece.
+`bin/fm-test-run.sh --check-coverage` reports `herdr_shards=` and `herdr_unhinted=`, and refuses past the same unmeasured-share bound the serial lane uses.
+
+Refresh the Herdr hints exactly as the serial ones are refreshed, from the per-shard artifacts:
+
+```sh
+for run in <run-id> <run-id> <run-id>; do
+  for k in 1 2; do
+    gh run download "$run" -R <owner>/firstmate --name "fm-test-timing-herdr-$k" --dir "/tmp/fm-herdr/$run/$k"
+  done
+done
+jq -r '.scripts[] | select(.exit == 0) | [.path, .duration_ms] | @tsv' /tmp/fm-herdr/*/*/*/*.json \
+  | awk -F'\t' '$2 > m[$1] { m[$1] = $2 } END { for (p in m) print p, m[p] }' \
+  | LC_ALL=C sort
+bin/fm-test-run.sh --check-coverage
+```
+
 ## Coverage guard
 
 `bin/fm-test-run.sh --check-coverage` verifies that both parallel lanes partition the proven-isolated set.
 It also verifies that the parallel lanes, portable serial lane, and real-Herdr family are disjoint and cover every `tests/*.test.sh` script.
-It separately verifies that the portable serial CI shards are non-empty, disjoint, and together equal the portable serial lane.
+It separately verifies that the portable serial CI shards are non-empty, disjoint, and together equal the portable serial lane, and that the real-Herdr CI shards are non-empty, disjoint, and together equal the `real-herdr-gated` family.
 It reports the unmeasured serial share as `serial_unhinted=` and refuses when that share exceeds `PORTABLE_SERIAL_MAX_UNHINTED_PERCENT`, so the shards stay balanced on evidence rather than on the default weight.
 
 ## Timing artifacts
@@ -118,13 +155,28 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 
 ## Lint partitions and end-to-end latency
 
-`bin/fm-lint.sh` owns two canonical CI partitions, each running the same full source-aware ShellCheck analysis with two bounded workers, pinned versions, workflow validation, and backend-purity checks.
-Its `--list-files` interface exposes partition membership; `tests/fm-lint.test.sh` verifies complete/disjoint executed roots and unchanged analysis flags.
+`bin/fm-lint.sh` owns `<k>of<n>` canonical CI partitions, each running the same full source-aware ShellCheck analysis with two bounded workers, pinned versions, workflow validation, and backend-purity checks.
+The count belongs to the caller and `.github/workflows/ci.yml` derives it from `strategy.job-total`, so the matrix and the split cannot disagree; an index outside `1..n`, a count below one, and a malformed spec are all refused rather than linting an empty root set and reporting a clean result having checked nothing.
+Its `--list-files` interface exposes partition membership; `tests/fm-lint.test.sh` verifies complete/disjoint executed roots at several counts and unchanged analysis flags.
 The workflow uploads each partition's quiet telemetry to distinguish analysis cost, memory use, and host contention.
 No fast mode, path skips, reduced checks, or paid runner provisioning is part of this layout.
 
+**Byte weight balances the partitions; it does not balance their duration, and the gap is large.**
+Partitions are packed by byte weight, and on green run [35479482522](https://github.com/BenjaminLu/firstmate/actions/runs/35479482522) that packing was as close to exact as it can get - both partitions held 7065522 bytes, to the byte - yet partition 1 ran 313 s against partition 2's 586 s, with 498.84 s of CPU against 871.98 s.
+Neither root bytes nor the transitive `# shellcheck source=` closure explains it: the closures differ by 6% while the wall differs by 87%.
+Measured per root on one machine, ShellCheck cost ranges from 102 ms/KB to 10122 ms/KB, a hundredfold spread, so file size carries almost no information about analysis cost.
+Raising `n` therefore splits the same mispredicted weight into more bins rather than correcting it; expect the partitions to stay uneven at any count until the weight itself is measured rather than estimated.
+Treat `shard_*_weight_bytes` in the telemetry as the scheduling proxy it is, and read the measured `wall_seconds` beside it before concluding a partition is balanced.
+
 The performance objective is a complete green run under fifteen minutes including start delay: roughly twelve minutes of longest-path execution, at most two minutes of runner delay, and less than one minute of other overhead.
-The candidate uses fourteen long-lived Linux jobs (nine serial, two parallel, Herdr, two lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
+The candidate uses fifteen long-lived Linux jobs (nine serial, two parallel, two Herdr, two lint), plus short checks and macOS; insufficient shared account capacity can erase the packing gain.
+
+**That last clause is now the binding constraint, not a caveat.**
+This repository is public and on a plan whose whole-account ceiling is twenty concurrent jobs: across 180 jobs sampled from ten runs on 2026-09-20, concurrency reached exactly 20 and never 21, and sat pinned at 20 for 12.5% of the window.
+One CI run is already eighteen jobs, so a second run in flight queues behind the first, and measured queue waits in that sample reached 3478 s for a single job - several times the execution time the packing saves.
+The consequence for this layout is concrete: splitting work across more runners only shortens the wall clock while the run fits inside that ceiling, and past it a run serialises its own overflow behind its own long jobs.
+Prefer changes that cut runner-seconds without adding a job - concurrency inside a lane that already has an isolation proof, as the portable parallel lanes now use - over changes that buy another runner, and measure the account's concurrent-job ceiling before assuming a shard count is free.
+Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one worker leaves most of that machine idle.
 Compare complete before/after runs, preserve cancelled and partial-run evidence, and measure a representative normal-run sample before claiming a P95 improvement.
 The workflow retains per-PR supersession without cancelling main pushes or changing the compliance workflow's event semantics.
 
@@ -139,7 +191,7 @@ The workflow retains per-PR supersession without cancelling main pushes or chang
 |---|---|---|
 | portable parallel 1/2 | See [CI workflow](../.github/workflows/ci.yml) | The workflow owns the parallel cap rationale and its evidence limits. |
 | portable serial shards | See [CI workflow](../.github/workflows/ci.yml) | Packing estimates are not healthy execution bounds; the existing cap remains a hang tripwire. |
-| Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
+| Herdr shards | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finished around 7 minutes before this lane gained `fm-backend-herdr-focus-flash-e2e`, which measures about 2 minutes against a real lab locally, so the step bound is still the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. Refresh this figure from the lane's uploaded timing artifact. |
 
 Timeouts are intended as hang tripwires; a passing coverage guard does not establish a healthy job duration.
 `.github/workflows/ci.yml` owns the exact numbers.

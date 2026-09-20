@@ -10,6 +10,8 @@
 #   fm-test-run.sh --changed [--base <git-ref>]
 #   fm-test-run.sh --lane portable-parallel-1|portable-parallel-2|portable-serial
 #   fm-test-run.sh --lane portable-serial-<k>of<n>   (one CI serial shard)
+#   fm-test-run.sh --lane real-herdr-gated            (the whole required lane)
+#   fm-test-run.sh --lane real-herdr-gated-<k>of<n>   (one CI Herdr shard)
 #   fm-test-run.sh --proven-isolated
 #   fm-test-run.sh tests/<name>.test.sh [more scripts...]
 #
@@ -208,6 +210,24 @@ PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=27000
 # leaves room for newly added tests while making a stale hint table fail loudly
 # instead of silently. docs/fm-test-portable-shards.md owns the refresh.
 PORTABLE_SERIAL_MAX_UNHINTED_PERCENT=15
+
+# How many separate-runner shards the required real-Herdr lane splits into.
+# Same contract as the serial count above: CI lane names carry it and a lane
+# whose "ofN" disagrees is refused rather than silently running a subset.
+#
+# Two is the whole win. tests/fm-backend-herdr-presentation-e2e.test.sh is 68%
+# of the lane on its own and is one flat script that builds a single real lab
+# session across its whole length, so it sets the makespan at every count above
+# one: three shards and four shards both finish no sooner than two. Raising
+# this buys nothing until that script is divisible.
+# docs/fm-test-portable-shards.md owns the measurement behind that.
+REAL_HERDR_SHARDS=2
+
+# Balance hint for a real-Herdr script with no measured duration. The lane is
+# small and top-heavy, so an unmeasured script is more likely to be a new small
+# one than a new dominant one; this sits near the measured median rather than
+# the mean, which the 433s outlier would drag far above any real newcomer.
+REAL_HERDR_DEFAULT_WEIGHT_MS=8000
 
 usage() {
   awk '
@@ -461,6 +481,11 @@ list_known_lanes() {
     i=$((i + 1))
   done
   printf '%s\n' real-herdr-gated
+  i=1
+  while [ "$i" -le "$REAL_HERDR_SHARDS" ]; do
+    printf 'real-herdr-gated-%sof%s\n' "$i" "$REAL_HERDR_SHARDS"
+    i=$((i + 1))
+  done
 }
 
 # Exact proven-isolated candidate set (same paths as
@@ -847,6 +872,128 @@ tests/fm-watcher-lock.test.sh 114098
 EOF
 }
 
+# Measured real-Herdr script durations in milliseconds, from the CI timing
+# artifacts recorded in docs/fm-test-portable-shards.md. Same rule as the serial
+# table above: the slowest completed value each script reached across the
+# sampled green runs, so packing weights stay conservative.
+real_herdr_weight_hints() {
+  cat <<'EOF'
+tests/fm-afk-inject-herdr-e2e.test.sh 60510
+tests/fm-afk-launch.test.sh 40576
+tests/fm-backend-autodetect-smoke.test.sh 8922
+tests/fm-backend-herdr-agent-exit-shell-e2e.test.sh 52
+tests/fm-backend-herdr-eventwait-smoke.test.sh 1714
+tests/fm-backend-herdr-focus-flash-e2e.test.sh 2441
+tests/fm-backend-herdr-launcher-workspace-e2e.test.sh 42306
+tests/fm-backend-herdr-presentation-e2e.test.sh 433530
+tests/fm-backend-herdr-prune-safety-e2e.test.sh 6428
+tests/fm-backend-herdr-respawn-idem-e2e.test.sh 2095
+tests/fm-backend-herdr-smoke.test.sh 4635
+tests/fm-backend-herdr-stale-active-tab-e2e.test.sh 954
+tests/fm-backend-herdr-workspace-per-home-e2e.test.sh 19117
+tests/fm-control-herdr-smoke.test.sh 10931
+tests/fm-herdr-attached-viewer-live-e2e.test.sh 2306
+tests/fm-herdr-session-cleanup-e2e.test.sh 2159
+EOF
+}
+
+real_herdr_weight_for() {
+  local want=$1 path ms
+  while read -r path ms; do
+    if [ "$path" = "$want" ]; then
+      printf '%s\n' "$ms"
+      return 0
+    fi
+  done < <(real_herdr_weight_hints)
+  printf '%s\n' "$REAL_HERDR_DEFAULT_WEIGHT_MS"
+}
+
+# The real-Herdr scripts with no measured hint, one per line. Same meaning as
+# portable_serial_unhinted: balanced on a guess rather than on evidence.
+real_herdr_unhinted() {
+  local tmp
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-herdr-unhinted.XXXXXX") || return 1
+  real_herdr_weight_hints | awk 'NF { print $1 }' | LC_ALL=C sort -u >"$tmp/hinted"
+  list_real_herdr_gated | LC_ALL=C sort -u >"$tmp/herdr"
+  comm -23 "$tmp/herdr" "$tmp/hinted"
+  rm -rf "$tmp"
+}
+
+# Every real-herdr-gated script, one per line. Derived from the family owner so
+# a newly added Herdr test lands in a shard instead of falling out of the lane.
+list_real_herdr_gated() {
+  local s base
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    base=$(basename "$s")
+    if [ "$(family_for_basename "$base")" = real-herdr-gated ]; then
+      printf '%s\n' "$s"
+    fi
+  done < <(all_repo_tests)
+}
+
+# Longest-processing-time assignment of the real-Herdr family to
+# REAL_HERDR_SHARDS bins, printing "<shard>\t<script>" for every script.
+# Deterministic on the same rules as portable_serial_assignments: candidates
+# ordered by hint descending then path, ties to the lowest bin index.
+real_herdr_assignments() {
+  local ms script i best best_load
+  local -a loads=()
+  i=1
+  while [ "$i" -le "$REAL_HERDR_SHARDS" ]; do
+    loads[i]=0
+    i=$((i + 1))
+  done
+  while IFS=$'\t' read -r ms script; do
+    [ -n "$script" ] || continue
+    best=1
+    best_load=${loads[1]}
+    i=2
+    while [ "$i" -le "$REAL_HERDR_SHARDS" ]; do
+      if [ "${loads[i]}" -lt "$best_load" ]; then
+        best_load=${loads[i]}
+        best=$i
+      fi
+      i=$((i + 1))
+    done
+    loads[best]=$((best_load + ms))
+    printf '%s\t%s\n' "$best" "$script"
+  done < <(
+    while IFS= read -r script; do
+      [ -n "$script" ] || continue
+      printf '%s\t%s\n' "$(real_herdr_weight_for "$script")" "$script"
+    done < <(list_real_herdr_gated) | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
+  )
+}
+
+# Parse "<k>of<n>" from a real-Herdr shard lane and echo <k>, refusing when <n>
+# disagrees with this script's configured count. Same refusal as the serial
+# shards: a CI matrix built for a different count fails loudly rather than
+# leaving part of the required Herdr lane unrun.
+real_herdr_shard_index() {
+  local lane=$1 spec index count
+  spec=${lane#real-herdr-gated-}
+  index=${spec%%of*}
+  count=${spec#*of}
+  case "$spec" in
+    *of*) ;;
+    *) die "unknown lane '$lane' (see --list-lanes)" ;;
+  esac
+  case "$index" in
+    ''|*[!0-9]*) die "unknown lane '$lane' (see --list-lanes)" ;;
+  esac
+  case "$count" in
+    ''|*[!0-9]*) die "unknown lane '$lane' (see --list-lanes)" ;;
+  esac
+  if [ "$count" -ne "$REAL_HERDR_SHARDS" ]; then
+    die "lane '$lane' asks for $count real-Herdr shards but this runner is configured for $REAL_HERDR_SHARDS (see --list-lanes)"
+  fi
+  if [ "$index" -lt 1 ] || [ "$index" -gt "$REAL_HERDR_SHARDS" ]; then
+    die "lane '$lane' shard index is outside 1..$REAL_HERDR_SHARDS (see --list-lanes)"
+  fi
+  printf '%s\n' "$index"
+}
+
 # The portable-serial scripts with no measured hint, one per line. These fall
 # back to PORTABLE_SERIAL_DEFAULT_WEIGHT_MS, so they are balanced on a guess
 # rather than on evidence; the coverage guard bounds how many there may be.
@@ -988,6 +1135,18 @@ select_lane() {
       select_family real-herdr-gated
       found=1
       ;;
+    real-herdr-gated-*)
+      # One separate-runner shard of the same required family, still serial in
+      # itself and still installing its own pinned Herdr and default session.
+      shard=$(real_herdr_shard_index "$want")
+      while IFS=$'\t' read -r idx s; do
+        [ -n "$s" ] || continue
+        if [ "$idx" = "$shard" ]; then
+          add_script "$s"
+          found=1
+        fi
+      done < <(real_herdr_assignments)
+      ;;
     *)
       die "unknown lane '$want' (see --list-lanes)"
       ;;
@@ -996,7 +1155,7 @@ select_lane() {
 }
 
 run_coverage_guard() {
-  local tmp missing extra a b shard unhinted serial_total
+  local tmp missing extra a b shard unhinted serial_total herdr_unhinted herdr_total
   local p1_ms p1_unhinted p2_ms p2_unhinted parallel_max_ms parallel_imbalance_ms
   local -a saved_scripts=()
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-coverage.XXXXXX")
@@ -1047,6 +1206,20 @@ run_coverage_guard() {
   SCRIPTS=()
   select_family real-herdr-gated
   printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | LC_ALL=C sort -u >"$tmp/herdr"
+  : >"$tmp/herdr_shards_raw"
+  shard=1
+  while [ "$shard" -le "$REAL_HERDR_SHARDS" ]; do
+    SCRIPTS=()
+    select_lane "real-herdr-gated-${shard}of${REAL_HERDR_SHARDS}"
+    if [ "${#SCRIPTS[@]}" -eq 0 ]; then
+      log "coverage guard: real-Herdr shard $shard of $REAL_HERDR_SHARDS is empty"
+      SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
+      rm -rf "$tmp"
+      return 1
+    fi
+    printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" >>"$tmp/herdr_shards_raw"
+    shard=$((shard + 1))
+  done
   SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
 
   # Every serial script runs in exactly one CI shard: no duplicate work across
@@ -1065,6 +1238,27 @@ run_coverage_guard() {
     log "coverage guard: portable serial shards must equal the portable serial lane"
     [ -z "$missing" ] || { log "missing from serial shards:"; printf '%s\n' "$missing" >&2; }
     [ -z "$extra" ] || { log "extra beyond serial lane:"; printf '%s\n' "$extra" >&2; }
+    rm -rf "$tmp"
+    return 1
+  fi
+
+  # Every real-Herdr script runs in exactly one CI shard, for the same reason
+  # the serial shards are proved: the lane is required, so a script silently
+  # left out of every shard is lost coverage on a green run.
+  LC_ALL=C sort "$tmp/herdr_shards_raw" | uniq -d >"$tmp/herdr_shard_dups"
+  if [ -s "$tmp/herdr_shard_dups" ]; then
+    log "coverage guard: real-Herdr shards share scripts:"
+    cat "$tmp/herdr_shard_dups" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  LC_ALL=C sort -u "$tmp/herdr_shards_raw" >"$tmp/herdr_shards"
+  missing=$(comm -23 "$tmp/herdr" "$tmp/herdr_shards" || true)
+  extra=$(comm -13 "$tmp/herdr" "$tmp/herdr_shards" || true)
+  if [ -n "$missing" ] || [ -n "$extra" ]; then
+    log "coverage guard: real-Herdr shards must equal the real-herdr-gated family"
+    [ -z "$missing" ] || { log "missing from Herdr shards:"; printf '%s\n' "$missing" >&2; }
+    [ -z "$extra" ] || { log "extra beyond Herdr family:"; printf '%s\n' "$extra" >&2; }
     rm -rf "$tmp"
     return 1
   fi
@@ -1117,6 +1311,22 @@ run_coverage_guard() {
     return 1
   fi
 
+  # Same bound as the serial lane, for the same reason: the Herdr shards are
+  # packed from hints, so an unmeasured script is balanced on a guess. The lane
+  # is small enough that one unmeasured newcomer is a large share of it, so the
+  # count is reported rather than left to be inferred from a slow shard.
+  real_herdr_unhinted >"$tmp/herdr_unhinted"
+  herdr_unhinted=$(wc -l <"$tmp/herdr_unhinted" | tr -d ' ')
+  herdr_total=$(wc -l <"$tmp/herdr" | tr -d ' ')
+  if [ "$herdr_total" -gt 0 ] &&
+    [ "$((herdr_unhinted * 100))" -gt "$((herdr_total * PORTABLE_SERIAL_MAX_UNHINTED_PERCENT))" ]; then
+    log "coverage guard: $herdr_unhinted of $herdr_total real-Herdr scripts have no measured duration hint (max ${PORTABLE_SERIAL_MAX_UNHINTED_PERCENT}%)"
+    log "refresh the hints from a green run's timing artifacts: docs/fm-test-portable-shards.md"
+    cat "$tmp/herdr_unhinted" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+
   if [ -x "$ROOT/bin/fm-test-isolation-proof.sh" ]; then
     "$ROOT/bin/fm-test-isolation-proof.sh" --list | LC_ALL=C sort -u >"$tmp/proof_list"
     if ! cmp -s "$tmp/proven" "$tmp/proof_list"; then
@@ -1136,7 +1346,7 @@ run_coverage_guard() {
   parallel_imbalance_ms=$((p1_ms - p2_ms))
   [ "$parallel_imbalance_ms" -ge 0 ] || parallel_imbalance_ms=$((-parallel_imbalance_ms))
 
-  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s parallel_max_ms=%s parallel_imbalance_ms=%s parallel_unhinted=%s serial=%s serial_shards=%s serial_unhinted=%s herdr=%s\n' \
+  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s parallel_max_ms=%s parallel_imbalance_ms=%s parallel_unhinted=%s serial=%s serial_shards=%s serial_unhinted=%s herdr=%s herdr_shards=%s herdr_unhinted=%s\n' \
     "$(wc -l <"$tmp/all" | tr -d ' ')" \
     "$(wc -l <"$tmp/shards_union" | tr -d ' ')" \
     "$parallel_max_ms" \
@@ -1145,7 +1355,9 @@ run_coverage_guard() {
     "$(wc -l <"$tmp/serial" | tr -d ' ')" \
     "$PORTABLE_SERIAL_SHARDS" \
     "$unhinted" \
-    "$(wc -l <"$tmp/herdr" | tr -d ' ')"
+    "$herdr_total" \
+    "$REAL_HERDR_SHARDS" \
+    "$herdr_unhinted"
   rm -rf "$tmp"
   return 0
 }
