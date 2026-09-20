@@ -2208,6 +2208,18 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     "$SCRIPT_DIR/fm-contributions.sh" arm --if-owned >/dev/null \
       || echo "MISSING: contribution observation could not be armed; coverage is unconfirmed"
   fi
+  # Arm the fleet obligation report. It is armed here rather than by an operator
+  # action because the obligations it watches recur on every pull request and
+  # every merge, and a detector somebody has to remember to switch on is the
+  # same failure it exists to catch. Arming writes local state only and makes no
+  # network call, and needs no configuration. --if-needed keeps a home with no
+  # task and no board unarmed, because a registered check makes supervision
+  # required and such a home would otherwise keep a watcher alive to report on
+  # nothing.
+  if local_phase && [ -x "$SCRIPT_DIR/fm-obligation-check.sh" ]; then
+    "$SCRIPT_DIR/fm-obligation-check.sh" arm --if-needed >/dev/null \
+      || echo "MISSING: the fleet obligation report could not be armed; recurring obligations are unwatched"
+  fi
   if [ -n "$fleet_sync_pid" ]; then
     wait "$fleet_sync_pid" || true
     cat "$fleet_sync_out"

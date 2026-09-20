@@ -667,6 +667,36 @@ The sweep must finish inside `FM_CHECK_TIMEOUT` (default 30), because a run the 
 So a budget larger than that timeout allows is cut down to what fits instead of being refused, and the cut is reported in the report line.
 A budget that is not a whole number from 1 to 120 is still refused outright.
 
+## Fleet obligation report (state/fleet-obligations)
+
+The obligations that recur on every pull request and every merge are reported by [`bin/fm-obligation-check.sh`](../bin/fm-obligation-check.sh), which the watcher polls like any other state check and which prints one line only while something is owed.
+It is armed automatically by bootstrap on a locked session, because an obligation detector somebody has to remember to switch on is the same failure it exists to catch.
+There is nothing to configure.
+Bootstrap arms it with `arm --if-needed`, which arms only a home that has a live task or a board page, because a registered custom check makes supervision required for its home and a home with neither would otherwise keep a watcher alive to report on nothing.
+
+Four obligations are reported, each computed from this home's durable records plus the forge:
+
+- A task's own open pull request with no review and no comment posted on it.
+  A task whose records name no pull request is not assumed to have none: the forge is asked by the task's own branch, so the obligation does not depend on firstmate having remembered to record one.
+  That question is put to the worktree's `origin` and to nothing else, so when the branch has another remote and origin reports no pull request, the answer is reported as undeterminable naming that remote rather than as a determinate none.
+- An armed merge poll whose recorded head is not the pull request's live head, or that watches a pull request closed unmerged.
+- A Captain's Call card on the board whose pull request is no longer open.
+- A live task firstmate has steered that has no design record at `data/<task>/design.md` or `data/<task>/report.md`.
+
+It only reports.
+Nothing merges, dispatches, rebuilds, or is written because this check said so, and it holds up no fleet action while it runs.
+An obligation it cannot determine - the forge unreachable, a record unreadable, the budget spent, a GitLab merge request, an absent `gh` or `jq` - is reported in a separate `unknown:` segment rather than as owed and never as met, so silence from this check means all four were checked and found met.
+`bin/fm-obligation-check.sh report` prints the full finding set the last check recorded, which is where anything past the one-line cut stays readable.
+The script's own header owns the four definitions, the cost model and its measurements, and the stated GitLab and `jq` gaps.
+
+`FM_OBLIGATION_INTERVAL` (default 900 seconds, `0` to probe on every run) sets how often the forge is actually read - it rations the forge and nothing else, so a sweep inside that interval still evaluates the design-record obligation, which costs no forge call, and carries the rest of the last reading forward - and `FM_OBLIGATION_REPEAT` (default 3600, `0` to disable) is how long an unchanged finding set stays suppressed before it is reported again, because acknowledging a wake is not discharging the obligation.
+The record keeps those two clocks separately: the probe clock moves after every completed sweep including a silent one, so a home where everything is met still probes only once per interval, while the report clock moves only when a report is printed, so a run of silent sweeps cannot push a suppressed repeat further away.
+`FM_OBLIGATION_CALL_SECS` (default 12) bounds one forge call and `FM_OBLIGATION_BUDGET_SECS` (default 20) bounds a whole sweep; a sweep that runs out of budget says what it did not reach rather than reporting the rest as met.
+The sweep must finish inside `FM_CHECK_TIMEOUT` (default 30), because a run the watcher kills prints nothing and records nothing, so a budget larger than that timeout allows is cut down to what fits and the cut is named in the report.
+`FM_OBLIGATION_STEERS` (default 1) is how many steering records a task must have before it is owed a design record.
+
+`bin/fm-obligation-check.sh disarm` retires the check through `bin/fm-check-unregister.sh` and removes the report record; the next locked bootstrap arms it again.
+
 ## Mail plane (.env)
 
 The mail plane (bin/fm-mail.sh) reads unseen IMAP messages and sends one SMTP message.
