@@ -941,6 +941,48 @@ test_rebind_never_waits_on_a_held_task_record() {
   pass "a task record held by another owner defers the re-bind instead of stalling the cycle"
 }
 
+# The bound expiring is not one condition. fm_lock_acquire_wait_bounded returns
+# 124 only after confirming the owner process ALIVE, and 1 for a lock nothing
+# will reclaim - a stale directory whose steal lock is itself held. The first is
+# ordinary and self-correcting; the second is permanent, and every later poll
+# meets it again. Reporting the second as the first is how a head that will
+# never re-bind becomes a line in a log nothing reads.
+#
+# A live holder is the 124 case and test_rebind_never_waits_on_a_held_task_record
+# covers it. This constructs the other one: an owner that is gone, and a steal
+# lock held by a live process so recovery declines to reclaim it.
+test_a_permanent_lock_failure_is_not_reported_as_contention() {
+  local dir state rc armed_head
+  armed_head=0000000000000000000000000000000000000000
+  dir=$(make_case rebind-permanent-lock-failure)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+
+  strand_record_lock "$dir" "$state" task-a
+
+  set +e
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  case "$rc" in
+    0|124) ;;
+    *) fail "permanent-lock-failure watcher failed (rc=$rc): $(cat "$dir/watch.err")" ;;
+  esac
+
+  grep -qxF "pr_head=$armed_head" "$state/task-a.meta" \
+    || fail "a refused re-bind changed the task record anyway"
+  grep -F "pr-head-task-a" "$state/.wake-queue" >/dev/null 2>&1 \
+    || fail "a permanent lock failure queued nothing: $(cat "$state/.wake-queue" 2>/dev/null)"
+  ! grep -F 'deferred re-binding' "$state/.watch-triage.log" >/dev/null 2>&1 \
+    || fail "a permanent lock failure was reported as ordinary contention"
+  pass "a lock failure that is not live contention is reported as the permanent failure it is"
+}
+
 # A re-bind that cannot complete leaves the record naming a head the pull request
 # is no longer on - the exact failure this branch exists to end. On the merged
 # path nothing will ever correct it: the outcome publishes and the poll retires
@@ -3011,6 +3053,39 @@ release_lock_holder() {
   wait "$PR_POLL_HOLDER_PID" || fail "lock holder did not release $PR_POLL_HOLDER_LOCK"
 }
 
+# strand_record_lock <dir> <state> <id>: leave <id>'s record lock permanently
+# unacquirable - owner process gone, steal lock held by a live process so
+# stale-owner recovery declines to reclaim it. That is the shape that makes
+# fm_lock_acquire_wait_bounded return 1 rather than 124: not contention with a
+# live holder, but a lock nothing will ever release. Caller ends it with
+# release_lock_holder.
+strand_record_lock() {  # <dir> <state> <id>
+  local dir=$1 state=$2 id=$3 dead_pid
+  cat > "$dir/dead-holder.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+. "$FM_TEST_ROOT/bin/fm-wake-lib.sh"
+fm_lock_acquire_wait "$FM_TEST_LOCK"
+: > "$FM_TEST_ACQUIRED"
+sleep 600
+SH
+  chmod +x "$dir/dead-holder.sh"
+  FM_TEST_ROOT="$ROOT" FM_TEST_LOCK="$state/.meta-$id.lock" \
+    FM_TEST_ACQUIRED="$dir/dead-acquired" "$dir/dead-holder.sh" &
+  dead_pid=$!
+  for _ in $(seq 1 200); do
+    [ -e "$dir/dead-acquired" ] && break
+    sleep 0.02
+  done
+  [ -e "$dir/dead-acquired" ] || fail "the stale-lock fixture never acquired the record"
+  kill -9 "$dead_pid" 2>/dev/null || true
+  wait "$dead_pid" 2>/dev/null || true
+  [ -e "$state/.meta-$id.lock" ] || fail "killing the holder released the record lock"
+  start_lock_holder "$dir" "$state/.meta-$id.lock.steal"
+  # Past FM_LOCK_STALE_AFTER, so the dead owner is not read as mid-acquire.
+  sleep 3
+}
+
 start_poll_publish_holder() {  # <dir> <state> <id>
   start_lock_holder "$1" "$2/.pr-poll-publish-$3.lock"
 }
@@ -3134,6 +3209,7 @@ test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_poll_rebinds_the_recorded_head
 test_rebind_never_waits_on_a_held_task_record
+test_a_permanent_lock_failure_is_not_reported_as_contention
 test_a_failed_rebind_is_never_silent
 test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact

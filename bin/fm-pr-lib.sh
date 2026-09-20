@@ -1379,14 +1379,22 @@ fm_pr_lock_helpers() {
 # Returns 0 once the metadata records exactly <head>, including when it already
 # did, having replaced the file wholly or not at all. Two failures are distinct
 # because they mean different things to a supervisor:
-#   2  the metadata lock was still held when the bound expired. Contention is
-#      ordinary - a spawn owns that lock for the length of a relaunch - and the
-#      next poll re-reads the head, so the caller carries on.
+#   2  the metadata lock was still held by a LIVE owner when the bound expired.
+#      Contention is ordinary - a spawn owns that lock for the length of a
+#      relaunch - and the next poll re-reads the head, so the caller carries on.
 #   1  anything else. The record could not be brought to the head the forge
 #      just returned, and nothing about waiting longer would have helped.
+#
+# Only fm_lock_acquire_wait_bounded's 124 is that live-owner case: it returns
+# 124 only after re-reading the owner pid and confirming the process alive, and
+# returns 1 for a stale lock nothing will reclaim, for a timeout helper that
+# could not load, and for a failing pid read. Those are PERSISTENT - every later
+# poll meets the same thing and the head never re-binds - so they must not be
+# reported as the self-correcting case. Collapsing them here is what turns a
+# permanent failure into a line in a log AGENTS.md calls safe to delete.
 fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <head>
   local state=$1 id=$2 provider=$3 host=$4 path=$5 number=$6 head=$7
-  local meta lock state_device url status=0 timeout
+  local meta lock state_device url status=0 timeout lock_rc
   fm_pr_task_id_valid "$id" || return 1
   fm_pr_head_valid "$head" || return 1
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
@@ -1395,7 +1403,12 @@ fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <he
   meta="$state/$id.meta"
   lock=$(fm_meta_lock_path "$meta") || return 1
   timeout=${FM_TEST_PR_META_LOCK_TIMEOUT:-$_FM_PR_META_LOCK_TIMEOUT}
-  fm_lock_acquire_wait_bounded "$lock" "$timeout" || return 2
+  lock_rc=0
+  fm_lock_acquire_wait_bounded "$lock" "$timeout" || lock_rc=$?
+  if [ "$lock_rc" -ne 0 ]; then
+    [ "$lock_rc" -eq 124 ] || return 1
+    return 2
+  fi
   if ! fm_pr_metadata_identity_parse "$meta" \
     || [ "$FM_PR_META_PROVIDER" != "$provider" ] \
     || [ "$FM_PR_META_HOST" != "$host" ] \
