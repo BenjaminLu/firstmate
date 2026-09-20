@@ -679,6 +679,13 @@ github_checks_not_green() {
               # name be renamed to the sentinel, so the refusal would name a
               # check that does not exist and one waiver would cover every
               # unnamed check at once.
+              # The sentinel is what gets DISPLAYED; whether a check is
+              # unnamed is carried separately, so a check genuinely named
+              # "(unnamed check)" is never grouped with the truly unnamed ones
+              # and never waived by a flag aimed at them. R19 moved this
+              # collision from a plausible name to an implausible one; this
+              # removes it.
+              unnamed: ((.name // "") == ""),
               name: (if (.name // "") == "" then "(unnamed check)" else .name end),
               why: (if .status != "COMPLETED" then (.status // "UNKNOWN")
                     else (.conclusion // "UNKNOWN") end),
@@ -686,9 +693,10 @@ github_checks_not_green() {
               ok: (.status == "COMPLETED" and (.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED")),
               at: (.startedAt | settled_at)
             }
-            | . + {group: (if .name == "(unnamed check)" then ["", $i] else [.name, -1] end)}
+            | . + {group: (if .unnamed then ["", $i] else [.name, -1] end)}
           else
             {kind: "status_context",
+             unnamed: ((.context // "") == ""),
              name: (if (.context // "") == "" then "(unnamed check)" else .context end),
              why: (.state // "UNKNOWN"),
              ok: (.state == "SUCCESS")}

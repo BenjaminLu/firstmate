@@ -4554,3 +4554,30 @@ test_several_verdictless_reviews_are_not_called_the_review() {
 }
 
 test_several_verdictless_reviews_are_not_called_the_review
+
+# R19 moved the sentinel collision from a plausible name to an implausible one.
+# A check genuinely named "(unnamed check)" must still not be grouped with the
+# truly unnamed ones, nor waived by a flag aimed at them.
+test_a_check_named_like_the_sentinel_is_still_its_own_check() {
+  local case_dir rc head=2727272727272727272727272727272727272727
+  case_dir=$(make_case github-sentinel-collision)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" \
+    "$(check_run '(unnamed check)' COMPLETED FAILURE 2026-09-20T09:00:00Z)" \
+    "$(check_run '' COMPLETED SUCCESS 2026-09-20T09:00:00Z)"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-sentinel-collision: a red check must not merge"
+  # The green unnamed run must not clear the red real check of that name: they
+  # are different checks and must not share a group.
+  assert_grep "check '(unnamed check)' failed" "$case_dir/stderr" \
+    "github-sentinel-collision: a real check was cleared by an unnamed one's pass"
+  pass "a check named like the unnamed sentinel is grouped as itself, not with the truly unnamed"
+}
+
+test_a_check_named_like_the_sentinel_is_still_its_own_check
