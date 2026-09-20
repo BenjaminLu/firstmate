@@ -193,12 +193,12 @@ Prefer changes that cut runner-seconds without adding a job over changes that bu
 Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one worker leaves most of that machine idle - but idle cores are not automatically a saving, and the rule for when they are is below.
 **Concurrency inside a lane wins when the lane is packing-bound and does nothing when the lane is bounded by a single long script, and it costs runner-seconds either way.**
 Both portable parallel lanes carry the same isolation proof and were given `--jobs 2` together; one kept it and one did not, and the difference is entirely which of those two shapes the lane has.
-Measured on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) against the three green baseline runs cited above.
+Measured on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) against three green baseline runs: [35479482522](https://github.com/BenjaminLu/firstmate/actions/runs/35479482522), [35482088244](https://github.com/BenjaminLu/firstmate/actions/runs/35482088244) and [35481800435](https://github.com/BenjaminLu/firstmate/actions/runs/35481800435).
 That run was **cancelled** by per-PR supersession: eight of its nineteen jobs were still queued and never executed, so it establishes nothing about this layout's concurrency.
 What survives cancellation is the two parallel lane jobs this table quotes, which both completed green on their own runners before the cancellation, so their walls and their uploaded timing artifacts are sound.
 Read anything else from that run with the caution the closing paragraph of this section asks for.
 
-Every cell is that lane's own measurement: the serial columns are the three baseline runs, the `jobs=2` columns are run 35484461648, and the script-sum and longest-script columns carry the serial median against that one run.
+Every cell is that lane's own measurement: the serial columns are the three baseline runs named above, the `jobs=2` columns are run 35484461648, and the script-sum and longest-script columns carry the serial median against that one run.
 
 | lane | bound | serial wall, 3 runs (median) | `jobs=2` wall | script sum, median -> jobs=2 | longest script, median -> jobs=2 |
 |---|---|---|---:|---:|---:|
