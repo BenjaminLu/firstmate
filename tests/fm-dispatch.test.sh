@@ -978,6 +978,31 @@ ASK
   pass "fm-dispatch: a contract no reader can reach is refused, and a quoted one still dispatches"
 }
 
+# first-body-line is body-scoped like body and mark, so it must stop where they
+# stop. It did not: an EMPTY `# Definition of done` reported the heading that ends
+# it as its first body line. Inert today only because every caller post-filters
+# for a contract line and a heading is not one - and that mode now lives in shared
+# machinery where the next caller need not have that filter.
+test_first_body_line_stops_at_the_section_end() {
+  local file
+  file="$TMP_ROOT/first-body-line-terminator.md"
+  mkdir -p "$TMP_ROOT"
+  printf '%s\n' '# Definition of done' '# Next section' 'Delivery contract: mode=no-mistakes' > "$file"
+  assert_equals "" "$(fm_brief_heading_parse "$file" "# Definition of done" first-body-line)" \
+    "an empty section reported the heading that ends it as its own first body line"
+
+  # A deeper heading is body, exactly as it is for body and mark mode.
+  printf '%s\n' '# Definition of done' '## Sub' 'Delivery contract: mode=direct-PR' > "$file"
+  assert_equals "## Sub" "$(fm_brief_heading_parse "$file" "# Definition of done" first-body-line)" \
+    "a deeper heading inside the section was treated as ending it"
+
+  # Blank lines before the first real line are skipped, not reported.
+  printf '%s\n' '# Definition of done' '' '' 'Delivery contract: mode=direct-PR' > "$file"
+  assert_equals "direct-PR" "$(fm_brief_delivery_mode "$file")" \
+    "blank lines under the heading stopped the contract being found"
+  pass "fm-dod-lib: first-body-line stops at the section end like its two siblings"
+}
+
 test_dispatch_scaffolds_a_design_record_an_older_brief_never_had() {
   local case_dir id out status brief record
   case_dir=$(make_case design-legacy)
@@ -1090,3 +1115,4 @@ test_design_fill_matches_what_the_detector_accepted
 test_dispatch_refuses_a_design_record_that_is_not_a_file
 test_delivery_contract_is_read_from_its_own_section
 test_unreachable_delivery_contract_is_refused_not_read_as_absent
+test_first_body_line_stops_at_the_section_end

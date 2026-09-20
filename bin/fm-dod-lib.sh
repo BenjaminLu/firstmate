@@ -214,6 +214,17 @@ fm_brief_heading_parse() {  # <file|-> <heading> <body|present|terminator|mark|f
           want = 1
           next
         }
+        # Stop where body and mark mode stop. Without it an
+        # empty section reports the heading that ENDS it as its first body line,
+        # which today only the post-filter in each caller makes harmless.
+        if (want && !was_fenced && !is_fence) {
+          level = 0
+          while (substr(scan, level + 1, 1) == "#") level++
+          if (level > 0 && level <= target_level && substr(scan, level + 1, 1) ~ /^[[:space:]]?$/) {
+            want = 0
+            next
+          }
+        }
         if (want && line ~ /[^[:space:]]/) {
           print line
           want = 0
