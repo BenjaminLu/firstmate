@@ -4318,7 +4318,7 @@ test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act() {
   out=$(run_captain "$home" reconcile close "$call" --evidence-file "$home/unrecoverable.txt" 2>&1) \
     && fail "reconcile close reported success over an unanswerable row: $out"
   assert_contains "$out" "unrecoverable: $call" "the reconciliation did not name the state: $out"
-  assert_contains "$out" "Raise the call again" "the refusal ended nowhere a person can act: $out"
+  assert_contains "$out" "raise the call again as its own task" "the refusal ended nowhere a person can act: $out"
   assert_absent "$home/state/reconcile-requests/$call.request" \
     "the pending request was left pointing at a row no command can act on"
 
@@ -4326,6 +4326,21 @@ test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act() {
   out=$(run_captain "$home" answer "$call" --decision-file "$home/unrecoverable.txt" 2>&1) \
     && fail "answer recorded a captain answer on an archived row: $out"
   assert_contains "$out" "raise the call again as its own task" "the answer refusal ended nowhere: $out"
+
+  # Every refusal that says to raise the call again prints the form that
+  # works. `hold` requires --reason always, and the earlier text hid it behind
+  # an ellipsis after --title, so the flag set is checked by running it: the
+  # named pair creates the new call, and dropping either one is refused.
+  assert_contains "$out" '--title "<the question>"' \
+    "the refusal did not say what --title is for: $out"
+  assert_contains "$out" '--reason "<why the captain owns it>"' \
+    "the refusal hid the mandatory --reason: $out"
+  run_captain "$home" hold sample-raised-again --title "The question again" \
+    --reason "captain owns the re-raised call" --repo sample >/dev/null \
+    || fail "the flag set the refusal named did not create the new call"
+  out=$(run_captain "$home" hold sample-raised-twice --title "Another question" --repo sample 2>&1) \
+    && fail "hold created a call with no reason, so the named --reason was not mandatory after all: $out"
+  assert_contains "$out" "reason" "the refusal for a missing reason did not name it: $out"
 
   # Consumer two: the gate. It refuses, names the drop, and the drop is the
   # only thing that clears it.

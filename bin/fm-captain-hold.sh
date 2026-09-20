@@ -605,6 +605,13 @@ archived_row_body() {  # <task-id>; prints the archived row's body
 # in the origin's metadata so it is auditable rather than silent.
 ARCHIVED_UNANSWERABLE="was closed outside this owner with no captain answer recorded, and retention has archived its row, so the answer can no longer be recorded on it (tasks-axi cannot write an archived row)"
 
+# Raising the call again is the ending every refusal above points at, so the
+# command it prints has to be the one that works. `hold` needs --reason
+# always and --title to create, and an ellipsis after --title hides the
+# mandatory flag behind what reads like optional detail, so both are printed
+# with what each is FOR - the shape the scout remedy settled on.
+RAISE_AGAIN_REMEDY="raise the call again as its own task with bin/fm-captain-hold.sh hold <new-id> --title \"<the question>\" --reason \"<why the captain owns it>\", where --title creates the new row and --reason is what the board shows as the call"
+
 # 0 when <task-id> is exactly that state: archived, carrying no resolution
 # record. 1 for anything else, so every caller keeps its ordinary refusal.
 archived_without_answer() {  # <task-id>
@@ -633,7 +640,7 @@ verify_hold_durable() {  # <task-id> [<attested-entry>]
     [ "$archived_status" -eq 0 ] \
       || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
     body_has_resolution_record "$archived" \
-      || fail "attested captain call $entry $ARCHIVED_UNANSWERABLE; it is not a durable captain call and never can be. Raise the call again as its own task, then retire this one from the inventory with bin/fm-captain-hold.sh complete <origin> --drop-unrecoverable $entry, which records the drop rather than skipping it"
+      || fail "attested captain call $entry $ARCHIVED_UNANSWERABLE; it is not a durable captain call and never can be. To carry the question forward, $RAISE_AGAIN_REMEDY; then retire this one from the inventory with bin/fm-captain-hold.sh complete <origin> --drop-unrecoverable $entry, which records the drop rather than skipping it"
     return 0
   fi
   show=$TASK_SHOW_OUTPUT
@@ -1265,7 +1272,7 @@ replay_archived_answer() {  # <task-id> <release-0-or-1>
   [ "$status" -eq 0 ] \
     || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
   body_has_resolution_record "$archived" \
-    || fail "task $id $ARCHIVED_UNANSWERABLE; raise the call again as its own task with bin/fm-captain-hold.sh hold <new-id> --title ... and record the captain's answer there"
+    || fail "task $id $ARCHIVED_UNANSWERABLE; $RAISE_AGAIN_REMEDY, and record the captain's answer there"
   [ "$(recorded_decision_digest "$archived" || true)" = "$DECISION_DIGEST" ] \
     || fail "archived task $id records a different captain decision"
   recorded_mode=$(recorded_resolution_mode "$archived" || true)
@@ -1916,7 +1923,7 @@ replay_archived_reconciliation() {  # <task-id>
     reconcile_request_retire "$id" \
       || fail "could not retire the reconcile request for unrecoverable task $id"
     printf 'unrecoverable: %s\n' "$id"
-    fail "task $id $ARCHIVED_UNANSWERABLE; its reconcile request is retired because nothing can act on that row. Raise the call again as its own task with bin/fm-captain-hold.sh hold <new-id> --title ..."
+    fail "task $id $ARCHIVED_UNANSWERABLE; its reconcile request is retired because nothing can act on that row. To carry the question forward, $RAISE_AGAIN_REMEDY"
   fi
   [ "$(recorded_decision_digest "$archived" || true)" = "$DECISION_DIGEST" ] \
     || fail "archived task $id records a different resolution; it cannot be reconciled again"
