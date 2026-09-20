@@ -16,8 +16,8 @@
 #   5. A value that resolves in another object database this home can see - the
 #      project clone, firstmate itself - is not refused, and a remote target is
 #      not judged against this host at all.
-#   6. No readable source at all steps aside rather than blocking a steer
-#      it cannot judge.
+#   6. No readable RECORDED copy steps aside rather than blocking a steer it
+#      cannot judge, even where firstmate's own repository is readable.
 # The codex case below passes a literal `$...` message on purpose (the point is
 # sending an unexpanded `$` invocation), so SC2016 is disabled.
 # shellcheck disable=SC2016
@@ -100,13 +100,23 @@ commit_only_in_project() { # <case-dir>
   git -C "$dir/project" rev-parse HEAD
 }
 
-run_send() { # <case-dir> <err-file> -- <fm-send args...>
+# run_send <case-dir> <err-file> [env...] -- <fm-send args...>. FM_ROOT_OVERRIDE
+# defaults to the fixture home, which is NOT a git repository: a case that needs
+# firstmate's own repository as a source passes its own override, so no case can
+# pick one up by accident.
+run_send() {
   local dir=$1 err=$2
-  shift 3
+  shift 2
+  local envs=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  shift
   : >"$dir/send.log"
   env PATH="$dir/fakebin:$PATH" \
     FM_ROOT_OVERRIDE="$dir/home" FM_HOME="$dir/home" FM_SEND_LOG="$dir/send.log" \
-    FM_SEND_SETTLE=0 \
+    FM_SEND_SETTLE=0 ${envs[@]+"${envs[@]}"} \
     "$SEND" "$@" >/dev/null 2>"$err"
 }
 
@@ -332,7 +342,14 @@ test_refusal_is_skipped_when_no_local_copy_can_answer() {
   expect_code 0 "$rc" "an unreadable local copy must not block a steer:"$'\n'"$(cat "$err")"
   assert_grep 'verify against deadbeefdeadbeef' "$dir/home/state/task-a.inbox/001.msg" \
     "the steer should still be recorded when the check cannot judge it"
-  pass "fm-send: the check steps aside when no local copy can answer"
+  # Production shape: firstmate's own repository IS readable, and it is not one
+  # of the task's recorded copies. It must not turn a steer nothing recorded
+  # can judge into a refusal against an unrelated repository.
+  rm -rf "$dir/home/state/task-a.inbox"
+  run_send "$dir" "$err" FM_ROOT_OVERRIDE="$ROOT" -- task-a 'verify against deadbeefdeadbeef'
+  rc=$?
+  expect_code 0 "$rc" "a readable firstmate repository must not create a refusal on its own:"$'\n'"$(cat "$err")"
+  pass "fm-send: the check steps aside when no recorded local copy can answer"
 }
 
 test_refuses_a_message_naming_a_commit_that_does_not_resolve

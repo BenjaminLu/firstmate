@@ -723,7 +723,8 @@ fm_send_feed_resolved_holds() { # <answer-text>
 #
 # It steps aside rather than blocking whenever it cannot judge - no meta, no
 # readable object database among the task's recorded paths, or no git on the
-# path. Blocking a legitimate steer because the check could not answer is a
+# path. Firstmate's own repository can only accept a value, never cause a
+# refusal, because it is readable everywhere and is nobody's recorded copy. Blocking a legitimate steer because the check could not answer is a
 # worse failure than the error it prevents.
 #
 # That is why the lookup is not the slot's own object database alone. A pooled
@@ -796,14 +797,20 @@ fm_send_rides_inbox_plane() { # <text>
   return 0
 }
 
-# fm_send_commit_ish_sources: the readable object databases this home may ask
-# about a value named in a steer to <meta-file>, most specific first, one per
-# line. Empty output means nothing can answer, which is a step-aside.
+# fm_send_commit_ish_sources: the object databases RECORDED for <meta-file> that
+# can answer, most specific first, one per line. Empty output means no copy of
+# this task can answer, which is a step-aside.
+#
+# Firstmate's own repository is deliberately NOT in this list. It is readable in
+# every production home, so including it here would mean "no readable source"
+# never happens and a steer that no recorded copy can judge would be refused
+# against a repository with nothing to do with the task. It joins the lookup
+# below only once a recorded copy has answered, where it can accept a value but
+# never create a refusal.
 fm_send_commit_ish_sources() { # <meta-file>
   local meta=$1 repo
   [ -z "$(fm_meta_get "$meta" remote_host)" ] || return 0
-  for repo in "$(fm_meta_get "$meta" worktree)" "$(fm_meta_get "$meta" project)" \
-    "$FM_ROOT"; do
+  for repo in "$(fm_meta_get "$meta" worktree)" "$(fm_meta_get "$meta" project)"; do
     [ -n "$repo" ] && [ -d "$repo" ] || continue
     git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
     printf '%s\n' "$repo"
@@ -819,7 +826,15 @@ fm_send_refuse_unresolvable_commit_ish() { # <message> <meta-file>
   [ -n "$meta" ] || return 0
   command -v git >/dev/null 2>&1 || return 0
   sources=$(fm_send_commit_ish_sources "$meta")
+  # The step-aside is decided on the RECORDED copies alone; firstmate's own
+  # repository is appended only after one of them answered, so it can accept a
+  # firstmate commit named to a worker on another project without ever being
+  # the reason a steer is refused.
   [ -n "$sources" ] || return 0
+  if [ -d "$FM_ROOT" ] && git -C "$FM_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    sources="$sources
+$FM_ROOT"
+  fi
   for sha in $candidates; do
     resolved=0
     for repo in $sources; do
