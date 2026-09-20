@@ -2008,8 +2008,17 @@ reconcile_note() {
 # sends a reader here names the entry the metadata holds, but a caller may
 # equally pass the row id that entry resolves to, so both spellings are
 # accepted and the ENTRY is what is judged and removed. An argument matching
-# two attested entries is refused rather than guessed at.
-attested_entry_for_drop() {  # <origin> <comma-list> <given>; prints the entry
+# two candidate entries is refused rather than guessed at.
+#
+# The candidate list is the inventory this command is BUILDING - the metadata
+# it already holds plus whatever ids this same command line supplied - not
+# the metadata alone. The gate refuses at the first attestation of an
+# unrecoverable call and tells the reader to drop it, but `complete` writes
+# decision_keys= only after the loop that refusal aborts, so on that path the
+# entry is never in the metadata yet. Matching the metadata alone made the
+# printed remedy guaranteed to answer "there is nothing to drop" on exactly
+# the path it was printed for.
+attested_entry_for_drop() {  # <origin> <candidate-comma-list> <given>; prints the entry
   local origin=$1 previous=$2 given=$3 given_row entry entry_row match='' rc
   if list_has_key "$previous" "$given"; then
     printf '%s' "$given"
@@ -2048,6 +2057,7 @@ keys_without() {  # <comma-list> <space-separated-drops>
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc resolved
   local resolved_how attested_by_prefix='' drops='' none=0 dropped_previous='' drop dropped_entries=''
+  local drop_candidates=''
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -2091,9 +2101,10 @@ command_complete() {
   # one row while the raw string names another or none, and judging the raw
   # string either refuses a real dead end or drops a call that is still open,
   # held and unanswered while recording that it was unrecoverable.
+  drop_candidates=$(sorted_key_union "$previous" "$supplied")
   for drop in $drops; do
-    entry=$(attested_entry_for_drop "$origin" "$previous" "$drop") \
-      || fail "task $drop is not in origin $origin's attested captain-call inventory; there is nothing to drop"
+    entry=$(attested_entry_for_drop "$origin" "$drop_candidates" "$drop") \
+      || fail "task $drop is neither in origin $origin's attested captain-call inventory nor supplied on this command line; there is nothing to drop"
     resolved=$(resolve_entry "$origin" "$entry") || exit $?
     resolved=${resolved%% *}
     archived_without_answer "$resolved" \

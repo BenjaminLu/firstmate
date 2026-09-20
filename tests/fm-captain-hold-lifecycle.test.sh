@@ -4527,6 +4527,68 @@ test_a_drop_judges_the_row_the_gate_judges() {
   pass "a drop judges the row the gate judges, under either spelling of the entry"
 }
 
+# The path the filed bug actually describes: the FIRST attestation of an
+# inventory that contains an unrecoverable call. The gate refuses and names
+# the drop, and the drop has to work from there - `complete` writes
+# decision_keys= only after the loop that refusal aborts, so matching the
+# metadata alone made the printed remedy certain to answer "nothing to drop".
+# What is lost when it does is the record: --none is the only remaining exit
+# and it leaves no decision_dropped= and no dropped event, which is exactly
+# the trace this branch built.
+test_the_drop_works_on_a_first_attestation() {
+  local home origin call good out
+  home=$(make_home drop-first-attestation)
+  origin=sample-first-attest
+  call=sample-first-unrecoverable
+  good=sample-first-durable
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$origin"
+  tasks_in "$home" add "$origin" "Investigate on a first attestation" --kind scout \
+    --repo sample --start >/dev/null || fail "could not create the first-attestation origin"
+  write_origin_meta "$home" "$origin"
+  printf '# First attestation\n\nTwo captain choices remain.\n' > "$home/data/$origin/report.md"
+  tasks_in "$home" add "$call" "Choose the unrecoverable option" --repo sample >/dev/null \
+    || fail "could not create the unrecoverable call"
+  tasks_in "$home" add "$good" "Choose the durable option" --repo sample >/dev/null \
+    || fail "could not create the durable call"
+  run_captain "$home" hold "$call" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the unrecoverable call"
+  run_captain "$home" hold "$good" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the durable call"
+  # Closed through the fleet's sanctioned backlog command, never attested.
+  tasks_in "$home" "done" "$call" >/dev/null || fail "could not close the call outside this owner"
+  assert_no_grep "decision_keys=" "$home/state/$origin.meta" \
+    "the fixture attested an inventory before the first attestation"
+
+  out=$(run_captain "$home" complete "$origin" "$call" "$good" 2>&1) \
+    && fail "the first attestation passed an unanswered captain call: $out"
+  assert_contains "$out" "--drop-unrecoverable $call" "the gate named no exit: $out"
+
+  # Exactly what the refusal named, on the same command line as the ids it
+  # was attesting - which is the only shape that path has.
+  out=$(run_captain "$home" complete "$origin" "$call" "$good" --drop-unrecoverable "$call" 2>&1) \
+    || fail "the drop the gate named was refused on the path it was named for: $out"
+  assert_contains "$out" "dropped as unrecoverable: $call" "the drop was not reported: $out"
+  assert_grep "decision_dropped=$call" "$home/state/$origin.meta" \
+    "the retired call left no record in the origin's metadata"
+  assert_grep '"kind":"dropped"' "$home/state/board-live.jsonl" \
+    "the retired call left no durable trace, which is what --none already did"
+  assert_contains "$(grep '^decision_keys=' "$home/state/$origin.meta" | tail -1)" "$good" \
+    "the drop took the durable call with it"
+  run_captain "$home" verify "$origin" >/dev/null 2> "$home/first-verify.err" \
+    || fail "the gate did not pass after the drop it named: $(cat "$home/first-verify.err")"
+
+  # A drop still has to be a real one: an id supplied on this command line
+  # whose row is perfectly durable is refused exactly as an attested one is.
+  out=$(run_captain "$home" complete "$origin" "$good" --drop-unrecoverable "$good" 2>&1) \
+    && fail "supplying an id on the command line let a durable call be dropped: $out"
+  assert_contains "$out" "not an unrecoverable archived row" \
+    "the durable call was refused for some other reason: $out"
+  pass "the drop works on a first attestation, and still refuses a durable call"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4739,6 +4801,7 @@ test_a_reconciliation_retires_its_request_after_retention
 test_hold_refuses_an_id_the_archive_already_owns
 test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act
 test_a_drop_judges_the_row_the_gate_judges
+test_the_drop_works_on_a_first_attestation
 test_the_remaining_reads_see_the_archive_too
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
