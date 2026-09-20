@@ -158,7 +158,10 @@ case "${1:-} ${2:-}" in
   "pr view")
     case " $* " in
       *statusCheckRollup*)
-        printf '%s\n' "{\"state\":\"OPEN\",\"isDraft\":false,\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"headRefOid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"baseRefName\":\"main\",\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"name\":\"ci\",\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"}]}"
+        # author and reviews are part of what gh returns for this --json set,
+        # and the merge entrypoint reads the approval out of them, so the
+        # fixture carries a standing approving review at the same head.
+        printf '%s\n' "{\"state\":\"OPEN\",\"isDraft\":false,\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"headRefOid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"baseRefName\":\"main\",\"author\":{\"login\":\"worker\"},\"reviews\":[{\"state\":\"COMMENTED\",\"authorAssociation\":\"COLLABORATOR\",\"author\":{\"login\":\"reviewer\"},\"commit\":{\"oid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\"},\"submittedAt\":\"2026-09-20T09:00:00Z\",\"body\":\"Review verdict: APPROVED\"}],\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"name\":\"ci\",\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"}]}"
         exit 0
         ;;
       *headRefOid,reviewDecision*)
