@@ -5324,7 +5324,14 @@ test_answering_a_call_closes_its_card() {
   pass "answering a call closes its card"
 }
 
-test_a_dated_deferral_leaves_the_live_call_list() {
+# What this checks is the CARD RECORD, and only that. A dated deferral does
+# also leave the board's live call list, but through machinery this test never
+# touches - bin/fm-bearings-snapshot.sh buckets it as not-live - and it would
+# keep doing so if the card were never marked at all. Naming it for the board
+# behaviour would make the function name an acceptance criterion the
+# assertions do not hold up, which is the defect this same round removed from
+# the network guard.
+test_a_dated_deferral_records_its_card_as_deferred() {
   local home rec
   home=$(make_home card-deferred)
   tasks_in "$home" add later-call "A call deferred to a date" \
@@ -5347,4 +5354,4 @@ test_a_call_with_a_card_file_records_its_options_at_the_moment_it_is_raised
 test_a_call_with_no_card_file_is_recorded_as_visibly_thin
 test_a_card_file_that_cannot_be_used_refuses_the_hold_instead_of_going_thin
 test_answering_a_call_closes_its_card
-test_a_dated_deferral_leaves_the_live_call_list
+test_a_dated_deferral_records_its_card_as_deferred
