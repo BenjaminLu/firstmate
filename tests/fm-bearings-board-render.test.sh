@@ -1475,21 +1475,6 @@ test_a_disconnected_live_seam_refuses_instead_of_reporting_success() {
   pass "a disconnected live seam refuses instead of reporting success"
 }
 
-# Both seams present: the live one is preferred, because it is the one that
-# reaches firstmate on the machine the captain is actually using.
-test_the_live_seam_is_preferred_over_the_serving_surface() {
-  local home out
-  home=$(make_home live-seam-both)
-  out=$(BOARD_LIVE_SEAM=connected render_payload "$home" "$(no_channel_payload)")
-
-  [ "$(printf '%s' "$out" | jq -r '.live_answers | length')" = "1" ] \
-    || fail "the live seam was not used when both were present: $out"
-  [ "$(printf '%s' "$out" | jq -r '.cards[0].on_enter')" = "null" ] \
-    || fail "the answer also went to the serving surface, sending it twice: $out"
-
-  pass "the live seam is preferred over the serving surface"
-}
-
 test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered() {
   local home out
   home=$(make_home no-channel)
@@ -2112,7 +2097,7 @@ test_a_packet_with_figures_opens_its_tabs_inside_the_card() {
           # sends down the answer channel is the value that option carries
           and (.panels[1] | .label == "Error stream only" and .cost == "Two lines of code leave."
             and ([.buttons[] | .queues.selection] == ["quiet"])
-            and (.buttons[0].queues | .schema == "fm-bearings-answer.v1" and .question == "stream-choice")
+            and (.buttons[0].queues.question == "stream-choice")
             and (.buttons[0].text | test("Choose Error stream only")))
           and (.panels[2] | .label == "Both streams" and ([.buttons[] | .queues.selection] == ["loud"]))
           and (.panels[3] | [.buttons[] | .queues.selection] == ["reconcile"]))
@@ -2405,7 +2390,7 @@ test_a_free_form_answer_never_counts_as_choosing_an_option() {
     # the channel, and the note that followed it hid the vote from the check.
     ((.cards[0].on_enter_all | length) == 1)
     and (.cards[0].on_enter_all[0]
-      | .schema == "fm-bearings-answer.v1" and .question == "stream-choice"
+      | .question == "stream-choice"
         and .selection == "" and .note == "in my own words")
   ' >/dev/null || fail "a free-form answer was recorded as choosing an option: $out"
   pass "a free-form answer with no option chosen is queued as a note, not a vote"
@@ -2755,7 +2740,6 @@ test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered
 test_the_dispatch_bar_refuses_visibly_when_it_cannot_send
 test_an_answer_goes_down_the_live_seam_when_the_serving_surface_is_absent
 test_a_disconnected_live_seam_refuses_instead_of_reporting_success
-test_the_live_seam_is_preferred_over_the_serving_surface
 test_a_card_that_cannot_send_says_so_before_the_captain_composes_an_answer
 test_a_send_that_reports_failure_leaves_the_card_unanswered
 test_a_call_that_carried_no_options_says_so_on_the_card

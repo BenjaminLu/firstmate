@@ -169,25 +169,42 @@ const queued = [];
 // The page remembers what the captain clicked so a re-render can put the
 // acknowledgement back; that memory is browser storage, so the shim has one.
 const storage = new Map();
-// A board opened WITHOUT the surface that serves it has no answer channel at
-// all - queuePrompt is simply absent. That is a real state the captain can be
-// in, not a hypothetical, so the shim can reproduce it.
+// A board with no answer channel at all is a real state the captain can be in,
+// not a hypothetical, so the shim can reproduce it.
 const noChannel = process.env.BOARD_NO_ANSWER_CHANNEL === "1";
-// The seam the live transport exposes, which is the one that exists on the
-// captain's own machine. BOARD_LIVE_SEAM=connected|disconnected selects it;
-// unset leaves only the serving surface's seam, as before.
-const liveSeam = process.env.BOARD_LIVE_SEAM || "";
+// THERE IS ONE SEAM NOW, and this is it: window.fmBoardLive, what the live
+// transport exposes on the captain's own machine. The serving surface's
+// queuePrompt seam is gone from the board, so the shim no longer offers it -
+// a harness that kept it would be testing a channel the product does not have,
+// and every case reached through it would prove nothing about the board the
+// captain opens.
+// BOARD_LIVE_SEAM=connected|disconnected|flaky selects its state explicitly;
+// BOARD_NO_ANSWER_CHANNEL=1 removes it; unset means connected, because that is
+// the ordinary case.
+const liveSeam = process.env.BOARD_LIVE_SEAM || (noChannel ? "" : "connected");
 const liveAnswers = [];
 globalThis.window = {
   ...(liveSeam ? {
     fmBoardLive: {
       canAnswer: () => liveSeam === "connected" || liveSeam === "flaky",
-      answer: (picks) => { liveAnswers.push(picks); return liveSeam === "connected"; },
+      answer: (picks) => {
+        liveAnswers.push(picks);
+        // Reported in the shape this harness already reads answers in, built
+        // only from what the page actually sent: the seam's own payload,
+        // renamed to the fields the reporters below expect.
+        queued.push({
+          text: picks.label,
+          data: {
+            question: picks.key,
+            selection: picks.selection,
+            note: picks.note,
+            ...(picks.close === undefined ? {} : { close: picks.close }),
+          },
+        });
+        return liveSeam === "connected";
+      },
     },
   } : {}),
-  ...(noChannel ? {} : {
-    lavish: { queuePrompt: (text, opts) => queued.push({ text, data: opts && opts.data }) },
-  }),
   localStorage: {
     getItem: (k) => (storage.has(k) ? storage.get(k) : null),
     setItem: (k, v) => { storage.set(k, String(v)); },

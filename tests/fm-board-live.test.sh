@@ -746,6 +746,62 @@ test_a_host_this_home_does_not_answer_to_is_refused() {
 # and sending the captain to re-run the command he just ran hides the second.
 # The symlink case is also the O_NOFOLLOW guard: the board page carries the
 # answer token, and this is the commit that put it behind a port.
+# THE PORT HAS TWO ENTRY POINTS. The page request is one; this handshake is the
+# other, and it is the one that hands out live board state. A guard on only the
+# first reads, to whoever changes this next, as though the entry conditions were
+# in one place. Spoken raw rather than through the client helper, because what
+# is being asserted is exactly the header that helper fills in correctly.
+ws_handshake_status() {  # <port> <host-header> ; prints the status line
+  node -e '
+    const net = require("node:net");
+    const [port, host] = process.argv.slice(1);
+    const sock = net.connect(Number(port), "127.0.0.1", () => {
+      sock.write(
+        "GET /board-live HTTP/1.1\r\n" +
+        "Host: " + host + "\r\n" +
+        "Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+        "Sec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+    });
+    let buf = "";
+    sock.on("data", (c) => {
+      buf += c;
+      if (buf.includes("\r\n")) { process.stdout.write(buf.split("\r\n")[0]); sock.destroy(); }
+    });
+    sock.on("close", () => { if (!buf) process.stdout.write("(closed with no answer)"); });
+    sock.on("error", () => { process.stdout.write("(error)"); });
+    setTimeout(() => { sock.destroy(); }, 5000).unref();
+  ' "$1" "$2"
+}
+
+test_the_websocket_handshake_refuses_a_host_this_home_does_not_answer_to() {
+  local home port got
+  home=$(make_home rebound-socket) || fail "could not build a home"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(ws_handshake_status "$port" "evil.example.com:$port")
+  case $got in
+    *101*) fail "a forged Host was upgraded and handed the live board: $got" ;;
+    *403*) ;;
+    *) fail "the handshake answered a forged Host with neither 403 nor 101: $got" ;;
+  esac
+  got=$(ws_handshake_status "$port" "evil.example.com")
+  case $got in
+    *101*) fail "a portless forged Host was upgraded: $got" ;;
+    *403*) ;;
+    *) fail "the handshake answered a portless forged Host unexpectedly: $got" ;;
+  esac
+  # And both real spellings still upgrade, or the fix would have closed the
+  # board to defend it.
+  for spelling in "127.0.0.1:$port" "localhost:$port"; do
+    got=$(ws_handshake_status "$port" "$spelling")
+    case $got in
+      *101*) ;;
+      *) fail "the handshake refused $spelling, which is how the board connects: $got" ;;
+    esac
+  done
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "the websocket handshake refuses a forged Host exactly as the page request does"
+}
+
 test_a_board_that_cannot_be_read_says_why_rather_than_blaming_the_captain() {
   local home port board got real
   home=$(make_home unreadable) || fail "could not build a home"
@@ -1134,6 +1190,7 @@ test_a_home_with_no_board_says_so_rather_than_serving_nothing
 test_the_port_serves_the_board_page_itself
 test_no_origin_may_put_the_board_in_a_frame
 test_a_host_this_home_does_not_answer_to_is_refused
+test_the_websocket_handshake_refuses_a_host_this_home_does_not_answer_to
 test_a_board_that_cannot_be_read_says_why_rather_than_blaming_the_captain
 test_the_port_serves_the_board_and_nothing_else
 test_a_home_with_no_board_page_is_told_so_rather_than_served_something_else

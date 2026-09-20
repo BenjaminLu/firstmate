@@ -229,7 +229,7 @@ So the captain's board needs nothing installed beyond node: no external presenta
 It serves exactly the one file the build wrote and nothing else: each route names its own file, and a request never contributes a path segment to anything opened, so `state/` and `data/` are not reachable by it rather than protected from it.
 Two things here are known to be short-lived and are built as routes rather than as settled facts: this port is to serve the decision packet too, separated by path, and the board file moves from `.lavish/bearings-board.html` to `state/board.html`.
 The board depends on no external command at all - nothing invokes, probes, or needs `lavish-axi` on this path - and nothing may frame it: every response carries `x-frame-options: DENY` and `frame-ancestors 'none'`.
-The board is a local surface: the listener is loopback, and the server answers only a request whose `Host` is `127.0.0.1` or `localhost` at the port it actually took, so a name an attacker points at 127.0.0.1 cannot borrow this origin.
+The board is a local surface: the listener is loopback, and both of the port's entry points - the page request and the websocket handshake - answer only a `Host` of `127.0.0.1` or `localhost` at the port the server actually took, so a name an attacker points at 127.0.0.1 cannot borrow this origin on either.
 
 `state/board-live.jsonl` is the append-only event log every publisher writes to, and it is the durability: an event published while the server is down is read at the next start rather than lost.
 `state/board-live.endpoint` records the URL the running server took, `state/board-live.pid` its process, and `state/board-live.log` whatever it said if it could not start.

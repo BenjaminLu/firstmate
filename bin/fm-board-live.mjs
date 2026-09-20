@@ -80,6 +80,15 @@
 // known end date rather than a standing design. The token check on every
 // inbound message is unchanged and was never the part in question.
 //
+// THE PORT HAS TWO ENTRY POINTS, AND EVERY CLAIM HERE COVERS BOTH OR NAMES
+// WHICH. A page request and a websocket handshake arrive on the same port and
+// are handled separately, so a guard written on one of them is not a guard on
+// the port. The Host allowlist is on both; the frame headers belong to the
+// response and so to the page request; the origin allowlist and the token
+// belong to the socket. When you add a guard here, say which of the two it is
+// on, because the previous version of this block enumerated the socket alone
+// and read as though it covered everything.
+//
 // NOBODY MAY FRAME THIS, AND THAT IS A SEPARATE FACT FROM WHO MAY READ IT.
 // An earlier draft of this block concluded "no browser gains anything" from
 // two true statements about READING: another origin cannot read this
@@ -1018,6 +1027,8 @@ function serve(opts) {
     // hands them the page, the token in it, and the socket. Answering only to
     // this home's own loopback address closes that, and it stays correct
     // whichever way the separate read-authentication decision goes.
+    // THIS PORT HAS TWO ENTRY POINTS and both make this check: here, and the
+    // upgrade handler below. Neither is the complete guard on its own.
     const host = req.headers.host;
     if (!boundPort || !hostAllowed(host, boundPort)) {
       send(403, "text/plain; charset=utf-8",
@@ -1068,6 +1079,19 @@ function serve(opts) {
     const key = req.headers["sec-websocket-key"];
     if (req.headers.upgrade?.toLowerCase() !== "websocket" || typeof key !== "string") {
       socket.destroy();
+      return;
+    }
+    // THE SAME HOST CHECK AS THE REQUEST HANDLER, because this is the port's
+    // SECOND entry point and it is the one that hands out live board state.
+    // A name an attacker controls, pointed at 127.0.0.1, reaches both; a check
+    // on only one of them is a false map for whoever changes this next.
+    if (!boundPort || !hostAllowed(req.headers.host, boundPort)) {
+      socket.end(
+        "HTTP/1.1 403 Forbidden\r\n" +
+        "content-type: text/plain; charset=utf-8\r\n" +
+        "connection: close\r\n\r\n" +
+        "fm-board-live: this port answers 127.0.0.1 and localhost only\n",
+      );
       return;
     }
     const origin = req.headers.origin;
