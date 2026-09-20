@@ -494,6 +494,59 @@ test_home_seed_refuses_empty_charter_fields() {
   pass "home seeding refuses empty normalized charter fields"
 }
 
+# The charter carries the captain's own words, spliced under `# Charter` by
+# bin/fm-brief.sh. A charter that quotes a fenced block whose content starts with
+# `# ` used to truncate there, and the truncated text is what the seeds write into
+# data/secondmates.md - the table work is routed by. A registry line that reads
+# plausibly while missing half its scope is worse than one that is obviously
+# broken, so the section read is the shared fence-aware parser rather than a local
+# awk that stops at the first `# `.
+test_charter_sections_survive_a_fenced_quotation() {
+  local home id brief summary scope charter
+  home="$TMP_ROOT/fenced-charter-home"
+  id=fenced-charter
+  mkdir -p "$home/data"
+  # shellcheck source=bin/fm-secondmate-charter-lib.sh
+  . "$ROOT/bin/fm-secondmate-charter-lib.sh"
+  # Two distinct failures of a `# `-matching awk, both in one fenced quotation.
+  # A fenced line equal to the heading re-matched the heading rule and was
+  # silently DROPPED from the registry text; any other fenced `# ` line hit the
+  # section-end rule and TRUNCATED everything after it.
+  charter=$(printf '%s\n' 'Own the widget domain.' '' \
+    'A charter section looks like:' '```' '# Charter' 'example text' \
+    '# Routing scope' 'what it routes' '```' \
+    'and the charter continues past it.')
+  FM_SECONDMATE_SCOPE='widget work and its rendering' \
+    scaffold_secondmate_charter "$home" "$id" "$charter" alpha \
+    || fail "fenced-charter fixture scaffold failed"
+  brief="$home/data/$id/brief.md"
+  assert_present "$brief" "fenced charter brief was not scaffolded"
+
+  summary=$(registry_summary_for_brief "$brief")
+  case "$summary" in
+    *"and the charter continues past it."*) ;;
+    *) fail "the charter truncated at the fenced '# Charter' line: $summary" ;;
+  esac
+  case "$summary" in
+    *"Own the widget domain."*) ;;
+    *) fail "the charter lost its opening sentence: $summary" ;;
+  esac
+  case "$summary" in
+    *"# Charter"*) ;;
+    *) fail "the fenced line equal to the heading was dropped from the charter: $summary" ;;
+  esac
+  case "$summary" in
+    *"what it routes"*) ;;
+    *) fail "the charter lost text inside its fenced quotation: $summary" ;;
+  esac
+  scope=$(registry_scope_for_brief "$brief")
+  case "$scope" in
+    *"widget work and its rendering"*) ;;
+    *) fail "the routing scope was not read back whole: $scope" ;;
+  esac
+  pass "secondmate charter: a fenced quotation does not truncate the registry text"
+}
+
 test_home_seed_no_projects_end_to_end() {
   # A domain whose subject is the firstmate repo itself needs no project clones:
   # the deliberate --no-projects signal scaffolds, seeds, registers, and spawns a
@@ -2971,6 +3024,7 @@ test_home_seed_rolls_back_failed_clone
 test_home_seed_refuses_missing_filled_charter
 test_home_seed_refuses_placeholder_charter
 test_home_seed_refuses_empty_charter_fields
+test_charter_sections_survive_a_fenced_quotation
 test_home_seed_no_projects_end_to_end
 test_secondmate_spawn_resolves_punctuated_registry_projects
 test_secondmate_spawn_refuses_ambiguous_and_mismatched_registry_bindings
