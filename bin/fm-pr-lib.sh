@@ -1276,8 +1276,18 @@ fm_pr_poll_merge_notified_remove() {  # <state> <id>
 # fm_afk_contract_lock_helpers does.
 _FM_PR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# The acquire below is BOUNDED, for the same reason bin/fm-afk-contract.sh's
+# fm_afk_contract_lock_hold is: this runs inside bin/fm-watch.sh's check loop,
+# and the task metadata lock is also taken by bin/fm-spawn.sh, which holds it
+# across backend window creation, worktree setup and launch delivery. An
+# unbounded wait there would stop that whole supervision cycle - every other
+# task's poll included - behind one ordinary relaunch. A re-bind is the one
+# write here that never needs to wait: the next cycle re-reads the head anyway,
+# so it refuses and reports instead.
+_FM_PR_META_LOCK_TIMEOUT=2
+
 fm_pr_lock_helpers() {
-  command -v fm_meta_lock_path >/dev/null 2>&1 && return 0
+  command -v fm_lock_acquire_wait_bounded >/dev/null 2>&1 && return 0
   # shellcheck source=/dev/null
   . "$_FM_PR_LIB_DIR/fm-wake-lib.sh"
 }
@@ -1296,10 +1306,16 @@ fm_pr_lock_helpers() {
 # request's head instead of being overwritten with the old one's.
 #
 # Returns 0 once the metadata records exactly <head>, including when it already
-# did, and 1 on any failure, having replaced the file wholly or not at all.
+# did, having replaced the file wholly or not at all. Two failures are distinct
+# because they mean different things to a supervisor:
+#   2  the metadata lock was still held when the bound expired. Contention is
+#      ordinary - a spawn owns that lock for the length of a relaunch - and the
+#      next poll re-reads the head, so the caller carries on.
+#   1  anything else. The record could not be brought to the head the forge
+#      just returned, and nothing about waiting longer would have helped.
 fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <head>
   local state=$1 id=$2 provider=$3 host=$4 path=$5 number=$6 head=$7
-  local meta lock tmp='' state_device url status=0 line
+  local meta lock tmp='' state_device url status=0 line timeout
   fm_pr_task_id_valid "$id" || return 1
   fm_pr_head_valid "$head" || return 1
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
@@ -1307,7 +1323,8 @@ fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <he
   state_device=$(fm_pr_file_device "$state") || return 1
   meta="$state/$id.meta"
   lock=$(fm_meta_lock_path "$meta") || return 1
-  fm_lock_acquire_wait "$lock" || return 1
+  timeout=${FM_TEST_PR_META_LOCK_TIMEOUT:-$_FM_PR_META_LOCK_TIMEOUT}
+  fm_lock_acquire_wait_bounded "$lock" "$timeout" || return 2
   if ! fm_pr_metadata_identity_parse "$meta" \
     || [ "$FM_PR_META_PROVIDER" != "$provider" ] \
     || [ "$FM_PR_META_HOST" != "$host" ] \

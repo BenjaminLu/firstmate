@@ -2289,10 +2289,18 @@ while :; do
             'merged '*) poll_head=${out#merged }; out=merged ;;
             'head '*) poll_head=${out#head }; out= ;;
           esac
-          if [ -n "$poll_head" ] \
-            && ! fm_pr_meta_rebind_head "$STATE" "$id" \
-              "$provider" "$host" "$path" "$number" "$poll_head"; then
-            triage_log "could not re-bind the recorded head of $id to $poll_head"
+          if [ -n "$poll_head" ]; then
+            rebind_rc=0
+            fm_pr_meta_rebind_head "$STATE" "$id" \
+              "$provider" "$host" "$path" "$number" "$poll_head" || rebind_rc=$?
+          else
+            rebind_rc=0
+          fi
+          # A re-bind never holds this loop up. Contention (2) is ordinary - a
+          # relaunch owns the task record for as long as a spawn takes - and the
+          # next poll re-reads the head, so it is logged and the cycle carries on.
+          if [ "$rebind_rc" -eq 2 ]; then
+            triage_log "deferred re-binding the recorded head of $id to $poll_head; the task record was locked"
           fi
         elif fm_custom_check_snapshot_prepare "$STATE" "$id"; then
           custom_snapshot=$FM_CUSTOM_CHECK_SNAPSHOT

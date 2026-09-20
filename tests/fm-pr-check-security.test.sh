@@ -895,6 +895,52 @@ test_poll_rebinds_the_recorded_head() {
   pass "an open pull request's moved head is re-bound every cycle without waking the supervisor"
 }
 
+# A re-bind runs inside the supervision loop, and the task record it writes is
+# also held by bin/fm-spawn.sh for the whole length of a relaunch. Waiting there
+# would stop every remaining check in the cycle, so the acquire is bounded: this
+# proves the cycle still finishes, with the record untouched and the wait named.
+test_rebind_never_waits_on_a_held_task_record() {
+  local dir state rc armed_head started elapsed
+  armed_head=0000000000000000000000000000000000000000
+  dir=$(make_case rebind-bounded-lock)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$armed_head" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  add_stop_custom_check "$dir"
+  start_lock_holder "$dir" "$state/.meta-task-a.lock"
+
+  started=$(date +%s)
+  set +e
+  # The inactive-outcome scan takes this same task record, under its own bounded
+  # wrapper - the house pattern this finding asks the re-bind to join. Hold it to
+  # its shortest budget so what this case measures is the re-bind, not that scan.
+  FM_TEST_GH_STATE=OPEN FM_TEST_GH_HEAD=cafebabecafebabecafebabecafebabecafebabe \
+    FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_PR_META_LOCK_TIMEOUT=1 \
+    FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  elapsed=$(( $(date +%s) - started ))
+  release_lock_holder
+
+  [ "$rc" -eq 0 ] || fail "held task record stopped the watcher cycle (rc=$rc): $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in
+    check:*z-stop.check.sh:*stop-cycle) ;;
+    *) fail "held task record starved the rest of the cycle: $(cat "$dir/watch.out")" ;;
+  esac
+  [ "$elapsed" -lt 8 ] || fail "the cycle waited ${elapsed}s on a held task record"
+  grep -qxF "pr_head=$armed_head" "$state/task-a.meta" \
+    || fail "a refused re-bind changed the task record anyway"
+  grep -F "deferred re-binding the recorded head of task-a" "$state/.watch-triage.log" >/dev/null \
+    || fail "a refused re-bind left no record of the wait"
+  ! find "$state" -name '.fm-pr-meta-head.*' -print | grep . >/dev/null \
+    || fail "a refused re-bind left a temporary behind"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "a refused re-bind disturbed the armed poll"
+  pass "a task record held by another owner defers the re-bind instead of stalling the cycle"
+}
+
 # fm_pr_meta_rebind_head is what writes that value, so the refusals that keep a
 # head nobody saw out of the record are proven on it directly.
 test_recorded_head_refuses_what_the_forge_did_not_return() {
@@ -2824,11 +2870,16 @@ SH
   pass "a renumbered registration is never re-recorded around a tampered artifact:$exercised, or a pending retirement"
 }
 
-start_poll_publish_holder() {  # <dir> <state> <id>
-  local dir=$1 state=$2 id=$3 i
+# Hold <lock-path> in a live, unrelated process until release_lock_holder, so a
+# case can prove what another owner's lock actually does to the code under test.
+# The holder must be a real live process: the lock's own stale-owner recovery
+# reclaims a record whose pid is gone, which would silently un-hold it.
+start_lock_holder() {  # <dir> <lock-path>
+  local dir=$1 i
   PR_POLL_HOLDER_ACQUIRED="$dir/poll-publish-holder-acquired"
   PR_POLL_HOLDER_RELEASE="$dir/poll-publish-holder-release"
-  PR_POLL_HOLDER_LOCK="$state/.pr-poll-publish-$id.lock"
+  PR_POLL_HOLDER_LOCK=$2
+  rm -f "$PR_POLL_HOLDER_ACQUIRED" "$PR_POLL_HOLDER_RELEASE"
   cat > "$dir/poll-publish-holder.sh" <<'SH'
 #!/usr/bin/env bash
 set -eu
@@ -2849,12 +2900,20 @@ SH
   done
   kill "$PR_POLL_HOLDER_PID" 2>/dev/null || true
   wait "$PR_POLL_HOLDER_PID" 2>/dev/null || true
-  fail "poll publication holder did not acquire its lock"
+  fail "lock holder did not acquire $PR_POLL_HOLDER_LOCK"
+}
+
+release_lock_holder() {
+  : > "$PR_POLL_HOLDER_RELEASE"
+  wait "$PR_POLL_HOLDER_PID" || fail "lock holder did not release $PR_POLL_HOLDER_LOCK"
+}
+
+start_poll_publish_holder() {  # <dir> <state> <id>
+  start_lock_holder "$1" "$2/.pr-poll-publish-$3.lock"
 }
 
 release_poll_publish_holder() {
-  : > "$PR_POLL_HOLDER_RELEASE"
-  wait "$PR_POLL_HOLDER_PID" || fail "poll publication holder did not release its lock"
+  release_lock_holder
 }
 
 test_device_rerecord_serializes_direct_rearm() {
@@ -2971,6 +3030,7 @@ test_arm_only_arms_without_announcing_ready
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_poll_rebinds_the_recorded_head
+test_rebind_never_waits_on_a_held_task_record
 test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication
