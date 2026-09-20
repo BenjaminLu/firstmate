@@ -446,8 +446,10 @@ check_design_records() {
 
 # One line per thing that needs a pull request's live state:
 #   <key|-> <TAB> <url> <TAB> <slug|-> <TAB> <number|-> <TAB> <role> <TAB> <owner> <TAB> <extra>
-# role is taskpr (obligation 1), poll (obligation 2, extra is the recorded
-# head), or card (obligation 3, owner is the board card key).
+# role is taskpr (obligation 1, from the task's own records), discovered
+# (obligation 1, found at the forge by the task's branch), poll (obligation 2,
+# extra is the recorded head), or card (obligation 3, owner is the board card
+# key).
 #
 # The key is the pull request's CANONICAL identity - the lowercased owner and
 # repository plus the number - and never the raw URL a local record happens to
@@ -580,7 +582,7 @@ discover_task_pull_request() {
   # An empty answer here is the forge saying there is no open pull request on
   # that branch, which is a determinate none.
   [ -n "$GH_OUT" ] || return 0
-  add_target "$GH_OUT" taskpr "$id (not recorded in its own records)"
+  add_target "$GH_OUT" discovered "$id"
 }
 
 collect_task_targets() {
@@ -814,10 +816,16 @@ evaluate_targets() {
     IFS=$'\t' read -r _ pr_state head reviews comments <<< "$line"
 
     case "$role" in
-      taskpr)
+      taskpr|discovered)
         [ "$pr_state" = OPEN ] || continue
         [ "${reviews:-0}" = 0 ] && [ "${comments:-0}" = 0 ] || continue
-        owed "nothing posted on $url (task $owner): no review and no comment"
+        if [ "$role" = discovered ]; then
+          # Say where it came from: the task's own records not naming it is
+          # itself something for firstmate to fix.
+          owed "nothing posted on $url (task $owner, which its own records do not name): no review and no comment"
+        else
+          owed "nothing posted on $url (task $owner): no review and no comment"
+        fi
         ;;
       poll)
         if [ "$pr_state" = CLOSED ]; then

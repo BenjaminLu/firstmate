@@ -263,8 +263,8 @@ test_a_pull_request_nobody_recorded_is_still_found() {
   run "$home" "$out"
   assert_contains "$(cat "$out")" "nothing posted on $PR_BASE/55" \
     "an unreviewed pull request that no task record names was not found"
-  assert_contains "$(cat "$out")" "not recorded in its own records" \
-    "the report did not say the pull request was missing from the task's records"
+  assert_contains "$(cat "$out")" "(task omega, which its own records do not name)" \
+    "the report did not say the pull request is missing from the task's own records"
   pass "an unreviewed pull request nobody recorded is found from the task's own branch"
 }
 
