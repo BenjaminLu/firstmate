@@ -1603,6 +1603,120 @@ test_compose_slots_the_risk_a_packet_leaves_out() {
   pass "compose slots only the card fields a verified packet left out"
 }
 
+# --- the card the call itself wrote ------------------------------------------
+# The captain refused a board whose cards are recomposed every time: 看板的卡片
+# 我要一個realtime方案，不要你每次重建，沒意義. So a call writes its card when it
+# is raised and compose READS it. These tests hold the two halves of that: the
+# record outranks everything else a card could be built from, and a thin record
+# reaches the captain looking thin rather than looking complete.
+
+# Write a card record the way bin/fm-captain-hold.sh does, for the fixture task.
+write_card_record() {  # <home> <json>
+  mkdir -p "$1/state/board-cards" || fail "cannot create the card directory"
+  printf '%s\n' "$2" > "$1/state/board-cards/gated-work.json" \
+    || fail "cannot write the fixture card record"
+}
+
+FULL_CARD_RECORD='{"schema":"fm-board-card.v1","task":"gated-work","key":"captain-hold-gated-work-1","at":"2026-09-20T04:00:00Z","state":"open","thin":false,"title":{"en":"Ship the forge loop","hant":"上線 forge 迴圈","hans":"上线 forge 循环"},"repo":"firstmate","decide":"Which way do we ship it?","if_nothing":"the branch waits","reversible":"no","risk":"high","options":[{"value":"now","label":"Ship now","consequence":"fast, unproven"},{"value":"wait","label":"Wait for the review","consequence":"slower, checked"}],"recommend_value":"wait","recommend_why":"the review caught the last one","close":"release","figures":[]}'
+
+test_compose_builds_the_card_the_call_wrote_rather_than_rebuilding_it() {
+  local home skeleton
+  home=$(make_compose_home compose-card-record)
+  write_card_record "$home" "$FULL_CARD_RECORD"
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a home whose call wrote a card record"
+  # Every field below is the RECORD's, and every one of them differs from the
+  # verified packet this same fixture also carries, so a pass cannot come from
+  # the packet path by accident.
+  jq -e '.captains_call[0]
+    | .key == "gated-work" and .type == "decision"
+    and .title.en == "Ship the forge loop" and .title.hant == "上線 forge 迴圈"
+    and .decide.en == "Which way do we ship it?"
+    and .if_nothing.en == "the branch waits"
+    and .risk == "high" and .reversible == "no"
+    and .recommend_value == "wait"
+    and .recommend_why.en == "the review caught the last one"
+    and .close == "release"
+    and ([.options[].value] == ["now", "wait"])
+    and (.thin | not)' "$skeleton" >/dev/null \
+    || fail "the card was not built from the record the call wrote: $(cat "$skeleton")"
+  # And no slot on it is left for a composer, which is the whole claim: build
+  # refuses a {FILL: ...} and this card has none, so it reaches the captain
+  # exactly as the call wrote it. ({TRANSLATE: ...} is the ordinary translation
+  # pass every English-only string takes and is not a composer slot.)
+  jq -e '[.captains_call[0] | .. | strings | select(startswith("{FILL:"))] | length == 0' \
+    "$skeleton" >/dev/null \
+    || fail "a record-seeded card still carried a composer slot: $(cat "$skeleton")"
+  pass "compose builds a captain card from the record the call wrote"
+}
+
+test_compose_keeps_the_packet_card_for_a_call_that_wrote_no_record() {
+  local home skeleton
+  home=$(make_compose_home compose-card-no-record)
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a home with no card record"
+  jq -e '.captains_call[0].title.en == "Rollout order"' "$skeleton" >/dev/null \
+    || fail "a call with no record lost its packet-seeded card: $(cat "$skeleton")"
+  pass "a call that wrote no record keeps the packet-seeded card it had"
+}
+
+# A thin call is the ordinary needs-decision PR #33 deliberately left free of
+# any packet obligation. It still reaches the board - that is the point - but
+# it must arrive looking like what it is.
+test_compose_carries_a_thin_call_to_the_board_as_visibly_thin() {
+  local home skeleton
+  home=$(make_compose_home compose-card-thin)
+  write_card_record "$home" '{"schema":"fm-board-card.v1","task":"gated-work","key":"captain-hold-gated-work-1","at":"2026-09-20T04:00:00Z","state":"open","thin":true,"title":"Rename the flag?","repo":"firstmate","decide":"Rename the flag?","if_nothing":"","reversible":"yes","risk":"medium","options":[],"recommend_value":"","recommend_why":"","close":"","figures":[]}'
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a home whose call wrote a thin card"
+  # thin says so on its face; it carries no option of its own, so the captain
+  # is never shown a choice the call did not offer (build adds the board's own
+  # reconcile afterwards); and neither risk nor reversibility is claimed here,
+  # because nobody assessed either.
+  jq -e '.captains_call[0]
+    | .thin == true and .allow_freeform == true
+    and .title.en == "Rename the flag?"
+    and ([.options[].value] == [])
+    and (has("risk") | not) and (has("reversible") | not)
+    and (has("recommend_value") | not) and (has("recommend_why") | not)' "$skeleton" >/dev/null \
+    || fail "a thin call did not reach the board as thin: $(cat "$skeleton")"
+  jq -e '[.captains_call[0] | .. | strings | select(startswith("{FILL:"))] | length == 0' \
+    "$skeleton" >/dev/null \
+    || fail "a thin card carried a composer slot the captain would never see filled"
+  pass "a call that offered no options reaches the board saying so"
+}
+
+# One unreadable file must cost its own card its freshness, never the board.
+# This is the opposite posture to --card-file, which refuses the hold outright:
+# there a bad file stops one call being raised, here it would blank every card
+# the captain has.
+test_compose_survives_a_card_record_it_cannot_read() {
+  local home skeleton
+  home=$(make_compose_home compose-card-unreadable)
+  write_card_record "$home" 'this is not json at all {'
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "an unreadable card record took the whole board down"
+  jq -e '.captains_call[0].title.en == "Rollout order"' "$skeleton" >/dev/null \
+    || fail "an unreadable record did not fall back to the packet card: $(cat "$skeleton")"
+  pass "an unreadable card record costs its own card, never the board"
+}
+
+test_compose_ignores_a_card_record_of_a_schema_it_does_not_know() {
+  local home skeleton
+  home=$(make_compose_home compose-card-foreign-schema)
+  write_card_record "$home" '{"schema":"something-else.v9","title":"Not ours","options":[]}'
+  skeleton="$home/skeleton.json"
+  run_board "$home" compose --snapshot "$COMPOSE_ASSETS/snapshot.json" --out "$skeleton" >/dev/null \
+    || fail "compose refused a card record written by something else"
+  jq -e '.captains_call[0].title.en == "Rollout order"' "$skeleton" >/dev/null \
+    || fail "a foreign card record was read as though it were ours: $(cat "$skeleton")"
+  pass "a card record of an unknown schema is ignored rather than guessed at"
+}
+
 test_build_names_the_unfilled_card_slot_it_refuses() {
   local home skeleton filled board out rc
   home=$(make_compose_home compose-unfilled-slot)
@@ -2146,6 +2260,11 @@ test_compose_carries_the_secondmate_integrity_warnings
 test_compose_badges_a_warning_only_for_a_synthesized_gate
 test_compose_leaves_the_omitted_charted_counts_to_the_composer
 test_compose_slots_the_risk_a_packet_leaves_out
+test_compose_builds_the_card_the_call_wrote_rather_than_rebuilding_it
+test_compose_keeps_the_packet_card_for_a_call_that_wrote_no_record
+test_compose_carries_a_thin_call_to_the_board_as_visibly_thin
+test_compose_survives_a_card_record_it_cannot_read
+test_compose_ignores_a_card_record_of_a_schema_it_does_not_know
 test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled

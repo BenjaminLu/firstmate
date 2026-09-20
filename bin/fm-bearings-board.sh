@@ -110,7 +110,17 @@
 #            board either. A held task's title,
 #            repo, and kind come from this home's backlog record when
 #            `bin/fm-tasks-axi.sh show` can read it; a work item (kind other
-#            than captain) gets `close: release`, a question omits close. When
+#            than captain) gets `close: release`, a question omits close. A held
+#            task whose call wrote a card record - `<state>/board-cards/<id>.json`,
+#            owned by `bin/fm-board-card-lib.sh` - is seeded from THAT record and
+#            from nothing else, because the record is the call itself rather than
+#            an artifact written before it. A record-seeded card carries no
+#            {FILL: ...} placeholder of any kind: a full one arrived with its
+#            options, and a thin one carries `thin: true`, no options of its own,
+#            no risk and no reversibility, so the page can say plainly that the
+#            call offered the captain nothing to choose between. An unreadable
+#            record is skipped rather than fatal, so one bad file cannot take the
+#            whole board down with it. Failing that, when
 #            `bin/fm-packet.sh verify` accepts the held task's packet, the card
 #            is seeded from `bin/fm-packet.sh card <id>` instead of
 #            placeholders. A card that gets placeholders carries the task's
@@ -768,6 +778,7 @@ validate_payload() {  # <data.json>
       and (optional_copy("freeform_hint"))
       and ((has("close") | not) or (.close == "done" or .close == "release"))
       and ((has("allow_freeform") | not) or (.allow_freeform | type == "boolean"))
+      and ((has("thin") | not) or (.thin | type == "boolean"))
       and ((has("recommend_value") | not)
         or (.recommend_value | placeholder)
         or ((.recommend_value | slug(128))
@@ -1039,6 +1050,53 @@ packet_card() {  # <task-id>
   printf '%s\n' "$card" | jq -c . 2>/dev/null || printf 'null\n'
 }
 
+# The card record the call wrote when it was raised, or null when this home has
+# none for the task.
+#
+# THIS is the realtime card the captain asked for: 看板的卡片我要一個realtime方
+# 案，不要你每次重建，沒意義. Its content was written at the instant the call was
+# raised, by the one site every captain call goes through, so composing a board
+# from it is a read rather than a rebuild. `bin/fm-board-card-lib.sh` owns the
+# record's format; this reads it and nothing else.
+#
+# A record WINS over the packet, because the packet is the worker's artifact
+# written before the call and the record is the call itself. A call raised
+# before this home had records simply has none, and the packet and placeholder
+# paths behind it are untouched.
+#
+# A record that cannot be read or is not the schema this knows becomes null
+# here rather than an error. That is deliberate and it is the opposite of
+# `--card-file`'s posture: refusing there stops a bad card being RAISED, while
+# refusing here would take down the whole board - every other card with it -
+# over one unreadable file. The call still shows, seeded the way it was before.
+record_card() {  # <task-id>
+  local path=$STATE/board-cards/$1.json
+  [ -r "$path" ] || { printf 'null\n'; return 0; }
+  jq -c '
+    # Empty is how the record spells "the call did not say", and the board
+    # spells that as absent, so the two are reconciled here and nowhere else.
+    def present: . != null and . != "";
+    if type != "object" or .schema != "fm-board-card.v1" then null
+    else . as $r
+      | {key: $r.key, options: ($r.options // []), thin: ($r.thin == true)}
+      + (if ($r.title | present) then {title: $r.title} else {} end)
+      + (if ($r.repo | present) then {repo: $r.repo} else {} end)
+      + (if ($r.decide | present) then {decide: $r.decide} else {} end)
+      + (if ($r.if_nothing | present) then {if_nothing: $r.if_nothing} else {} end)
+      + (if ($r.recommend_value | present) then {recommend_value: $r.recommend_value} else {} end)
+      + (if ($r.recommend_why | present) then {recommend_why: $r.recommend_why} else {} end)
+      + (if ($r.close | present) then {close: $r.close} else {} end)
+      + (if (($r.figures // []) | length) > 0 then {figures: $r.figures} else {} end)
+      # A thin card carries no risk and no reversibility, because nobody
+      # assessed either. Carrying the defaults this record writes would put a
+      # claim on the card the captain answers that nobody actually made.
+      + (if $r.thin == true then {}
+         else (if ($r.risk | present) then {risk: $r.risk} else {} end)
+            + (if ($r.reversible | present) then {reversible: $r.reversible} else {} end)
+         end)
+    end' "$path" 2>/dev/null || printf 'null\n'
+}
+
 # The task's pull request as board `evidence` links, or [] when no PR is
 # recorded. A decision card with no packet behind it still owes the captain
 # something to decide against, and the ground truth is the pull request itself:
@@ -1093,7 +1151,7 @@ command_compose_check() {  # <data.json>
 }
 
 command_compose() {
-  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' links='{}' id record card link ids tmp readable=true
+  local lang=hant out='' snapshot_file='' snapshot records='{}' cards='{}' written='{}' links='{}' id record card call link ids tmp readable=true
   local acks='{}'
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1134,6 +1192,8 @@ EOF
     [ -n "$id" ] || continue
     card=$(packet_card "$id")
     cards=$(jq -n --argjson acc "$cards" --arg id "$id" --argjson card "$card" '$acc + {($id): $card}')
+    call=$(record_card "$id")
+    written=$(jq -n --argjson acc "$written" --arg id "$id" --argjson call "$call" '$acc + {($id): $call}')
     link=$(pr_evidence "$id")
     links=$(jq -n --argjson acc "$links" --arg id "$id" --argjson link "$link" '$acc + {($id): $link}')
   done <<EOF
@@ -1145,7 +1205,8 @@ EOF
   acks=$(board_acks_map)
   tmp=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-bearings-skeleton.XXXXXX") || fail "cannot stage the board skeleton"
   printf '%s\n' "$snapshot" | jq --arg schema "$BOARD_SCHEMA" --arg lang "$lang" \
-    --argjson records "$records" --argjson cards "$cards" --argjson links "$links" \
+    --argjson records "$records" --argjson cards "$cards" --argjson written "$written" \
+    --argjson links "$links" \
     --argjson acks "$acks" \
     --argjson readable "$readable" "$BOARD_JQ_DEFS"'
     . as $snap |
@@ -1220,8 +1281,54 @@ EOF
           reversible: reversible_slot, risk: risk_slot}
          | with_entries(select($card[.key] == null)))
       + (if $card.close != null then {close: $card.close} else hold_close end);
-    def decision_card: . as $row | ($cards[$row.id] // null) as $card
-      | if $card == null then placeholder_card else packet_seeded($card) end;
+    # A card composed from the record the call wrote, which is the only card
+    # shape on this board that needs no composer at all.
+    #
+    # It carries NO fill slot, and that is the point rather than an omission. A
+    # packet-seeded card leaves risk, reversibility and the recommendation for
+    # a model to fill in afterwards, which is the rebuild the captain refused. A
+    # record is complete at the instant it is written: a full card carries its
+    # options because --card-file demanded them, and a thin card carries none
+    # and says so on its face. Either way the board can be built straight from
+    # it, and build refuses a fill slot, so a slot injected here would be a bug
+    # that stops the board rather than one that ships a lie.
+    def record_seeded($card): . as $row
+      | {key: $row.key, type: "decision",
+         repo: (($card.repo // "") | if . == "" then repo_of($row.id) else . end),
+         title: (if $card.title == null then ($row | t(hold_title; $row.key))
+                 else ($card.title | i18n($row.key)) end),
+         options: [$card.options[]? | . as $o
+           | .label |= i18n($o.value)
+           | if has("hint") then .hint |= i18n($o.value) else . end
+           | if has("consequence") then .consequence |= i18n($o.value) else . end
+           | if has("buys") then .buys |= i18n($o.value) else . end
+           | if has("changes")
+             then .changes |= with_entries(.value |= [.[] | i18n($o.value)])
+             else . end],
+         allow_freeform: true}
+      # `thin` is what the page says out loud. A call that offered the captain
+      # no options must look like one, or he cannot tell an empty card from a
+      # card whose options went missing on the way to him.
+      + (if $card.thin then {thin: true} else {} end)
+      + (if $card.decide != null then {decide: ($card.decide | i18n($row.key))} else {} end)
+      + (if $card.if_nothing != null then {if_nothing: ($card.if_nothing | i18n($row.key))} else {} end)
+      + (if $card.recommend_why != null then {recommend_why: ($card.recommend_why | i18n($row.key))} else {} end)
+      + (if $card.recommend_value != null then {recommend_value: $card.recommend_value} else {} end)
+      + (if $card.risk != null then {risk: $card.risk} else {} end)
+      + (if $card.reversible != null then {reversible: $card.reversible} else {} end)
+      # No figures. The drawings on a card live under `packet.figures` and are
+      # read from the figure sections of a verified packet, not from the
+      # decision block a --card-file carries, so a record-seeded card has none
+      # to give and says nothing rather than hanging an empty slot on it.
+      + (($links[$row.id] // []) | if length == 0 then {} else {evidence: .} end)
+      + (if $card.close != null then {close: $card.close} else hold_close end);
+    # Precedence, most authoritative first: the record the call wrote, then the
+    # verified packet the worker wrote, then placeholders for a composer.
+    def decision_card: . as $row | ($written[$row.id] // null) as $call
+      | ($cards[$row.id] // null) as $card
+      | if $call != null then record_seeded($call)
+        elif $card == null then placeholder_card
+        else packet_seeded($card) end;
     def merge_ready: .checks == "passing" and .mergeable == "MERGEABLE" and .review != "CHANGES_REQUESTED";
     def merge_card: .task as $task
       | ((record($task) | if . == null then null else .title end)
