@@ -97,6 +97,19 @@ const dataNode = new Node("script");
 dataNode.textContent = html
   .split('<script id="bearings-data" type="application/json">')[1]
   .split("</script>")[0];
+/* A reason code the copy table has no words for cannot be put in a BUILT
+   board - the payload contract restricts the field to the eight it knows - so
+   the only way to drive the page's guard is to change the code after the build
+   and before the page reads it. That is also exactly the situation the guard
+   exists for: the contract and the copy table are in different files, and a
+   code added to one is not forced through the other. */
+if (process.env.BOARD_MERGE_REASON) {
+  const patched = JSON.parse(dataNode.textContent);
+  for (const row of patched.merge_queue || []) {
+    if (!row.ready) row.reason = process.env.BOARD_MERGE_REASON;
+  }
+  dataNode.textContent = JSON.stringify(patched);
+}
 byId.set("bearings-data", dataNode);
 
 globalThis.document = {

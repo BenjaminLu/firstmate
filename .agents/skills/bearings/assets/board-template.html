@@ -666,6 +666,7 @@ __FM_BEARINGS_BOARD_DATA__
       mq_unroutable: "its work item cannot take an answer from this board",
       mq_duplicate: "two open pull requests claim the same work item",
       mq_backlog_unreadable: "the work list could not be read here",
+      mq_unworded: "held for a reason this board has no words for",
       lane_working: "Writing", lane_pr: "On a PR · checks running",
       lane_failed: "A check failed", lane_stuck: "Stuck",
       lane_waiting: "Waiting on something else", lane_stopped: "Stopped",
@@ -732,6 +733,7 @@ __FM_BEARINGS_BOARD_DATA__
       mq_unroutable: "它的工作項目沒辦法從這個看板接收回答",
       mq_duplicate: "兩個開啟中的 PR 認領同一個工作項目",
       mq_backlog_unreadable: "這裡讀不到工作清單",
+      mq_unworded: "被某個這個看板還沒有說法的原因擋著",
       lane_working: "在寫", lane_pr: "PR 上 · 檢查跑著",
       lane_failed: "有檢查失敗", lane_stuck: "卡住了",
       lane_waiting: "在等別的東西", lane_stopped: "停了",
@@ -798,6 +800,7 @@ __FM_BEARINGS_BOARD_DATA__
       mq_unroutable: "它的工作项目没办法从这个看板接收回答",
       mq_duplicate: "两个开启中的 PR 认领同一个工作项目",
       mq_backlog_unreadable: "这里读不到工作清单",
+      mq_unworded: "被某个这个看板还没有说法的原因挡着",
       lane_working: "在写", lane_pr: "PR 上 · 检查跑着",
       lane_failed: "有检查失败", lane_stuck: "卡住了",
       lane_waiting: "在等别的东西", lane_stopped: "停了",
@@ -1930,6 +1933,16 @@ __FM_BEARINGS_BOARD_DATA__
     /* The merge lane. The headline is computed from the rows themselves rather
        than from a second count in the payload, because two numbers that can
        disagree is how a surface starts lying. */
+    /* A reason code is payload data, and t() falls back to the key it was
+       given, so an unworded code would put a raw machine token - mq_checks_
+       pending - in front of the captain. The payload contract restricts these
+       to eight codes today, and the contract and the copy table live in
+       different files, so the next code added to one is not forced through the
+       other. Same guard riskBadge already uses two hundred lines up. */
+    function reasonWords(code) {
+      var key = "mq_" + String(code).replace(/-/g, "_");
+      return t(key) === key ? t("mq_unworded") : t(key);
+    }
     var mergeSection = document.getElementById("bb-merge-section");
     var mergeHead = document.getElementById("bb-merge-head");
     var mergeQueue = document.getElementById("bb-merge-queue");
@@ -1955,7 +1968,7 @@ __FM_BEARINGS_BOARD_DATA__
         else { row.appendChild(pr); }
         row.appendChild(el("span", "bb-mqrow__repo", r.repo));
         row.appendChild(el("span", "bb-mqrow__why",
-          r.ready ? t("mq_ready") : t("mq_" + String(r.reason).replace(/-/g, "_"))));
+          r.ready ? t("mq_ready") : reasonWords(r.reason)));
         mergeQueue.appendChild(row);
       });
     }

@@ -324,6 +324,29 @@ test_an_empty_merge_lane_says_why_it_is_empty() {
   pass "an empty merge lane says how many are open and why none is on the desk"
 }
 
+# R13. A reason code is payload data and t() falls back to the key it was
+# given, so a code with no copy would put a raw machine token in front of the
+# captain. The payload contract and the copy table live in different files, so
+# the next code added to one is not forced through the other.
+test_a_reason_with_no_words_never_shows_the_captain_a_machine_token() {
+  local home out
+  home=$(make_home merge-unworded)
+  out=$(render_payload "$home" "$(merge_payload '[
+    {"repo":"o/r","num":"29","ready":false,"reason":"checks-pending"}]')")
+  # Sanity: a known code reads as words.
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.rows[0].text')" "checks have not gone green" \
+    "a known reason code did not render as words: $out"
+  # The guard itself, driven through the page rather than asserted about the
+  # table: a code the copy table has no entry for must not leak its key.
+  out=$(BOARD_MERGE_REASON=marooned render_payload "$home" "$(merge_payload '[
+    {"repo":"o/r","num":"29","ready":false,"reason":"checks-pending"}]')")
+  [ "$(printf '%s' "$out" | jq -r '.merge.rows[0].text' | grep -c "mq_")" = "0" ] \
+    || fail "a reason with no copy showed the captain a machine token: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.merge.rows[0].text')" "no words for" \
+    "a reason with no copy did not say so in the captain's language: $out"
+  pass "a reason code with no words never reaches the captain as a token"
+}
+
 test_a_green_pull_request_reads_as_ready_in_the_lane() {
   local home out
   home=$(make_home merge-ready)
@@ -1963,3 +1986,4 @@ test_a_board_that_knows_no_lanes_offers_no_fleet_counters
 test_the_dispatch_bar_refuses_a_send_that_reports_failure
 test_the_map_makes_no_risk_claim_nobody_made
 test_a_floor_count_reads_as_a_floor_not_a_total
+test_a_reason_with_no_words_never_shows_the_captain_a_machine_token
