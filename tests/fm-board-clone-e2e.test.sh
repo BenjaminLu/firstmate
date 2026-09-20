@@ -152,13 +152,26 @@ make_home() {  # <name> <payload-json-text> ; prints the home path
 
 # Build the board in a home through the shipped command, and print the URL it
 # says the captain can open. Every failure is the case's, not a skip.
-build_board() {  # <home> ; prints the url
+#
+# The build also starts the server, and the server is what later runs the
+# answer path, so whether the backlog backend is reachable from it is settled
+# here and nowhere else. Starting the server without it and then reaching for
+# it at the click is exactly the shape that produced `answer-path-refused`
+# while every other case stayed green.
+build_board() {  # <home> [--with-backlog] ; prints the url
   local home=$1 out url
   STARTED_HOMES+=("$home")
-  out=$(in_clone "$home" "$CLONE/bin/fm-bearings-board.sh" build "$home/payload.json" 2>&1) || {
-    printf '%s\n' "$out" >&2
-    return 1
-  }
+  if [ "${2-}" = --with-backlog ]; then
+    out=$(in_clone_with_backlog "$home" "$CLONE/bin/fm-bearings-board.sh" build "$home/payload.json" 2>&1) || {
+      printf '%s\n' "$out" >&2
+      return 1
+    }
+  else
+    out=$(in_clone "$home" "$CLONE/bin/fm-bearings-board.sh" build "$home/payload.json" 2>&1) || {
+      printf '%s\n' "$out" >&2
+      return 1
+    }
+  fi
   url=$(printf '%s\n' "$out" | awk '/^url: / { sub(/^url: /, ""); print; exit }')
   [ -n "$url" ] || { printf '%s\n' "$out" >&2; return 1; }
   printf '%s\n' "$url"
@@ -307,7 +320,11 @@ test_a_server_running_code_that_has_changed_is_detectable_from_outside_it() {
     || fail "a healthy home did not pass its own check"
 
   # The code moves under the running process, which is what a fleet update
-  # does. Appending is enough: the process holds what it read at exec.
+  # does. Appending is enough: the process holds what it read at exec, and the
+  # copy is put back at the end so the cases after this one run against the
+  # clone as it shipped.
+  cp -p "$CLONE/bin/fm-board-live.mjs" "$TMP_ROOT/fm-board-live.mjs.orig" \
+    || fail "could not keep a copy of the clone's server code"
   printf '\n// the server code changed while a server was running on it\n' \
     >> "$CLONE/bin/fm-board-live.mjs" \
     || fail "could not change the clone's server code"
@@ -338,6 +355,8 @@ test_a_server_running_code_that_has_changed_is_detectable_from_outside_it() {
     || fail "the replacement server could not be asked about itself"
   assert_contains "$after" "code: current" \
     "the replacement server is not on the code now on disk either"
+  cp -p "$TMP_ROOT/fm-board-live.mjs.orig" "$CLONE/bin/fm-board-live.mjs" \
+    || fail "could not put the clone's server code back"
   pass "a server whose code has moved is detectable from outside it and does not go on serving"
 }
 
@@ -361,7 +380,11 @@ test_a_click_on_an_option_reaches_this_home_and_what_was_clicked_is_recoverable(
       --reason "captain must decide" >/dev/null 2>&1 \
       || fail "could not hold the task for the captain"
   fi
-  url=$(build_board "$home") || fail "the clone could not build a board to click"
+  if [ "$backlog_reachable" -eq 1 ]; then
+    url=$(build_board "$home" --with-backlog) || fail "the clone could not build a board to click"
+  else
+    url=$(build_board "$home") || fail "the clone could not build a board to click"
+  fi
 
   # The card's own controls, named once and handed to jq as data so nothing
   # here has to be quoted twice.

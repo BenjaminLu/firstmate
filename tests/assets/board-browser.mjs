@@ -261,9 +261,10 @@ async function main() {
   const browser = findBrowser();
   if (!browser) die("no chrome, chromium or edge found on this machine", 3);
 
-  const profile = mkdtempSync(join(tmpdir(), "fm-board-browser-"));
-  const child = spawn(browser, [
-    "--headless=new",
+  // --headless=new is what a current Chrome wants and what an older Chromium
+  // does not know, so both are tried rather than one being assumed: a clone on
+  // a machine with the older build is a clone this has to work on.
+  const FLAGS = (profile) => [
     "--remote-debugging-port=0",
     `--user-data-dir=${profile}`,
     "--no-first-run",
@@ -278,34 +279,51 @@ async function main() {
     "--disable-features=Translate,MediaRouter,OptimizationHints",
     "--window-size=1280,900",
     "about:blank",
-  ], { stdio: ["ignore", "ignore", "pipe"] });
-  let browserStderr = "";
-  child.stderr.on("data", (d) => { browserStderr += d.toString("utf8"); });
+  ];
 
+  let child = null;
+  let profile = null;
   const stop = () => {
-    try { child.kill("SIGKILL"); } catch { /* already gone */ }
-    try { rmSync(profile, { recursive: true, force: true }); } catch { /* best effort */ }
+    try { if (child) child.kill("SIGKILL"); } catch { /* already gone */ }
+    try { if (profile) rmSync(profile, { recursive: true, force: true }); } catch { /* best effort */ }
   };
   process.on("exit", stop);
+  // A run killed from outside must not leave a browser and a profile behind on
+  // the machine it was killed on.
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(signal, () => { stop(); process.exit(1); });
+  }
 
-  // The port the browser actually took, from the file it writes once it has
-  // one. Deriving it any other way is guessing.
-  const portFile = join(profile, "DevToolsActivePort");
   let endpoint = null;
-  for (let waited = 0; waited < 20000; waited += 100) {
-    if (existsSync(portFile)) {
-      const lines = readFileSync(portFile, "utf8").split("\n");
-      if (lines.length >= 2 && lines[0].trim()) {
-        endpoint = `ws://127.0.0.1:${lines[0].trim()}${lines[1].trim()}`;
-        break;
+  let lastWords = "";
+  for (const headless of ["--headless=new", "--headless"]) {
+    profile = mkdtempSync(join(tmpdir(), "fm-board-browser-"));
+    child = spawn(browser, [headless, ...FLAGS(profile)], { stdio: ["ignore", "ignore", "pipe"] });
+    let browserStderr = "";
+    child.stderr.on("data", (d) => { browserStderr += d.toString("utf8"); });
+    // The port the browser actually took, from the file it writes once it has
+    // one. Deriving it any other way is guessing.
+    const portFile = join(profile, "DevToolsActivePort");
+    for (let waited = 0; waited < 20000; waited += 100) {
+      if (existsSync(portFile)) {
+        const lines = readFileSync(portFile, "utf8").split("\n");
+        if (lines.length >= 2 && lines[0].trim()) {
+          endpoint = `ws://127.0.0.1:${lines[0].trim()}${lines[1].trim()}`;
+          break;
+        }
       }
+      if (child.exitCode !== null) break;
+      await sleep(100);
     }
-    if (child.exitCode !== null) break;
-    await sleep(100);
+    if (endpoint) break;
+    lastWords = browserStderr.trim();
+    stop();
+    child = null;
+    profile = null;
   }
   if (!endpoint) {
     stop();
-    die(`the browser never reported a debugging port. Its own words: ${browserStderr.trim() || "(none)"}`);
+    die(`the browser never reported a debugging port. Its own words: ${lastWords || "(none)"}`);
   }
 
   const cdp = new Cdp(await openWs(endpoint));

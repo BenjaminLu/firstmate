@@ -217,8 +217,14 @@ json_string() {  # <text>
 # between two versions of one file and is not, and is not used as, a
 # tamper-proof digest.
 code_fingerprint() {
+  local sum
   [ -f "$SERVER" ] || return 1
-  cksum < "$SERVER" 2>/dev/null | tr -s ' ' | tr -d '\n' || return 1
+  sum=$(cksum < "$SERVER" 2>/dev/null | tr -s ' ' | tr -d '\n') || return 1
+  # An empty answer is not a fingerprint. Returning one would be recorded as
+  # what the server is running and would then match every other unreadable
+  # read, which is a check that passes by being broken.
+  [ -n "$sum" ] || return 1
+  printf '%s\n' "$sum"
 }
 
 # "current", "stale", or "unknown" - never silence, because silence is what the
