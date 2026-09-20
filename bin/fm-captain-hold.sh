@@ -1197,23 +1197,26 @@ ANSWER_LIVE_WORKER_REMEDY="record the captain's answer with --release, which kee
 # The reconcile remedy names standing the worker down, and on a SCOUT that
 # step has a prerequisite of its own: cleanup refuses until the captain-call
 # completion gate has passed. A scout is the one kind where that is true, and
-# the kind the stranding this guard exists to prevent actually happened to, so
-# the remedy names the gate there rather than sending the reader to a command
-# that refuses in turn. The kind comes from the worker record the guard has
-# already found; a record naming no kind gets the plain remedy.
+# the kind the stranding this guard exists to prevent actually happened to.
+# The kind comes from the worker record the guard has already found; a record
+# naming no kind gets the plain remedy.
 #
-# The gate's own form is `complete <origin-id> <task-id>`, and here both are
-# the same value - the guard is reachable only when the captain call held IS
-# the worker's own row, which is the shape the lifecycle skill prefers. Two
-# identical ids read like a typo, so the remedy prints what each one is for
-# rather than the bare command: the arguments are separate namespaces that
-# merely coincide in this case, and every other call site passes two
-# different values.
+# WHY THE SCOUT REMEDY NAMES NO COMMAND LINE. It used to, and it was rewritten
+# three times: the gate's form is `complete <origin-id> <task-id>` with both
+# ids the same value here, which reads like a typo and needed explaining, and
+# the steps after it are cleanup and then the reconciliation. A refusal naming
+# another command is a claim about a second program's reachable states, made
+# from a place that cannot see them - and every refusal on this path that
+# named a command with its own argument grammar has been wrong at least once,
+# while every one that named a flag on the command in hand has been right
+# first time. So this one names the state and the owner of the procedure, the
+# way bin/fm-teardown.sh's own refusal in the same area does; that one has
+# never needed correcting.
 reconcile_live_worker_remedy() {  # <task-id>
   local id=$1 kind=''
   [ ! -f "$STATE/$id.meta" ] || kind=$(meta_value "$STATE/$id.meta" kind)
   if [ "$kind" = scout ]; then
-    printf '%s' "pass this scout's captain-call completion gate with bin/fm-captain-hold.sh complete $id $id, where the first id names the worker whose inventory is attested and the second the captain call in it - here the same row - then stand the worker down with bin/fm-teardown.sh, which keeps this row open and still held for the captain, and then reconcile close it with the same evidence"
+    printf '%s' "stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence. This is a scout, so cleanup has a prerequisite of its own: inventory its report and any visual review through bin/fm-captain-hold.sh before standing it down"
     return 0
   fi
   printf '%s' "stand the worker down with bin/fm-teardown.sh first - cleanup keeps this row open and still held for the captain - then reconcile close it with the same evidence"

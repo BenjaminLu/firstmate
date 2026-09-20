@@ -4813,9 +4813,11 @@ test_answer_will_not_close_a_row_whose_worker_is_still_up() {
 # A refusal's whole job is to say what would work, and the two commands held to
 # the live-worker rule have different ways out: `answer` has a second close
 # mode, `reconcile close` has none and must stand the worker down first. Each
-# refusal is checked by running exactly what it told the reader to run.
-test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
-  local home id out show ship gate
+# refusal is checked by carrying out what it told the reader to do - and the
+# scout branch deliberately describes that in states and owners rather than in
+# a command line, so what is checked there is the sequence, not a string.
+test_each_live_worker_refusal_describes_a_way_out_that_works() {
+  local home id out show ship
   home=$(make_home live-worker-remedies)
   id=sample-live-reconcile
   mkdir -p "$home/data/$id" "$home/projects/sample" "$home/projects/$id"
@@ -4837,20 +4839,23 @@ test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
     "the reconcile refusal named a flag reconcile close rejects: $out"
   assert_contains "$out" "fm-teardown.sh" \
     "the reconcile refusal did not name the remedy that works here: $out"
-  # On a scout, cleanup has a prerequisite of its own, so a remedy that named
-  # only cleanup would be refused in turn. The refusal must name that step -
-  # and it is read back out of the refusal rather than retyped here, because a
-  # substring assertion cannot tell a complete command from a prefix of one.
-  gate=$(named_captain_hold_command "$out") \
-    || fail "the scout refusal named no bin/fm-captain-hold.sh command to run: $out"
+  # On a scout, cleanup has a prerequisite of its own, so a remedy naming only
+  # cleanup would be refused in turn. This one names that step by its state
+  # and its owner rather than by a command line - the shape bin/fm-teardown.sh
+  # uses in the same area, adopted here after the command-line version was
+  # rewritten three times. So what is asserted is that the owner is named and
+  # no argument list is, and then the described sequence is driven to prove
+  # the state it describes is real.
+  assert_contains "$out" "bin/fm-captain-hold.sh" \
+    "the scout refusal did not name the owner of the step cleanup requires: $out"
+  assert_not_contains "$out" "complete $id" \
+    "the scout refusal went back to printing a command line with its own grammar: $out"
   assert_present "$home/state/reconcile-requests/$id.request" \
     "the refused reconciliation retired its own pending request"
 
-  # Run what the refusal said to run, in the order it named, and nothing else:
-  # the command below is the refusal's own words, word-split into arguments.
-  # shellcheck disable=SC2086  # Deliberate: the refusal's argument list.
-  run_captain "$home" $gate >/dev/null \
-    || fail "the command the scout refusal named was itself refused: $gate"
+  # The sequence the refusal describes, in the order it describes it.
+  run_captain "$home" complete "$id" "$id" >/dev/null \
+    || fail "the inventory step the refusal describes was refused"
   run_teardown "$home" "$id" >/dev/null 2> "$home/remedy-teardown.err" \
     || fail "the named remedy could not stand the worker down: $(cat "$home/remedy-teardown.err")"
   run_captain "$home" reconcile close "$id" --evidence-file "$home/live-evidence.txt" >/dev/null \
@@ -4874,9 +4879,9 @@ test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts() {
   out=$(run_captain "$home" reconcile close "$ship" --evidence-file "$home/live-evidence.txt" 2>&1) \
     && fail "reconcile close closed a ship row whose worker is still up: $out"
   assert_contains "$out" "fm-teardown.sh" "the ship refusal did not name cleanup: $out"
-  assert_not_contains "$out" "completion gate" \
-    "the ship refusal named a scout-only prerequisite: $out"
-  pass "each live-worker refusal names a remedy its own command accepts"
+  assert_not_contains "$out" "bin/fm-captain-hold.sh" \
+    "the ship refusal named the scout-only inventory step: $out"
+  pass "each live-worker refusal describes a way out that works"
 }
 
 # A close already recorded and interrupted must still be finishable. The guard
@@ -4963,7 +4968,7 @@ test_the_remaining_reads_see_the_archive_too
 test_the_note_refusal_reads_what_it_says_it_read
 test_verify_names_a_complete_that_works
 test_answer_will_not_close_a_row_whose_worker_is_still_up
-test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
+test_each_live_worker_refusal_describes_a_way_out_that_works
 test_an_interrupted_close_still_finishes_when_a_worker_appears
 test_keyed_intake_reports_a_live_workers_row_as_skipped
 test_answer_records_and_closes
