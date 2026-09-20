@@ -629,6 +629,11 @@ __FM_BEARINGS_BOARD_DATA__
       rev_yes: "reversible", rev_no: "cannot be undone", rev_partly: "partly reversible",
       k_decide: "decide", k_about: "about", k_nothing: "if nothing", k_why: "why", k_evidence: "evidence",
       k_undoing: "undoing it",
+      merge_state: "checks {c} · review {r}",
+      checks_passing: "all green", checks_failing: "one has failed",
+      checks_pending: "still running", checks_none: "none configured",
+      review_APPROVED: "approved", review_CHANGES_REQUESTED: "changes requested",
+      review_REVIEW_REQUIRED: "none yet", review_none: "none yet",
       packet: "open the packet", rec: "rec",
       tab_diff: "Difference", choose: "Choose {x}",
       tab_note: "Open a tab above to see exactly what that option changes.",
@@ -677,6 +682,10 @@ __FM_BEARINGS_BOARD_DATA__
       lane_waiting: "Waiting on something else", lane_stopped: "Stopped",
       lane_unreported: "Not reporting", lane_done: "Delivered",
       lane_unplaced: "Could not be placed",
+      state_working: "working", state_blocked: "stuck", state_parked: "waiting at a gate",
+      state_paused: "waiting", state_failed: "stopped", state_unknown: "not reporting",
+      state_done: "delivered",
+      kind_ship: "change", kind_scout: "investigation", kind_captain: "your call",
       stat_writing: "writing now", stat_stuck: "stuck or failing", stat_prs: "open PRs",
       card_of: "card {i} of {n}", answered: "{n} answered", prev: "Previous card", next: "Next card",
       empty_call: "Nothing needs your action right now.", empty_underway: "Nothing is underway.",
@@ -701,6 +710,11 @@ __FM_BEARINGS_BOARD_DATA__
       rev_yes: "可回頭", rev_no: "回不去", rev_partly: "部分可回頭",
       k_decide: "決定什麼", k_about: "背景", k_nothing: "什麼都不做", k_why: "為什麼", k_evidence: "證據",
       k_undoing: "要收回的話",
+      merge_state: "檢查 {c} · review {r}",
+      checks_passing: "全綠", checks_failing: "有一項失敗",
+      checks_pending: "還在跑", checks_none: "沒有設定",
+      review_APPROVED: "已核可", review_CHANGES_REQUESTED: "要求修改",
+      review_REVIEW_REQUIRED: "還沒有", review_none: "還沒有",
       packet: "打開 packet", rec: "建議",
       tab_diff: "差在哪", choose: "選 {x}",
       tab_note: "點上面的分頁，看那個選項到底改了什麼。",
@@ -749,6 +763,10 @@ __FM_BEARINGS_BOARD_DATA__
       lane_waiting: "在等別的東西", lane_stopped: "停了",
       lane_unreported: "沒有回報", lane_done: "交付了",
       lane_unplaced: "放不進任何一欄",
+      state_working: "在做", state_blocked: "卡住", state_parked: "等在關卡",
+      state_paused: "在等", state_failed: "停了", state_unknown: "沒有回報",
+      state_done: "交付了",
+      kind_ship: "改動", kind_scout: "調查", kind_captain: "你的決定",
       stat_writing: "正在寫", stat_stuck: "卡住或失敗", stat_prs: "開著的 PR",
       card_of: "第 {i} 張，共 {n} 張", answered: "已答 {n} 張", prev: "上一張", next: "下一張",
       empty_call: "現在沒有需要你處理的事。", empty_underway: "沒有進行中的工作。",
@@ -773,6 +791,11 @@ __FM_BEARINGS_BOARD_DATA__
       rev_yes: "可回头", rev_no: "回不去", rev_partly: "部分可回头",
       k_decide: "决定什么", k_about: "背景", k_nothing: "什么都不做", k_why: "为什么", k_evidence: "证据",
       k_undoing: "要收回的话",
+      merge_state: "检查 {c} · review {r}",
+      checks_passing: "全绿", checks_failing: "有一项失败",
+      checks_pending: "还在跑", checks_none: "没有设定",
+      review_APPROVED: "已核可", review_CHANGES_REQUESTED: "要求修改",
+      review_REVIEW_REQUIRED: "还没有", review_none: "还没有",
       packet: "打开 packet", rec: "建议",
       tab_diff: "差在哪", choose: "选 {x}",
       tab_note: "点上面的分页，看那个选项到底改了什么。",
@@ -821,6 +844,10 @@ __FM_BEARINGS_BOARD_DATA__
       lane_waiting: "在等别的东西", lane_stopped: "停了",
       lane_unreported: "没有回报", lane_done: "交付了",
       lane_unplaced: "放不进任何一栏",
+      state_working: "在做", state_blocked: "卡住", state_parked: "等在关卡",
+      state_paused: "在等", state_failed: "停了", state_unknown: "没有回报",
+      state_done: "交付了",
+      kind_ship: "改动", kind_scout: "调查", kind_captain: "你的决定",
       stat_writing: "正在写", stat_stuck: "卡住或失败", stat_prs: "开着的 PR",
       card_of: "第 {i} 张，共 {n} 张", answered: "已答 {n} 张", prev: "上一张", next: "下一张",
       empty_call: "现在没有需要你处理的事。", empty_underway: "没有进行中的工作。",
@@ -911,6 +938,16 @@ __FM_BEARINGS_BOARD_DATA__
   }
   lang = storedLang() || (LANGS.indexOf(data.lang) >= 0 ? data.lang : "en");
 
+  /* One guarded lookup for every captain-facing string built from a value the
+     page did not choose. t() falls back to the key it was given, so an
+     unworded token would reach the captain as `state_parked` - the class the
+     contract forbids outright. Without a fallback the value keeps its own
+     spelling, which is worse than words and far better than a key. */
+  function words(prefix, value, fallback) {
+    var key = prefix + String(value == null ? "" : value).replace(/-/g, "_");
+    if (t(key) !== key) return t(key);
+    return fallback != null ? fallback : String(value == null ? "" : value);
+  }
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -1380,6 +1417,17 @@ __FM_BEARINGS_BOARD_DATA__
       pad.appendChild(el("h3", "bb-decision__title", pick(item.title)));
 
       if (item.type === "merge" && item.detail) pad.appendChild(el("p", "bb-decision__detail", pick(item.detail)));
+      /* The forge's own words for where the pull request stands, said in the
+         captain's. Codes rather than prose on the payload, so the strings live
+         with the rest of the board copy and a code the table has not learned
+         still shows its own spelling instead of a blank line. */
+      if (item.type === "merge" && item.checks_state) {
+        pad.appendChild(el("p", "bb-decision__detail",
+          t("merge_state", {
+            c: words("checks_", item.checks_state),
+            r: words("review_", item.review_state || "none")
+          })));
+      }
       if (item.type === "merge" && item.pr_url) {
         pad.appendChild(link("bb-decision__link", item.pr_url, item.pr_url));
       }
@@ -2009,10 +2057,7 @@ __FM_BEARINGS_BOARD_DATA__
        to eight codes today, and the contract and the copy table live in
        different files, so the next code added to one is not forced through the
        other. Same guard riskBadge already uses two hundred lines up. */
-    function reasonWords(code) {
-      var key = "mq_" + String(code).replace(/-/g, "_");
-      return t(key) === key ? t("mq_unworded") : t(key);
-    }
+    function reasonWords(code) { return words("mq_", code, t("mq_unworded")); }
     var mergeSection = document.getElementById("bb-merge-section");
     var mergeHead = document.getElementById("bb-merge-head");
     var mergeQueue = document.getElementById("bb-merge-queue");
@@ -2054,14 +2099,21 @@ __FM_BEARINGS_BOARD_DATA__
     if (!data.underway.length) uw.appendChild(el("div", "bb-empty", t("empty_underway")));
     function workerRow(x) {
       var row = el("div", "bb-row");
-      row.appendChild(badge(x.state === "working" ? "online" : "info", x.state));
+      /* The run state and the task kind are internal vocabulary - `parked`,
+         `unreported`, `ship`, `scout` - and putting them on the row raw is the
+         class the contract forbids on a captain-facing surface. Both go
+         through the same guarded lookup the rest of the page uses, and a value
+         with no copy keeps its own spelling rather than rendering blank, so a
+         state this page has not learned yet is still visible. */
+      row.appendChild(badge(x.state === "working" ? "online" : "info", words("state_", x.state)));
       var main = el("div", "bb-row__main");
       /* the snapshot's durable name-or-id label leads the row so a scan says
          WHICH task this is; the run status keeps its place on the second line */
       main.appendChild(el("div", "bb-row__title", pick(x.name)));
       /* captain-facing rows name the repo; the internal task id shows only when
          no repo is known */
-      main.appendChild(el("div", "bb-row__sub", pick(x.doing) + " · " + x.kind + " · " + (x.repo || x.id)));
+      main.appendChild(el("div", "bb-row__sub",
+        pick(x.doing) + " · " + words("kind_", x.kind) + " · " + (x.repo || x.id)));
       row.appendChild(main);
       return row;
     }

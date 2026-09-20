@@ -424,6 +424,7 @@ const cards = deck.children
   .map((card) => ({
     badges: findAll(card, "fm-badge").map((b) => b.textContent),
     title: findAll(card, "bb-decision__title")[0]?.textContent ?? "",
+    detail: findAll(card, "bb-decision__detail").map((n) => n.textContent),
     ctx: findAll(card, "bb-ctx__row").map((r) => ({
       k: findAll(r, "bb-ctx__k")[0]?.textContent ?? "",
       v: findAll(r, "bb-ctx__v")[0]?.textContent ?? "",
@@ -561,6 +562,12 @@ process.stdout.write(
     /* The fleet as lanes: the label, the count it shows, and which workers it
        holds. The "could not be placed" column is read the same way as any
        other, because the whole point of it is that it is visible. */
+    /* Every worker row in full. The lane view reports only names, so until now
+       nothing in the suite could see the row's state badge or its kind - which
+       is where the internal vocabulary was showing. An unobservable surface is
+       an unasserted one in both directions. */
+    raw_rows: (byId.get("bb-underway") || new Node("div")).querySelectorAll(".bb-row")
+      .map((r) => r.textContent),
     lanes: (byId.get("bb-underway") || new Node("div")).querySelectorAll(".bb-lane")
       .map((l) => ({
         label: l.querySelectorAll(".bb-lane__label")[0]?.textContent ?? "",

@@ -794,6 +794,8 @@ validate_payload() {  # <data.json>
       # time that is false - so the board has to carry which it was.
       and ((has("weighed_by") | not)
         or (.weighed_by == "fleet" or .weighed_by == "firstmate"))
+      and ((has("checks_state") | not) or (.checks_state | nonempty_string))
+      and ((has("review_state") | not) or (.review_state | nonempty_string))
       and ((has("recommend_value") | not)
         or (.recommend_value | placeholder)
         or ((.recommend_value | slug(128))
@@ -1416,7 +1418,12 @@ EOF
       | {key: ("merge." + $task), type: "merge",
          repo: (.repo | split("/") | last),
          title: t("Merge: " + ($title // ("PR #" + .num + " in " + .repo)); $task),
-         detail: t("checks " + .checks + ", review " + .review; $task),
+         # Codes, not prose, and for the same reason the merge lane uses them:
+         # `.review` is the forge value passed straight through, so this line
+         # read "checks passing, review CHANGES_REQUESTED" on the card the
+         # captain answers. The words belong with the rest of the board copy.
+         checks_state: .checks,
+         review_state: .review,
          risk: risk_slot,
          options: [
            {value: "merge", label: {en: "Merge now", hant: "立即合併", hans: "立即合并"}},

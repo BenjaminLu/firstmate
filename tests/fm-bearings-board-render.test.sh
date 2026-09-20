@@ -428,6 +428,65 @@ test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
 }
 
 # Colour repeats the risk, so the plot reads without counting pixels.
+# R20. Internal vocabulary on surfaces the captain reads. A worker row wore its
+# raw run state and task kind - `parked`, `unreported`, `ship` - in all three
+# languages, and a merge card read "review CHANGES_REQUESTED", the forge's own
+# enum passed straight through to the card he answers.
+test_no_internal_token_reaches_the_captains_rows() {
+  local home out
+  home=$(make_home tokens-rows)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"a","repo":"r","name":"Alpha","state":"parked","kind":"ship","doing":"at a gate","lane":"waiting"},
+    {"id":"b","repo":"r","name":"Bravo","state":"unknown","kind":"scout","doing":"silent","lane":"unreported"}]')")
+
+  [ "$(printf '%s' "$out" | jq -r '[.lanes[].workers[]] | length')" = "2" ] \
+    || fail "the fixture lost a worker, so this proves nothing: $out"
+  local rows
+  rows=$(printf '%s' "$out" | jq -r '.raw_rows | join(" ")')
+  for token in parked unknown ship scout; do
+    [ "$(printf '%s' "$rows" | grep -c "$token")" = "0" ] \
+      || fail "the internal token '$token' reached a captain-facing row: $rows"
+  done
+  assert_contains "$rows" "waiting at a gate" \
+    "the run state was not said in the captain's words: $rows"
+  assert_contains "$rows" "investigation" \
+    "the task kind was not said in the captain's words: $rows"
+  pass "no internal run state or task kind reaches the captain's rows"
+}
+
+# A state this page has not learned keeps its own spelling rather than going
+# blank: the captain seeing an odd word is far better than a row that says
+# nothing, and it is how the next new state stays visible.
+test_an_unworded_state_keeps_its_spelling_rather_than_vanishing() {
+  local home out
+  home=$(make_home tokens-unknown-state)
+  out=$(render_payload "$home" "$(fleet_payload '[
+    {"id":"z","repo":"r","name":"Zulu","state":"marooned","kind":"ship","doing":"who knows","lane":"working"}]')")
+  assert_contains "$(printf '%s' "$out" | jq -r '.raw_rows | join(" ")')" "marooned" \
+    "a state the page has no words for rendered as nothing at all: $out"
+  pass "a state the page has no words for keeps its own spelling"
+}
+
+test_the_merge_card_does_not_show_the_forges_own_enum() {
+  local home out
+  home=$(make_home tokens-merge)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:true, underway:[], landed:[], charted:[],
+    captains_call:[{key:"merge.t1", type:"merge", repo:"r", title:"Merge: a PR",
+      risk:"medium", weighed_by:"firstmate", blocks:0, allow_freeform:true,
+      checks_state:"passing", review_state:"CHANGES_REQUESTED",
+      options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}]}]}')")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].detail | join(" ")' | grep -c "CHANGES_REQUESTED")" = "0" ] \
+    || fail "the forge's own enum reached the card the captain answers: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].detail | join(" ")')" "changes requested" \
+    "the merge card did not say where the pull request stands: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].detail | join(" ")')" "all green" \
+    "the merge card did not say what the checks did: $out"
+  pass "the merge card says where a pull request stands without the forge's enum"
+}
+
 # R19. The harness could still submit a card through a submit button a browser
 # would never have let the captain press. That is how the dispatch bar's silent
 # disable stayed invisible for a whole round, so the hole is treated as a
@@ -1159,7 +1218,10 @@ test_an_underway_row_leads_with_the_task_name_and_keeps_its_run_status() {
       and (.underway[0]
         | .title == "Show task names on the board"
           and (.sub | test("no-mistakes: review round 2"))
-          and (.sub | test("ship")) and (.sub | test("firstmate"))
+          # the task kind, worded for the captain rather than the fleet token
+          # `ship` - this row is one of the surfaces that stopped carrying
+          # internal vocabulary, and the kind is still on it
+          and (.sub | test("change")) and (.sub | test("firstmate"))
           and [.badges[] | .text] == ["working"])
   ' >/dev/null || fail "an underway row did not lead with the task name: $out"
   pass "an underway row leads with the task name and still reports its run status"
@@ -2213,3 +2275,6 @@ test_the_per_option_buttons_stay_live_on_a_working_board
 test_the_card_does_not_call_a_change_reversible_when_nobody_said_so
 test_the_bar_puts_its_length_refusal_where_the_captain_looks
 test_the_harness_cannot_answer_through_a_button_a_person_cannot_press
+test_no_internal_token_reaches_the_captains_rows
+test_an_unworded_state_keeps_its_spelling_rather_than_vanishing
+test_the_merge_card_does_not_show_the_forges_own_enum
