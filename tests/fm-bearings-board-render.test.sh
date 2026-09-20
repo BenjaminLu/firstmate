@@ -398,6 +398,52 @@ test_the_map_plots_a_stalling_call_above_and_right_of_an_idle_one() {
 }
 
 # Colour repeats the risk, so the plot reads without counting pixels.
+# R7. A thin call carries no risk and no reversibility, because nobody wrote
+# either. Reading those absences as "medium, fairly reversible" puts a claim on
+# the captain's plot that nobody made - under a note promising the opposite.
+# The card already refuses to invent them; the picture drawn from the same
+# payload has to refuse too.
+test_the_map_makes_no_risk_claim_nobody_made() {
+  local home out thin low
+  home=$(make_home map-unassessed)
+  out=$(render_payload "$home" "$(jq -n '{
+    schema:"fm-bearings-board.v1", home:"render-home", generated:"2026-09-20T00:00Z",
+    prs_live:false, underway:[], landed:[], charted:[],
+    captains_call:[
+      {key:"thin-call", type:"decision", repo:"s", title:"Nobody assessed this",
+       thin:true, blocks:0, allow_freeform:true, options:[]},
+      {key:"low-call", type:"decision", repo:"s", title:"Somebody did",
+       risk:"low", reversible:"yes", blocks:0, allow_freeform:true,
+       options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
+
+  thin=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "thin-call")')
+  low=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "low-call")')
+
+  # Not drawn in any risk colour: amber would read as "somebody called this
+  # medium", which is the exact invention this fixes.
+  [ "$(printf '%s' "$thin" | jq -r '.fill')" != "var(--gold-500)" ] \
+    || fail "an unassessed call was drawn in the medium risk colour: $out"
+  [ "$(printf '%s' "$thin" | jq -r '.fill')" != "$(printf '%s' "$low" | jq -r '.fill')" ] \
+    || fail "an unassessed call was drawn like an assessed one: $out"
+  # And marked as not measured rather than merely coloured differently.
+  [ "$(printf '%s' "$thin" | jq -r '.dashed')" = "true" ] \
+    || fail "an unassessed call was not marked as unmeasured: $out"
+  [ "$(printf '%s' "$low" | jq -r '.dashed')" = "false" ] \
+    || fail "an assessed call was marked as unmeasured: $out"
+  # It must not sit to the right of a call somebody assessed as cheap, because
+  # right means expensive and nobody said that about this one.
+  printf '%s %s' "$(printf '%s' "$thin" | jq -r '.cx')" "$(printf '%s' "$low" | jq -r '.cx')" \
+    | awk '{ exit !($1 <= $2) }' \
+    || fail "an unassessed call was plotted as more costly than an assessed cheap one: $out"
+  # Said in words too, for anyone reading by ear.
+  assert_contains "$(printf '%s' "$thin" | jq -r '.aria')" "nobody assessed" \
+    "the unassessed bubble did not say so in words: $out"
+  # And the note stops claiming both positions come from the record.
+  assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "not because it is cheap" \
+    "the note under the plot still claimed a position nobody recorded: $out"
+  pass "the map makes no risk claim for a call nobody assessed"
+}
+
 test_the_map_colours_each_bubble_by_its_own_risk() {
   local home out
   home=$(make_home map-colour)
@@ -1880,3 +1926,4 @@ test_a_board_with_no_lanes_renders_as_it_always_did
 test_the_masthead_counts_the_fleet_it_is_showing
 test_a_board_that_knows_no_lanes_offers_no_fleet_counters
 test_the_dispatch_bar_refuses_a_send_that_reports_failure
+test_the_map_makes_no_risk_claim_nobody_made

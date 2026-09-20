@@ -456,6 +456,8 @@ const bubbles = findAll(mapHost, "bb-bub").map((g) => {
     r: Number(circle.attributes?.r ?? 0),
     fill: circle.attributes?.fill ?? "",
     selected: (g.attributes?.class ?? "").includes("is-sel"),
+    /* A broken outline is how the plot says nobody assessed this call. */
+    dashed: (circle.attributes?.["stroke-dasharray"] ?? "") !== "",
     aria: g.attributes?.["aria-label"] ?? "",
   };
 });

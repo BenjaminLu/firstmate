@@ -649,6 +649,8 @@ __FM_BEARINGS_BOARD_DATA__
       quad_pick: "just pick one", quad_when: "whenever",
       map_blocks: "{n} waiting", map_blocks_none: "nothing waiting",
       map_empty: "No open calls to plot.",
+      map_unassessed: "nobody assessed what a wrong answer costs",
+      map_note_unassessed: "A bubble with a broken outline carries no risk assessment at all - nobody wrote one - so it sits at the left edge because the cost is unknown, not because it is cheap.",
       t_merge: "Merges",
       mq_sub: "Your rule: a pull request that has not gone fully green never becomes a merge call.",
       mq_none_head: "Nothing is on your desk, and this is why. {n} open, none of them green and clear, so by your own rule none is asking you to merge it. The lane is empty because the rule is working, not because nothing is happening.",
@@ -712,6 +714,8 @@ __FM_BEARINGS_BOARD_DATA__
       quad_pick: "隨便挑一個", quad_when: "有空再說",
       map_blocks: "{n} 件在等", map_blocks_none: "沒有人在等",
       map_empty: "沒有待決事項可畫。",
+      map_unassessed: "沒有人評估過答錯的代價",
+      map_note_unassessed: "虛線外框的泡泡完全沒有風險評估 —— 沒有人寫過 —— 所以它靠在最左邊是因為代價不明，不是因為代價低。",
       t_merge: "合併",
       mq_sub: "你的規則：沒有全綠的 PR 永遠不會變成合併決策。",
       mq_none_head: "現在沒有東西等你決定，原因在這裡。開著的有 {n} 個，沒有一個是全綠又沒擋住的，所以按你自己的規則，沒有一個在問你要不要合併。這一區是空的代表規則有在運作，不是沒事發生。",
@@ -775,6 +779,8 @@ __FM_BEARINGS_BOARD_DATA__
       quad_pick: "随便挑一个", quad_when: "有空再说",
       map_blocks: "{n} 件在等", map_blocks_none: "没有人在等",
       map_empty: "没有待决事项可画。",
+      map_unassessed: "没有人评估过答错的代价",
+      map_note_unassessed: "虚线外框的泡泡完全没有风险评估 —— 没有人写过 —— 所以它靠在最左边是因为代价不明，不是因为代价低。",
       t_merge: "合并",
       mq_sub: "你的规则：没有全绿的 PR 永远不会变成合并决策。",
       mq_none_head: "现在没有东西等你决定，原因在这里。开着的有 {n} 个，没有一个是全绿又没挡住的，所以按你自己的规则，没有一个在问你要不要合并。这一区是空的代表规则有在运作，不是没事发生。",
@@ -1666,15 +1672,25 @@ __FM_BEARINGS_BOARD_DATA__
       var v = Math.min(c.blocks || 0, 3) / 3;
       return c.type === "merge" ? Math.max(v, 0.8) : v;
     }
+    /* Did anybody actually assess what a wrong answer costs?
+       A thin call carries no risk and no reversibility, because nobody wrote
+       either. The card already refuses to claim otherwise; the picture drawn
+       from the same payload has to refuse too, or the plot invents a position
+       and a colour under a note promising it invented neither. */
+    function assessed(c) { return RISKW[c.risk] != null; }
     function wrongCost(c) {
-      var r = RISKW[c.risk]; if (r == null) r = 1;
+      if (!assessed(c)) return 0;
+      var r = RISKW[c.risk];
       var v = REVW[c.reversible]; if (v == null) v = 0;
       return Math.min(1, (r + v) / 4);
     }
     function riskFill(risk) {
       if (risk === "high") return "var(--rust-500)";
       if (risk === "low") return "var(--sea-500)";
-      return "var(--gold-500)";
+      if (risk === "medium") return "var(--gold-500)";
+      /* Not a risk colour at all. Amber here would read as "somebody called
+         this medium", and nobody did. */
+      return "var(--text-faint)";
     }
     function svgEl(name, attrs) {
       var n = document.createElementNS("http://www.w3.org/2000/svg", name);
@@ -1702,7 +1718,13 @@ __FM_BEARINGS_BOARD_DATA__
       markMapSelection = function () {};
       if (!host || !note || !list) return;
       clear(host); clear(list);
-      note.textContent = items.length ? t("map_note") : "";
+      /* The note claims both positions come from what the fleet records. That
+         claim is false for a call nobody assessed, so when one is on the plot
+         the note says which part of it does not apply to that bubble. */
+      note.textContent = !items.length ? ""
+        : (items.some(function (c) { return !assessed(c); })
+           ? t("map_note") + " " + t("map_note_unassessed")
+           : t("map_note"));
       if (!items.length) {
         host.appendChild(el("p", "bb-map__note", t("map_empty")));
         return;
@@ -1780,10 +1802,14 @@ __FM_BEARINGS_BOARD_DATA__
         g.setAttribute("class", "bb-bub");
         g.setAttribute("aria-label", pick(c.title) + ". " +
           (c.blocks ? t("map_blocks", { n: c.blocks }) : t("map_blocks_none")) +
-          (c.risk ? ". " + t("risk", { r: t("risk_" + c.risk) }) : ""));
+          ". " + (assessed(c) ? t("risk", { r: t("risk_" + c.risk) }) : t("map_unassessed")));
         var circle = svgEl("circle", { cx: pt.x.toFixed(1), cy: pt.y.toFixed(1), r: pt.r,
           fill: riskFill(c.risk), "fill-opacity": 0.6,
           stroke: "var(--ink-900)", "stroke-width": 1.8 });
+        /* A broken outline is the second half of saying "not measured": the
+           colour says it and the edge says it, so neither has to be noticed
+           on its own. */
+        if (!assessed(c)) circle.setAttribute("stroke-dasharray", "3 3");
         g.appendChild(circle);
         pt.g = g; pt.circle = circle;
         if (c.blocks) {
