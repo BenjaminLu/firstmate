@@ -38,6 +38,10 @@ Where a task carries a design record, that record owns intent, so the pull reque
 7. **The merge gate is: checks green, every finding ruled, and a reviewer's approval of the exact commit that would merge.**
    Merge authority itself is unchanged and stays with section 7 - `yolo` on means firstmate merges through `bin/fm-pr-merge.sh`, `yolo` off means the captain's word.
 
+Not all of that gate is a refusal.
+`bin/fm-pr-merge.sh` is the single owner of what a merge actually refuses, and every condition it does not check is firstmate's own discipline instead - today that includes every finding being ruled.
+Read the script when you need to know which is which, because this list is the obligation and the script is the enforcement, and a contract that reads as enforced when it is not is the quiet degradation `AGENTS.md` section 1 forbids.
+
 Red checks are the worker's to fix, not the reviewer's and not a finding class of their own.
 The reviewer reports a red check as a finding so it is visible with everything else; firstmate steers the worker to fix it.
 Nothing merges red - section 7 owns that rule and the single named waiver.
