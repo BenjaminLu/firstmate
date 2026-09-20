@@ -72,6 +72,7 @@ Refresh the hints whenever the serial lane gains scripts, rather than waiting fo
 
 `bin/fm-test-run.sh` owns the per-shard packing, so its `--check-coverage` output is the current account of lane size and coverage rather than a copied inventory.
 Nine serial runners pack the refreshed measurements into 730.7 s (12m11s) on every shard, which is also the ideal: no script is now long enough to set the makespan on its own.
+That figure is derived over a 182-script serial lane, and packing is longest-processing-time over the whole lane, so it moves whenever the lane gains or loses a script rather than only when a hint changes: re-derive it from `--list --lane portable-serial` and the hint table rather than quoting it after the lane has grown.
 Scored against the same measurements, the previous hints left shard 3 carrying 983s of real work against that 731s ideal, and the refresh alone cut the modeled makespan to 819s.
 The remaining 97s came from splitting the longest script.
 `tests/fm-watch-triage.test.sh` used to run 819s as one file, occupied a whole shard, and stayed the makespan at every shard count, so it was recorded here as this layout's indivisible floor.
