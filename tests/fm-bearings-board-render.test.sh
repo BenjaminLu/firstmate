@@ -648,6 +648,40 @@ test_an_empty_press_does_not_wipe_a_standing_refusal() {
   pass "an empty press never wipes the message already telling him something"
 }
 
+# R25. Moving the bar's length refusal into its own alert put it in a slot the
+# very next line overwrote: refreshBar re-asserts the no-channel notice over
+# whatever is already there. So on a board with no answer channel the captain
+# ticked nine rows, three vanished, and nothing on the page ever mentioned the
+# limit - a guard that steps aside, on the surface whose whole job is to be the
+# one place he looks. With a channel present the fix was correct and its test
+# passed, which is why nothing caught it.
+test_the_bar_keeps_its_length_refusal_on_a_board_that_cannot_send() {
+  local home out
+  home=$(make_home bar-limit-no-channel)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(over_limit_payload)" pick-past-limit)
+
+  # The guard fired, established without reading the message.
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.count' | grep -oE '[0-9]+' | head -1)" != "9" ] \
+    || fail "the length guard never fired, so this proves nothing: $out"
+  # And what he earned by ticking is what he is shown.
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "limit" \
+    "the bar took his ticks away and never mentioned the limit: $out"
+  [ "$(printf '%s' "$out" | jq -r '.dispatch.limit_role')" = "alert" ] \
+    || fail "the refusal would not be announced: $out"
+  pass "the bar keeps its length refusal on a board that cannot send"
+}
+
+# And with nothing earned, the standing notice is still what he sees - the fix
+# must not have traded one silence for another.
+test_the_bar_still_says_it_cannot_dispatch_when_nothing_else_is_standing() {
+  local home out
+  home=$(make_home bar-standing-notice)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 render_click "$home" "$(rebuild_payload 2026-09-20T00:00Z)" dispatch)
+  assert_contains "$(printf '%s' "$out" | jq -r '.dispatch.limit')" "cannot dispatch anything" \
+    "the bar stopped saying it cannot dispatch: $out"
+  pass "the bar still says it cannot dispatch when nothing else is standing"
+}
+
 # R23 and R24, one defect in one paragraph. The plot stopped overclaiming and
 # the caption under it did not: it opened "Nothing is weighted by hand" on a
 # plot that now has one, and its broken-outline sentence said every such bubble
@@ -2367,3 +2401,5 @@ test_the_merge_card_does_not_show_the_forges_own_enum
 test_the_caption_says_nothing_is_hand_weighted_when_nothing_is
 test_the_caption_drops_that_claim_when_one_bubble_breaks_it
 test_the_caption_does_not_send_every_broken_outline_to_the_left_edge
+test_the_bar_keeps_its_length_refusal_on_a_board_that_cannot_send
+test_the_bar_still_says_it_cannot_dispatch_when_nothing_else_is_standing

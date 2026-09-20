@@ -2232,10 +2232,23 @@ __FM_BEARINGS_BOARD_DATA__
          he ticks rows, the button never lights, and nothing anywhere explains
          it. Every other refusal here is written from inside the click handler,
          which he can no longer reach. */
-      if (!canSend) barRefuse(t("no_channel_dispatch_yet"));
+      paintBarRefusal();
     }
-    function barRefuse(message) {
+    /* A refusal the captain has EARNED and not yet resolved. Kept rather than
+       repainted from scratch, because refreshBar runs immediately after some
+       of them and used to overwrite what had just been written - so ticking
+       past the length limit on a board with no answer channel took his ticks
+       away and then told him only that the board cannot dispatch, never that
+       there is a limit. A guard that steps aside is the worse direction of
+       failure, and this is the surface whose whole job is to be the one place
+       he looks. */
+    var barStanding = "";
+    function barRefuse(message) { barStanding = message; paintBarRefusal(); }
+    function paintBarRefusal() {
       if (!barLimit) return;
+      /* The channel notice is the standing background state; anything he just
+         earned outranks it and holds until something resolves it. */
+      var message = barStanding || (answerChannel() ? "" : t("no_channel_dispatch_yet"));
       barLimit.textContent = message;
       barLimit.className = "bb-limit" + (message ? " is-visible" : "");
     }
@@ -2256,8 +2269,8 @@ __FM_BEARINGS_BOARD_DATA__
             /* His tick just disappeared, so this is a refusal and goes to the
                bar's own alert - not the counter slot, where it rendered as
                muted uppercase micro-type with nothing announcing it. */
-            barRefuse(t("pick_limit"));
             refreshBar();
+            barRefuse(t("pick_limit"));
             return;
           }
           refreshBar();
