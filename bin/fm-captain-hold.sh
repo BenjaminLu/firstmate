@@ -652,13 +652,23 @@ archived_without_answer() {  # <task-id>
 # nobody typed. So the durability checks no longer fail on this state at all:
 # they report it, and the two commands that own the whole inventory compose
 # one remedy once, from everything they can see.
-# A RECONSTRUCTION MUST BE A SUPERSET OF THE INVOCATION IT ANSWERS. Every
-# argument it omits is work that following the message undoes, and when the
-# omitted argument is what made progress the sequence cannot converge. The
-# drops this very run already resolved and validated are exactly that: enter
-# through the singular form the tracked documentation names, with two
-# stranded calls, and a reply that forgot the flag just typed printed the
-# other one, forever.
+# A RECONSTRUCTION MUST BE A SUPERSET OF THE INVOCATION IT ANSWERS, EXCEPT
+# FOR ARGUMENTS WHOSE INCLUSION WOULD CHANGE WHAT THE REMEDY MEANS. Every
+# argument it omits for any other reason is work that following the message
+# undoes, and when the omitted argument is what made progress the sequence
+# cannot converge. The drops this very run already resolved and validated are
+# exactly that: enter through the singular form the tracked documentation
+# names, with two stranded calls, and a reply that forgot the flag just typed
+# printed the other one, forever.
+#
+# The one exception this command takes, stated here rather than only where it
+# is taken: `--none` is accepted beside a drop and is never carried into the
+# reconstruction. It does not mean "as you were" - it attests that nothing
+# further is waiting on the captain - so repeating it would turn a remedy for
+# one stranded entry into a claim about the whole inventory, and in the state
+# where the inventory ends up empty the guard refuses it outright. The
+# reasoning for that refusal lives with command_verify's transfer remedy,
+# which declines to name `--none` for the same reason.
 drop_remedy_command() {  # <origin> <supplied-ids> <already-dropped> <entries> <survivors> <open>
   local origin=$1 supplied=$2 already=$3 entries=$4 survivors=$5 open=$6 flags='' entry extra=''
   for entry in $already $entries; do
