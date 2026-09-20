@@ -695,13 +695,25 @@ fm_wait_capture_settled() {
   local present=() absent=() absent_mode=() aborts=() tail_lines='' index
   while [ "$#" -gt 0 ]; do
     case $1 in
-      --tail) tail_lines=$2; shift 2 ;;
-      --present) present+=("$2"); shift 2 ;;
-      --absent) absent+=("$2"); absent_mode+=(fixed); shift 2 ;;
-      --absent-re) absent+=("$2"); absent_mode+=(regex); shift 2 ;;
-      --abort) aborts+=("$2"); shift 2 ;;
+      --tail|--present|--absent|--absent-re|--abort)
+        # Every flag takes a value, and a flag given without one has to be
+        # refused here. Reading $2 for it under set -u kills the shell at that
+        # line instead: no named failure, nothing on stdout, just a non-zero
+        # exit for the runner to attribute to whichever case was running. This
+        # helper's header requires that a check unable to do its job says what
+        # it saw, and being called wrong is the first thing that applies to.
+        [ "$#" -ge 2 ] || fail "fm_wait_capture_settled: $1 needs a value"
+        ;;
       *) fail "fm_wait_capture_settled: unknown argument '$1'" ;;
     esac
+    case $1 in
+      --tail) tail_lines=$2 ;;
+      --present) present+=("$2") ;;
+      --absent) absent+=("$2"); absent_mode+=(fixed) ;;
+      --absent-re) absent+=("$2"); absent_mode+=(regex) ;;
+      --abort) aborts+=("$2") ;;
+    esac
+    shift 2
   done
   [ "${#present[@]}" -gt 0 ] || [ "${#absent[@]}" -gt 0 ] \
     || fail "fm_wait_capture_settled: needs at least one --present, --absent or --absent-re pattern"

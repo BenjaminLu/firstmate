@@ -253,7 +253,23 @@ test_a_wait_that_requires_nothing_is_refused() {
     && status=0 || status=$?
   expect_code 1 "$status" "a misspelled flag must be refused rather than silently ignored: $out"
   assert_contains "$out" "unknown argument '--pressent'" "the refusal must name the argument it did not understand"
-  pass "a wait with no condition, or with a flag it does not understand, is refused instead of passing"
+
+  # The third malformation: a known flag with its value left off. Reading the
+  # missing value under set -u kills the shell mid-function, which prints no
+  # named failure at all - the one shape that escapes while its two siblings
+  # above are refused.
+  out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/novalue" 4 --present) 2>&1 ) \
+    && status=0 || status=$?
+  expect_code 1 "$status" "a flag with no value must be refused: $out"
+  assert_contains "$out" '--present needs a value' "the refusal must name the flag that was left bare"
+  assert_not_contains "$out" 'unbound variable' \
+    "a flag with no value must be refused by name, not killed by the interpreter"
+
+  out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/novalue-tail" 4 \
+    --absent 'x' --tail) 2>&1 ) && status=0 || status=$?
+  expect_code 1 "$status" "a trailing flag with no value must be refused: $out"
+  assert_contains "$out" '--tail needs a value' "the refusal must name the flag that was left bare"
+  pass "a wait with no condition, an unknown flag, or a flag left without its value is refused by name"
 }
 
 test_an_unseen_intermediate_frame_still_settles
