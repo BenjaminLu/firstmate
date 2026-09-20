@@ -10,6 +10,7 @@
 #   fm-board-live.sh stop
 #   fm-board-live.sh status
 #   fm-board-live.sh endpoint
+#   fm-board-live.sh token [--rotate]
 #   fm-board-live.sh doctor
 #
 # event     Append ONE fm-board-event.v1 line to this home's event log. That
@@ -45,9 +46,53 @@
 #           events the log holds.
 # endpoint  Print the endpoint URL a page should connect to, from the running
 #           server's own record, or exit 1 when none is running.
+# token     Print this home's inbound token, creating it on first use, and
+#           make sure the inbound channel is bound to the keyed-answer intake
+#           before printing anything. This is what a board build injects into
+#           the page so the captain's click can be told apart from anyone
+#           else's; see THE CLICK COMES BACK below. --rotate issues a new one,
+#           which immediately stops every board already built from answering
+#           and is the way out if a token is ever exposed.
 # doctor    Report what is and is not set up here, and exit 0 when the home is
 #           in a complete state - including the complete state of having no
 #           board at all.
+#
+# THE CLICK COMES BACK, AND WHAT PROVES IT IS THE CAPTAIN'S. The socket carries
+# the fleet out to the board and the captain's answer back, and the second half
+# is the dangerous one: an inbound message can settle a captain's call. Any
+# process on this machine, and ANY PAGE IN ANY BROWSER on it, can open a socket
+# to a loopback port - a page's own origin does not stop it - so a port that
+# acted on whatever arrived would hand every website the captain visits the
+# power to answer his decisions.
+#
+# So an inbound message is proved two ways, and both must hold:
+#
+#   THE TOKEN, which is the real proof. 32 random bytes in
+#   state/board-live.token at mode 0600, issued once per home and stable across
+#   restarts and rebuilds, injected into the built board page (itself 0600).
+#   Every inbound message carries it and it is compared without leaking timing.
+#   A page cannot read a local file and cannot read another origin's page, so
+#   no website can obtain it.
+#
+#   THE ORIGIN, which is defence in depth. A browser sets the handshake's
+#   Origin header itself and page script cannot forge it, so a connection from
+#   a real web origin is refused before it is upgraded. A board opened from
+#   this machine is either a file (Origin: null) or served on loopback, and
+#   only those are allowed.
+#
+# WHAT THIS DOES NOT CLAIM. The boundary it proves is the machine's own user
+# account. A process already running as the captain can read the token file -
+# and could equally edit the backlog directly, so there was never anything to
+# defend there. Reading the board state still needs no token, only an allowed
+# origin, because the same state is readable in this home's own files; a
+# sandboxed frame can therefore still subscribe and watch. Writing is the half
+# that can change something, and writing is the half that is proved.
+#
+# AND IT CAN ONLY EVER CARRY AN ANSWER. Nothing an inbound message says is an
+# instruction: the one thing it can express is which option the captain picked
+# on which card, which is exactly what he can say in chat. bin/fm-board-answer.sh
+# owns what happens next, and every merge, dispatch, and teardown stays behind
+# the rules that already govern it.
 #
 # WHY A FILE AND NOT A SOCKET. A publisher that had to reach a process could
 # fail in a caller that must not fail, and would lose the event when the server
@@ -64,6 +109,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 LOG="$STATE/board-live.jsonl"
 PIDFILE="$STATE/board-live.pid"
 ENDPOINT="$STATE/board-live.endpoint"
+TOKEN="$STATE/board-live.token"
 SERVER="$SCRIPT_DIR/fm-board-live.mjs"
 
 # The whole header, found by where it ends rather than by a line number: a
@@ -229,6 +275,62 @@ command_status() {
   fi
   printf 'events: %s\n' "${lines:-0}"
   printf 'log: %s\n' "$LOG"
+  # Never the token itself, only whether one exists: this output is read in
+  # terminals, pasted into reports, and captured in test logs.
+  if [ -f "$TOKEN" ] && [ ! -L "$TOKEN" ]; then
+    printf 'inbound: a board built in this home can send the captain answers back\n'
+  else
+    printf 'inbound: no token issued yet; a board built now gets one\n'
+  fi
+}
+
+# The inbound token. UNLIKE `event`, this refuses loudly rather than exiting 0
+# on trouble: a caller asking for it is building the board the captain will
+# click, and a board built with no token is a board whose buttons do nothing -
+# the exact failure this channel exists to remove.
+command_token() {
+  local rotate=0 new tmp
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --rotate) rotate=1; shift ;;
+      *) printf 'fm-board-live: unknown token option: %s\n' "$1" >&2; return 2 ;;
+    esac
+  done
+  ( [ -d "$STATE" ] || mkdir -p "$STATE" ) || {
+    printf 'fm-board-live: cannot create %s\n' "$STATE" >&2
+    return 1
+  }
+  [ "$rotate" -eq 0 ] || rm -f -- "$TOKEN"
+  if [ ! -f "$TOKEN" ] || [ -L "$TOKEN" ]; then
+    # od is POSIX and present on every machine a clone runs on, so the token
+    # needs neither openssl nor node to exist.
+    new=$(LC_ALL=C od -An -tx1 -N32 < /dev/urandom 2>/dev/null | tr -d ' \n')
+    case ${#new} in
+      64) ;;
+      *) printf 'fm-board-live: cannot read 32 random bytes from /dev/urandom\n' >&2; return 1 ;;
+    esac
+    case $new in
+      *[!0-9a-f]*) printf 'fm-board-live: the random source did not produce hex\n' >&2; return 1 ;;
+    esac
+    tmp=$(umask 077; mktemp "$STATE/.board-live-token.XXXXXX") || {
+      printf 'fm-board-live: cannot stage the inbound token\n' >&2
+      return 1
+    }
+    if ! { printf '%s\n' "$new" > "$tmp" && chmod 0600 "$tmp" && mv -f -- "$tmp" "$TOKEN"; }; then
+      rm -f -- "$tmp"
+      printf 'fm-board-live: cannot write the inbound token\n' >&2
+      return 1
+    fi
+  fi
+  # Bound before the token leaves this command, never after: a token IS the
+  # permission to answer, so issuing one before its answers had an intake to
+  # reach would be the ordering the board build already refuses elsewhere.
+  if ! "$SCRIPT_DIR/fm-captain-hold.sh" bind \
+      "$("$SCRIPT_DIR/fm-board-answer.sh" source-id)" >/dev/null 2>&1; then
+    printf 'fm-board-live: cannot bind the board answer channel to the decision intake\n' >&2
+    return 1
+  fi
+  cat "$TOKEN"
 }
 
 command_endpoint() {
@@ -269,6 +371,7 @@ case $cmd in
   stop) command_stop "$@" ;;
   status) command_status "$@" ;;
   endpoint) command_endpoint "$@" ;;
+  token) command_token "$@" ;;
   doctor) command_doctor "$@" ;;
   ''|--help|-h) usage; [ -n "$cmd" ] && exit 0 || exit 2 ;;
   *) printf 'fm-board-live: unknown command: %s\n' "$cmd" >&2; usage >&2; exit 2 ;;

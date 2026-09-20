@@ -232,7 +232,15 @@ The port is derived from the home's own path, which keeps it stable across resta
 A derived port already in use falls back to one the system assigns, recorded in the endpoint file.
 The optional local, gitignored `config/board-live-port` pins a port instead, and `FM_BOARD_LIVE_PORT` overrides both; a pinned port that is taken is an error rather than a silent move, because a pin exists to be honored.
 
-`bin/fm-board-live.sh`'s header owns the publish kinds and the lifecycle commands, and `bin/fm-board-live.mjs`'s header owns what an event may change, why the wire carries whole board state rather than deltas, and why a change needing new prose marks the board behind instead of being guessed at.
+The same connection carries the captain's answer back, so pressing a button on the board reaches firstmate over the socket rather than through any separate tool.
+`state/board-live.token` is what proves an answer came from a board built in this home: 32 random bytes issued once per home at mode 0600, stable across restarts and rebuilds, and injected into the built board page.
+Nothing has to be set up for that either - a board build issues the token and binds the channel - and `bin/fm-board-live.sh token --rotate` issues a new one, which immediately stops every board already built from answering.
+`state/board-inbound.jsonl` records each authenticated answer as it arrives, without its token, before anything is attempted with it.
+`bin/fm-board-live.sh status` says whether a board built in this home can answer at all, without printing the token.
+
+`bin/fm-board-live.sh`'s header owns the publish kinds, the lifecycle commands, what proves an inbound message is the captain's and what that proof does not claim.
+`bin/fm-board-live.mjs`'s header owns what an event may change, why the wire carries whole board state rather than deltas, why a change needing new prose marks the board behind instead of being guessed at, and the inbound message and reply shapes.
+`bin/fm-board-answer.sh`'s header owns what an accepted answer then reaches, and `.agents/skills/bearings/assets/live-transport.js` owns the `window.fmBoardLive` seam a board calls to send one.
 
 ## Gate defaults (.no-mistakes.yaml)
 

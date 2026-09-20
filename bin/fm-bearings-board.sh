@@ -348,6 +348,12 @@ BOARD_SESSION_NAME=${FM_BEARINGS_BOARD_NAME:-bearings}
 LIVE_TRANSPORT="${FM_BOARD_LIVE_TRANSPORT:-$SCRIPT_DIR/../.agents/skills/bearings/assets/live-transport.js}"
 LIVE_ANCHOR='<script id="bearings-data" type="application/json">'
 LIVE_ENDPOINT_SLOT='__FM_BOARD_LIVE_ENDPOINT__'
+# The other half of the same connection: what the board sends the captain's
+# answer back with. bin/fm-board-live.sh's header owns what it proves. It is
+# a credential, so it reaches only a board written to a file at mode 0600 -
+# printing a derived board to a terminal prints it too, which is why `build`
+# and every caller that keeps a board use --out.
+LIVE_TOKEN_SLOT='__FM_BOARD_LIVE_TOKEN__'
 BOARD_SCHEMA=fm-bearings-board.v1
 PLACEHOLDER_RE='\{(FILL|TRANSLATE)(:[^}]*)?\}'
 # The one definition of a routable key, an acceptable captain-facing link, and
@@ -412,19 +418,26 @@ live_endpoint() {
 # is what lets a repaint restore first paint exactly and lets the board's own
 # error card be undone. Fails rather than emitting a board that cannot update.
 derive_live_board() {  # <endpoint> <destination>
-  local endpoint=$1 dest=$2 anchors
+  local endpoint=$1 dest=$2 anchors token
   [ -f "$LIVE_TRANSPORT" ] && [ ! -L "$LIVE_TRANSPORT" ] \
     || { printf 'the live transport is missing: %s\n' "$LIVE_TRANSPORT" >&2; return 1; }
   grep -qF "$LIVE_ENDPOINT_SLOT" "$LIVE_TRANSPORT" \
     || { printf 'the live transport carries no endpoint slot\n' >&2; return 1; }
+  grep -qF "$LIVE_TOKEN_SLOT" "$LIVE_TRANSPORT" \
+    || { printf 'the live transport carries no answer-token slot\n' >&2; return 1; }
   anchors=$(grep -cxF "$LIVE_ANCHOR" "$TEMPLATE")
   [ "$anchors" -eq 1 ] \
     || { printf 'board template does not carry exactly one data slot opening: %s\n' "$TEMPLATE" >&2; return 1; }
+  # A board that cannot send an answer back is a picture of a board, so this
+  # refuses rather than emitting one whose buttons would do nothing.
+  token=$("$SCRIPT_DIR/fm-board-live.sh" token) \
+    || { printf 'cannot issue the answer token this board would need to reach firstmate\n' >&2; return 1; }
 
   local filled
   filled=$(umask 077; mktemp "${TMPDIR:-/tmp}/fm-board-live-transport.XXXXXX") || return 1
-  if ! FM_LIVE_ENDPOINT="$endpoint" perl -pe \
-      "s/\\Q$LIVE_ENDPOINT_SLOT\\E/\$ENV{FM_LIVE_ENDPOINT}/g" "$LIVE_TRANSPORT" > "$filled"; then
+  if ! FM_LIVE_ENDPOINT="$endpoint" FM_LIVE_TOKEN="$token" perl -pe \
+      "s/\\Q$LIVE_ENDPOINT_SLOT\\E/\$ENV{FM_LIVE_ENDPOINT}/g;
+       s/\\Q$LIVE_TOKEN_SLOT\\E/\$ENV{FM_LIVE_TOKEN}/g" "$LIVE_TRANSPORT" > "$filled"; then
     rm -f -- "$filled"
     printf 'cannot set the live endpoint on the transport\n' >&2
     return 1
@@ -451,6 +464,10 @@ derive_live_board() {  # <endpoint> <destination>
   fi
   if grep -qF "$LIVE_ENDPOINT_SLOT" "$dest"; then
     printf 'the live endpoint slot survived derivation\n' >&2
+    return 1
+  fi
+  if grep -qF "$LIVE_TOKEN_SLOT" "$dest"; then
+    printf 'the answer-token slot survived derivation\n' >&2
     return 1
   fi
   return 0

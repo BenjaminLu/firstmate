@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Behavior tests for the bearings board's live event path: the publisher
-# (bin/fm-board-live.sh), the server and its merge (bin/fm-board-live.mjs), the
-# derivation that puts the transport on the board
-# (bin/fm-bearings-board.sh derive), and the transport itself, executed under
-# the DOM shim in tests/assets/board-live-page-harness.mjs.
+# Behavior tests for the bearings board's live event path in both directions:
+# the publisher (bin/fm-board-live.sh), the server and its merge
+# (bin/fm-board-live.mjs), the inbound half that carries the captain's click
+# back (the same server plus bin/fm-board-answer.sh), the derivation that puts
+# the transport on the board (bin/fm-bearings-board.sh derive), and the
+# transport itself, executed under the DOM shim in
+# tests/assets/board-live-page-harness.mjs.
 #
 # Every assertion is on observable behavior: what the server serves, what a
 # real websocket client receives, and what the page shows. Nothing here reads
@@ -15,6 +17,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 LIVE="$ROOT/bin/fm-board-live.sh"
+ANSWER="$ROOT/bin/fm-board-answer.sh"
 SERVER="$ROOT/bin/fm-board-live.mjs"
 BOARD="$ROOT/bin/fm-bearings-board.sh"
 CLIENT="$ROOT/tests/assets/board-live-client.mjs"
@@ -63,6 +66,286 @@ free_port() {
 }
 
 # --- the publisher -----------------------------------------------------------
+
+# --- the click coming back ---------------------------------------------------
+#
+# Every case here speaks real websocket to a real server, so what is asserted
+# is what a page on the wire would get, not what the code intends.
+
+# File mode, both spellings, because the suite runs on macOS and on CI Linux.
+fm_test_mode() {  # <path>
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+# A home that can actually record an answer: the fixture home plus a backlog
+# with one task held for the captain, which is what a decision card keys.
+make_answering_home() {  # <name> ; prints the home path
+  local home
+  home=$(make_home "$1") || return 1
+  cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
+  printf '## In flight\n\n## Queued\n\n## Done\n' > "$home/data/backlog.md"
+  ( cd "$home" \
+    && BEADS_ACTOR=fixture tasks-axi add pick-one "Pick one" --repo firstmate \
+    && BEADS_ACTOR=fixture tasks-axi hold pick-one --kind captain --reason "captain must decide" \
+  ) >/dev/null 2>&1 || return 1
+  printf '%s\n' "$home"
+}
+
+serve_home() {  # <home> ; prints the port
+  local home=$1 port
+  port=$(free_port)
+  STARTED_HOMES+=("$home")
+  FM_HOME="$home" "$LIVE" start --port "$port" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$port"
+}
+
+inbound_message() {  # <token> <id> <answers-json>
+  printf '{"schema":"fm-board-inbound.v1","token":"%s","type":"answer","id":"%s","answers":%s}' \
+    "$1" "$2" "$3"
+}
+
+test_a_board_is_built_able_to_answer() {
+  local home token page
+  home=$(make_home inbound-token) || fail "could not build a home"
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  printf '%s' "$token" | grep -Eq '^[0-9a-f]{64}$' \
+    || fail "the answer token is not 32 random bytes of hex: $token"
+  assert_equals "$token" "$(FM_HOME="$home" "$LIVE" token)" \
+    "asking twice issued two different tokens, so a board built yesterday would stop answering"
+  assert_equals "600" "$(fm_test_mode "$home/state/board-live.token")" \
+    "the answer token is readable by anyone on the machine"
+  page="$home/.lavish/bearings-board.html"
+  assert_contains "$(cat "$page")" "$token" \
+    "the built board carries no way to send an answer back"
+  assert_equals "600" "$(fm_test_mode "$page")" \
+    "the board carrying the token is readable by anyone on the machine"
+  pass "a board is built able to answer, with one stable token kept to the captain's own account"
+}
+
+test_a_rotated_token_stops_an_old_board_answering() {
+  local home token rotated port got
+  home=$(make_answering_home inbound-rotate) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  rotated=$(FM_HOME="$home" "$LIVE" token --rotate) || fail "the token could not be rotated"
+  [ "$rotated" != "$token" ] || fail "rotating the token issued the same one again"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 15000 --count-type inbound \
+    --send "$(inbound_message "$token" rot '[{"key":"pick-one","selection":"yes"}]')") \
+    || fail "the server never answered a board carrying the retired token"
+  assert_equals unauthenticated "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].reason')" \
+    "a board carrying a retired token was still allowed to answer"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "rotating the token stops every board already built from answering"
+}
+
+test_a_message_from_another_origin_never_reaches_the_port() {
+  local home token port got
+  home=$(make_answering_home inbound-origin) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  # A website the captain happens to be visiting, holding a token it should
+  # never have: the browser writes the Origin itself and page script cannot
+  # change it, so this is the strongest form of the attack.
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 8000 \
+    --origin "https://evil.example" \
+    --send "$(inbound_message "$token" forged '[{"key":"pick-one","selection":"yes"}]')") \
+    || fail "the client could not reach the server at all"
+  assert_contains "$(printf '%s' "$got" | jq -r '.handshake_refused')" "403" \
+    "a page on another origin was allowed to open the captain's answer channel"
+  [ "$(cd "$home" && tasks-axi show pick-one 2>/dev/null | sed -n 's/^  state: //p')" != "done" ] \
+    || fail "a message from another origin settled the captain's call"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "a message from another origin is refused at the handshake and settles nothing"
+}
+
+test_a_message_with_no_token_is_refused_out_loud() {
+  local home port got
+  home=$(make_answering_home inbound-unauth) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  FM_HOME="$home" "$LIVE" token >/dev/null || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  # A local process that is not a browser: it sends no Origin at all, so the
+  # token is the whole of what stands between it and the captain's decisions.
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 15000 --count-type inbound \
+    --send "$(inbound_message 0000000000000000000000000000000000000000000000000000000000000000 \
+      nope '[{"key":"pick-one","selection":"yes"}]')") \
+    || fail "the server never answered an unauthenticated message"
+  assert_equals refused "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].status')" \
+    "an unauthenticated message was not refused, or was dropped in silence"
+  assert_equals unauthenticated "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].reason')" \
+    "the refusal does not say the message was not the captain's"
+  [ "$(cd "$home" && tasks-axi show pick-one 2>/dev/null | sed -n 's/^  state: //p')" != "done" ] \
+    || fail "an unauthenticated message settled the captain's call"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "a message that cannot be proved the captain's is refused out loud and settles nothing"
+}
+
+test_an_inbound_message_can_only_ever_carry_an_answer() {
+  local home token port got
+  home=$(make_answering_home inbound-authority) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  # An authenticated message asking for anything other than an answer. The
+  # token proves who sent it; it does not widen what may be asked for.
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 15000 --count-type inbound \
+    --send "{\"schema\":\"fm-board-inbound.v1\",\"token\":\"$token\",\"type\":\"merge\",\"pr\":\"https://example.test/pr/1\"}") \
+    || fail "the server never answered a message asking for something else"
+  assert_equals refused "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].status')" \
+    "an authenticated message was allowed to ask for something other than an answer"
+  assert_equals unsupported-type "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].reason')" \
+    "the refusal does not say why"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "a proven sender may answer a question and may not ask for anything else"
+}
+
+test_the_captains_click_settles_the_call_the_way_a_typed_answer_does() {
+  local home token port got body
+  home=$(make_answering_home inbound-answer) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 2 60000 --count-type inbound \
+    --send "$(inbound_message "$token" click \
+      '[{"key":"pick-one","selection":"yes","label":"Yes, ship it","close":"done"}]')") \
+    || fail "the captain's click was never answered"
+  assert_equals accepted "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].status')" \
+    "the captain's click was not accepted"
+  assert_equals recorded "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")] | last | .status')" \
+    "the captain's click was accepted and then never recorded"
+  # The durable record, written by the one intake every channel feeds.
+  body=$(cd "$home" && tasks-axi show pick-one)
+  assert_equals "done" "$(printf '%s' "$body" | sed -n 's/^  state: //p')" \
+    "the captain's click did not settle the call"
+  assert_contains "$body" "Answer: yes" \
+    "the recorded decision does not carry what the captain chose"
+  assert_contains "$body" "Yes, ship it" \
+    "the recorded decision does not read the way the captain read it"
+  # The acknowledgement on the row he clicked, written by the one carrier.
+  [ -f "$home/state/board-acks/pick-one.json" ] \
+    || fail "the row the captain clicked carries no acknowledgement"
+  # Firstmate learning about it at all.
+  assert_contains "$(cat "$home/state/.wake-queue")" "board-answer:pick-one" \
+    "the captain answered and firstmate was never told"
+  pass "the captain's click settles the call, acknowledges his row, and tells firstmate"
+}
+
+test_an_answer_is_durable_before_anything_is_attempted_with_it() {
+  local home token port journal
+  home=$(make_answering_home inbound-journal) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  node "$CLIENT" "ws://127.0.0.1:$port/board-live" 2 60000 --count-type inbound \
+    --send "$(inbound_message "$token" kept '[{"key":"pick-one","selection":"yes","label":"Yes"}]')" \
+    >/dev/null || fail "the captain's click was never answered"
+  journal="$home/state/board-inbound.jsonl"
+  [ -f "$journal" ] || fail "the captain's answer was never written down"
+  assert_contains "$(cat "$journal")" "pick-one" \
+    "the record of the captain's answer does not name what he answered"
+  [ "$(grep -c "$token" "$journal")" -eq 0 ] \
+    || fail "the durable record carries the token, which is a credential"
+  assert_equals "600" "$(fm_test_mode "$journal")" \
+    "the record of the captain's answers is readable by anyone on the machine"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "an answer is on disk, without its credential, before anything is attempted with it"
+}
+
+test_the_reconcile_choice_is_not_recorded_as_an_answer() {
+  local home token port got
+  home=$(make_answering_home inbound-reconcile) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  node "$CLIENT" "ws://127.0.0.1:$port/board-live" 2 60000 --count-type inbound \
+    --send "$(inbound_message "$token" recheck \
+      '[{"key":"pick-one","selection":"reconcile","note":"this may be moot"}]')" \
+    >/dev/null || fail "the reconcile choice was never answered"
+  [ "$(cd "$home" && tasks-axi show pick-one | sed -n 's/^  state: //p')" != "done" ] \
+    || fail "asking for a re-check closed the call as though it had been answered"
+  [ -f "$home/state/reconcile-requests/pick-one.request" ] \
+    || fail "asking for a re-check recorded no obligation to re-check"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "the board's re-check choice records an obligation and never closes the call"
+}
+
+test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked() {
+  local home token port got
+  home=$(make_answering_home inbound-dispatch) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  # The dispatch bar answers for the rows he ticked, not for itself, and names
+  # no captain-held task: it must come back as an order that landed, not as an
+  # answer that could not be recorded.
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 2 60000 --count-type inbound \
+    --send "$(inbound_message "$token" order \
+      '[{"key":"dispatch.charted","note":"alpha,beta","label":"Dispatch: alpha, beta"}]')") \
+    || fail "the dispatch order was never answered"
+  assert_equals recorded \
+    "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")] | last | .status')" \
+    "starting queued work came back as an answer that could not be recorded"
+  [ -f "$home/state/board-acks/alpha.json" ] && [ -f "$home/state/board-acks/beta.json" ] \
+    || fail "the rows the captain ticked carry no acknowledgement"
+  [ ! -f "$home/state/board-acks/dispatch.charted.json" ] \
+    || fail "the send button acknowledged itself instead of the rows he ticked"
+  assert_contains "$(cat "$home/state/.wake-queue")" "alpha,beta" \
+    "firstmate was not told which queued items to start"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "the dispatch bar acknowledges each row the captain ticked and tells firstmate which they were"
+}
+
+test_a_malformed_message_is_refused_rather_than_guessed_at() {
+  local home token port got
+  home=$(make_answering_home inbound-malformed) || { echo "skip: tasks-axi fixture unavailable"; return 0; }
+  token=$(FM_HOME="$home" "$LIVE" token) || fail "a home could not issue an answer token"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 3 20000 --count-type inbound \
+    --send "not json at all" \
+    --send "$(inbound_message "$token" empty '[{"key":"pick-one"}]')" \
+    --send "$(inbound_message "$token" twice \
+      '[{"key":"pick-one","selection":"yes"},{"key":"pick-one","selection":"no"}]')") \
+    || fail "the server never answered a malformed message"
+  assert_equals malformed "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][0].reason')" \
+    "text that is not a message was not refused as one"
+  assert_equals malformed "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][1].reason')" \
+    "a pick carrying neither a choice nor words was not refused"
+  assert_equals duplicate-key "$(printf '%s' "$got" | jq -r '[.[] | select(.type == "inbound")][2].reason')" \
+    "two answers for one card in one message were not refused"
+  [ "$(cd "$home" && tasks-axi show pick-one 2>/dev/null | sed -n 's/^  state: //p')" != "done" ] \
+    || fail "a malformed message settled the captain's call"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "a message this port cannot read is refused by name rather than guessed at"
+}
+
+test_reading_the_board_still_needs_no_token() {
+  local home port got
+  home=$(make_home inbound-read) || fail "could not build a home"
+  port=$(serve_home "$home") || fail "the server did not start"
+  got=$(node "$CLIENT" "ws://127.0.0.1:$port/board-live" 1 8000) \
+    || fail "a subscriber carrying no token was not sent the board"
+  assert_equals state "$(printf '%s' "$got" | jq -r '.[0].type')" \
+    "the outbound half started demanding a credential the pages already built do not carry"
+  FM_HOME="$home" "$LIVE" stop >/dev/null 2>&1
+  pass "subscribing is unchanged; only answering is proved"
+}
+
+test_the_page_carries_the_answer_and_shows_what_came_back() {
+  local home sent refused offline
+  home=$(make_home page-answer) || fail "could not build a home"
+  sent=$(page_says "$home" answer-sent)
+  assert_contains "$(printf '%s' "$sent" | jq -r '.outbound[0]')" '"key":"pick-one"' \
+    "pressing a button on a card put nothing on the wire"
+  assert_contains "$(printf '%s' "$sent" | jq -r '.outbound[0]')" '"schema":"fm-board-inbound.v1"' \
+    "what the page sent is not what the server accepts"
+  assert_contains "$(printf '%s' "$sent" | jq -r '.sent.text')" "recorded" \
+    "the page never told the captain his answer landed"
+  refused=$(page_says "$home" answer-refused)
+  assert_equals danger "$(printf '%s' "$refused" | jq -r '.sent.tone')" \
+    "a refused answer does not read as something gone wrong"
+  assert_contains "$(printf '%s' "$refused" | jq -r '.sent.text')" "NOT recorded" \
+    "the page let a refused answer look like it worked"
+  offline=$(page_says "$home" answer-offline)
+  assert_contains "$(printf '%s' "$offline" | jq -r '.sent.text')" "NOT sent" \
+    "pressing a button on a disconnected board looked like it worked"
+  assert_equals 0 "$(printf '%s' "$offline" | jq -r '.outbound | length')" \
+    "a disconnected board put something on the wire anyway"
+  pass "the page carries the captain's answer and says what became of it, including when nothing did"
+}
 
 test_publishing_never_resurrects_a_retired_home() {
   local home rc
@@ -468,3 +751,15 @@ test_a_dropped_connection_is_reopened_and_corrected
 test_a_page_that_stopped_receiving_says_how_long_ago
 test_the_status_never_covers_the_language_switch
 test_publishing_sites_reach_the_board
+test_a_board_is_built_able_to_answer
+test_a_rotated_token_stops_an_old_board_answering
+test_a_message_from_another_origin_never_reaches_the_port
+test_a_message_with_no_token_is_refused_out_loud
+test_an_inbound_message_can_only_ever_carry_an_answer
+test_the_captains_click_settles_the_call_the_way_a_typed_answer_does
+test_an_answer_is_durable_before_anything_is_attempted_with_it
+test_the_reconcile_choice_is_not_recorded_as_an_answer
+test_the_dispatch_bar_acknowledges_each_row_the_captain_ticked
+test_a_malformed_message_is_refused_rather_than_guessed_at
+test_reading_the_board_still_needs_no_token
+test_the_page_carries_the_answer_and_shows_what_came_back
