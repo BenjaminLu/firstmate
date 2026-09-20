@@ -43,7 +43,8 @@
 # question gates over minting a new row. The command records a UTC `Captain
 # hold set:` timestamp in the task body: repeating an active hold preserves the
 # existing timestamp, while re-holding released work starts a new lifecycle.
-# A task already closed is refused rather than reopened. `--until` records the
+# A task already closed is refused rather than reopened, whether the active
+# backlog still lists it or done_keep has retired it to the archive. `--until` records the
 # captain's own deferral date through `tasks-axi hold --until`, so a "revisit
 # later" answer is stored as a date instead of a live card.
 #
@@ -894,6 +895,18 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
   verify_hold_durable "${resolved%% *}"
 }
 
+# The closed-task refusal above, for a row the active backlog no longer lists.
+# Without it that refusal held only where Done entries are kept, so a home
+# with retention off got a second row under an id the archive already owns.
+refuse_archived_reuse() {  # <task-id>
+  local id=$1 status=0
+  archived_row_body "$id" >/dev/null || status=$?
+  [ "$status" -ne 2 ] \
+    || fail "the backlog archive could not be read while checking whether task $id already exists"
+  [ "$status" -ne 0 ] \
+    || fail "task $id is already closed and archived; a new captain call needs its own task"
+}
+
 command_hold() {
   local id=${1:-} title='' reason='' repo='' origin='' until='' show state existing_title body='' hold_kind hold_set occurrence
   local existing_hold_kind='' existing_held='' preserve_hold_set=0
@@ -944,6 +957,11 @@ command_hold() {
       [ "$existing_title" = "$title" ] || fail "existing task $id has a different title"
     fi
   else
+    # A closed row done_keep has retired is still that id's row. Creating a
+    # second one here would put one id in both halves of the backlog and
+    # silently skip the refusal above, which this file publishes as a
+    # guarantee rather than as a retention-dependent one.
+    refuse_archived_reuse "$id"
     [ -n "$title" ] || fail "--title is required to create task $id"
     validate_one_line title "$title"
     if [ -z "$repo" ] && [ -n "$origin" ] && [ -f "$STATE/$origin.meta" ]; then

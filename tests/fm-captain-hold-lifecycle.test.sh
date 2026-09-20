@@ -4225,6 +4225,39 @@ test_a_reconciliation_retires_its_request_after_retention() {
   pass "a reconciliation retires its request even once retention has archived the row"
 }
 
+# `hold` refuses to reopen a closed task, and this file publishes that refusal
+# as a guarantee. It held only where Done entries are kept: with retention off
+# the row is in the archive, the active read saw nothing, and a second row was
+# created under an id the archive already owned.
+test_hold_refuses_an_id_the_archive_already_owns() {
+  local home id out
+  home=$(make_home hold-after-retention)
+  id=sample-zero-rehold
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  tasks_in "$home" add "$id" "Original call" --repo sample >/dev/null \
+    || fail "could not create the re-hold fixture"
+  run_captain "$home" hold "$id" --reason "captain choice pending" >/dev/null \
+    || fail "could not hold the re-hold fixture"
+  printf 'Fund the clock seam.\n' > "$home/rehold-decision.txt"
+  run_captain "$home" answer "$id" --decision-file "$home/rehold-decision.txt" >/dev/null \
+    || fail "could not answer the re-hold fixture"
+  assert_grep "$id" "$home/data/done-archive.md" "the fixture did not archive the answered call"
+
+  out=$(run_captain "$home" hold "$id" --reason "second call" --title "Original call" 2>&1) \
+    && fail "hold created a second row under an id the archive already owns: $out"
+  assert_contains "$out" "already closed" "the refusal did not name the closed row: $out"
+  assert_no_grep "$id" "$home/data/backlog.md" \
+    "the refused hold still put the archived id back in the active backlog"
+
+  # A genuinely unused id still creates normally on the same home.
+  run_captain "$home" hold sample-zero-fresh --title "A fresh call" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "the archive check refused an id nothing owns"
+  pass "hold refuses an id the archive already owns"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4409,6 +4442,7 @@ test_completion_gate_reads_an_answered_call_out_of_the_archive
 test_archive_follows_its_configuration_and_reports_an_unreadable_store
 test_a_replayed_answer_stays_idempotent_after_retention
 test_a_reconciliation_retires_its_request_after_retention
+test_hold_refuses_an_id_the_archive_already_owns
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
 test_an_interrupted_close_still_finishes_when_a_worker_appears
