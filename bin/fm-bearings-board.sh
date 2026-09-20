@@ -791,7 +791,13 @@ validate_payload() {  # <data.json>
       and optional_ack;
     def underway_item:
       type == "object" and repo_marker and name_marker and (.id | nonempty_string)
-      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string);
+      and (.state | nonempty_string) and (.doing | copy) and (.kind | nonempty_string)
+      # `lane` is deliberately NOT an enum. The page knows the lanes it can
+      # draw and collects everything else under a heading that says so, which
+      # is what stops a worker vanishing when the fleet grows a state neither
+      # side knows yet. Refusing an unknown lane here would drop the whole
+      # board instead, which is the worse failure.
+      and ((has("lane") | not) or (.lane | nonempty_string));
     def landed_item:
       type == "object" and repo_marker and (.id | nonempty_string)
       and (.what | copy) and (.owner | nonempty_string)
@@ -1457,8 +1463,36 @@ EOF
           # is dropped and the row still says what is holding the work.
           + (if (.url | https_url) then {url: .url} else {} end)
           + (if $code == null then {} else {reason: $code} end) ]),
-      underway: [ .in_flight[]? | {id, repo, name: t(.name; .id), state, kind,
-        doing: t(.doing; .state)} ],
+      underway: (
+        # Which lane of the pipeline each worker is actually in.
+        #
+        # Fourteen workers as fourteen rows says nothing; the same fourteen as
+        # counts per lane says "four on pull requests, one check failed, two
+        # stuck" at a glance. The shape of the pile IS the reading, which is
+        # why this is computed here rather than left to the page to guess.
+        #
+        # A worker on a pull request is placed by that pull request rather than
+        # by its own state, because "writing" and "waiting on checks" are the
+        # same state to the fleet and completely different to the captain.
+        #
+        # Anything this cannot place keeps whatever the fleet called it and is
+        # collected visibly by the page. A board that quietly loses a worker is
+        # worse than one that says it could not place him.
+        ([ .candidate_prs[]? | {key: .task, value: .checks} ] | from_entries) as $prchecks
+        | [ .in_flight[]? | . as $w
+          | ($prchecks[$w.id] // null) as $checks
+          | {id, repo, name: t(.name; .id), state, kind,
+             doing: t(.doing; .state),
+             lane: (
+               if $checks == "failing" then "failed"
+               elif $checks != null and $checks != "passing" then "pr"
+               elif .state == "working" then "working"
+               elif .state == "blocked" then "stuck"
+               elif .state == "failed" then "stopped"
+               elif .state == "unknown" then "unreported"
+               elif .state == "done" then "done"
+               elif .state == "paused" or .state == "parked" then "waiting"
+               else .state end)} ]),
       landed: [ .landed[]?
         | {id: (if owned then .id else (.owner + "/" + .id) end),
            repo: (if owned then repo_of(.id) else null end),

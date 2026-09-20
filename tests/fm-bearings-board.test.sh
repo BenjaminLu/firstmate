@@ -1794,6 +1794,57 @@ test_compose_tells_a_failed_check_from_an_unclaimed_pull_request() {
   pass "compose names a failed check rather than lumping it in with unclaimed work"
 }
 
+# A worker is placed by its pull request rather than by its own state when it
+# has one, because "writing" and "waiting on checks" are the same state to the
+# fleet and completely different to the captain.
+test_compose_places_a_worker_by_its_pull_request_when_it_has_one() {
+  local home skeleton snap
+  home=$(make_compose_home compose-lane-pr)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.in_flight[0].state = "working"
+    | .candidate_prs[0].task = "ship-task"
+    | .candidate_prs[0].checks = "pending"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the lane fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose worker is on a pull request"
+  jq -e '[.underway[] | select(.id == "ship-task") | .lane] == ["pr"]' "$skeleton" >/dev/null \
+    || fail "a worker waiting on checks was not placed on its pull request: $(jq -c .underway "$skeleton")"
+
+  jq '.in_flight[0].state = "working"
+    | .candidate_prs[0].task = "ship-task"
+    | .candidate_prs[0].checks = "failing"' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the failing-lane fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot whose pull request has a failed check"
+  jq -e '[.underway[] | select(.id == "ship-task") | .lane] == ["failed"]' "$skeleton" >/dev/null \
+    || fail "a worker whose check failed was not placed in that lane: $(jq -c .underway "$skeleton")"
+  pass "compose places a worker by its pull request rather than by its own state"
+}
+
+# Every other worker is placed by what the fleet says it is doing, and a state
+# with no lane keeps its own name so the board can show it rather than lose it.
+test_compose_places_every_worker_it_can_and_names_the_rest() {
+  local home skeleton snap
+  home=$(make_compose_home compose-lane-states)
+  skeleton="$home/skeleton.json"
+  snap="$home/snapshot.json"
+  jq '.in_flight[0].state = "blocked" | .candidate_prs = []' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the blocked fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot with a blocked worker"
+  jq -e '[.underway[] | select(.id == "ship-task") | .lane] == ["stuck"]' "$skeleton" >/dev/null \
+    || fail "a blocked worker was not placed as stuck: $(jq -c .underway "$skeleton")"
+
+  jq '.in_flight[0].state = "marooned" | .candidate_prs = []' \
+    "$COMPOSE_ASSETS/snapshot.json" > "$snap" || fail "cannot stage the unknown-state fixture"
+  run_board "$home" compose --snapshot "$snap" --out "$skeleton" >/dev/null \
+    || fail "compose refused a snapshot carrying a state it has no lane for"
+  jq -e '[.underway[] | select(.id == "ship-task") | .lane] == ["marooned"]' "$skeleton" >/dev/null \
+    || fail "a state with no lane did not keep its own name: $(jq -c .underway "$skeleton")"
+  pass "compose places every worker it can and names the state of the rest"
+}
+
 test_build_names_the_unfilled_card_slot_it_refuses() {
   local home skeleton filled board out rc
   home=$(make_compose_home compose-unfilled-slot)
@@ -2346,6 +2397,8 @@ test_compose_counts_the_work_stalled_behind_each_call
 test_compose_counts_zero_for_a_call_nothing_waits_on
 test_compose_gives_every_open_pull_request_its_reason
 test_compose_tells_a_failed_check_from_an_unclaimed_pull_request
+test_compose_places_a_worker_by_its_pull_request_when_it_has_one
+test_compose_places_every_worker_it_can_and_names_the_rest
 test_build_names_the_unfilled_card_slot_it_refuses
 test_compose_decodes_a_quoted_backlog_title
 test_skeleton_fails_build_until_its_placeholders_are_filled
