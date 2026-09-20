@@ -538,24 +538,51 @@ target_reads() {
 
 GH_MISSING=0
 
-# One bounded gh call. Prints its stdout; returns 1 on any failure, with the
-# reason in FORGE_ERROR.
+# One bounded gh call. The answer lands in GH_OUT and the reason for a failure
+# in FORGE_ERROR, both assigned in the caller's own shell.
+#
+# It does NOT print its answer for a caller to capture. A caller writing
+# `out=$(run_gh ...)` runs the whole function in a command substitution, so its
+# FORGE_ERROR assignment lands in a subshell that dies with it and the parent
+# reads an empty reason - which is how every failure came out as "could not be
+# read:" with nothing after the colon, leaving firstmate unable to tell a rate
+# limit from a broken token from a network outage. Assigning GH_OUT keeps the
+# command substitution around gh itself, where only gh's output crosses.
+#
+# gh's own first line of stderr is carried into the reason, because "the forge
+# refused the read" alone does not say which of those three it was.
 FORGE_ERROR=
+GH_OUT=
 run_gh() {
-  local bound out status
+  local bound status errfile detail
   FORGE_ERROR=
+  GH_OUT=
   bound=$(call_bound)
-  out=$(fm_run_timed "$bound" gh "$@" 2>/dev/null)
+  errfile=$(mktemp "${TMPDIR:-/tmp}/fm-obligation-gh.XXXXXX" 2>/dev/null) || {
+    FORGE_ERROR="no temporary file could be created for the forge read"
+    return 1
+  }
+  GH_OUT=$(fm_run_timed "$bound" gh "$@" 2>"$errfile")
   status=$?
+  detail=$(head -n 1 "$errfile" 2>/dev/null | tr '\t\r\n' '   ')
+  rm -f -- "$errfile"
+  case "${#detail}" in
+    0) ;;
+    *) [ "${#detail}" -le 200 ] || detail="${detail:0:200}..." ;;
+  esac
   if [ "$status" -eq 124 ]; then
     FORGE_ERROR="the forge did not answer within ${bound}s"
     return 1
   fi
   if [ "$status" -ne 0 ]; then
-    FORGE_ERROR="the forge refused the read"
+    if [ -n "$detail" ]; then
+      FORGE_ERROR="the forge refused the read: $detail"
+    else
+      FORGE_ERROR="the forge refused the read"
+    fi
     return 1
   fi
-  printf '%s' "$out"
+  return 0
 }
 
 # One pull request, named explicitly by repository and number.
@@ -575,17 +602,18 @@ run_gh() {
 # proportional to this home's own work, and it is also exact: a listing needs a
 # --limit, and past that limit absence stops being proof of anything.
 view_pull_request() {
-  local key=$1 slug=$2 number=$3 out
-  out=$(run_gh pr view "$number" --repo "$slug" \
+  local key=$1 slug=$2 number=$3
+  run_gh pr view "$number" --repo "$slug" \
     --json state,headRefOid,reviews,comments \
-    --jq '[.state, (.headRefOid // "-"), ((.reviews // []) | length | tostring), ((.comments // []) | length | tostring)] | @tsv') || return 1
+    --jq '[.state, (.headRefOid // "-"), ((.reviews // []) | length | tostring), ((.comments // []) | length | tostring)] | @tsv' \
+    || return 1
   # An exit status of 0 with nothing on stdout resolves nothing, and treating it
   # as a completed read would leave the pull request silently unaccounted for.
-  if [ -z "$out" ]; then
+  if [ -z "$GH_OUT" ]; then
     FORGE_ERROR="the forge answered with nothing"
     return 1
   fi
-  RESOLVED="$RESOLVED$key	$out
+  RESOLVED="$RESOLVED$key	$GH_OUT
 "
   return 0
 }

@@ -397,8 +397,10 @@ test_an_unreachable_forge_is_unknown_not_clean() {
   run "$home" "$out" GH_FIXTURE_FAIL=1
   report=$(cat "$out")
   [ -s "$out" ] || fail "an unreachable forge produced silence, which means all four obligations are met"
-  assert_contains "$report" "unknown: $PR_BASE/7 could not be read" \
-    "an unreachable forge was not reported as an undeterminable answer"
+  assert_contains "$report" "unknown: $PR_BASE/7 could not be read: the forge refused the read" \
+    "an unreachable forge was not reported as an undeterminable answer with its reason"
+  assert_contains "$report" "the forge said no" \
+    "the forge's own explanation did not reach the report, so a rate limit reads the same as a broken token"
   assert_not_contains "$report" "owed:" \
     "an undeterminable obligation was reported as owed, which sends firstmate to do work that may not be needed"
   pass "an unreachable forge is reported as unknown, never as clean and never as owed"
@@ -448,6 +450,23 @@ test_the_budget_running_out_is_unknown_not_dropped() {
   assert_contains "$report" "unknown:" "a sweep the budget cut short did not report an unknown answer"
   assert_not_contains "$report" "owed:" "a pull request the budget never reached was reported as owed"
   pass "a sweep the budget cuts short reports what it could not determine"
+}
+
+test_a_read_that_times_out_says_so_rather_than_saying_nothing() {
+  local home out report
+  # The two failures are different actions for firstmate - wait, or fix the
+  # credential - so the report has to tell them apart.
+  home=$(make_home slow-forge)
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0
+  out="$home/out.txt"
+  run "$home" "$out" FM_OBLIGATION_CALL_SECS=1 GH_FIXTURE_HANG=6
+  report=$(cat "$out")
+  assert_contains "$report" "the forge did not answer within" \
+    "a read killed at its bound was not distinguished from a read the forge refused"
+  assert_not_contains "$report" "could not be read: the forge refused" \
+    "a timed-out read was reported as a refusal"
+  pass "a read killed at its bound says so, and says it differently from a refusal"
 }
 
 test_an_oversized_budget_is_cut_to_fit_and_named() {
@@ -917,6 +936,7 @@ test_a_secondmate_is_not_a_work_item
 test_an_unreachable_forge_is_unknown_not_clean
 test_a_missing_gh_is_unknown_not_clean
 test_a_gitlab_merge_request_is_a_named_gap_not_a_pass
+test_a_read_that_times_out_says_so_rather_than_saying_nothing
 test_the_budget_running_out_is_unknown_not_dropped
 test_an_oversized_budget_is_cut_to_fit_and_named
 test_an_unreadable_board_is_unknown_not_clean
