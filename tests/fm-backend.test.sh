@@ -965,24 +965,31 @@ SH
   printf '%s\n' "$fb"
 }
 
-# run_teardown_case <script> <fm-root-override> <fakebin> <log> <state> <data> <config> <id>
+# run_teardown_case <script> <fm-root-override> <fakebin> <log> <home> <data> <id>
 # FM_ROOT_OVERRIDE is passed separately from <script> so both the old and new
 # runs can point it at the SAME neutral (non-git) shim root - that root's
 # bin/fm-guard.sh is a symlink to the real, unchanged script, so the
 # worktree-tangle check runs identically (and silently) for both, regardless
 # of which fm-teardown.sh (old or new) is actually being invoked.
+#
+# The home is named for the same reason every spawn fixture above names one
+# (see make_spawn_home). fm-teardown.sh reaches fm_treehouse_project_lock_path
+# too, and while its three call sites are gated behind fm_treehouse_pool_slot -
+# which wants a real <pool>/treehouse-state.json this fixture never builds, so
+# the guard is not reached today - an undeclared home is the same latent defect
+# and nothing keeps that gate where it is.
 run_teardown_case() {
-  local script=$1 fmroot=$2 fb=$3 log=$4 state=$5 data=$6 config=$7 id=$8
+  local script=$1 fmroot=$2 fb=$3 log=$4 home=$5 data=$6 id=$7
   : > "$log"
-  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$fmroot" \
-    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
     FM_TMUX_LOG="$log" \
     "$script" "$id"
 }
 
 test_teardown_conformance_old_vs_new() {
   local old_bin fb proj wt id old_tmux_ref saved_base_ref
-  local state_old state_new config_old config_new data log_old log_new out_old out_new rc_old rc_new
+  local state_old state_new config_old config_new home_old home_new data log_old log_new out_old out_new rc_old rc_new
   # Force the post-squash topology inside this case: merge-base with main may
   # equal HEAD on default-branch CI, and that must not make the legacy kill
   # fixture self-referential. build_old_bin still uses BASE_REF for entrypoints;
@@ -1004,9 +1011,10 @@ test_teardown_conformance_old_vs_new() {
   mkdir -p "$data/$id"
   printf 'scout findings\n' > "$data/$id/report.md"
 
-  state_old="$TMP_ROOT/teardown-state-old"; state_new="$TMP_ROOT/teardown-state-new"
-  config_old="$TMP_ROOT/teardown-config-old"; config_new="$TMP_ROOT/teardown-config-new"
-  mkdir -p "$state_old" "$state_new" "$config_old" "$config_new"
+  home_old=$(make_spawn_home "$TMP_ROOT/teardown-home-old") || fail "could not build the old teardown run's firstmate home"
+  home_new=$(make_spawn_home "$TMP_ROOT/teardown-home-new") || fail "could not build the new teardown run's firstmate home"
+  state_old="$home_old/state"; state_new="$home_new/state"
+  config_old="$home_old/config"; config_new="$home_new/config"
 
   fm_write_meta "$state_old/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
@@ -1017,9 +1025,9 @@ test_teardown_conformance_old_vs_new() {
   touch "$state_old/.last-watcher-beat" "$state_new/.last-watcher-beat"
 
   log_old="$TMP_ROOT/teardown-old.log"; log_new="$TMP_ROOT/teardown-new.log"
-  out_old=$(run_teardown_case "$old_bin/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_old" "$state_old" "$data" "$config_old" "$id" 2>&1)
+  out_old=$(run_teardown_case "$old_bin/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_old" "$home_old" "$data" "$id" 2>&1)
   rc_old=$?
-  out_new=$(run_teardown_case "$ROOT/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_new" "$state_new" "$data" "$config_new" "$id" 2>&1)
+  out_new=$(run_teardown_case "$ROOT/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_new" "$home_new" "$data" "$id" 2>&1)
   rc_new=$?
 
   expect_code 0 "$rc_old" "old fm-teardown.sh (scout, report present) should succeed"$'\n'"$out_old"
