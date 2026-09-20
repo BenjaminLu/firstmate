@@ -2280,9 +2280,12 @@ while :; do
           # staying on whatever was captured when the poll was armed. A head
           # line is not supervisor-actionable - an open pull request's head
           # moves with every push - so it is consumed here and clears $out
-          # rather than waking. A merged line's head is the commit the merge
-          # landed, recorded before that outcome is published. Only a head this
-          # poll just read reaches metadata, and a line this watcher does not
+          # rather than waking. A merged line carries the pull request's head at
+          # the moment the merge was seen - the last commit on its branch, NOT
+          # the commit created on the base, which under this fleet's default
+          # squash is a different object entirely - and that is what the record
+          # is for and what every consumer reads it as. Only a head this poll
+          # just read reaches metadata, and a line this watcher does not
           # recognise is left alone and still surfaces as an ordinary wake.
           poll_head=
           case "$out" in

@@ -793,7 +793,7 @@ test_static_poll_contract() {
   done
   out=$(FM_TEST_GH_STATE=MERGED run_poll "$dir")
   [ "$out" = "merged $DEFAULT_POLL_HEAD" ] \
-    || fail "static poll did not emit exactly one merged line carrying the landed head: $out"
+    || fail "static poll did not emit exactly one merged line carrying the merged pull request's head: $out"
   # Losing the merge is worse than losing its attribution, so an unreadable head
   # still reports the merge - and reports it with no head rather than any other.
   out=$(FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD_UNREADABLE=1 run_poll "$dir")
@@ -843,7 +843,7 @@ test_static_poll_contract() {
   [ "$rc" -eq 0 ] || fail "watcher did not surface merged poll"
   [ "$(grep -c '^check: .*: merged$' "$dir/watch.out")" -eq 1 ] || fail "watcher did not convert merged output into exactly one wake"
   grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$dir/home/state/task-a.meta" \
-    || fail "watcher did not record the commit the merge landed at"
+    || fail "watcher did not record the merged pull request's head"
   pass "static poll reports the live head, reports a merge once, and remains watcher-bounded"
 }
 
@@ -1716,11 +1716,12 @@ test_merged_poll_retires_once() {
   ack_watcher_cycle "$state" || fail "first merged notification handling acknowledgement failed"
   assert_poll_absent "$state" task-a
   # Retirement still changes nothing about the canonical identity, and now adds
-  # exactly one thing: the commit the merge landed, read by the poll that saw it.
+  # exactly one thing: the pull request's head as the poll that saw the merge
+  # read it. That is the branch head, not the commit created on the base.
   [ "$(grep -v '^pr_head=' "$state/task-a.meta")" = "$meta_before" ] \
     || fail "merged retirement changed canonical metadata"
   grep -qxF "pr_head=$DEFAULT_POLL_HEAD" "$state/task-a.meta" \
-    || fail "merged retirement did not record the commit the merge landed"
+    || fail "merged retirement did not record the merged pull request's head"
 
   rm -f "$state/.last-check"
   set +e

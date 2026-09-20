@@ -6,9 +6,13 @@
 # for GitLab, so an upstream checkout needs no extra tooling to follow either.
 #
 # Output contract, one line at most, consumed by bin/fm-watch.sh:
-#   "merged <head>"  the pull request is merged, at that exact head commit
-#   "merged"         the pull request is merged and no head could be read
-#   "head <head>"    not merged; <head> is the pull request's head right now
+#   "merged <head>"  merged, and <head> was its branch head when that was seen
+#   "merged"         merged, and no head could be read
+#   "head <head>"    not merged; <head> is its branch head right now
+# <head> is always the head of the pull request's OWN branch. It is never the
+# commit created on the base branch: a squash or rebase merge lands a new object
+# that this value is not an ancestor of, and bin/fm-teardown.sh's content-check
+# fallback exists for exactly that.
 # and silence on every error, so a failed lookup can never be read as a merge.
 # Only a merged line is supervisor-actionable; the head line exists because the
 # head a pull request is open at moves with every push, rebase and force-push,
