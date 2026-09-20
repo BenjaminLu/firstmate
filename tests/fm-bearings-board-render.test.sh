@@ -169,6 +169,63 @@ no_channel_payload() {
                {value:"no", label:"No", consequence:"it was not"}]}]}'
 }
 
+# R3. The board was written when the surface serving it carried every answer.
+# On the captain's own machine that surface is not installed, so every card
+# refused - honestly, but the whole decisions surface was inert, which is the
+# standing complaint with a better error message. The live transport carries
+# answers now and names its own seam; the page has to call it.
+test_an_answer_goes_down_the_live_seam_when_the_serving_surface_is_absent() {
+  local home out
+  home=$(make_home live-seam)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 BOARD_LIVE_SEAM=connected \
+    render_payload "$home" "$(no_channel_payload)")
+
+  # It sent, and it sent the captain's pick as data rather than a sentence.
+  printf '%s' "$out" | jq -e '
+    (.live_answers | length) == 1
+    and (.live_answers[0].key == "unreachable")
+    and (.live_answers[0].note == "in my own words")
+  ' >/dev/null || fail "the answer did not reach the live seam as data: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].limit')" = "" ] \
+    || fail "the card refused an answer the live seam accepted: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "true" ] \
+    || fail "the card did not record an answer the live seam accepted: $out"
+
+  pass "an answer goes down the live seam when the serving surface is absent"
+}
+
+# The seam being PRESENT is not the same as it being able to reach firstmate.
+# A live seam that exists and is disconnected must refuse rather than report
+# an answer it could not send - and must not shadow the fallback either.
+test_a_disconnected_live_seam_refuses_instead_of_reporting_success() {
+  local home out
+  home=$(make_home live-seam-down)
+  out=$(BOARD_NO_ANSWER_CHANNEL=1 BOARD_LIVE_SEAM=disconnected \
+    render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].is_queued')" = "false" ] \
+    || fail "a disconnected live seam still marked the card answered: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "not recorded" \
+    "a disconnected live seam did not say the answer was not recorded: $out"
+
+  pass "a disconnected live seam refuses instead of reporting success"
+}
+
+# Both seams present: the live one is preferred, because it is the one that
+# reaches firstmate on the machine the captain is actually using.
+test_the_live_seam_is_preferred_over_the_serving_surface() {
+  local home out
+  home=$(make_home live-seam-both)
+  out=$(BOARD_LIVE_SEAM=connected render_payload "$home" "$(no_channel_payload)")
+
+  [ "$(printf '%s' "$out" | jq -r '.live_answers | length')" = "1" ] \
+    || fail "the live seam was not used when both were present: $out"
+  [ "$(printf '%s' "$out" | jq -r '.cards[0].on_enter')" = "null" ] \
+    || fail "the answer also went to the serving surface, sending it twice: $out"
+
+  pass "the live seam is preferred over the serving surface"
+}
+
 test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered() {
   local home out
   home=$(make_home no-channel)
@@ -1398,3 +1455,6 @@ test_repainting_the_board_never_accumulates_tickers
 test_a_queued_click_survives_a_rebuild_of_the_board
 test_a_card_that_cannot_reach_firstmate_says_so_instead_of_looking_answered
 test_the_dispatch_bar_refuses_visibly_when_it_cannot_send
+test_an_answer_goes_down_the_live_seam_when_the_serving_surface_is_absent
+test_a_disconnected_live_seam_refuses_instead_of_reporting_success
+test_the_live_seam_is_preferred_over_the_serving_surface

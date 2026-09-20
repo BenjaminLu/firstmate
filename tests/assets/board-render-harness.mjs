@@ -121,7 +121,18 @@ const storage = new Map();
 // all - queuePrompt is simply absent. That is a real state the captain can be
 // in, not a hypothetical, so the shim can reproduce it.
 const noChannel = process.env.BOARD_NO_ANSWER_CHANNEL === "1";
+// The seam the live transport exposes, which is the one that exists on the
+// captain's own machine. BOARD_LIVE_SEAM=connected|disconnected selects it;
+// unset leaves only the serving surface's seam, as before.
+const liveSeam = process.env.BOARD_LIVE_SEAM || "";
+const liveAnswers = [];
 globalThis.window = {
+  ...(liveSeam ? {
+    fmBoardLive: {
+      canAnswer: () => liveSeam === "connected",
+      answer: (picks) => { liveAnswers.push(picks); return liveSeam === "connected"; },
+    },
+  } : {}),
   ...(noChannel ? {} : {
     lavish: { queuePrompt: (text, opts) => queued.push({ text, data: opts && opts.data }) },
   }),
@@ -423,4 +434,4 @@ const more = ch.children.filter((c) => c.className.includes("bb-morechip")).map(
 
 process.stdout.write(
   JSON.stringify({ stats, underway, charted, empty, more, cards, headings, error: errorText,
-    dispatch, intervals: intervals.size }) + "\n");
+    dispatch, live_answers: liveAnswers, intervals: intervals.size }) + "\n");

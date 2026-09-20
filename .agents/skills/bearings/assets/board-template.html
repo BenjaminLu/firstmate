@@ -821,9 +821,42 @@ __FM_BEARINGS_BOARD_DATA__
    itself answered, drew an acknowledgement, and dealt the next card. A
    control that looks like it worked and did not is worse than one that says
    it cannot, because the captain walks away believing he answered. */
+  /* Two seams, because the page outlived one of them.
+     The board was written when the surface serving it carried every answer.
+     On the captain's own machine that surface is not installed, so on his
+     board EVERY card refused - honestly, but the whole decisions surface was
+     inert, which is 為什麼船長裁決這一塊一直是空的 with a better error
+     message. The live transport now carries answers down the same socket it
+     receives on, and names its seam window.fmBoardLive.
+     The live seam is preferred when it is there AND says it can reach
+     firstmate right now; the serving surface is the fallback; neither present
+     means no channel, and every caller already refuses visibly in that case.
+     Order matters: canAnswer() is asked before falling back, so a live seam
+     that exists but is disconnected does not shadow a working fallback. */
   function answerChannel() {
-    if (!window.lavish || typeof window.lavish.queuePrompt !== "function") return null;
-    return function (text, opts) { return window.lavish.queuePrompt(text, opts); };
+    var live = window.fmBoardLive;
+    if (live && typeof live.answer === "function"
+      && (typeof live.canAnswer !== "function" || live.canAnswer())) {
+      /* The live seam takes the captain's pick as data rather than a composed
+         sentence, which is what lets the fleet record what he actually chose.
+         It returns false when it could not even be sent, and that false must
+         reach the caller: a send that reports success it did not have is the
+         bug this whole path exists to remove. */
+      return function (text, opts) {
+        var d = (opts && opts.data) || {};
+        return live.answer({
+          key: d.question || "",
+          selection: d.selection || d.answer || "",
+          note: d.note || "",
+          label: (opts && opts.text) || text || "",
+          close: d.close
+        }) !== false;
+      };
+    }
+    if (window.lavish && typeof window.lavish.queuePrompt === "function") {
+      return function (text, opts) { window.lavish.queuePrompt(text, opts); return true; };
+    }
+    return null;
   }
 
   function utf8ByteLength(text) { return new TextEncoder().encode(text).length; }
@@ -1367,11 +1400,17 @@ __FM_BEARINGS_BOARD_DATA__
         };
         if (item.close) ctxData.close = item.close;
         var enTitle = typeof item.title === "object" ? (item.title.en || pick(item.title)) : item.title;
-        send(
+        if (send(
           "Captain's Call answer - " + enTitle + ": " + displayAnswer,
           { tag: "choice", text: enTitle + " -> " + displayAnswer, element: form,
             data: ctxData }
-        );
+        ) === false) {
+          /* The channel was there and still could not send. Same consequence
+             as having no channel: nothing below this point may run. */
+          answerLimit.textContent = t("no_channel");
+          answerLimit.className = "bb-limit is-visible";
+          return;
+        }
         rememberAnswered("card", item.key);
         card.classList.add("is-queued");
         ackClicked(pad);
@@ -1561,13 +1600,18 @@ __FM_BEARINGS_BOARD_DATA__
           barRefuse(t("no_channel_dispatch"));
           return;
         }
-        barRefuse("");
-        sendDispatch(
+        if (sendDispatch(
           "Dispatch order - start this queued work now: " + ids.join(", "),
           { tag: "choice", text: "Dispatch: " + ids.join(", "), element: bar,
             queueKey: "dispatch.charted",
             data: { question: "dispatch.charted", answer: dispatchAnswer } }
-        );
+        ) === false) {
+          /* The channel was there and still could not send. Same consequence
+             as having no channel: nothing below may run. */
+          barRefuse(t("no_channel_dispatch"));
+          return;
+        }
+        barRefuse("");
         dispatchQueued = true;
         bar.classList.add("is-queued");
         /* the answer is about the rows he picked, so that is where it is
