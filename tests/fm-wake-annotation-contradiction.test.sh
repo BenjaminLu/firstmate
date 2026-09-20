@@ -270,6 +270,51 @@ test_the_whole_phase_budget_is_shared_by_every_status_key() {
   pass "the current-state budget is spent once across the drain, not once per status key"
 }
 
+test_the_real_crew_state_reader_is_parsed_end_to_end() {
+  local dir state out
+  dir=$(make_case real-reader)
+  state="$dir/state"
+  # Every other case here binds the reader to a fake, which proves the fake
+  # behaves as written and nothing else. This one runs the REAL
+  # bin/fm-crew-state.sh, so the wire format the two files share - the `state: `
+  # prefix, the first word before the ` · ` separator, the last line - is
+  # observed from both ends at least once. A change that prints the source beside
+  # the proxy should not itself be tested only against a proxy.
+  mkdir -p "$dir/wt" "$dir/realbin"
+  # The real reader's no-run fallback probes the endpoint before it will trust a
+  # status declaration, and consults no-mistakes for a run. Answer both locally:
+  # nothing here may reach this machine's tmux server or no-mistakes daemon.
+  cat > "$dir/realbin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${1:-}" = display-message ] && { printf '%%0\n'; exit 0; }
+exit 1
+SH
+  cat > "$dir/realbin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$dir/realbin/tmux" "$dir/realbin/no-mistakes"
+
+  # A secondmate idles on its own watcher, so an idle endpoint is healthy and the
+  # real reader resolves its state from the status declaration - which is how this
+  # case gets a genuine disagreement without standing up a pipeline run.
+  fm_write_meta "$state/real-worker.meta" kind=secondmate backend=tmux \
+    "window=firstmate:fm-real-worker" "worktree=$dir/wt"
+  printf 'working: still implementing the parser\n' > "$state/real-worker.status"
+  printf 'done: finished the parser\n' >> "$state/real-worker.status"
+  append_wake "$state" signal real-worker.status 'signal: real-worker' \
+    || fail "could not queue the real-reader signal wake"
+
+  out=$(PATH="$dir/realbin:$PATH" FM_STATE_OVERRIDE="$state" "$DRAIN" 2>&1) \
+    || fail "drain failed against the real current-state reader: $out"
+  assert_contains "$out" 'still implementing the parser (current state disagrees: done)' \
+    "the real reader's verdict was not parsed onto the stale line"
+  assert_not_contains "$out" 'current state could not be read' \
+    "the real reader answered but the drain reported it as unreadable"
+  pass "the real bin/fm-crew-state.sh verdict is parsed onto a stale annotation end to end"
+}
+
 test_annotation_names_current_state_when_it_disagrees
 test_annotation_is_unchanged_when_current_state_agrees
 test_unreadable_current_state_says_so_rather_than_claiming_agreement
@@ -279,5 +324,6 @@ test_a_missing_task_record_says_so_rather_than_staying_silent
 test_current_state_is_read_once_per_status_key_not_once_per_line
 test_hung_current_state_reads_stay_inside_the_presentation_lock_budget
 test_the_whole_phase_budget_is_shared_by_every_status_key
+test_the_real_crew_state_reader_is_parsed_end_to_end
 
 echo "all fm-wake annotation-contradiction tests passed"
