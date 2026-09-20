@@ -178,7 +178,7 @@ The candidate uses fifteen long-lived Linux jobs (nine serial, two parallel, two
 **That last clause is now the binding constraint, not a caveat.**
 This repository is public and on a plan whose whole-account ceiling is twenty concurrent jobs: across 180 jobs sampled from ten runs on 2026-09-20, concurrency reached exactly 20 and never 21, and sat pinned at 20 for 12.5% of the window.
 One CI run is nineteen jobs at this layout - the fifteen long-lived Linux jobs named above plus the coverage guard, the timing aggregate, the repository invariants, and macOS - but the count the ceiling reasons against is **concurrent demand, which is eighteen**.
-`tests-timing-aggregate` is `needs:`-gated behind every long-lived lane, so it cannot be in any peak set: on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) it overlapped zero other jobs, and peak concurrency is identical with and without it.
+`tests-timing-aggregate` cannot be in any peak set, and that is a deduction from the workflow rather than an observation of a run: it `needs:` all four long-lived lane groups, and those thirteen jobs are what any peak near eighteen is made of, so it cannot be running while they are.
 So a run demands eighteen slots of twenty and a second run in flight queues behind the first; measured queue waits in that sample reached 3478 s for a single job, several times the execution time the packing saves.
 That leaves two spare slots, which is what decides whether the next shard is free - and a job that never overlaps its siblings, like the aggregate, is free of that budget however many there are.
 The consequence for this layout is concrete: splitting work across more runners only shortens the wall clock while the run fits inside that ceiling, and past it a run serialises its own overflow behind its own long jobs.
@@ -187,7 +187,10 @@ Prefer changes that cut runner-seconds without adding a job over changes that bu
 Standard public `ubuntu-latest` runners have four cores, so a lane pinned to one worker leaves most of that machine idle - but idle cores are not automatically a saving, and the rule for when they are is below.
 **Concurrency inside a lane wins when the lane is packing-bound and does nothing when the lane is bounded by a single long script, and it costs runner-seconds either way.**
 Both portable parallel lanes carry the same isolation proof and were given `--jobs 2` together; one kept it and one did not, and the difference is entirely which of those two shapes the lane has.
-Measured on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) against the three green baseline runs cited above:
+Measured on run [35484461648](https://github.com/BenjaminLu/firstmate/actions/runs/35484461648) against the three green baseline runs cited above.
+That run was **cancelled** by per-PR supersession: eight of its nineteen jobs were still queued and never executed, so it establishes nothing about this layout's concurrency.
+What survives cancellation is the four lane jobs this table quotes, which all completed green on their own runners before the cancellation, so their walls and their uploaded timing artifacts are sound.
+Read anything else from that run with the caution the closing paragraph of this section asks for.
 
 Every cell is that lane's own measurement: the serial columns are the three baseline runs, the `jobs=2` columns are run 35484461648, and the script-sum and longest-script columns carry the serial median against that one run.
 
