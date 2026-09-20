@@ -521,7 +521,7 @@ exit 0
 fi
 
 if [ "$KIND" = scout ]; then
-VISUAL_LINE='If your deliverable is a visual artifact the captain will review and iterate on, you may host that review loop yourself (publish, revise, republish, staying alive) instead of handing it back to firstmate. Publish it with '"'"'$FM_ROOT/bin/fm-board-live.sh publish <key> <absolute-page-path>'"'"', which prints the address and needs nothing installed beyond node, and give the captain that address. Every string the captain reads on that artifact carries all three of EN / 繁體 / 简体, like every other captain-facing visual surface.'
+VISUAL_LINE="If your deliverable is a visual artifact the captain will review and iterate on, you may host that review loop yourself (publish, revise, republish, staying alive) instead of handing it back to firstmate. Publish it with \`$FM_ROOT/bin/fm-board-live.sh publish <key> <absolute-page-path>\`, which prints the address and needs nothing installed beyond node, and give the captain that address. Every string the captain reads on that artifact carries all three of EN / 繁體 / 简体, like every other captain-facing visual surface."
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 

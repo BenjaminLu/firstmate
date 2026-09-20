@@ -1022,8 +1022,12 @@ test_scout_visual_review_loop_needs_nothing_installed() {
   brief="$case_dir/home/data/scout-visual/brief.md"
   assert_grep 'you may host that review loop yourself' "$brief" \
     "scout brief did not offer the review loop"
-  assert_grep 'bin/fm-board-live.sh publish' "$brief" \
-    "scout brief did not name the command that gives the artifact an address"
+  # The path has to be one the scout can run, not the name of a variable only
+  # the scaffold knew the value of.
+  assert_grep "$ROOT/bin/fm-board-live.sh publish" "$brief" \
+    "scout brief did not name a runnable command that gives the artifact an address"
+  assert_no_grep '$FM_ROOT' "$brief" \
+    "scout brief handed the worker an unexpanded variable instead of a path"
   ! grep -qi lavish "$brief" \
     || fail "scout brief still names the removed presentation tool"
   pass "fm-brief.sh: a visual scout gets its review loop with nothing installed"
