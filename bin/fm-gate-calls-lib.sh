@@ -65,37 +65,40 @@
 #   `grounds` are the call itself: a bad one of those refuses the whole
 #   record, because a record naming the wrong call or stating no reason is
 #   worse than a reported gap. `link` and `key` are presentation - a board
-#   opens one and lines the other up against a review - so a malformed one is
-#   dropped, its name is listed in `rejected`, and the call is still recorded.
-#   A pasted URL with a trailing space must not cost a well-formed ruling its
-#   place in the log; that is the same silent loss arriving by a politer door.
+#   opens one and lines the other up against a review - so one that is
+#   malformed, or simply over its byte cap, is dropped, its name is listed in
+#   `rejected`, and the call is still recorded. A pasted URL with a trailing
+#   space must not cost a well-formed ruling its place in the log; that is
+#   the same silent loss arriving by a politer door.
 #
-#   `rejected` names a field that is not in the record, and that ALSO has two
-#   causes: the field was malformed, as above, or it was well-formed and the
-#   shortening ladder dropped it to get the line under the bound (see BOUNDS).
-#   `truncated` separates them in ONE direction only, and reading it as if it
-#   separated them in both is the mistake to avoid. `truncated:false` proves
-#   every name listed was malformed, because dropping a good field always
-#   sets the flag. `truncated:true` proves nothing about any particular name:
-#   some other cause above may have set it, so a malformed link in a record
-#   whose `grounds` were also shortened looks exactly like a good link
-#   dropped for length. And when `rejected` lists more than one name the
-#   record does not say which cause belongs to which - a malformed `key`
-#   beside a dropped `link` is recorded as `key,link` under one flag.
+#   `rejected` names a field that is not in the record, and it has THREE
+#   causes: the value was malformed; it was well formed but over its byte
+#   cap; or it was well formed and within its cap, and the shortening ladder
+#   dropped it to get the line under the bound (see BOUNDS).
 #
-#   So state "the value was malformed" only when `truncated` is false;
-#   otherwise say the field is not in the record and stop. Who that costs is
-#   worth being exact about, because it is not a rendering problem: both
-#   causes leave `link` empty, so anything keying on presence or absence is
-#   unaffected either way. It costs whoever reads this log to ask an
-#   operational question - is some call site pasting malformed links? A
-#   malformed link is a bug where the call was made; a dropped one is the
-#   bound working as designed, and in a composite record the two cannot be
-#   told apart. That is a diagnostic cost carried by a person reading the
+#   `truncated` does NOT attribute a name to any of them, in either
+#   direction. `truncated:true` does not, because another cause above may
+#   have set the flag - a malformed link in a record whose `grounds` were
+#   also shortened looks exactly like a good link dropped for length.
+#   `truncated:false` does not either, because an over-cap link is refused
+#   without ever touching the flag, so a syntactically perfect 618-byte URL
+#   records exactly what a fat-fingered one does. And when `rejected` lists
+#   more than one name the record does not say which cause belongs to which:
+#   a malformed `key` beside a dropped `link` is `key,link` under one flag.
+#
+#   So `rejected` says the field is not in the record, and nothing says why.
+#   Do not read a cause out of `truncated` in either direction. Who that
+#   costs is worth being exact about, because it is not a rendering problem:
+#   every cause leaves `link` empty, so anything keying on presence or
+#   absence is unaffected whichever one applied. It costs whoever reads this
+#   log to ask an operational question - is some call site pasting malformed
+#   links? A malformed link is a bug where the call was made; an over-cap or
+#   a dropped one is the bound working as designed, and the record cannot
+#   separate them. That is a diagnostic cost carried by a person reading the
 #   log. Attributing each name to its own cause would take a per-field
 #   record this format deliberately does not carry, and it is not worth
 #   adding until someone actually hits that question and cannot answer it.
-#   `rejected` is empty when nothing was dropped for either reason.
+#   `rejected` is empty when nothing was dropped for any of those reasons.
 #
 #   Nothing in this library reads the log. Rendering it is a separate surface;
 #   the log is the durable record that surface will read.

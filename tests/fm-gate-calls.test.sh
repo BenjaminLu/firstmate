@@ -443,11 +443,13 @@ test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds() {
   pass "an over-cap link is rejected on its byte length, before it can cost the grounds anything"
 }
 
-test_truncated_false_proves_malformed_and_true_proves_nothing() {
+test_truncated_attributes_a_rejected_name_to_no_cause() {
   local home log rc=0 long_link quotes
-  # `truncated` separates the two causes of a name in `rejected` in ONE
-  # direction. This case pins both halves, because reading it as if it
-  # separated them in both directions is what the contract now warns against.
+  # A name in `rejected` has three causes - malformed, over its byte cap, or
+  # well formed and dropped to fit the bound - and `truncated` attributes it
+  # to none of them. This case drives all three and pins the pairs that are
+  # indistinguishable, because every round that tried to state a rule here
+  # stated one direction too strongly and had to be corrected.
   home=$(make_home dropped-good-link)
   log="$home/state/gate-calls.jsonl"
   long_link="https://x.example/$(head -c 470 < /dev/zero | tr '\0' 'p')"
@@ -467,8 +469,7 @@ test_truncated_false_proves_malformed_and_true_proves_nothing() {
   assert_equals 'merge pull request 38' "$(log_field "$log" 1 what)" \
     "dropped-good-link: the subject was altered when only the link should have gone"
 
-  # The sound direction: nothing was dropped for length, so the flag is false
-  # and every name in `rejected` is provably a malformed value.
+  # Cause 1, malformed: refused at validation, which never touches the flag.
   home=$(make_home malformed-only)
   log="$home/state/gate-calls.jsonl"
   run_gate_call "$home" record --site pr-merge --task task-c2 --verdict refused \
@@ -478,13 +479,13 @@ test_truncated_false_proves_malformed_and_true_proves_nothing() {
   assert_equals link "$(log_field "$log" 1 rejected)" \
     "malformed-only: the malformed link is invisible in the record"
   assert_equals false "$(log_field "$log" 1 truncated)" \
-    "malformed-only: with nothing dropped for length the flag must stay false, which is what makes it proof of a malformed value"
+    "malformed-only: refusing a malformed field changes nothing the caller passed, so the flag stays false"
 
-  # The unsound direction: the SAME malformed link, with grounds long enough
-  # to shorten, produces the same pairing as the dropped-good-link record
-  # above. Nothing rendered depends on telling them apart - both leave
-  # `link` empty - but a person reading this log to ask whether some call
-  # site is pasting bad URLs cannot answer it from a composite record.
+  # The SAME malformed link, with grounds long enough to shorten, produces
+  # the same pairing as the dropped-good-link record above: `truncated:true`
+  # says another cause fired, not which. Nothing rendered depends on telling
+  # them apart - every cause leaves `link` empty - but a person reading this
+  # log to ask whether some call site is pasting bad URLs cannot answer it.
   home=$(make_home malformed-and-shortened)
   log="$home/state/gate-calls.jsonl"
   run_gate_call "$home" record --site pr-merge --task task-c3 --verdict refused \
@@ -509,7 +510,22 @@ test_truncated_false_proves_malformed_and_true_proves_nothing() {
     "two-causes: a malformed key beside a dropped link must still name both fields"
   assert_equals true "$(log_field "$log" 1 truncated)" \
     "two-causes: one flag covers both names, which is why it cannot attribute either"
-  pass "truncated:false proves every rejected name was malformed, and truncated:true attributes nothing"
+  # Cause 2, well formed but over its byte cap: refused the same way, so it
+  # records exactly what a malformed value does. This is the pair that made
+  # the previous round's "truncated:false proves malformed" rule false, and
+  # the suite already asserted it twenty-five lines away in
+  # test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds.
+  home=$(make_home over-cap-well-formed)
+  log="$home/state/gate-calls.jsonl"
+  run_gate_call "$home" record --site pr-merge --task task-c5 --verdict refused \
+    --what 'merge pull request 38' --grounds 'the checks are not green' \
+    --link "https://x.example/$(head -c 600 < /dev/zero | tr '\0' 'p')" \
+    >/dev/null 2>&1 || fail "over-cap-well-formed: the call must still record"
+  assert_equals link "$(log_field "$log" 1 rejected)" \
+    "over-cap-well-formed: the over-cap link is invisible in the record"
+  assert_equals false "$(log_field "$log" 1 truncated)" \
+    "over-cap-well-formed: a syntactically perfect but over-cap link is refused without touching the flag, which is why truncated:false cannot prove a value was malformed"
+  pass "a rejected name can be malformed, over its byte cap, or dropped to fit, and truncated tells a reader which of the three it was in neither direction"
 }
 
 test_an_escape_heavy_link_cannot_cross_the_boundary() {
@@ -764,7 +780,7 @@ test_an_oversized_call_is_shortened_visibly
 test_a_bulky_link_costs_the_link_and_never_the_ruling
 test_an_oversized_link_is_rejected_before_it_can_shorten_the_grounds
 test_an_escape_heavy_link_cannot_cross_the_boundary
-test_truncated_false_proves_malformed_and_true_proves_nothing
+test_truncated_attributes_a_rejected_name_to_no_cause
 test_a_bulky_task_id_keeps_the_drops_record_bounded
 test_no_emitted_line_can_cross_the_flush_boundary
 test_concurrent_writers_produce_parseable_records
