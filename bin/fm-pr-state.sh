@@ -182,6 +182,7 @@ if ! APPROVAL_ROWS=$(gh pr view "$URL" --json reviews --jq '
   | if (submitted | not) then $oid + " D"
     elif (standing | not) then $oid + " X"
     elif .state == "APPROVED" then $oid + " A"
+    elif .state == "CHANGES_REQUESTED" then $oid + " N"
     else $oid + " T" + tail_line
     end
   ' 2>/dev/null); then
@@ -194,6 +195,7 @@ else
   APPROVED_AT_HEAD=0
   REVIEWS_SEEN=0
   STANDING_AT_HEAD=0
+  DECLINED_AT_HEAD=0
   WITHDRAWN_AT_HEAD=0
   OUTSIDE_AT_HEAD=0
   NEWEST_REVIEWED=
@@ -208,16 +210,26 @@ else
       D) WITHDRAWN_AT_HEAD=1 ;;
       X) OUTSIDE_AT_HEAD=1 ;;
       A) STANDING_AT_HEAD=1; APPROVED_AT_HEAD=1 ;;
+      N) STANDING_AT_HEAD=1; DECLINED_AT_HEAD=1 ;;
       T*)
+        # The verdict literals are compared here rather than inside the jq
+        # program, so bin/fm-review-verdict-lib.sh stays their only owner. A
+        # review that declined is not one that stated no verdict: it wants
+        # findings fixed and a new review, not a verdict line added.
         STANDING_AT_HEAD=1
-        [ "${row_verdict#T}" != "$FM_REVIEW_VERDICT_APPROVED" ] || APPROVED_AT_HEAD=1
+        case "${row_verdict#T}" in
+          "$FM_REVIEW_VERDICT_APPROVED") APPROVED_AT_HEAD=1 ;;
+          "$FM_REVIEW_VERDICT_DECLINED") DECLINED_AT_HEAD=1 ;;
+        esac
         ;;
     esac
   done <<APPROVAL_ROWS
 $APPROVAL_ROWS
 APPROVAL_ROWS
   if [ "$APPROVED_AT_HEAD" -ne 1 ]; then
-    if [ "$REVIEWS_SEEN" -eq 0 ]; then
+    if [ "$DECLINED_AT_HEAD" -eq 1 ]; then
+      printf 'NO APPROVAL AT HEAD: %s (a review at this head does not approve)\n' "$HEAD"
+    elif [ "$REVIEWS_SEEN" -eq 0 ]; then
       printf 'NO APPROVAL AT HEAD: %s (no review has been posted)\n' "$HEAD"
     elif [ "$STANDING_AT_HEAD" -eq 1 ]; then
       printf 'NO APPROVAL AT HEAD: %s (the review at this head states no verdict)\n' "$HEAD"

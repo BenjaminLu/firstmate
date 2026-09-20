@@ -238,6 +238,24 @@ test_a_missing_approval_is_a_blocker() {
     *) fail "a withdrawn review at the head must be named as such, got: $out" ;;
   esac
 
+  # A review that declined is not a review that stated no verdict: it wants
+  # findings fixed and a new review, not a verdict line added. Both the verbal
+  # decline (the only form this fleet can post) and GitHub's own
+  # CHANGES_REQUESTED state must say so.
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"R1 defect high.\n\nReview verdict: NOT APPROVED"}]}' run_state) \
+    || fail "declined fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "a declined review must not be reported as stating no verdict, got: $out" ;;
+  esac
+
+  out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"CHANGES_REQUESTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Please fix R1."}]}' run_state) \
+    || fail "changes-requested fixture was refused"
+  case "$out" in
+    *'NO APPROVAL AT HEAD'*'(a review at this head does not approve)'*) ;;
+    *) fail "a CHANGES_REQUESTED review must not be reported as stating no verdict, got: $out" ;;
+  esac
+
   # A standing review at the head that reached no verdict.
   out=$(FM_TEST_APPROVAL_REVIEWS='{"reviews":[{"state":"COMMENTED","authorAssociation":"COLLABORATOR","author":{"login":"reviewer"},"commit":{"oid":"c2eac54c17a1ddc2633ad51b83e21e5fe888142e"},"submittedAt":"2026-09-20T09:00:00Z","body":"Some notes, no verdict."}]}' run_state) \
     || fail "no-verdict fixture was refused"
