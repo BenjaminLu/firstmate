@@ -77,8 +77,8 @@ A second review after fixes is the same call with a new task id, because that sc
 Give its `--spec` what changed - the finding ids that were fixed and the commits that fixed them - so it re-reads that surface first rather than starting the whole diff over from nothing.
 Its `--ask` does not change: the captain's intent behind the pull request did not move because a fix landed.
 
-A `no-mistakes` pull request needs the same dispatch and the same approval before it merges.
-Its pipeline's own review is not a review on the forge, so `bin/fm-pr-merge.sh` cannot see it and will refuse the merge without one.
+`AGENTS.md` section 7 is where that requirement is stated, for every mode including `no-mistakes`; this skill does not restate it.
+What is worth knowing here is why a `no-mistakes` pull request is not already covered: its pipeline's own review is not a review on the forge, so `bin/fm-pr-merge.sh` cannot see it.
 Everything above applies unchanged there; only the rest of this skill - the findings, the rulings, the fixes - belongs to the `direct-PR` path, because that pipeline owns its own.
 
 ## Read the findings
