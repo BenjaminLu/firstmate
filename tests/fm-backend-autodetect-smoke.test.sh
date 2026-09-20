@@ -85,7 +85,15 @@ trap on_exit EXIT
 
 # --- scratch world: FM_HOME with NO backend config, one throwaway project ---
 
-STATE="$TMP_ROOT/state"; DATA="$TMP_ROOT/data"; CONFIG="$TMP_ROOT/config"
+# $TMP_ROOT is that scratch home, and FM_HOME must NAME it. fm-spawn.sh defaults
+# FM_HOME to FM_ROOT_OVERRIDE, so overriding only the state directory would leave
+# the repository checkout standing in as the home - and fm_treehouse_project_lock_path
+# anchors the shared Treehouse project lock at <home>/state, ignoring
+# FM_STATE_OVERRIDE by design. It would then need <repo>/state, which is
+# gitignored and exists only in a checkout something has already operated in, so
+# this test would pass or fail on what a shard-mate happened to leave behind.
+HOME_DIR="$TMP_ROOT"
+STATE="$HOME_DIR/state"; DATA="$HOME_DIR/data"; CONFIG="$HOME_DIR/config"
 mkdir -p "$STATE" "$DATA/$ID" "$CONFIG"
 # Backend auto-detection is what is under test here, so opt out of the default-on
 # presentation projection and keep the assertions on the flat per-home workspace.
@@ -112,7 +120,8 @@ git -C "$PROJ" remote add origin "file://$PROJ.origin.git"
 
 OUT_FILE="$TMP_ROOT/spawn.out"; ERR_FILE="$TMP_ROOT/spawn.err"
 env -u TMUX -u FM_BACKEND PATH="$PATH" HERDR_ENV=1 \
-  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
+  FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
   FM_CONFIG_OVERRIDE="$CONFIG" FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" \
   FM_SPAWN_NO_GUARD=1 \
   "$ROOT/bin/fm-spawn.sh" "$ID" "$PROJ" "sh -c 'echo autodetect-smoke-ok'" --mode no-mistakes --yolo off \
@@ -163,7 +172,8 @@ pass "real herdr: the auto-detected spawn's launch command actually ran in the h
 # --- teardown completes the trivial spawn/teardown cycle --------------------
 
 TEARDOWN_OUT="$TMP_ROOT/teardown.out"
-FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" \
+  FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
   FM_CONFIG_OVERRIDE="$CONFIG" \
   "$ROOT/bin/fm-teardown.sh" "$ID" >"$TEARDOWN_OUT" 2>&1
 status=$?
