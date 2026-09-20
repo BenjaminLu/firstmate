@@ -4368,11 +4368,25 @@ test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act() {
   assert_not_contains "$(grep '^decision_keys=' "$home/state/$origin.meta" | tail -1)" "$call" \
     "the dropped key stayed in the attested inventory"
 
+  # The trace has to outlive the cleanup it unblocks. The metadata record does
+  # not - cleanup removes it - and the archive is byte-identical across a
+  # drop, so a retired call and one nobody noticed cannot be told apart there.
+  # The fleet event log is what survives, and the drop is in it.
+  assert_grep '"kind":"dropped"' "$home/state/board-live.jsonl" \
+    "the drop left no durable trace in the fleet event log"
+  assert_grep "\"task\":\"$call\"" "$home/state/board-live.jsonl" \
+    "the dropped event did not name the entry that was retired"
+  assert_grep "\"owner\":\"$origin\"" "$home/state/board-live.jsonl" \
+    "the dropped event did not name the origin whose inventory it left"
+
   # The gate now passes on the remaining durable call, and cleanup proceeds.
   run_captain "$home" verify "$origin" >/dev/null 2> "$home/verify-after-drop.err" \
     || fail "the gate still could not pass after the named exit: $(cat "$home/verify-after-drop.err")"
   run_teardown "$home" "$origin" >/dev/null 2> "$home/drop-teardown.err" \
     || fail "cleanup stayed blocked after the named exit: $(cat "$home/drop-teardown.err")"
+  assert_absent "$home/state/$origin.meta" "cleanup left the origin's metadata behind"
+  assert_grep '"kind":"dropped"' "$home/state/board-live.jsonl" \
+    "the only durable trace of the drop went with the cleanup it unblocked"
   pass "an unanswerable archived call ends somewhere a person can act, in both consumers"
 }
 

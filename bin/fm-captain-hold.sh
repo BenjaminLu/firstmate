@@ -148,12 +148,15 @@
 # `reconcile close` retires a request whose subject is unrecoverable (a
 # request points at a call, it is never the call), and
 # `complete --drop-unrecoverable <task-id>` removes an attested key, refusing
-# unless that exact row is archived with no captain answer and recording the
-# removal as `decision_dropped=` beside the keys it leaves. A drop is
-# therefore deliberate, narrow and auditable, which is the opposite of the
-# silent skip the filed reasoning ruled out - and strictly safer than the
-# `--force` cleanup that was previously the only way out, because that skips
-# every other entry in the same inventory too.
+# unless the row that entry resolves to is archived with no captain answer.
+# A drop is deliberate, narrow, and recorded - as `decision_dropped=` beside
+# the keys it leaves, and as a `dropped` event in the fleet event log, which
+# outlives the cleanup that removes that metadata - while the archived row
+# afterwards retains the closure but not, by itself, the fact that it was
+# retired deliberately. That is the opposite of the silent skip the filed
+# reasoning ruled out, and strictly safer than the `--force` cleanup that was
+# previously the only way out, because that skips every other entry in the
+# same inventory too.
 #
 # `complete` is the shared investigation and visual-review completion gate.
 # It attests, in the origin task's metadata, the reviewed inventory of
@@ -601,8 +604,11 @@ archived_row_body() {  # <task-id>; prints the archived row's body
 # DELIBERATELY - `reconcile close` retires a request whose subject is gone
 # (the request is a pointer to a call, never the call itself), and
 # `complete --drop-unrecoverable` removes an attested key, refusing unless
-# that exact row really is archived without an answer and recording the drop
-# in the origin's metadata so it is auditable rather than silent.
+# the row that entry resolves to really is archived without an answer. A drop
+# is deliberate, narrow, and recorded - in the origin's metadata, and as a
+# `dropped` event in the fleet event log, which outlives the cleanup it
+# unblocks - while the archived row afterwards retains the closure but not,
+# by itself, the fact that it was retired deliberately.
 ARCHIVED_UNANSWERABLE="was closed outside this owner with no captain answer recorded, and retention has archived its row, so the answer can no longer be recorded on it (tasks-axi cannot write an archived row)"
 
 # Raising the call again is the ending every refusal above points at, so the
@@ -2127,6 +2133,15 @@ EOF
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
       printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$keys" >> "$meta"
     fi
+    # The metadata record above is removed by the very cleanup a drop
+    # unblocks, and the archive is byte-identical across a drop - a retired
+    # call and one nobody ever noticed are indistinguishable there. So the
+    # durable trace is one event per dropped entry in the fleet event log,
+    # which survives cleanup. It is published after the record it describes,
+    # and like every other publication here it can never fail this command.
+    for drop in $dropped_entries; do
+      publish_board_event 0 dropped "$drop" --owner "$origin" || true
+    done
     fm_lock_release "$CAPTAIN_META_LOCK"
     CAPTAIN_META_LOCK_HELD=0
 
