@@ -742,7 +742,10 @@ fm_send_feed_resolved_holds() { # <answer-text>
 # invocations, not prose naming a commit someone read, and the gate-response
 # flow AGENTS.md section 7 mandates travels one of them: a guard reaching there
 # could refuse a required path over a numeric argument, which is how a safety
-# measure becomes an outage.
+# measure becomes an outage. Which plane a message rides is decided by how it is
+# DELIVERED, not by its first character: a fire-and-forget or remote send
+# becomes a durable record rather than a parser command, so a leading "/" there
+# is ordinary text and is guarded like any other.
 #
 # It matches only whole WORDS of 8-40 hex characters that are not all digits, so
 # ordinary prose is untouched. Every 8+ digit run is hex-shaped, so without that
