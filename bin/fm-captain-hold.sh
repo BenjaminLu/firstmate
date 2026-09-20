@@ -620,8 +620,8 @@ archived_without_answer() {  # <task-id>
 # Durable state of one captain call: an active captain hold (annotations
 # surviving even when a date gate has expired) or a recorded captain answer,
 # wherever this home's backlog keeps the row - the active file or its archive.
-verify_hold_durable() {  # <task-id>
-  local id=$1 show state hold_kind body archived archived_status=0
+verify_hold_durable() {  # <task-id> [<attested-entry>]
+  local id=$1 entry=${2:-$1} show state hold_kind body archived archived_status=0
   if ! task_show "$id"; then
     # Retention is not a resolution. An archived row proves durability only
     # through the captain answer recorded in it; an archived row without one,
@@ -633,7 +633,7 @@ verify_hold_durable() {  # <task-id>
     [ "$archived_status" -eq 0 ] \
       || fail "captain-held task $id is absent from this home's configured backlog and its archive (data directory $DATA)"
     body_has_resolution_record "$archived" \
-      || fail "attested captain call $id $ARCHIVED_UNANSWERABLE; it is not a durable captain call and never can be. Raise the call again as its own task, then retire this one from the inventory with bin/fm-captain-hold.sh complete <origin> --drop-unrecoverable $id, which records the drop rather than skipping it"
+      || fail "attested captain call $entry $ARCHIVED_UNANSWERABLE; it is not a durable captain call and never can be. Raise the call again as its own task, then retire this one from the inventory with bin/fm-captain-hold.sh complete <origin> --drop-unrecoverable $entry, which records the drop rather than skipping it"
     return 0
   fi
   show=$TASK_SHOW_OUTPUT
@@ -944,7 +944,10 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
     exit "$resolve_status"
   fi
   printf '%s\n' "$resolved"
-  verify_hold_durable "${resolved%% *}"
+  # The attested spelling travels with the resolved row, so a refusal names
+  # the entry the metadata actually holds rather than an identity the caller
+  # cannot find there.
+  verify_hold_durable "${resolved%% *}" "$entry"
 }
 
 # The closed-task refusal above, for a row the active backlog no longer lists.
@@ -1988,6 +1991,34 @@ reconcile_note() {
   printf 'still-open: %s\n' "$id"
 }
 
+# The attested entry a --drop-unrecoverable argument names. Every refusal that
+# sends a reader here names the entry the metadata holds, but a caller may
+# equally pass the row id that entry resolves to, so both spellings are
+# accepted and the ENTRY is what is judged and removed. An argument matching
+# two attested entries is refused rather than guessed at.
+attested_entry_for_drop() {  # <origin> <comma-list> <given>; prints the entry
+  local origin=$1 previous=$2 given=$3 given_row entry entry_row match='' rc
+  if list_has_key "$previous" "$given"; then
+    printf '%s' "$given"
+    return 0
+  fi
+  rc=0
+  given_row=$(resolve_entry "$origin" "$given" 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || return 1
+  given_row=${given_row%% *}
+  for entry in $(printf '%s\n' "$previous" | tr ',' ' '); do
+    rc=0
+    entry_row=$(resolve_entry "$origin" "$entry" 2>/dev/null) || rc=$?
+    [ "$rc" -eq 0 ] || continue
+    entry_row=${entry_row%% *}
+    [ "$entry_row" = "$given_row" ] || continue
+    [ -z "$match" ] || return 1
+    match=$entry
+  done
+  [ -n "$match" ] || return 1
+  printf '%s' "$match"
+}
+
 # Remove <drop> from a comma-separated key list, exactly.
 keys_without() {  # <comma-list> <space-separated-drops>
   local keys=$1 drops=$2 kept='' entry drop found
@@ -2003,7 +2034,7 @@ keys_without() {  # <comma-list> <space-separated-drops>
 
 command_complete() {
   local origin=${1:-} meta previous='' supplied='' keys='' entry key status_file open has_meta=0 transfer_rc resolved
-  local resolved_how attested_by_prefix='' drops='' none=0 dropped_previous='' drop
+  local resolved_how attested_by_prefix='' drops='' none=0 dropped_previous='' drop dropped_entries=''
   [ "$#" -ge 2 ] || { usage >&2; exit 2; }
   validate_slug origin-id "$origin"
   shift
@@ -2040,18 +2071,24 @@ command_complete() {
     previous=$(meta_value "$meta" decision_keys)
     dropped_previous=$(meta_value "$meta" decision_dropped)
   fi
-  # A drop is refused unless that exact entry is attested here AND its row
-  # really is the unrepairable state: archived, carrying no captain answer. So
-  # nothing durable, and nothing merely inconvenient, can be dropped, and the
-  # removal is recorded in the metadata beside the keys it leaves.
+  # A drop is refused unless the entry is attested here AND the row it
+  # RESOLVES to is the unrepairable state: archived, carrying no captain
+  # answer. Resolving first is what keeps the drop judging the same row the
+  # gate judges - an attested entry can be a pre-collapse identity that names
+  # one row while the raw string names another or none, and judging the raw
+  # string either refuses a real dead end or drops a call that is still open,
+  # held and unanswered while recording that it was unrecoverable.
   for drop in $drops; do
-    list_has_key "$previous" "$drop" \
+    entry=$(attested_entry_for_drop "$origin" "$previous" "$drop") \
       || fail "task $drop is not in origin $origin's attested captain-call inventory; there is nothing to drop"
-    archived_without_answer "$drop" \
-      || fail "attested captain call $drop is not an unrecoverable archived row; only a row the archive holds with no captain answer can be dropped, and every other entry must be answered or stay"
+    resolved=$(resolve_entry "$origin" "$entry") || exit $?
+    resolved=${resolved%% *}
+    archived_without_answer "$resolved" \
+      || fail "attested captain call $entry (row $resolved) is not an unrecoverable archived row; only a row the archive holds with no captain answer can be dropped, and every other entry must be answered or stay"
+    dropped_entries="${dropped_entries}${dropped_entries:+ }$entry"
   done
   keys=$(sorted_key_union "$previous" "$supplied")
-  [ -z "$drops" ] || keys=$(keys_without "$keys" "$drops")
+  [ -z "$dropped_entries" ] || keys=$(keys_without "$keys" "$dropped_entries")
   if [ -n "$keys" ]; then
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
@@ -2073,10 +2110,11 @@ EOF
   fi
 
   if [ "$has_meta" = 1 ]; then
-    if [ -n "$drops" ]; then
+    if [ -n "$dropped_entries" ]; then
       # The drop is recorded beside the keys it leaves, so an inventory that
       # shrank says why and when rather than simply being shorter than it was.
-      dropped_previous=$(sorted_key_union "$dropped_previous" "$drops")
+      # It records the ATTESTED spelling, which is what decision_keys held.
+      dropped_previous=$(sorted_key_union "$dropped_previous" "$dropped_entries")
       printf 'decision_dropped=%s\n' "$dropped_previous" >> "$meta"
     fi
     if [ "$(meta_value "$meta" decisions_reviewed)" != 1 ] || [ "$previous" != "$keys" ]; then
@@ -2104,7 +2142,7 @@ EOF
     fi
   fi
   printf 'complete: %s captain-call inventory reviewed%s%s%s\n' "$origin" "${keys:+ ($keys)}" \
-    "${drops:+ [dropped as unrecoverable: $(printf '%s' "$drops" | tr ' ' ',')]}" \
+    "${dropped_entries:+ [dropped as unrecoverable: $(printf '%s' "$dropped_entries" | tr ' ' ',')]}" \
     "${attested_by_prefix:+ [attested through the configured prefix: $attested_by_prefix]}"
 }
 

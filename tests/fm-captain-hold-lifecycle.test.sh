@@ -4404,6 +4404,84 @@ test_the_remaining_reads_see_the_archive_too() {
   pass "the board intake and the open predicate see the archive too"
 }
 
+# The gate resolves an attested entry before judging it - a pre-collapse
+# attestation records a SHORT key that names a composed row. A drop that
+# judged the raw string instead would look at a different row, or at none,
+# and that goes wrong in both directions: it refuses a real dead end, and it
+# drops an entry whose row is open, held and unanswered while recording that
+# the call was unrecoverable.
+test_a_drop_judges_the_row_the_gate_judges() {
+  local home id short composed out meta
+  home=$(make_home drop-resolves-entry)
+  id=sample-drop-legacy
+  short=pick-one
+  composed="$id-decision-$short"
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Legacy-shaped review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the legacy drop origin"
+  write_origin_meta "$home" "$id"
+  printf '# Legacy drop\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_shim "$home" hold "$id" "$short" --title "Pick one" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not create the composed captain call"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$short" >> "$home/state/$id.meta"
+  run_captain "$home" verify "$id" >/dev/null \
+    || fail "the short key did not verify through its composed identity"
+
+  # A DECOY: a row whose id is the raw attested string, archived with no
+  # answer. Judging the raw string would drop the real call by looking here.
+  tasks_in "$home" add "$short" "An unrelated row that happens to be named for the key" \
+    --repo sample >/dev/null || fail "could not create the decoy row"
+  tasks_in "$home" "done" "$short" >/dev/null || fail "could not close the decoy"
+  assert_grep "$short" "$home/data/done-archive.md" "the decoy was not archived"
+
+  out=$(run_captain "$home" complete "$id" --drop-unrecoverable "$short" 2>&1) \
+    && fail "a still-open, held, unanswered captain call was dropped by judging the raw entry: $out"
+  assert_contains "$out" "not an unrecoverable archived row" \
+    "the drop was refused for some other reason than the row it resolves to: $out"
+  assert_contains "$out" "$composed" "the refusal did not name the row the entry resolves to: $out"
+  assert_no_grep "decision_dropped=" "$home/state/$id.meta" \
+    "a refused drop recorded that a live captain call was unrecoverable"
+  run_captain "$home" verify "$id" >/dev/null \
+    || fail "the refused drop disturbed the attested inventory"
+
+  # Instance one, the other direction, in a home with no decoy so the entry
+  # resolves to its composed row: the gate refuses and names the attested
+  # spelling, and the drop works from either spelling.
+  home=$(make_home drop-resolves-entry-clean)
+  printf '%s\n' 'backend = "markdown"' '' '[markdown]' \
+    'path = "data/backlog.md"' 'archive = "data/done-archive.md"' \
+    'done_keep = 0' > "$home/.tasks.toml"
+  composed="$id-decision-$short"
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Legacy-shaped review" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the clean legacy origin"
+  write_origin_meta "$home" "$id"
+  printf '# Legacy drop\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_shim "$home" hold "$id" "$short" --title "Pick one" \
+    --reason "captain choice pending" --repo sample >/dev/null \
+    || fail "could not create the clean composed captain call"
+  printf 'decisions_reviewed=1\ndecision_keys=%s\n' "$short" >> "$home/state/$id.meta"
+  tasks_in "$home" "done" "$composed" >/dev/null \
+    || fail "could not close the composed call outside this owner"
+  out=$(run_captain "$home" verify "$id" 2>&1) \
+    && fail "the gate passed an unanswered composed call: $out"
+  assert_contains "$out" "--drop-unrecoverable $short" \
+    "the gate named an identity the metadata does not hold: $out"
+  out=$(run_captain "$home" complete "$id" --drop-unrecoverable "$composed" 2>&1) \
+    || fail "the drop refused the row id the entry resolves to: $out"
+  assert_contains "$out" "dropped as unrecoverable: $short" \
+    "the drop recorded a spelling the metadata never held: $out"
+  meta=$(cat "$home/state/$id.meta")
+  assert_contains "$meta" "decision_dropped=$short" "the drop was not recorded under the attested entry"
+  run_captain "$home" verify "$id" >/dev/null 2> "$home/legacy-drop-verify.err" \
+    || fail "the gate still could not pass after the drop: $(cat "$home/legacy-drop-verify.err")"
+  pass "a drop judges the row the gate judges, under either spelling of the entry"
+}
+
 # --- cleanup owns the close of a row whose worker is still up ----------------
 #
 # The captain's answer arriving while the work it gates is still running is
@@ -4615,6 +4693,7 @@ test_a_replayed_answer_stays_idempotent_after_retention
 test_a_reconciliation_retires_its_request_after_retention
 test_hold_refuses_an_id_the_archive_already_owns
 test_an_unanswerable_archived_call_ends_somewhere_a_person_can_act
+test_a_drop_judges_the_row_the_gate_judges
 test_the_remaining_reads_see_the_archive_too
 test_answer_will_not_close_a_row_whose_worker_is_still_up
 test_each_live_worker_refusal_names_a_remedy_its_own_command_accepts
