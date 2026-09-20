@@ -102,9 +102,14 @@
 # did not reach is reported as unknown rather than dropped.
 #
 # The forge is not read on every sweep. Probes run at most once per
-# FM_OBLIGATION_INTERVAL (default 900, 0 disables the gate, otherwise 60..86400)
-# and the check is silent in between, so the watcher's 300-second sweep does not
-# turn into a forge poll every five minutes.
+# FM_OBLIGATION_INTERVAL (default 900, 0 disables the gate, otherwise 60..86400),
+# so the watcher's 300-second sweep does not turn into a forge poll every five
+# minutes. That gate covers the FORGE and nothing else: obligation 4 and the
+# task records it reads cost no forge call, so a sweep inside the interval
+# still evaluates and reports them, and carries the forge half of the last
+# reading forward unchanged. Rate-limiting work that does not use the rationed
+# resource would delay an owed obligation by up to a whole interval and save
+# nothing.
 #
 # WHAT COUNTS AS A REVIEW. A pull request satisfies obligation 1 when it carries
 # any formal review OR any comment. The reviewed-PR path posts its findings with
@@ -200,7 +205,7 @@ BOARD="${FM_BOARD_OVERRIDE:-$FM_HOME/.lavish/bearings-board.html}"
 CHECK_ID=fleet-obligations
 CHECK_SHIM="$STATE/$CHECK_ID.check.sh"
 RECORD="$STATE/.$CHECK_ID"
-RECORD_SCHEMA=fm-fleet-obligations-v1
+RECORD_SCHEMA=fm-fleet-obligations-v2
 REGISTER_BIN="$SCRIPT_DIR/fm-check-register.sh"
 UNREGISTER_BIN="$SCRIPT_DIR/fm-check-unregister.sh"
 BOARD_ANCHOR='<script id="bearings-data" type="application/json">'
@@ -316,22 +321,49 @@ fi
 
 # --- findings ---------------------------------------------------------------
 
-# Both are newline-delimited lists, one finding per line, never a string the
-# printer has to split back apart. flatten() guarantees no finding can contain a
-# newline, so the list is unambiguous whatever a home path or a board key holds;
-# joining them with "; " for the wake line is a one-way rendering step.
-OWED=
-UNKNOWN=
+# Newline-delimited lists, one finding per line, never a string the printer has
+# to split back apart. flatten() guarantees no finding can contain a newline, so
+# a list is unambiguous whatever a home path or a board key holds; joining them
+# with "; " for the wake line is a one-way rendering step.
+#
+# They are kept in two scopes because the no-probe interval gates the forge and
+# nothing else. A sweep inside that interval still evaluates every LOCAL
+# obligation and reports it, and carries the FORGE findings forward from the
+# record unchanged, so gating a rate limit for one resource never suppresses
+# work that does not use it.
+OWED_LOCAL=
+UNKNOWN_LOCAL=
+OWED_FORGE=
+UNKNOWN_FORGE=
+# Which pair owed() and unknown() append to. Set once per phase by action_check.
+FINDING_SCOPE=local
 DEADLINE=0
 BUDGET_REPORTED=0
 
 flatten() { printf '%s' "$1" | tr '\t\r\n' '   '; }
 
-owed() { OWED="$OWED$(flatten "$1")
-"; }
+owed() {
+  if [ "$FINDING_SCOPE" = local ]; then
+    OWED_LOCAL="$OWED_LOCAL$(flatten "$1")
+"
+  else
+    OWED_FORGE="$OWED_FORGE$(flatten "$1")
+"
+  fi
+}
 
-unknown() { UNKNOWN="$UNKNOWN$(flatten "$1")
-"; }
+unknown() {
+  if [ "$FINDING_SCOPE" = local ]; then
+    UNKNOWN_LOCAL="$UNKNOWN_LOCAL$(flatten "$1")
+"
+  else
+    UNKNOWN_FORGE="$UNKNOWN_FORGE$(flatten "$1")
+"
+  fi
+}
+
+all_owed() { printf '%s%s' "$OWED_LOCAL" "$OWED_FORGE"; }
+all_unknown() { printf '%s%s' "$UNKNOWN_LOCAL" "$UNKNOWN_FORGE"; }
 
 count_findings() {
   printf '%s' "$1" | awk 'NF { n++ } END { printf "%d", n + 0 }'
@@ -423,7 +455,8 @@ steer_count() {
 # --- obligation 4: a steered task with no design record ---------------------
 
 # Local only, no forge call, so it is evaluated before anything can spend the
-# budget and can never be cut short by it.
+# budget, can never be cut short by it, and is not held behind the no-probe
+# interval that rations the forge.
 check_design_records() {
   local id inbox steers
   while IFS= read -r id; do
@@ -983,19 +1016,25 @@ evaluate_targets() {
 # is the steady state - the healthy home - paying the full cost permanently.
 RECORD_EPOCH=0
 RECORD_REPORTED_AT=0
-RECORD_OWED=
-RECORD_UNKNOWN=
+RECORD_OWED_LOCAL=
+RECORD_UNKNOWN_LOCAL=
+RECORD_OWED_FORGE=
+RECORD_UNKNOWN_FORGE=
 
-# The record keeps the two finding lists separately rather than one rendered
+# The record keeps each finding list separately rather than one rendered
 # string, one finding per line under a repeated key. flatten() guarantees no
 # finding holds a newline, so this round-trips exactly with no escaping and no
-# separator a finding could itself contain.
+# separator a finding could itself contain. The forge lists are kept apart from
+# the local ones so a sweep inside the no-probe interval can carry the forge
+# half forward untouched instead of recomputing or discarding it.
 record_read() {
   local line first=1
   RECORD_EPOCH=0
   RECORD_REPORTED_AT=0
-  RECORD_OWED=
-  RECORD_UNKNOWN=
+  RECORD_OWED_LOCAL=
+  RECORD_UNKNOWN_LOCAL=
+  RECORD_OWED_FORGE=
+  RECORD_UNKNOWN_FORGE=
   [ -f "$RECORD" ] || return 0
   while IFS= read -r line; do
     if [ "$first" = 1 ]; then
@@ -1018,35 +1057,47 @@ record_read() {
           *) RECORD_REPORTED_AT=$line ;;
         esac
         ;;
-      owed=*) RECORD_OWED="$RECORD_OWED${line#owed=}
+      owed_local=*) RECORD_OWED_LOCAL="$RECORD_OWED_LOCAL${line#owed_local=}
 " ;;
-      unknown=*) RECORD_UNKNOWN="$RECORD_UNKNOWN${line#unknown=}
+      unknown_local=*) RECORD_UNKNOWN_LOCAL="$RECORD_UNKNOWN_LOCAL${line#unknown_local=}
+" ;;
+      owed_forge=*) RECORD_OWED_FORGE="$RECORD_OWED_FORGE${line#owed_forge=}
+" ;;
+      unknown_forge=*) RECORD_UNKNOWN_FORGE="$RECORD_UNKNOWN_FORGE${line#unknown_forge=}
 " ;;
     esac
   done < "$RECORD"
   return 0
 }
 
-# record_write <reported_at>: the probe clock is always now, because this is
-# called at the end of a sweep that probed. The caller passes the report clock
-# so a silent sweep carries the previous one forward unchanged.
+# record_write <epoch> <reported_at>: both clocks are passed, because a sweep
+# that did not reach the forge must leave the probe clock where it was or the
+# no-probe interval would never reopen, while still recording the local half it
+# did evaluate.
 record_write() {
-  local reported_at=$1 tmp now finding
-  fm_now now
+  local epoch=$1 reported_at=$2 tmp finding
   tmp=$(mktemp "$RECORD.XXXXXX" 2>/dev/null) || return 1
   chmod 0600 "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
   {
     printf '%s\n' "$RECORD_SCHEMA"
-    printf 'epoch=%s\n' "$now"
+    printf 'epoch=%s\n' "$epoch"
     printf 'reported_at=%s\n' "$reported_at"
     while IFS= read -r finding; do
       [ -n "$finding" ] || continue
-      printf 'owed=%s\n' "$finding"
-    done <<< "$OWED"
+      printf 'owed_local=%s\n' "$finding"
+    done <<< "$OWED_LOCAL"
     while IFS= read -r finding; do
       [ -n "$finding" ] || continue
-      printf 'unknown=%s\n' "$finding"
-    done <<< "$UNKNOWN"
+      printf 'unknown_local=%s\n' "$finding"
+    done <<< "$UNKNOWN_LOCAL"
+    while IFS= read -r finding; do
+      [ -n "$finding" ] || continue
+      printf 'owed_forge=%s\n' "$finding"
+    done <<< "$OWED_FORGE"
+    while IFS= read -r finding; do
+      [ -n "$finding" ] || continue
+      printf 'unknown_forge=%s\n' "$finding"
+    done <<< "$UNKNOWN_FORGE"
   } > "$tmp" || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$RECORD" || { rm -f -- "$tmp"; return 1; }
   return 0
@@ -1064,11 +1115,11 @@ DISCLOSURE_RESERVE=64
 
 compose_line() {
   local body='obligations' total shown=0 remaining segment list finding candidate
-  total=$(( $(count_findings "$OWED") + $(count_findings "$UNKNOWN") ))
+  total=$(( $(count_findings "$(all_owed)") + $(count_findings "$(all_unknown)") ))
   [ "$total" -gt 0 ] || { printf '%s' ''; return 0; }
 
   for segment in owed unknown; do
-    if [ "$segment" = owed ]; then list=$OWED; else list=$UNKNOWN; fi
+    if [ "$segment" = owed ]; then list=$(all_owed); else list=$(all_unknown); fi
     [ -n "$list" ] || continue
     local first=1
     while IFS= read -r finding; do
@@ -1098,13 +1149,17 @@ compose_line() {
 # --- actions ----------------------------------------------------------------
 
 action_check() {
-  local now line age changed=0
+  local now line age changed=0 gated=0 epoch
 
   record_read
   fm_now now
+  # The interval gates the FORGE and nothing else. Obligation 4 and the task
+  # records it reads cost no forge call, so they are evaluated on every sweep;
+  # rate-limiting them behind a limit for a resource they do not use delayed an
+  # owed obligation by up to a whole interval for no saving at all.
   if [ "$INTERVAL" -ne 0 ] && [ "$RECORD_EPOCH" -gt 0 ] \
     && [ "$now" -ge "$RECORD_EPOCH" ] && [ $((now - RECORD_EPOCH)) -lt "$INTERVAL" ]; then
-    return 0
+    gated=1
   fi
 
   if [ ! -d "$STATE" ]; then
@@ -1114,20 +1169,34 @@ action_check() {
 
   DEADLINE=$((now + BUDGET_SECS))
 
-  [ -z "$BUDGET_CUT_FROM" ] \
-    || unknown "the sweep budget ${BUDGET_CUT_FROM}s was cut to ${BUDGET_SECS}s to stay inside the watcher check timeout of ${CHECK_TIMEOUT}s"
-
+  FINDING_SCOPE=local
   collect_live_tasks
   check_design_records
-  collect_task_targets
-  collect_board_targets
-  resolve_targets
-  evaluate_targets
 
-  [ "$OWED" = "$RECORD_OWED" ] && [ "$UNKNOWN" = "$RECORD_UNKNOWN" ] || changed=1
+  FINDING_SCOPE=forge
+  if [ "$gated" -eq 0 ]; then
+    [ -z "$BUDGET_CUT_FROM" ] \
+      || unknown "the sweep budget ${BUDGET_CUT_FROM}s was cut to ${BUDGET_SECS}s to stay inside the watcher check timeout of ${CHECK_TIMEOUT}s"
+    collect_task_targets
+    collect_board_targets
+    resolve_targets
+    evaluate_targets
+    epoch=$now
+  else
+    # The forge half is carried forward exactly as the last sweep that reached
+    # the forge left it, so a gated sweep neither re-reports it as news nor
+    # drops it from the record.
+    OWED_FORGE=$RECORD_OWED_FORGE
+    UNKNOWN_FORGE=$RECORD_UNKNOWN_FORGE
+    epoch=$RECORD_EPOCH
+  fi
+
+  [ "$OWED_LOCAL" = "$RECORD_OWED_LOCAL" ] && [ "$UNKNOWN_LOCAL" = "$RECORD_UNKNOWN_LOCAL" ] \
+    && [ "$OWED_FORGE" = "$RECORD_OWED_FORGE" ] && [ "$UNKNOWN_FORGE" = "$RECORD_UNKNOWN_FORGE" ] \
+    || changed=1
 
   line=
-  if [ -n "$OWED" ] || [ -n "$UNKNOWN" ]; then
+  if [ -n "$(all_owed)" ] || [ -n "$(all_unknown)" ]; then
     line=$(compose_line)
   fi
 
@@ -1143,14 +1212,15 @@ action_check() {
     # Report before recording, so a record that cannot be written costs a
     # repeated report rather than a lost one.
     printf '%s\n' "$line"
-    record_write "$now" || true
+    record_write "$epoch" "$now" || true
     return 0
   fi
-  # Nothing printed, but this sweep DID probe the forge, so the probe clock
-  # moves and the no-probe interval engages - including on a home where
-  # everything is met, which is the case that runs most. The report clock is
-  # carried forward untouched, so a suppressed repeat still arrives on time.
-  record_write "$RECORD_REPORTED_AT" || true
+  # Nothing printed. A sweep that reached the forge moves the probe clock so
+  # the no-probe interval engages - including on a home where everything is
+  # met, which is the case that runs most - while a gated sweep passes the old
+  # one straight back. The report clock is carried forward untouched either
+  # way, so a suppressed repeat still arrives on time.
+  record_write "$epoch" "$RECORD_REPORTED_AT" || true
   return 0
 }
 
@@ -1162,15 +1232,16 @@ action_report() {
     [ "$printed" -eq 1 ] || printf 'owed:\n'
     printed=1
     printf '  - %s\n' "$finding"
-  done <<< "$RECORD_OWED"
+  done <<< "$RECORD_OWED_LOCAL$RECORD_OWED_FORGE"
   printed=0
   while IFS= read -r finding; do
     [ -n "$finding" ] || continue
     [ "$printed" -eq 1 ] || printf 'unknown:\n'
     printed=1
     printf '  - %s\n' "$finding"
-  done <<< "$RECORD_UNKNOWN"
-  if [ -z "$RECORD_OWED" ] && [ -z "$RECORD_UNKNOWN" ]; then
+  done <<< "$RECORD_UNKNOWN_LOCAL$RECORD_UNKNOWN_FORGE"
+  if [ -z "$RECORD_OWED_LOCAL$RECORD_OWED_FORGE" ] \
+    && [ -z "$RECORD_UNKNOWN_LOCAL$RECORD_UNKNOWN_FORGE" ]; then
     printf 'the last check found all four obligations met\n'
   fi
   return 0

@@ -1155,8 +1155,12 @@ test_the_forge_is_not_read_between_intervals() {
   task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
   out="$home/out.txt"
   run "$home" "$out"
+  # Age the probe clock forward on the record the sweep above actually wrote,
+  # rather than hand-writing one: a hand-written record has to name the schema,
+  # and a stale literal there would silently disable this whole case.
   now=$(date +%s)
-  printf '%s\nepoch=%s\n' fm-fleet-obligations-v1 "$now" > "$home/state/.fleet-obligations"
+  sed "s/^epoch=.*/epoch=$now/" "$home/state/.fleet-obligations" > "$home/state/.fleet-obligations.new"
+  mv -f "$home/state/.fleet-obligations.new" "$home/state/.fleet-obligations"
   : > "$home/gh.log"
   local status=0
   env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
@@ -1250,6 +1254,58 @@ test_a_forge_answer_with_no_content_is_unknown_not_clean() {
 }
 
 # --- the forge is asked once per distinct pull request ----------------------
+
+test_obligation_four_is_not_gated_by_the_forge_interval() {
+  local home out calls
+  # The interval is a rate limit on the forge. Obligation 4 costs no forge call
+  # at all, so gating it delayed an owed obligation by up to a whole interval
+  # and saved nothing.
+  home=$(make_home local-not-gated)
+  forge_pr "$home" "$SLUG" 20 OPEN "$(commit 6)" 1 2 fm/met
+  task "$home" iota "kind=ship" "pr=$PR_BASE/20" "pr_head=$(commit 6)"
+  out="$home/out.txt"
+  # First sweep at the real interval: all met, silent, and it sets the clock.
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=900 FM_CHECK_TIMEOUT=30 PATH="$home/bin:$PATH" \
+    "$CHECK" > "$out" 2>&1 || fail "the first sweep exited non-zero"
+  assert_silent "$out" "the all-met home reported on its first sweep"
+
+  # A new task appears, steered, with no design record. It must be reported
+  # now, not after the interval.
+  task "$home" beta "kind=ship"
+  steer "$home" beta 2
+  : > "$home/gh.log"
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=900 FM_CHECK_TIMEOUT=30 PATH="$home/bin:$PATH" \
+    "$CHECK" > "$out" 2>&1 || fail "the gated sweep exited non-zero"
+  assert_contains "$(cat "$out")" "beta has been steered 2 times with no design record" \
+    "an obligation costing no forge call was suppressed by the forge's own rate limit"
+  calls=$(wc -l < "$home/gh.log" | tr -d '[:space:]')
+  [ "$calls" = 0 ] \
+    || fail "the gated sweep made $calls forge reads, so the interval stopped gating what it is for"
+  pass "obligation 4 is evaluated inside the no-probe interval, and the forge still is not read"
+}
+
+test_a_gated_sweep_keeps_the_forge_findings_it_is_not_rechecking() {
+  local home out
+  # A gated sweep must neither re-report the forge half as news nor drop it
+  # from the record, or the next full sweep would read as changed.
+  home=$(make_home gated-carry)
+  forge_pr "$home" "$SLUG" 7 OPEN "$(commit 7)" 0 0 fm/carry
+  task "$home" alpha "kind=ship" "pr=$PR_BASE/7" "pr_head=$(commit 7)"
+  out="$home/out.txt"
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=900 FM_CHECK_TIMEOUT=30 PATH="$home/bin:$PATH" \
+    "$CHECK" > "$out" 2>&1 || fail "the first sweep exited non-zero"
+  assert_contains "$(cat "$out")" "nothing posted on $PR_BASE/7" "the first sweep did not report the forge finding"
+  env FM_HOME="$home" GH_FORGE="$home/forge" GH_LOG="$home/gh.log" \
+    FM_OBLIGATION_INTERVAL=900 FM_CHECK_TIMEOUT=30 PATH="$home/bin:$PATH" \
+    "$CHECK" > "$out" 2>&1 || fail "the gated sweep exited non-zero"
+  assert_silent "$out" "a gated sweep re-reported the forge finding it did not recheck"
+  grep -q "^owed_forge=.*pull/7" "$home/state/.fleet-obligations" \
+    || fail "a gated sweep dropped the forge finding from the record, so the next full sweep would read it as news"
+  pass "a gated sweep carries the forge findings forward instead of re-reporting or dropping them"
+}
 
 test_one_read_covers_a_pull_request_every_obligation_names() {
   local home out calls
@@ -1482,6 +1538,8 @@ test_a_record_spelled_in_another_case_still_reports
 test_one_pull_request_spelled_two_ways_is_one_read
 test_an_unreadable_task_record_is_unknown_not_clean
 test_a_forge_answer_with_no_content_is_unknown_not_clean
+test_obligation_four_is_not_gated_by_the_forge_interval
+test_a_gated_sweep_keeps_the_forge_findings_it_is_not_rechecking
 test_one_read_covers_a_pull_request_every_obligation_names
 test_the_forge_is_asked_only_about_this_home_s_own_work
 test_an_overlong_report_says_how_much_is_not_shown
