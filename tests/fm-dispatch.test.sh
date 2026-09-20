@@ -678,9 +678,37 @@ test_resolver_off_with_rules_stops_before_filing() {
 # lands before anything is written, so a call that omitted it leaves no half-made
 # task behind.
 test_design_record_choice_is_required_and_exclusive() {
-  local case_dir id out status
+  local case_dir id out status home fakebin
   case_dir=$(make_case design-required)
   : > "$case_dir/empty-design.md"
+  home="$case_dir/home"
+  fakebin="$case_dir/fakebin"
+
+  # The primary branch: neither flag passed. run_dispatch supplies --design for
+  # every other case in this file, so this one call deliberately bypasses it and
+  # invokes the script with the same environment and nothing to choose from.
+  id=dispatch-design-absent
+  mkdir -p "$home/user-home"
+  out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$home/user-home" \
+    CLAUDE_CONFIG_DIR='' \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="${TMUX:-fake,1,0}" \
+    TYPESAFE_API_KEY='' PATH="$fakebin:$PATH" \
+    "$DISPATCH" "$id" --project "$case_dir/project" \
+    --mode no-mistakes --yolo off --ask "$case_dir/ask.md" --spec "$case_dir/spec.md" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "omitting both design flags should refuse: $out"
+  assert_contains "$out" "--design <file> or --no-design <reason> required" \
+    "the refusal did not name the two flags that satisfy it"
+  assert_contains "$out" "$home/data/$id/design.md" \
+    "the refusal did not name the record the plan belongs in"
+  assert_contains "$out" "a decision that gets recorded rather than a step that gets skipped" \
+    "the refusal did not say why declaring no design is still an answer"
+  assert_absent "$home/data/$id/brief.md" "a refused call still scaffolded a brief"
+  assert_absent "$home/data/$id/design.md" "a refused call still wrote a design record"
+  assert_no_grep "$id" "$home/data/backlog.md" "a refused call still filed an item"
+  assert_absent "$home/state/$id.meta" "a refused call still spawned"
 
   id=dispatch-design-missing
   out=$(run_dispatch "$case_dir" "$id" --project "$case_dir/project" \
