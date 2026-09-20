@@ -126,6 +126,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-gate-calls-lib.sh
 . "$SCRIPT_DIR/fm-gate-calls-lib.sh"
+# shellcheck source=bin/fm-review-verdict-lib.sh
+. "$SCRIPT_DIR/fm-review-verdict-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
 # shellcheck source=bin/fm-merge-outcome-lib.sh
@@ -647,14 +649,17 @@ github_checks_not_green() {
 # satisfies no check rather than a value one could pass.
 #
 # A review counts as approving when GitHub's own review state is APPROVED, or
-# when the last non-empty line of its body is exactly "Review verdict: APPROVED".
+# when the last non-empty line of its body is exactly the approved verdict line.
 # It counts as refusing on CHANGES_REQUESTED or on that line's NOT APPROVED
 # form. Both forms are read from the same reviews array and both are bound to
 # the same commit, so the day a second account makes GitHub's native verdict
 # reachable here, that state is already accepted and nothing has to migrate.
 # The last-line rule is what keeps a verdict quoted inside a review body from
 # counting as that review's own verdict, and it is the captain's rule stated as
-# the reviewer contract in bin/fm-brief.sh states it: a review ends with a verdict.
+# the reviewer contract states it: a review ends with a verdict.
+# The verdict string itself is not written here. bin/fm-review-verdict-lib.sh
+# owns it and every program that must agree on it sources that file, so the two
+# sides cannot drift apart rather than merely being told not to.
 #
 # Only reviews whose commit.oid is the live head are considered. An approval of
 # a superseded commit is not an approval of what would merge, so a push after a
@@ -689,7 +694,8 @@ github_checks_not_green() {
 # worker, and the merge line says which of the two cases it is looking at.
 github_approval_state() {
   local json=$1 head=$2
-  printf '%s' "$json" | jq -r --arg head "$head" '
+  printf '%s' "$json" | jq -r --arg head "$head" \
+    --arg yes "$FM_REVIEW_VERDICT_APPROVED" --arg no "$FM_REVIEW_VERDICT_DECLINED" '
     def tail_line:
       (.body // "")
       | split("\n")
@@ -700,9 +706,9 @@ github_approval_state() {
       (.state // "") as $st
       | ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"] | index($st) != null;
     def approves:
-      submitted and (.state == "APPROVED" or (tail_line == "Review verdict: APPROVED"));
+      submitted and (.state == "APPROVED" or (tail_line == $yes));
     def refuses:
-      submitted and (.state == "CHANGES_REQUESTED" or (tail_line == "Review verdict: NOT APPROVED"));
+      submitted and (.state == "CHANGES_REQUESTED" or (tail_line == $no));
     def standing:
       (.authorAssociation // "") as $a
       | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a) != null;
@@ -854,7 +860,7 @@ APPROVAL
       refusals="$refusals  - the newest review is of commit ${newest_reviewed:-unreadable}, not the current head $live_head, so nothing has approved what would merge
 "
     else
-      refusals="$refusals  - the review at the current head $live_head states no verdict; a review must end with the line \"Review verdict: APPROVED\" or \"Review verdict: NOT APPROVED\"
+      refusals="$refusals  - the review at the current head $live_head states no verdict; a review must end with the line \"$FM_REVIEW_VERDICT_APPROVED\" or \"$FM_REVIEW_VERDICT_DECLINED\"
 "
     fi
   fi

@@ -42,7 +42,7 @@ Nothing merges red - section 7 owns that rule and the single named waiver.
 The captain ruled on 2026-09-20 that only a reviewer approves, that a worker only fixes, and that only an approved pull request merges.
 
 The approval is the reviewer's own posted review, read back off the forge by `bin/fm-pr-merge.sh`, which refuses a merge without one.
-The reviewer's generated brief is the single owner of the exact verdict line it must end with; do not restate that string in a steer, and never write it yourself.
+`bin/fm-review-verdict-lib.sh` is the single owner of the exact verdict line, and the brief, the merge gate, and the blocker report all source it; do not restate that string in a steer, and never write it yourself.
 Three consequences are yours:
 
 - **You dispatch every reviewer, and you dispatch one again after fixes land.**

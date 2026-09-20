@@ -3696,3 +3696,60 @@ test_only_a_submitted_standing_review_counts() {
 }
 
 test_only_a_submitted_standing_review_counts
+
+# The verdict line crosses two programs: bin/fm-brief.sh tells the reviewer what
+# to write and bin/fm-pr-merge.sh decides whether it merges. Sourcing one owner
+# makes them agree by construction; this asserts it through both executable
+# interfaces, so a future copy pasted back into either one fails here instead of
+# silently making every review unreadable to the gate.
+test_the_brief_verdict_line_is_what_the_gate_accepts() {
+  local case_dir home brief line head=2323232323232323232323232323232323232323
+  case_dir=$(make_case github-brief-verdict-agreement)
+  mkdir -p "$case_dir/wt" "$case_dir/brief-home"
+  home="$case_dir/brief-home"
+
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" verdict-probe some-proj \
+    --review https://github.com/example/repo/pull/95 >/dev/null 2>&1 \
+    || fail "brief-verdict-agreement: scaffolding a review brief failed"
+
+  brief="$home/data/verdict-probe/brief.md"
+  assert_present "$brief" "brief-verdict-agreement: no review brief was written"
+
+  # The approving verdict exactly as the reviewer is instructed to write it,
+  # taken out of the generated brief rather than retyped here, so this test
+  # cannot agree with a copy that has drifted from what the brief says.
+  line=$(grep -E '^Review verdict: APPROVED$' "$brief" | head -1)
+  [ -n "$line" ] \
+    || fail "brief-verdict-agreement: the generated brief instructs no approving verdict line"$'\n'"$(grep -n -i verdict "$brief" || true)"
+
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" reviewer "R1 - preference - low - naming.
+
+$line")"
+
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "brief-verdict-agreement: the gate rejected the verdict its own brief instructs"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 95 example/repo --squash
+
+  # And the declining one holds the merge, so the agreement covers both verdicts
+  # rather than only the one that happens to pass.
+  line=$(grep -E '^Review verdict: NOT APPROVED$' "$brief" | head -1)
+  [ -n "$line" ] \
+    || fail "brief-verdict-agreement: the generated brief instructs no declining verdict line"
+  case_dir=$(make_case github-brief-verdict-declines)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_reviews "$case_dir" "$head" \
+    "$(review_entry COMMENTED "$head" reviewer "$line")"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "brief-verdict-declines: the brief's declining verdict must hold the merge"
+  pass "the verdict line bin/fm-brief.sh writes is the one bin/fm-pr-merge.sh accepts, asserted through both"
+}
+
+test_the_brief_verdict_line_is_what_the_gate_accepts

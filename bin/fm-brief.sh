@@ -24,10 +24,11 @@
 #   confirms the supported lavish-axi floor; otherwise it asks for a text report.
 #   --review writes the reviewer contract: the deliverable is one review POSTED on
 #   the named pull request, and this file is the single owner of what that review
-#   owes (the four review disciplines, the finding format, the verdict line, and
-#   the local record). The verdict line is the approval itself: bin/fm-pr-merge.sh
-#   reads it back off the forge and refuses a merge without it, so the two files
-#   agree on that exact string and neither may change it alone.
+#   owes (the four review disciplines, the finding format, how the verdict line
+#   is presented, and the local record). The verdict line is the approval itself:
+#   bin/fm-pr-merge.sh reads it back off the forge and refuses a merge without it.
+#   The string is not written here - bin/fm-review-verdict-lib.sh owns it and both
+#   programs source that file, so they cannot drift apart.
 #   It is scout-shaped in every mechanical respect - scratch worktree, no branch,
 #   no commit, no push, no PR of its own - so it is spawned and torn down as a
 #   scout, and it writes data/<task-id>/report.md as the local pointer to the
@@ -113,6 +114,8 @@ esac
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-review-verdict-lib.sh
+. "$SCRIPT_DIR/fm-review-verdict-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 CREWMATE_PAUSE_WAIT_EXAMPLES='an upstream release, a rate-limit reset, a scheduled window, or your own validation round'
 
@@ -469,15 +472,15 @@ Widens scope: <no | yes - what acting on it would commit the project to>
 ### Not verified
 - <what you could not check, and why>
 
-Review verdict: <APPROVED | NOT APPROVED>
+$FM_REVIEW_VERDICT_PREFIX <APPROVED | NOT APPROVED>
 \`\`\`
 
 # The verdict line
 Your review MUST end with exactly one of these two lines, character for character, as the last non-empty line of the body:
 
 \`\`\`
-Review verdict: APPROVED
-Review verdict: NOT APPROVED
+$FM_REVIEW_VERDICT_APPROVED
+$FM_REVIEW_VERDICT_DECLINED
 \`\`\`
 
 This is the approval, and it is read by machine. \`bin/fm-pr-merge.sh\` refuses to merge a pull request whose current head has no approving review, so a pull request you do not approve does not merge, and one you never gave a verdict for does not merge either. Nothing else counts: \"blocking\", \"non-blocking\", \"clean\", \"LGTM\", or an approval written into a sentence are not this line.
