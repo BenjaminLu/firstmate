@@ -4171,3 +4171,47 @@ test_combinations_at_one_head_refuse_for_the_named_reason() {
 }
 
 test_combinations_at_one_head_refuse_for_the_named_reason
+
+# Two runs of one check name are one state of the world. Which state the refusal
+# reports must come from the same .at that decides red or green, not from the
+# order the forge happened to list them - an older cancelled run under a newer
+# one still in flight means wait, not re-run it.
+test_a_multi_run_check_reports_its_newest_run() {
+  local case_dir rc head=2222222222222222222222222222222222222222
+  local newer older
+
+  newer=$(check_run ci IN_PROGRESS - 2026-09-20T10:00:00Z)
+  older=$(check_run ci COMPLETED CANCELLED 2026-09-20T09:00:00Z)
+
+  case_dir=$(make_case github-multi-run-order-a)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" "$newer" "$older"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/95 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-multi-run-order-a: a check still running must not merge"
+  assert_grep "check 'ci' is still running" "$case_dir/stderr" \
+    "github-multi-run-order-a: the newest run's state was not the one reported"
+
+  # The same two runs, reversed. One state of the world, so one answer.
+  case_dir=$(make_case github-multi-run-order-b)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" "$older" "$newer"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/96 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "github-multi-run-order-b: a check still running must not merge"
+  assert_grep "check 'ci' is still running" "$case_dir/stderr" \
+    "github-multi-run-order-b: array order decided which state was reported"
+  assert_no_grep 'was cancelled' "$case_dir/stderr" \
+    "github-multi-run-order-b: an older cancelled run was reported over a newer one in flight"
+  pass "a check with several non-green runs reports the newest one's state, whatever order the forge listed them"
+}
+
+test_a_multi_run_check_reports_its_newest_run

@@ -653,10 +653,26 @@ github_checks_not_green() {
         ($entries
           | [.[] | select(.kind == "check_run")]
           | group_by(.group)[]
+          | ([.[] | select(.ok | not)]) as $reds
           | {
               name: .[0].name,
-              why: ([.[] | select(.ok | not)] | last | .why),
-              reds: [.[] | select(.ok | not)],
+              # The state REPORTED comes from the newest non-green run,
+              # decided by the same .at this expression already trusts to
+              # decide red or green, never by array position. Two runs of one
+              # check are one state of the world: an older cancelled run under
+              # a newer one still in flight means wait rather than re-run it,
+              # and forge ordering must not be what picks which of those an
+              # operator is told. A run with no startedAt is one that has not
+              # started, which is the most recent thing to have happened to
+              # that name, so it ranks after every dated run rather than being
+              # dropped: a re-run queued behind an old failure means wait.
+              why: (
+                $reds
+                | sort_by(.at // "9999-12-31T23:59:59Z")
+                | last
+                | .why
+              ),
+              reds: $reds,
               newest_green: ([.[] | select(.ok) | .at | select(. != null)] | max)
             }
           | select(
