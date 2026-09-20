@@ -91,14 +91,16 @@ if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/d
   fi
 fi
 
-META_TMP=
 META_LOCK=
 META_LOCK_HELD=0
 PR_POLL_PUBLISH_LOCK=
 PR_POLL_PUBLISH_LOCK_HELD=0
 pr_check_cleanup() {
   fm_pr_poll_cleanup
-  [ -z "$META_TMP" ] || rm -f -- "$META_TMP"
+  # fm_pr_meta_write_pr publishes the record by renaming this staged file and
+  # clears the name once that has succeeded, so a signal at any point during the
+  # write leaves it named here and removed on the way out.
+  [ -z "$FM_PR_META_TMP" ] || rm -f -- "$FM_PR_META_TMP"
   if [ "$PR_POLL_PUBLISH_LOCK_HELD" = 1 ]; then
     fm_lock_release "$PR_POLL_PUBLISH_LOCK" || true
     PR_POLL_PUBLISH_LOCK_HELD=0
@@ -121,29 +123,10 @@ META_LOCK_HELD=1
 META_DEVICE=$(fm_pr_file_device "$META") || exit 1
 STATE_DEVICE=$(fm_pr_file_device "$STATE") || exit 1
 [ "$META_DEVICE" = "$STATE_DEVICE" ] || { echo "error: task metadata is unavailable" >&2; exit 1; }
-META_TMP=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || exit 1
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    pr=*|pr_head=*) ;;
-    *) printf '%s\n' "$line" >> "$META_TMP" || exit 1 ;;
-  esac
-done < "$META"
-printf 'pr=%s\n' "$URL" >> "$META_TMP" || exit 1
-[ -z "$PR_HEAD" ] || printf 'pr_head=%s\n' "$PR_HEAD" >> "$META_TMP" || exit 1
-chmod 0600 "$META_TMP" || exit 1
-fm_pr_private_file_valid "$META_TMP" 600 "$STATE_DEVICE" || exit 1
-fm_pr_metadata_identity_parse "$META_TMP" || exit 1
-[ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \
-  && [ "$FM_PR_META_HOST" = "$HOST" ] && [ "$FM_PR_META_PATH" = "$PROJECT_PATH" ] \
-  && [ "$FM_PR_META_NUMBER" = "$NUMBER" ] || exit 1
-fm_pr_regular_destination_on_device_or_absent "$META" "$STATE_DEVICE" || exit 1
-mv -f -- "$META_TMP" "$META" || exit 1
-META_TMP=
-fm_pr_private_file_valid "$META" 600 "$STATE_DEVICE" || exit 1
-fm_pr_metadata_identity_parse "$META" || exit 1
-[ "$FM_PR_META_PROVIDER" = "$PROVIDER" ] && [ "$FM_PR_META_URL" = "$URL" ] \
-  && [ "$FM_PR_META_HOST" = "$HOST" ] && [ "$FM_PR_META_PATH" = "$PROJECT_PATH" ] \
-  && [ "$FM_PR_META_NUMBER" = "$NUMBER" ] || exit 1
+# One owner writes this pair, here and on every later re-bind by the poll
+# (bin/fm-pr-lib.sh's fm_pr_meta_write_pr).
+fm_pr_meta_write_pr "$STATE" "$META" "$STATE_DEVICE" \
+  "$PROVIDER" "$HOST" "$PROJECT_PATH" "$NUMBER" "$URL" "$PR_HEAD" || exit 1
 fm_lock_release "$META_LOCK"
 META_LOCK_HELD=0
 

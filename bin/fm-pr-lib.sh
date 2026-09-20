@@ -29,6 +29,7 @@ FM_PR_DATA_URL=
 FM_PR_DATA_HOST=
 FM_PR_DATA_PATH=
 FM_PR_DATA_NUMBER=
+FM_PR_META_TMP=
 FM_PR_META_PROVIDER=
 FM_PR_META_URL=
 FM_PR_META_HOST=
@@ -1265,6 +1266,76 @@ fm_pr_poll_merge_notified_remove() {  # <state> <id>
   rm -f -- "$marker"
 }
 
+# fm_pr_meta_write_pr <state> <meta> <state-device> <provider> <host> <path>
+#                     <number> <url> [head]
+#
+# Replace <meta> with a copy carrying exactly this pr= and, when <head> is given,
+# this pr_head=. The single owner of that rewrite: bin/fm-pr-check.sh records the
+# pair when a poll is armed and fm_pr_meta_rebind_head re-records the head on
+# every poll after that, and one invariant governs both -
+# fm_pr_metadata_identity_parse accepts no unrecognised line after pr=, so the
+# pair is stripped while copying and re-appended together at the end, never
+# appended in place.
+#
+# The caller holds the metadata lock and decides what to do on failure; this
+# validates the replacement before and after publishing it, and publishes whole
+# or not at all. FM_PR_META_TMP names the staged file while it exists so an
+# interrupted caller's own cleanup can remove it, and is cleared once the
+# rename has succeeded.
+fm_pr_meta_write_pr() {  # <state> <meta> <state-device> <provider> <host> <path> <number> <url> [head]
+  local state=$1 meta=$2 state_device=$3 provider=$4 host=$5 path=$6 number=$7 url=$8
+  local head=${9-} status=0 line
+  FM_PR_META_TMP=
+  [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
+  [ "$(fm_pr_file_link_count "$meta")" = 1 ] || return 1
+  [ "$(fm_pr_file_device "$meta")" = "$state_device" ] || return 1
+  [ -z "$head" ] || fm_pr_head_valid "$head" || return 1
+  umask 077
+  FM_PR_META_TMP=$(mktemp "$state/.fm-pr-meta.XXXXXX") || { FM_PR_META_TMP=; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      pr=*|pr_head=*) ;;
+      *) printf '%s\n' "$line" >> "$FM_PR_META_TMP" || status=1 ;;
+    esac
+  done < "$meta"
+  if [ "$status" -eq 0 ]; then
+    printf 'pr=%s\n' "$url" >> "$FM_PR_META_TMP" || status=1
+  fi
+  if [ "$status" -eq 0 ] && [ -n "$head" ]; then
+    printf 'pr_head=%s\n' "$head" >> "$FM_PR_META_TMP" || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    chmod 0600 "$FM_PR_META_TMP" \
+      && fm_pr_private_file_valid "$FM_PR_META_TMP" 600 "$state_device" \
+      && _fm_pr_meta_identity_is "$FM_PR_META_TMP" "$provider" "$host" "$path" "$number" "$url" \
+      && fm_pr_regular_destination_on_device_or_absent "$meta" "$state_device" \
+      && mv -f -- "$FM_PR_META_TMP" "$meta" \
+      || status=1
+  fi
+  if [ "$status" -eq 0 ]; then
+    FM_PR_META_TMP=
+    fm_pr_private_file_valid "$meta" 600 "$state_device" \
+      && _fm_pr_meta_identity_is "$meta" "$provider" "$host" "$path" "$number" "$url" \
+      || status=1
+  fi
+  if [ -n "$FM_PR_META_TMP" ]; then
+    rm -f -- "$FM_PR_META_TMP"
+    FM_PR_META_TMP=
+  fi
+  return "$status"
+}
+
+# The canonical identity <file> records is exactly this one.
+_fm_pr_meta_identity_is() {  # <file> <provider> <host> <path> <number> <url>
+  local file=$1 provider=$2 host=$3 path=$4 number=$5 url=$6
+  fm_pr_metadata_identity_parse "$file" || return 1
+  [ "$FM_PR_META_PROVIDER" = "$provider" ] \
+    && [ "$FM_PR_META_HOST" = "$host" ] \
+    && [ "$FM_PR_META_PATH" = "$path" ] \
+    && [ "$FM_PR_META_NUMBER" = "$number" ] \
+    && [ "$FM_PR_META_URL" = "$url" ]
+}
+
 # --- recorded head re-binding -------------------------------------------------
 # The single owner of writing a task's pr_head= after arming recorded it once.
 # bin/fm-pr-check.sh captures a head at arming time inside its own atomic pr=
@@ -1315,7 +1386,7 @@ fm_pr_lock_helpers() {
 #      just returned, and nothing about waiting longer would have helped.
 fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <head>
   local state=$1 id=$2 provider=$3 host=$4 path=$5 number=$6 head=$7
-  local meta lock tmp='' state_device url status=0 line timeout
+  local meta lock state_device url status=0 timeout
   fm_pr_task_id_valid "$id" || return 1
   fm_pr_head_valid "$head" || return 1
   [ -d "$state" ] && [ ! -L "$state" ] || return 1
@@ -1339,39 +1410,11 @@ fm_pr_meta_rebind_head() {  # <state> <id> <provider> <host> <path> <number> <he
     fm_lock_release "$lock" || return 1
     return 0
   fi
-  umask 077
-  tmp=$(mktemp "$state/.fm-pr-meta-head.XXXXXX") || { fm_lock_release "$lock" || true; return 1; }
-  # pr= and pr_head= are re-appended together at the end, because
-  # fm_pr_metadata_identity_parse accepts no unrecognised line after pr=.
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      pr=*|pr_head=*) ;;
-      *) printf '%s\n' "$line" >> "$tmp" || status=1 ;;
-    esac
-  done < "$meta"
+  fm_pr_meta_write_pr "$state" "$meta" "$state_device" \
+    "$provider" "$host" "$path" "$number" "$url" "$head" || status=1
   if [ "$status" -eq 0 ]; then
-    printf 'pr=%s\npr_head=%s\n' "$url" "$head" >> "$tmp" || status=1
+    grep -qxF "pr_head=$head" "$meta" || status=1
   fi
-  if [ "$status" -eq 0 ]; then
-    chmod 0600 "$tmp" \
-      && fm_pr_private_file_valid "$tmp" 600 "$state_device" \
-      && fm_pr_metadata_identity_parse "$tmp" \
-      && [ "$FM_PR_META_PROVIDER" = "$provider" ] \
-      && [ "$FM_PR_META_URL" = "$url" ] \
-      && [ "$FM_PR_META_HOST" = "$host" ] \
-      && [ "$FM_PR_META_PATH" = "$path" ] \
-      && [ "$FM_PR_META_NUMBER" = "$number" ] \
-      && fm_pr_regular_destination_on_device_or_absent "$meta" "$state_device" \
-      && mv -f -- "$tmp" "$meta" \
-      || status=1
-  fi
-  if [ "$status" -eq 0 ]; then
-    tmp=''
-    fm_pr_private_file_valid "$meta" 600 "$state_device" \
-      && grep -qxF "pr_head=$head" "$meta" \
-      || status=1
-  fi
-  [ -z "$tmp" ] || rm -f -- "$tmp"
   fm_lock_release "$lock" || status=1
   return "$status"
 }

@@ -934,7 +934,7 @@ test_rebind_never_waits_on_a_held_task_record() {
     || fail "a refused re-bind changed the task record anyway"
   grep -F "deferred re-binding the recorded head of task-a" "$state/.watch-triage.log" >/dev/null \
     || fail "a refused re-bind left no record of the wait"
-  ! find "$state" -name '.fm-pr-meta-head.*' -print | grep . >/dev/null \
+  ! find "$state" -name '.fm-pr-meta.*' -print | grep . >/dev/null \
     || fail "a refused re-bind left a temporary behind"
   fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
     || fail "a refused re-bind disturbed the armed poll"
@@ -1072,7 +1072,35 @@ SH
   ! find "$dir/home/state" -name '.fm-pr-poll-*' -print | grep . >/dev/null \
     || fail "interrupted publication left temporary files"
   assert_no_grep 'pr=' "$dir/home/state/task-a.meta" "interrupted preparation changed metadata"
-  pass "interrupted atomic preparation cleans private temporaries and publishes nothing"
+
+  # The later half: a signal DURING the record's own write. One owner stages that
+  # file (bin/fm-pr-lib.sh's fm_pr_meta_write_pr) and names it while it exists, so
+  # the cleanup trap can remove it; a name taken only after the call returned
+  # could not. Interrupt inside the staged write by hooking the chmod it makes on
+  # its own temporary, which no earlier step touches.
+  dir=$(make_case interrupted-meta-write)
+  write_task_meta "$dir"
+  cat > "$dir/fakebin/chmod" <<SH
+#!/usr/bin/env bash
+case " \$* " in
+  *.fm-pr-meta.*)
+    '$REAL_CHMOD' "\$@" || exit 1
+    kill -TERM "\$PPID"
+    exit 0
+    ;;
+esac
+exec '$REAL_CHMOD' "\$@"
+SH
+  chmod +x "$dir/fakebin/chmod"
+  set +e
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "interrupted record write unexpectedly succeeded"
+  ! find "$dir/home/state" -name '.fm-pr-meta.*' -print | grep . >/dev/null \
+    || fail "interrupted record write left its staged file behind"
+  assert_no_grep 'pr=' "$dir/home/state/task-a.meta" "interrupted record write published a partial record"
+  pass "interrupted atomic preparation and record writes clean their temporaries and publish nothing"
 }
 
 test_concurrent_watcher_sees_only_complete_publication() {
