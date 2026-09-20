@@ -124,11 +124,15 @@
 # The assembled line is held under FM_GATE_CALL_MAX_LINE bytes by shortening
 # `grounds`, then `what`, and the record carries "truncated":true whenever that
 # applied - so a long refusal list is shortened visibly rather than silently.
-# The identity fields it must never shorten - site, task, link, key - carry
-# their own caps instead, and an input over one of those is refused rather than
-# cut, because half a task id or half a link points at the wrong thing. Those
-# caps are also what make the shortening loop always terminate on a line that
-# still names the call.
+# The four short fields carry byte caps instead of being shortened, and what
+# an over-cap input costs depends on which of them it is - the same split
+# TWO SEVERITIES OF BAD INPUT above states, and that section is where it is
+# settled. `site` and `task` name the call, so an over-cap one refuses the
+# record rather than being cut to point at something else. `link` and `key`
+# are presentation, so an over-cap one is dropped into `rejected` and the
+# call is still recorded. Either way the field never reaches the line at some
+# half length, which is what lets the shortening ladder always terminate on a
+# line that still names the call.
 #
 # THE BOUND IS THE SHELL'S STDOUT BUFFER, NOT THE FILESYSTEM BLOCK.
 #
