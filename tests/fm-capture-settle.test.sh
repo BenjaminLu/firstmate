@@ -38,7 +38,9 @@ scripted_capture() {
   printf '%s\n' "$((index + 1))" >"$CAPTURE_COUNTER"
   [ "$index" -lt "${#FRAMES[@]}" ] || index=$(( ${#FRAMES[@]} - 1 ))
   [ "$CAPTURE_DELAY" = "0" ] || sleep "$CAPTURE_DELAY"
-  printf '%s\n' "${FRAMES[$index]}" >"$file"
+  # A frame may carry embedded newlines, so a multi-row viewport - a transcript
+  # above and the editor chrome below it - can be scripted as one entry.
+  printf '%b\n' "${FRAMES[$index]}" >"$file"
 }
 
 capture_calls() {
@@ -191,12 +193,60 @@ test_every_text_the_next_assertion_needs_can_be_required() {
   pass "every text the following assertion needs can be required of the settled capture, and a missing one is named"
 }
 
+test_a_scoped_absence_ignores_a_match_outside_its_scope() {
+  local out status
+  # The condition that sent this branch back: an absence that only ever meant
+  # the terminal's own chrome, checked against the transcript above it too.
+  # Broadening an absence makes FEWER frames settle, and with exhaustion now
+  # fatal that is a way to red a healthy run - so the scope has to survive the
+  # move into the helper.
+  reset_capture 'a transcript row about Working hours\nchrome: Working...\n' \
+    'a transcript row about Working hours\nchrome: idle\n'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/scoped" 6 \
+    --tail 1 --absent 'Working' 2>&1) && status=0 || status=$?
+  expect_code 0 "$status" "a --tail scoped absence must ignore a match above its scope: $out"
+
+  # Unscoped, the same frames never settle - which is the regression --tail is
+  # here to prevent, asserted rather than assumed.
+  reset_capture 'a transcript row about Working hours\nchrome: idle\n'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/unscoped" 3 \
+    --absent 'Working' 2>&1) && status=0 || status=$?
+  expect_code 1 "$status" "without --tail the same match must hold the wait out: $out"
+  pass "a scoped absence ignores a match outside its scope, and an unscoped one does not"
+}
+
+test_a_bounded_absence_ignores_a_longer_word_containing_the_token() {
+  local out status
+  reset_capture 'Workingtitle is not the indicator\n'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/bounded" 6 \
+    --absent-re 'Working([[:space:]]|$)' 2>&1) && status=0 || status=$?
+  expect_code 0 "$status" "a bounded absence must ignore a longer word containing the token: $out"
+
+  reset_capture 'Working is the indicator\n'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/bounded-hit" 3 \
+    --absent-re 'Working([[:space:]]|$)' 2>&1) && status=0 || status=$?
+  expect_code 1 "$status" "the bounded absence must still match the token itself: $out"
+  assert_contains "$out" "never cleared 'Working([[:space:]]|\$)'" \
+    "the failure must name the pattern that stayed"
+
+  # A fixed-string absence must stay fixed-string: a caller passing regex
+  # metacharacters to --absent is naming a literal, not a pattern.
+  # The frame says "Working now", which the pattern 'Working.*' matches as a
+  # regex and does not match as a literal. Settling proves --absent stayed
+  # fixed-string; a frame matching neither way would prove nothing.
+  reset_capture 'Working now, and nowhere the literal token\n'
+  out=$(fm_wait_capture_settled scripted_capture "$TMP_ROOT/literal" 6 \
+    --absent 'Working.*' 2>&1) && status=0 || status=$?
+  expect_code 0 "$status" "--absent must match literally, not as a pattern: $out"
+  pass "an --absent-re absence is bounded as written, and --absent stays a literal"
+}
+
 test_a_wait_that_requires_nothing_is_refused() {
   local out status
   reset_capture 'anything at all'
   out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/empty" 4) 2>&1 ) && status=0 || status=$?
   expect_code 1 "$status" "a wait with no condition must be refused, not pass on the first capture: $out"
-  assert_contains "$out" 'needs at least one --present or --absent' \
+  assert_contains "$out" 'needs at least one --present, --absent or --absent-re' \
     "the refusal must say what the call is missing"
 
   out=$( (fm_wait_capture_settled scripted_capture "$TMP_ROOT/typo" 4 --pressent 'x') 2>&1 ) \
@@ -214,5 +264,7 @@ test_a_self_reported_failure_aborts_at_once
 test_the_bound_is_an_attempt_count_that_stretches_under_load
 test_either_half_of_the_end_state_stands_alone
 test_every_text_the_next_assertion_needs_can_be_required
+test_a_scoped_absence_ignores_a_match_outside_its_scope
+test_a_bounded_absence_ignores_a_longer_word_containing_the_token
 test_a_wait_that_requires_nothing_is_refused
 echo "# all fm-capture-settle tests passed"

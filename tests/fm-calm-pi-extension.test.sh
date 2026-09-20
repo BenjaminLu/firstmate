@@ -2285,11 +2285,17 @@ TS
   wait_for_geometry_text "$snapshot" "visible row two" \
     || fail "Pi Calm hidden-block geometry E2E did not complete the /skill:ahoy turn"
   # Pi <=0.84 rendered a "Working..." transcript row; Pi >=0.85 embeds the
-  # indicator in the editor border as "Working". Absence of the bare token
-  # covers both spellings and is the stricter of the two, which is the safe
-  # direction for a wait: nothing else this fixture puts on screen contains it.
+  # indicator in the editor border as "Working". Both spellings live in the
+  # bottom chrome of this 44-row pane, so the condition stays scoped to the
+  # last twelve rows and stays bounded by the character that follows the token,
+  # exactly as the loop this replaces had it. Only the silence changed: running
+  # out is now a named failure. Widening an absence at the same moment it
+  # becomes fatal is how a wait acquires a way to red a healthy run - a bare
+  # 'Working' over the whole viewport would settle on strictly fewer frames,
+  # and settling is the only way past this line.
   fm_wait_capture_settled capture_geometry_viewport "$snapshot" 120 \
-    --absent 'Working' \
+    --tail 12 \
+    --absent-re 'Working(\.\.\.)?([[:space:]]|─|$)' \
     || fail "Pi Calm hidden-block geometry E2E left the /skill:ahoy turn still working"
   assert_contains "$(cat "$snapshot")" "[skill] ahoy" "Calm hid the collapsed skill header"
   assert_contains "$(cat "$snapshot")" "CALM_GEOMETRY_FINAL" "Calm hid the final assistant response"

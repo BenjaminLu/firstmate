@@ -619,16 +619,34 @@ fm_write_secondmate_meta() {
 
 # --- waiting for a terminal viewport to settle ------------------------------
 
-# fm_wait_capture_settled <capture-fn> <file> <max-attempts> \
-#                         [--present TEXT]... [--absent TEXT]... [--abort TEXT]...
+# fm_capture_match <file> <tail-lines> <fixed|regex> <pattern>
+#
+# The one matcher fm_wait_capture_settled tests every pattern through, so the
+# scope and the matching mode reach --present, --absent and --abort alike.
+# <tail-lines> empty means the whole capture.
+fm_capture_match() {
+  local file=$1 tail_lines=$2 mode=$3 pattern=$4 flag=-F
+  [ "$mode" = regex ] && flag=-E
+  if [ -n "$tail_lines" ]; then
+    tail -n "$tail_lines" "$file" 2>/dev/null | grep -q "$flag" -- "$pattern"
+  else
+    grep -q "$flag" -- "$pattern" "$file" 2>/dev/null
+  fi
+}
+
+# fm_wait_capture_settled <capture-fn> <file> <max-attempts> [--tail N] \
+#                         [--present TEXT]... [--absent TEXT]... \
+#                         [--absent-re ERE]... [--abort TEXT]...
 #
 # Re-runs <capture-fn> "<file>" until the captured viewport has SETTLED into
 # the end state a completed transition leaves behind: every --present text on
-# screen and every --absent text gone, all in the same capture. Returns 0 then,
-# 2 as soon as any --abort text appears - text by which the program under test
-# reports its own failure - and 1 once <max-attempts> captures have gone by
-# with neither. At least one --present or --absent is required; every flag may
-# be repeated, and all matching is fixed-string.
+# screen and every --absent text and --absent-re pattern gone, all in the same
+# capture. Returns 0 then, 2 as soon as any --abort text appears - text by
+# which the program under test reports its own failure - and 1 once
+# <max-attempts> captures have gone by with neither. At least one --present,
+# --absent or --absent-re is required, and every flag but --tail may repeat.
+# Matching is fixed-string except for --absent-re, and --tail N restricts every
+# pattern in the call to the last N lines of the capture.
 #
 # Wait on the end state, never on the intermediate one. Captures are discrete
 # samples, so a state the program passes through can appear and vanish
@@ -646,6 +664,20 @@ fm_write_secondmate_meta() {
 # them; a text they need but the wait did not require is a timing dependence
 # moved rather than removed.
 #
+# WHY --tail AND --absent-re EXIST, WHICH IS A WARNING ABOUT --absent
+#
+# An absence is satisfied by every frame that does NOT match, so broadening one
+# is not the conservative direction it looks like: it makes fewer frames settle
+# in a wait whose exhaustion ends the test. Converting a loop that fell through
+# in silence into one that fails is exactly when a condition must NOT also grow,
+# because the widening now has a way to red a healthy run that it did not have
+# before. These two flags exist so a scoped or boundary-bounded condition can be
+# made loud without being widened on the way: --tail keeps a match that only
+# ever meant the editor chrome out of the transcript above it, and --absent-re
+# keeps a token bounded so a longer word containing it cannot hold the wait out.
+# There is deliberately no --present-re: a present-text match has the opposite
+# risk profile, and no call site needs one.
+#
 # The bound is an attempt count, not a wall-clock budget, per CONTRIBUTING.md:
 # each attempt costs more on a loaded machine, so the count stretches with the
 # load it exists to tolerate, where a clock would expire on work that was still
@@ -660,24 +692,26 @@ fm_write_secondmate_meta() {
 fm_wait_capture_settled() {
   local capture_fn=$1 file=$2 max_attempts=$3
   shift 3
-  local present=() absent=() aborts=() text
+  local present=() absent=() absent_mode=() aborts=() tail_lines='' index
   while [ "$#" -gt 0 ]; do
     case $1 in
+      --tail) tail_lines=$2; shift 2 ;;
       --present) present+=("$2"); shift 2 ;;
-      --absent) absent+=("$2"); shift 2 ;;
+      --absent) absent+=("$2"); absent_mode+=(fixed); shift 2 ;;
+      --absent-re) absent+=("$2"); absent_mode+=(regex); shift 2 ;;
       --abort) aborts+=("$2"); shift 2 ;;
       *) fail "fm_wait_capture_settled: unknown argument '$1'" ;;
     esac
   done
   [ "${#present[@]}" -gt 0 ] || [ "${#absent[@]}" -gt 0 ] \
-    || fail "fm_wait_capture_settled: needs at least one --present or --absent text"
+    || fail "fm_wait_capture_settled: needs at least one --present, --absent or --absent-re pattern"
 
-  local attempt=0 settled reason rc
+  local attempt=0 settled reason rc text
   while :; do
     "$capture_fn" "$file" || true
     attempt=$((attempt + 1))
     for text in ${aborts[@]+"${aborts[@]}"}; do
-      if grep -Fq -- "$text" "$file" 2>/dev/null; then
+      if fm_capture_match "$file" "$tail_lines" fixed "$text"; then
         reason="reported '$text' instead of settling"
         rc=2
         break 2
@@ -685,23 +719,31 @@ fm_wait_capture_settled() {
     done
     settled=1
     for text in ${present[@]+"${present[@]}"}; do
-      grep -Fq -- "$text" "$file" 2>/dev/null || { settled=0; break; }
+      fm_capture_match "$file" "$tail_lines" fixed "$text" || { settled=0; break; }
     done
     if [ "$settled" -eq 1 ]; then
-      for text in ${absent[@]+"${absent[@]}"}; do
-        ! grep -Fq -- "$text" "$file" 2>/dev/null || { settled=0; break; }
+      index=0
+      while [ "$index" -lt "${#absent[@]}" ]; do
+        if fm_capture_match "$file" "$tail_lines" "${absent_mode[$index]}" "${absent[$index]}"; then
+          settled=0
+          break
+        fi
+        index=$((index + 1))
       done
     fi
     [ "$settled" -eq 0 ] || return 0
     if [ "$attempt" -ge "$max_attempts" ]; then
       reason="never settled across $max_attempts captures"
       for text in ${present[@]+"${present[@]}"}; do
-        grep -Fq -- "$text" "$file" 2>/dev/null \
+        fm_capture_match "$file" "$tail_lines" fixed "$text" \
           || reason="$reason; never showed '$text'"
       done
-      for text in ${absent[@]+"${absent[@]}"}; do
-        ! grep -Fq -- "$text" "$file" 2>/dev/null \
-          || reason="$reason; never cleared '$text'"
+      index=0
+      while [ "$index" -lt "${#absent[@]}" ]; do
+        if fm_capture_match "$file" "$tail_lines" "${absent_mode[$index]}" "${absent[$index]}"; then
+          reason="$reason; never cleared '${absent[$index]}'"
+        fi
+        index=$((index + 1))
       done
       rc=1
       break
