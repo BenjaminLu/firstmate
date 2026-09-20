@@ -467,7 +467,19 @@ test_a_steered_task_with_no_design_record_is_reported() {
   run "$home" "$out"
   assert_contains "$(cat "$out")" "epsilon has been steered 4 times with no design record at data/epsilon/design.md" \
     "a task whose plan lives only in its steering inbox was not reported"
-  pass "a steered task with no design record is reported"
+
+  # FM_OBLIGATION_STEERS defaults to 1, so a single steer is the most common
+  # wake line this check will ever print, and it is captain-visible.
+  local single
+  single=$(make_home o4-owed-one)
+  task "$single" epsilon "kind=ship"
+  steer "$single" epsilon 1
+  out="$single/out.txt"
+  run "$single" "$out"
+  assert_contains "$(cat "$out")" "epsilon has been steered once with no design record" \
+    "the single-steer line does not read like something written on purpose"
+  assert_not_contains "$(cat "$out")" "steered 1 times" "the single-steer line still reads \"1 times\""
+  pass "a steered task with no design record is reported, and one steer reads as once"
 }
 
 test_a_steered_task_with_a_design_record_is_silent() {

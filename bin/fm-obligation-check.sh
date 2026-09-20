@@ -434,7 +434,11 @@ check_design_records() {
     [ "$steers" -ge "$STEER_FLOOR" ] || continue
     [ -e "$DATA/$id/design.md" ] && continue
     [ -e "$DATA/$id/report.md" ] && continue
-    owed "$id has been steered $steers times with no design record at data/$id/design.md"
+    if [ "$steers" = 1 ]; then
+      owed "$id has been steered once with no design record at data/$id/design.md"
+    else
+      owed "$id has been steered $steers times with no design record at data/$id/design.md"
+    fi
   done <<< "$LIVE_TASKS"
 }
 
