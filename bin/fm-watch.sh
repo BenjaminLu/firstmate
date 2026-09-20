@@ -2103,6 +2103,16 @@ fi
 
 # Shared by both the first-notification and already-notified paths below so
 # the retirement sequence (bin/fm-pr-lib.sh) is stated once.
+# The head a task's record names at this instant, empty when it names none.
+# Every row about a re-bind is built from this rather than from what the path
+# that failed assumed it had left behind: a clear that did not happen leaves the
+# arming-time head in place, and a task armed without one never had a head to be
+# stale. A durable row that asserts either without looking is the same defect
+# this whole poll exists to end, one level up.
+recorded_pr_head() {  # <id>
+  grep '^pr_head=' "$STATE/$1.meta" 2>/dev/null | tail -1 | cut -d= -f2- || true
+}
+
 retire_merged_pr_poll() {  # <id>
   local id=$1
   if fm_pr_poll_retirement_publish "$STATE" "$id" "$SCRIPT_DIR/fm-pr-poll.sh" merged; then
@@ -2334,15 +2344,22 @@ while :; do
           fi
           if [ "$rebind_rc" -ne 0 ] || [ "${unconfirmed_head:-0}" = 1 ]; then
             if [ "$out" = merged ]; then
-              if [ "${unconfirmed_head:-0}" = 1 ]; then
-                triage_log "merged poll for $id returned no usable head (clear rc=$rebind_rc)"
+              # Merged: the poll retires in this same cycle, so whatever the
+              # record holds now it holds forever. Read it rather than assume
+              # it - a clear or a re-bind that failed leaves the previous value
+              # standing, and telling a supervisor "no head is recorded" while a
+              # superseded one is exactly what is recorded points them away from
+              # the problem instead of at it.
+              left=$(recorded_pr_head "$id")
+              if [ -n "$left" ]; then
+                triage_log "merged poll for $id left its record naming $left (rc=$rebind_rc)"
                 fm_wake_append check "pr-head-$id" \
-                  "check: $id merged but its pull request head could not be read, so no head is recorded for what landed: $url" \
+                  "check: $id merged, but its record still names $left, which is not confirmed to be what landed, and nothing will correct it: $url" \
                   || exit 1
               else
-                triage_log "could not re-bind the recorded head of $id to $poll_head before retiring its merged poll (rc=$rebind_rc)"
+                triage_log "merged poll for $id recorded no head (rc=$rebind_rc)"
                 fm_wake_append check "pr-head-$id" \
-                  "check: $id merged at $poll_head but its record could not be updated, so the head it still names is stale and nothing will correct it: $url" \
+                  "check: $id merged but its pull request head could not be read, so no head is recorded for what landed: $url" \
                   || exit 1
               fi
             elif [ "$rebind_rc" -eq 2 ]; then
@@ -2358,11 +2375,20 @@ while :; do
               # already does for pending tool updates and dead endpoints.
               triage_log "could not re-bind the recorded head of $id to $poll_head (rc=$rebind_rc)"
               rebind_marker="$STATE/.pr-head-reported-$id"
+              # Same rule as the merged path: a task armed without a head - no
+              # worktree, or no gh on PATH (bin/fm-pr-check.sh) - has no stale
+              # head to name, so the row must not claim one.
+              left=$(recorded_pr_head "$id")
+              if [ -n "$left" ]; then
+                left_note="so it still names $left"
+              else
+                left_note="so it still names no head at all"
+              fi
               if [ "$(cat "$rebind_marker" 2>/dev/null || true)" = "$poll_head $rebind_rc" ]; then
                 triage_log "absorbed a repeat re-bind failure for $id (already reported once)"
               else
                 fm_wake_append check "pr-head-$id" \
-                  "check: $id's record could not be updated to the head its pull request is on ($poll_head), so the head it names is stale: $url" \
+                  "check: $id's record could not be updated to the head its pull request is on ($poll_head), $left_note: $url" \
                   || exit 1
                 printf '%s %s\n' "$poll_head" "$rebind_rc" > "$rebind_marker" || exit 1
               fi

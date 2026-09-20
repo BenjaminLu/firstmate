@@ -1048,6 +1048,45 @@ test_a_failed_rebind_is_never_silent() {
   pass "a merged poll that cannot record its head reaches the durable queue, and one that can stays quiet"
 }
 
+# When the drop itself fails, the arming-time head survives - and the poll
+# retires in the same cycle, so it survives forever. A row saying "no head is
+# recorded" then points a supervisor at an empty record when what is actually
+# recorded is the superseded commit this branch exists to stop anyone trusting.
+# Every row here is built from what the record holds when it is read, not from
+# what the path that failed assumed it had left behind.
+test_a_merged_row_names_what_the_record_actually_holds() {
+  local dir state rc stale
+  stale=1111111111111111111111111111111111111111
+  dir=$(make_case merged-row-truthful)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  printf 'pr_head=%s\n' "$stale" >> "$state/task-a.meta"
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  # Strand the record so the drop cannot happen, exactly as a spawn holding it
+  # across a relaunch would.
+  strand_record_lock "$dir" "$state" task-a
+
+  set +e
+  FM_TEST_GH_STATE=MERGED FM_TEST_GH_HEAD_UNREADABLE=1 FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_PR_META_LOCK_TIMEOUT=1 FM_INACTIVE_RECONCILE_BUDGET_SECS=1 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  release_lock_holder
+  [ "$rc" -eq 0 ] || fail "merged cycle with a stranded record failed: $(cat "$dir/watch.err")"
+
+  # The stale head did survive - that is the premise, not the bug.
+  grep -qxF "pr_head=$stale" "$state/task-a.meta" \
+    || fail "the fixture did not actually strand the drop"
+  # So the row must say so, and must not claim the record is empty.
+  grep -F "still names $stale" "$state/.wake-queue" >/dev/null \
+    || fail "the row does not name the head the record actually holds: $(cat "$state/.wake-queue")"
+  ! grep -F 'no head is recorded for what landed' "$state/.wake-queue" >/dev/null \
+    || fail "the row claimed an empty record while a superseded head was recorded"
+  assert_poll_absent "$state" task-a
+  pass "a merged row names the head the record actually holds, not the one the path assumed"
+}
+
 # The non-terminal failure path repeats: the poll stays armed, so a persistent
 # cause is met again on every sweep. The durable queue is the supervisor's first
 # work list and each row needs acknowledging, so one row per sweep would crowd
@@ -3313,6 +3352,7 @@ test_rebind_never_waits_on_a_held_task_record
 test_a_permanent_lock_failure_is_not_reported_as_contention
 test_a_failed_rebind_is_never_silent
 test_a_merge_with_no_readable_head_drops_the_stale_one_and_says_so
+test_a_merged_row_names_what_the_record_actually_holds
 test_a_repeating_rebind_failure_is_reported_once_per_condition
 test_recorded_head_refuses_what_the_forge_did_not_return
 test_atomic_interruption_leaves_no_partial_artifact
