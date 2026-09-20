@@ -491,29 +491,65 @@ test_path_is_stable_and_home_scoped() {
   pass "path prints the stable home-scoped board location"
 }
 
+# Every remote host the built page names, with the ones that are not a fetch
+# removed: loopback is the live push and is wanted, the SVG namespace is an
+# identifier, an author link is the captain clicking, and the payload island is
+# data the page renders as text rather than anything it loads.
+#
+# Deliberately NOT a list of resource-position spellings. The guard this
+# replaces checked seven fixed strings and a protocol-relative webfont - the
+# closest relative of the thing it was written for - walked straight past it.
+# So this removes what is allowed and flags everything else, which cannot be
+# walked past by inventing an eighth spelling.
+board_remote_refs() {  # <page>
+  awk '
+    /<script id="bearings-data"/ { in_payload = 1 }
+    in_payload { if (/<\/script>/) { in_payload = 0 } ; next }
+    { print }
+  ' "$1" \
+    | sed 's/<a [^>]*>//g' \
+    | grep -oE '(https?:)?//[A-Za-z0-9._:-]+' \
+    | grep -vE '^(https?:)?//(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$' \
+    | grep -vE '^https?://www\.w3\.org$' \
+    | sort -u
+}
+
 # The captain may open this board offline, behind a firewall that blocks a font
-# CDN, or on a clone configured with nothing. A page that fetches at load still
+# host, or on a clone configured with nothing. A page that fetches at load still
 # renders, so nothing reports a failure - it just silently becomes a different
 # product for whoever cannot reach the host. The assertion is on the BUILT page
 # rather than the template, because the built page is what reaches the captain.
-test_the_built_board_fetches_nothing_from_the_network() {
-  local home data board
+#
+# WHAT THIS HOLDS, precisely, because a guard that claims more than it checks is
+# the defect this branch exists to attack: the built page names no REMOTE host
+# outside an author link. Loopback is allowed on purpose - the live push is a
+# loopback websocket, so "this page fetches nothing" would be false about the
+# very build being checked, and the narrower claim is the true one.
+#
+# WHAT IT CANNOT SEE, stated rather than left to a green: a URL assembled at
+# runtime from parts never appears as a literal, so no scan of the page finds
+# it. The live transport builds its own endpoint that way.
+test_the_built_board_names_no_remote_host_to_fetch_from() {
+  local home data board refs probe
   home=$(make_home offline)
   board="$home/.lavish/bearings-board.html"
   data="$home/payload.json"
 
+  # A scanner that errors prints nothing, and nothing reads as a clean page -
+  # the guard would then pass by silence, which is the failure it exists to
+  # catch. So prove it can FAIL on a fixture before trusting it on the board.
+  probe="$home/probe.html"
+  printf '<style>@import url("https://fonts.example/x.css");</style>\n' > "$probe"
+  [ -n "$(board_remote_refs "$probe")" ] \
+    || fail "the remote-reference scanner cannot detect a remote reference; its green would mean nothing"
+
   write_valid_payload "$data"
   run_board "$home" build "$data" >/dev/null || fail "the board did not build"
 
-  assert_no_grep '@import' "$board" "the board imports a remote stylesheet"
-  assert_no_grep '<link ' "$board" "the board links an external resource"
-  assert_no_grep '<script src=' "$board" "the board loads a remote script"
-  assert_no_grep '<img src="http' "$board" "the board loads a remote image"
-  assert_no_grep 'url(http' "$board" "the board references a remote url() asset"
-  assert_no_grep 'url("http' "$board" "the board references a remote url() asset"
-  assert_no_grep "url('http" "$board" "the board references a remote url() asset"
+  refs=$(board_remote_refs "$board")
+  [ -z "$refs" ] || fail "the built board names a remote host to fetch from: $refs"
 
-  pass "the built board fetches nothing from the network"
+  pass "the built board names no remote host, and the scanner proved it can fail"
 }
 
 test_build_refuses_malformed_payloads_before_touching_the_board() {
@@ -2126,4 +2162,4 @@ test_a_whitespace_only_refusal_reason_is_refused
 test_a_flag_with_no_value_explains_itself
 test_the_payload_contract_refuses_an_unknown_acknowledgement_kind
 test_a_captured_board_answer_acknowledges_every_key_it_named
-test_the_built_board_fetches_nothing_from_the_network
+test_the_built_board_names_no_remote_host_to_fetch_from
