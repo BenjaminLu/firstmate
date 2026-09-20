@@ -48,12 +48,14 @@ One call, the same shape as any other intake (`bin/fm-dispatch.sh` owns the mech
 
 ```
 bin/fm-dispatch.sh <review-task-id> --project projects/<name> \
-  --review <full https:// PR url> --ask <file> --spec <file>
+  --review <full https:// PR url> --ask <file> --spec <file> \
+  --no-design "reviewing an existing pull request; the design is the shipping task's"
 ```
 
 `--ask` is the captain's own words behind the pull request, copied from the shipping task's brief `## Captain's intent`.
 The reviewer needs it to judge scope: a finding "widens scope" only against what the captain actually asked for, so a reviewer given no intent cannot apply that rule and will guess.
 `--spec` is what to focus this review on - the risky surface, a subsystem, a class of defect the captain has been bitten by - and naming nothing in particular is a legitimate spec, written as such.
+`--design` or `--no-design` is required on every dispatch, a review included; a reviewer carries no design of its own, so the declaration above is the ordinary answer, and `--design <file>` is right only when this review is being pointed at a plan the shipping task did not carry.
 
 Give the review its own task id, distinct from the shipping task's.
 It is filed and spawned as a scout, so it is supervised, torn down, and reported like any scout.
