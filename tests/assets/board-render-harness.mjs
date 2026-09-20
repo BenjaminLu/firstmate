@@ -412,10 +412,18 @@ const answerCard = (card) => {
       : null;
     note.value = "";
   }
+  /* The per-option buttons inside a packet card. Third press site in this
+     file, and the same rule as the other two: a browser does not click a
+     DISABLED button, so probing one produces a message no viewer can reach -
+     here, the send-time refusal written over the render-time one the card had
+     correctly shown. A disabled button reports no queued answer, which is what
+     a person pressing it would get. */
   nodes
     .filter((n) => n.tagName === "button" && n.parentNode
       && n.parentNode.className.split(/\s+/).includes("bb-panel"))
-    .forEach((b) => { b._queued = record(() => b.dispatch("click")); });
+    .forEach((b) => {
+      b._queued = b.disabled === true ? null : record(() => b.dispatch("click"));
+    });
 };
 deck.children.forEach(answerCard);
 

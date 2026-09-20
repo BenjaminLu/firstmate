@@ -598,6 +598,13 @@ test_the_per_option_buttons_go_dead_with_the_rest_of_the_card() {
     || fail "the fixture card has no per-option buttons, so this proves nothing: $out"
   [ "$(printf '%s' "$out" | jq -r '[.cards[0].choose_buttons[] | select(.disabled | not)] | length')" = "0" ] \
     || fail "a per-option button stayed live on a board that cannot send: $out"
+  # R26. And the harness must not press them either. If it does, its own probe
+  # rewrites the render-time refusal into the send-time one, and the card then
+  # reports a message no viewer could ever have reached.
+  [ "$(printf '%s' "$out" | jq -r '[.cards[0].panels[].buttons[] | select(.queues != null)] | length')" = "0" ] \
+    || fail "the harness pressed a per-option button a person could not: $out"
+  assert_contains "$(printf '%s' "$out" | jq -r '.cards[0].limit')" "cannot take an answer" \
+    "the harness rewrote the card's refusal into one no viewer can reach: $out"
   pass "the per-option buttons go dead with the rest of the card"
 }
 
