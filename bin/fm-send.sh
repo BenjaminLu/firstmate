@@ -11,6 +11,10 @@
 # before anything is marked, recorded, or typed, because an empty marked
 # secondmate request delivers only marker and correlation bytes and leaves the
 # parent waiting on a reply to nothing.
+# An ordinary text steer naming a commit that resolves in no local copy of this
+# task is refused the same way, with exit 2, by the commit-ish guard below.
+# Exit 2 is the one outcome a resend cannot fix: the message itself has to be
+# corrected first.
 # Special keys instead of text: fm-send.sh <target> --key Enter
 # Key support is backend-specific: tmux/herdr support Escape, Enter, and C-c;
 # Orca currently supports Enter and C-c only, and rejects Escape.
@@ -28,7 +32,10 @@
 # resend is appropriate (unresolvable target, an endpoint that cannot be
 # locked and revalidated or that retired or changed, an unwritable record, a
 # failed or lost remote transport) or a decision-close append failed after
-# delivery (the error then carries the exact manual close). The remote enqueue
+# delivery (the error then carries the exact manual close). The exception is
+# exit 2: nothing was recorded and a resend of the SAME text would only be
+# refused again, because the message names a commit no local copy of this task
+# resolves. Correct the value, then send. The remote enqueue
 # is idempotent: the remote leg deduplicates an exact re-run of the same
 # request onto the existing record (bin/fm-task-inbox-lib.sh), so after a lost
 # transport (ssh exit 255, completion unknown) fm-send retries the same leg
@@ -72,7 +79,9 @@
 # before any resend, and never re-type blindly; a marked request's
 # pending-reply expectation stays armed because this outcome is not a proven
 # failure); any other nonzero = the send failed and nothing may be assumed
-# delivered. Submission dispatches through the target's recorded backend; the
+# delivered. The commit-ish refusal (exit 2) never fires here - it guards the
+# inbox plane only, so a harness-native invocation cannot be refused over a
+# value inside it. Submission dispatches through the target's recorded backend; the
 # tmux adapter shares its composer/submit core with the away-mode daemon via
 # bin/fm-tmux-lib.sh. Tune with FM_SEND_RETRIES (default 3; agy typed targets
 # default to 20 for agy's late busy render) / FM_SEND_SLEEP (0.4). Slash
