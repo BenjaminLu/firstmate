@@ -197,19 +197,10 @@ WATCHER_DOWNTIME_MARKER="$STATE/.watcher-down"
 # before, byte-for-byte.
 
 # Portable stat. macOS (BSD) stat uses `-f <fmt>`; Linux (GNU) stat uses `-c <fmt>`.
-# Do NOT use the `stat -f <fmt> ... || stat -c <fmt> ...` fallback form: on Linux
-# `stat -f` is *filesystem* stat and writes a partial filesystem dump ("File: ...",
-# "Blocks: ...") to stdout before failing, so the fallback's correct output gets
-# appended to that garbage. Arithmetic under `set -u` then aborts on the stray
-# token (e.g. the word "File" read as an unset variable), which silently kills the
-# watcher mid-cycle. Detect the platform once and pick the right form.
-# On Darwin, call /usr/bin/stat rather than PATH-resolved stat so GNU coreutils
-# cannot shadow the BSD `-f` syntax.
-if [ "$(uname)" = Darwin ]; then
-  stat_mtime() { /usr/bin/stat -f %m "$1" 2>/dev/null; }        # epoch seconds of mtime
-else
-  stat_mtime() { stat -c %Y "$1" 2>/dev/null; }
-fi
+# Reading the clock and a file's mtime is bin/fm-clock-lib.sh's alone (sourced
+# transitively through fm-wake-lib.sh above): fm_now for the current time,
+# fm_path_mtime for a file's, and its header owns the platform rationale,
+# including the Linux `stat -f` trap that silently killed this watcher mid-cycle.
 # bin/fm-classify-lib.sh owns status reported-state signatures and presentation
 # markers, while bin/fm-wake-lib.sh owns their wake-facing routing, the legacy
 # turn-ended signature, annotation staleness checks, and guarded bookkeeping writes.
@@ -662,7 +653,7 @@ signal_turnend_panes_churned() {  # <file> ...
   done
   # Enforce the deferral bound BEFORE any .stale- state is touched, so a wake that
   # surfaces here leaves the staleness backbone's own classification alone.
-  now_s=$(date +%s)
+  fm_now now_s
   for key in "${churned_keys[@]}"; do
     marker="$STATE/.churn-since-$key"
     if [ ! -e "$marker" ]; then
@@ -780,7 +771,8 @@ secondmate_in_active_turn() {  # <window> <idle>
 # Receipts close the append-before-marker crash window without changing the
 # foreign queue.
 secondmate_wake_stall_tick() {
-  local now=$(( $(date +%s) )) threshold=$SECONDMATE_WAKE_STALL_SECS
+  local now threshold=$SECONDMATE_WAKE_STALL_SECS
+  fm_now now
   local meta task kind remote_host home queue row epoch seq row_key marker progress_marker progress observed_at observed_key
   local receipt receipt_dir notify_key queued idle reason episode_alerted
   # Endpoint metadata admits this queue-loop check; secondmate-liveness owns registered mates whose endpoint is missing or dead.
@@ -892,7 +884,7 @@ resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min
     [ "$(age_of "$throttle")" -ge "$PAUSE_RESURFACE_SECS" ] || return 0   # 999999 when no prior re-surface
   fi
   fm_wake_append stale "$win" "$reason" || exit 1
-  if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else date +%s > "$throttle"; fi
+  if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else fm_now > "$throttle"; fi
   wake "$reason"
 }
 
@@ -914,9 +906,9 @@ wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age>
   local win=$1 since_file=$2 label=$3 age=$4 key wsf wage
   key=$(window_key "$win")
   wsf="$STATE/.writing-since-$key"
-  [ -e "$wsf" ] || date +%s > "$wsf"
+  [ -e "$wsf" ] || fm_now > "$wsf"
   wage=$(age_of "$wsf")
-  date +%s > "$since_file"
+  fm_now > "$since_file"
   resurface_absorbed "$win" "$STATE/.writing-resurfaced-$key" "$wage" \
     "stale: $win (idle ${age}s, writing its worktree for ${wage}s, rechecked on a long cadence not a wedge; confirm the writes are real progress)"
   triage_log "absorbed $label (worktree written since the idle window opened, idle ${age}s): $win"
@@ -947,7 +939,7 @@ wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age>
 # so a recheck that named the wrong one would point the reader away from the
 # person who can clear it.
 wedge_wait_evidence() {  # <task> -> `declared` or `held` on stdout
-  local task=$1 last until
+  local task=$1 last until now
   [ -n "$task" ] || return 1
   last=$(last_status_line "$STATE/$task.status")
   if status_is_captain_held "$last"; then
@@ -956,7 +948,8 @@ wedge_wait_evidence() {  # <task> -> `declared` or `held` on stdout
   fi
   status_is_paused "$last" || return 1
   if until=$(status_paused_until "$last"); then
-    [ "$(date +%s)" -lt "$until" ] || return 1
+    fm_now now
+    [ "$now" -lt "$until" ] || return 1
   fi
   printf 'declared'
 }
@@ -986,7 +979,7 @@ wedge_wait_evidence() {  # <task> -> `declared` or `held` on stdout
 # this is not an escalation, and a later genuine one must keep the
 # demand-inspection history it had already earned.
 wedge_defer_wait() {  # <window> <task> <since-file> <triage-label> <idle-age> <declared|held>
-  local win=$1 task=$2 since_file=$3 label=$4 age=$5 evidence=$6 key mtime wage min_age kind action waited
+  local win=$1 task=$2 since_file=$3 label=$4 age=$5 evidence=$6 key mtime wage min_age kind action waited now
   if [ "$evidence" = held ]; then
     if afk_record_present; then
       triage_log "absorbed $label (captain-held, never rechecked while the away-posture record exists): $win"
@@ -999,7 +992,7 @@ wedge_defer_wait() {  # <window> <task> <since-file> <triage-label> <idle-age> <
     action='confirm the wait still holds'
   fi
   key=$(window_key "$win")
-  mtime=$(stat_mtime "$STATE/$task.status")
+  mtime=$(fm_path_mtime "$STATE/$task.status")
   case "$mtime" in
     ''|*[!0-9]*)
       # An unreadable status file ages from the quiet window already in hand.
@@ -1009,13 +1002,14 @@ wedge_defer_wait() {  # <window> <task> <since-file> <triage-label> <idle-age> <
       wage=$age; min_age=0; waited=''
       ;;
     *)
-      wage=$(( $(date +%s) - mtime ))
+      fm_now now
+      wage=$(( now - mtime ))
       [ "$wage" -ge 0 ] || wage=0
       min_age=$PAUSE_RESURFACE_SECS; waited=", waiting ${wage}s"
       ;;
   esac
   clear_write_tracking "$key"
-  date +%s > "$since_file"
+  fm_now > "$since_file"
   resurface_absorbed "$win" "$STATE/.waiting-resurfaced-$key" "$wage" \
     "stale: $win (idle ${age}s${waited} - $kind, rechecked on a long cadence not a wedge; $action)" \
     '' "$min_age"
@@ -1077,7 +1071,7 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
   esac
   # Re-arm the idle timer on BOTH paths below, so the backend probe above stays on
   # its once-per-STALE_ESCALATE_SECS budget instead of running on every poll.
-  date +%s > "$since_file"
+  fm_now > "$since_file"
   id=$hash
   if gen=$(fm_busy_current_gen "$STATE" "$task"); then
     id=$gen
@@ -1114,18 +1108,19 @@ wedge_dead_record() {  # <window> <since-file> <triage-label> <idle-age> <pane-h
 # cheaper deferrals keep the panes they already own on their existing bounded
 # cadences and only a pane that would otherwise alarm pays for a backend read.
 wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-file> <task> <pane-hash>
-  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence
+  local win=$1 since_file=$2 label=$3 escalation_file=$4 task=$5 hash=$6 since age n reason evidence now
   since=$(cat "$since_file" 2>/dev/null || true)
   case "$since" in
     ''|*[!0-9]*)
       # Publish the repaired timer only after its old write-deferral chain is
       # gone, so observers cannot mistake a new idle window for the old chain.
       clear_write_tracking "$(window_key "$win")"
-      date +%s > "$since_file"
+      fm_now > "$since_file"
       triage_log "absorbed $label timer reset: $win"
       ;;
     *)
-      age=$(( $(date +%s) - since ))
+      fm_now now
+      age=$(( now - since ))
       if [ "$age" -ge "$STALE_ESCALATE_SECS" ]; then
         if evidence=$(wedge_wait_evidence "$task"); then
           wedge_defer_wait "$win" "$task" "$since_file" "$label" "$age" "$evidence"
@@ -1191,9 +1186,9 @@ handle_paused_stale() {  # <window> <task> <hash>
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
   clear_write_tracking "$key"
   statusf="$STATE/$task.status"
-  mtime=$(stat_mtime "$statusf")
-  case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
-  now=$(date +%s)
+  mtime=$(fm_path_mtime "$statusf")
+  fm_now now
+  case "$mtime" in ''|*[!0-9]*) mtime=$now ;; esac
   age=$(( now - mtime ))
   last=$(last_status_line "$statusf")
   min_age=$PAUSE_RESURFACE_SECS
@@ -1367,7 +1362,7 @@ pause_state_class() {  # <window> <task>
   # the bounded re-surface cadence, and a forgotten declaration would rot invisibly.
   [ "$class" = none ] && class=paused
   case "$class" in
-    paused) date +%s > "$recheck_file" ;;
+    paused) fm_now > "$recheck_file" ;;
     *) rm -f "$recheck_file" ;;
   esac
   printf '%s' "$class"
@@ -1500,7 +1495,7 @@ surface_nonterminal_stale() {  # <window> <hash>
     bounded=0
     STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
     if until=$(status_paused_until "$last"); then
-      now=$(date +%s)
+      fm_now now
       if [ "$now" -lt "$until" ]; then
         throttled=0
       else
@@ -1534,7 +1529,7 @@ surface_nonterminal_stale() {  # <window> <hash>
   clear_write_tracking "$key"
   if [ "$declared" -eq 0 ]; then
     : > "$STATE/.paused-$key"
-    date +%s > "$STATE/.paused-rechecked-$key"
+    fm_now > "$STATE/.paused-rechecked-$key"
   elif [ "$bounded" -eq 0 ]; then
     # A backlog hold is NOT a declared pause, and must not be dressed up as one:
     # the loop-top reconciliation and pause_state_class both read the status LINE,
@@ -1558,8 +1553,8 @@ surface_nonterminal_stale() {  # <window> <hash>
 # busy fleet. Persist the schedule as file mtimes instead.
 age_of() {  # seconds since file mtime; "due immediately" if missing
   local f=$1 m now
-  m=$(stat_mtime "$f") || { echo 999999; return; }
-  now=$(date +%s)
+  m=$(fm_path_mtime "$f") || { echo 999999; return; }
+  fm_now now
   [ "$m" -le "$now" ] || { echo 999999; return; }
   echo $(( now - m ))
 }
@@ -2083,6 +2078,10 @@ trap 'exit 1' HUP INT TERM
 # ${BASHPID:-$$} from this same main shell). Read directly, never via a command
 # substitution, so it matches the stored holder pid for the self-eviction check.
 WATCHER_PID=${BASHPID:-$$}
+# Counts completed supervision cycles for this watcher process; published in the
+# liveness beacon so an observer can see a cycle boundary without waiting for an
+# mtime second to turn over. Per-process, so it restarts at 1 with the watcher.
+WATCH_CYCLE=0
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
 # shellcheck disable=SC2034 # Consumed by wake() in the separately linted transition owner.
@@ -2167,7 +2166,17 @@ while :; do
 
   # Liveness beacon for fm-guard.sh: a fresh mtime here means a watcher is
   # alive. Supervision scripts warn when this goes stale with tasks in flight.
-  touch "$STATE/.last-watcher-beat"
+  #
+  # The content is this watcher's pid and cycle counter, and it exists for
+  # observers, not for supervision: every reader in bin/ still judges liveness
+  # from the mtime alone, which this write refreshes exactly as touch did. An
+  # mtime resolves to whole seconds, so "a cycle completed" is invisible until
+  # the second turns over, and anything watching for it has to wait a second per
+  # cycle no matter how fast the watcher actually runs. The counter changes the
+  # instant the cycle does, which is what lets a test drive the real watcher at
+  # a sub-second cadence instead of paying a second per observation.
+  WATCH_CYCLE=$((WATCH_CYCLE + 1))
+  printf '%s %s\n' "$WATCHER_PID" "$WATCH_CYCLE" > "$STATE/.last-watcher-beat"
 
   if [ "$(age_of "$STATE/home-summary.json")" -ge "$HOME_SUMMARY_INTERVAL" ]; then
     home_summary_refresh_detached
@@ -2553,7 +2562,7 @@ EOF
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
               printf '%s' "$h" > "$sf"
-              date +%s > "$ssf"
+              fm_now > "$ssf"
               clear_write_tracking "$key"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
             elif captain_call_stale_bound "$key" "$task"; then
@@ -2614,7 +2623,7 @@ EOF
               working)
                 clear_pause_tracking "$key"
                 printf '%s' "$h" > "$sf"
-                date +%s > "$ssf"
+                fm_now > "$ssf"
                 triage_log "absorbed non-terminal stale (provably working): $w"
                 ;;
               paused)

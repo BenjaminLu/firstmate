@@ -61,7 +61,7 @@ write_env() {
 enter_mailbox() {
   local home=$1 generator=$2
   mkdir -p "$home/bin" "$FAKEBIN"
-  [ -e "$home/bin/fm-wake-lib.sh" ] || ln -s "$ROOT/bin/fm-wake-lib.sh" "$home/bin/fm-wake-lib.sh"
+  fm_link_wake_lib "$home/bin"
   printf '%s\n' "$generator" > "$FAKEBIN/python3"
   chmod +x "$FAKEBIN/python3"
 }

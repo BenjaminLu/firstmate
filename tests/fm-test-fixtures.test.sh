@@ -279,6 +279,36 @@ test_spawn_home_layout() {
   pass "spawn-home layout writes harness pin, beat, and brief"
 }
 
+# fm_install_wake_lib / fm_link_wake_lib own the wake library's file set for
+# every fixture that builds a minimal bin/ by hand. This case is the guard on
+# that list: it builds a bin/ containing exactly what those helpers install and
+# nothing else, then sources fm-wake-lib.sh out of it for real. Splitting
+# another library off fm-wake-lib.sh without extending the list fails here,
+# loudly and in one place, instead of at run time inside whichever fixture
+# happens to run first. It asserts on behaviour, never on the library's text.
+test_wake_lib_file_set_is_self_sufficient() {
+  local dir out err rc
+  dir="$TMP_ROOT/wake-lib-set"
+  mkdir -p "$dir/copied" "$dir/linked"
+  fm_install_wake_lib "$dir/copied"
+  fm_link_wake_lib "$dir/linked"
+
+  for sub in copied linked; do
+    err="$dir/$sub.err"
+    rc=0
+    out=$(FM_STATE_OVERRIDE="$dir/$sub-state" bash -c \
+      '. "$1"; fm_now now; printf "%s" "$now"' _ "$dir/$sub/fm-wake-lib.sh" 2> "$err") || rc=$?
+    [ "$rc" -eq 0 ] \
+      || fail "the $sub wake-library file set could not be sourced: $(cat "$err")"
+    [ ! -s "$err" ] \
+      || fail "the $sub wake-library file set sourced with a missing dependency: $(cat "$err")"
+    case "$out" in
+      ''|*[!0-9]*) fail "the $sub wake-library file set sourced but produced no clock: '$out'" ;;
+    esac
+  done
+  pass "the wake library's fixture file set carries everything it sources"
+}
+
 test_git_config_isolation || fail "Git fixture config isolation"
 test_touch_epoch_preserves_repeated_dst_hour
 test_no_mistakes_version_constant
@@ -287,3 +317,4 @@ test_fake_gh_and_gh_axi
 test_spawn_tmux_and_fakebin
 test_send_stubs_and_ssh
 test_spawn_home_layout
+test_wake_lib_file_set_is_self_sufficient
