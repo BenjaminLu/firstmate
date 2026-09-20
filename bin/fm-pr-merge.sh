@@ -591,7 +591,9 @@ APPROVALS
 }
 
 # Every GitHub check that is not green in the given live pull-request JSON, one
-# name per line. An entry is green when it is a status context whose state is
+# per line as "<STATE> <name>", where the state is the check's own status or
+# conclusion so a refusal can say whether it failed, is still running, never
+# started, or was cancelled. An entry is green when it is a status context whose state is
 # SUCCESS, or a check run that completed with SUCCESS, NEUTRAL, or SKIPPED (so
 # a pending check is not green either). Exits nonzero when the rollup cannot be
 # read, so a malformed answer is a failed read and never an empty red set.
@@ -630,26 +632,29 @@ github_checks_not_green() {
             {
               kind: "check_run",
               name: (.name // ""),
+              why: (if .status != "COMPLETED" then (.status // "UNKNOWN")
+                    else (.conclusion // "UNKNOWN") end),
               completed: (.status == "COMPLETED"),
               ok: (.status == "COMPLETED" and (.conclusion == "SUCCESS" or .conclusion == "NEUTRAL" or .conclusion == "SKIPPED")),
               at: (.startedAt | settled_at)
             }
             | . + {group: (if .name == "" then ["", $i] else [.name, -1] end)}
           else
-            {kind: "status_context", name: (.context // ""), ok: (.state == "SUCCESS")}
+            {kind: "status_context", name: (.context // ""), why: (.state // "UNKNOWN"), ok: (.state == "SUCCESS")}
           end
       ]
     | . as $entries
     | (
         ($entries[]
           | select(.kind == "status_context" and (.ok | not))
-          | .name
+          | .why + " " + .name
         ),
         ($entries
           | [.[] | select(.kind == "check_run")]
           | group_by(.group)[]
           | {
               name: .[0].name,
+              why: ([.[] | select(.ok | not)] | last | .why),
               reds: [.[] | select(.ok | not)],
               newest_green: ([.[] | select(.ok) | .at | select(. != null)] | max)
             }
@@ -661,10 +666,10 @@ github_checks_not_green() {
                 or ([.reds[] | .at] | max) >= .newest_green
               )
             )
-          | .name
+          | .why + " " + .name
         )
       )
-    | if . == "" then "(unnamed check)" else . end
+    | if (. | endswith(" ")) then . + "(unnamed check)" else . end
   ' 2>/dev/null || return 1
 }
 
@@ -768,7 +773,7 @@ github_approval_state() {
 # Pre-merge conditions for a GitHub pull request, read from one live view.
 # Sets FM_PR_MERGE_HEAD to the verified head on success.
 github_verify_mergeable() {
-  local json fields line red name covered approval
+  local json fields line red red_row why reason name covered approval
   local total=0 named=0 refusals=''
   local state='' draft='' mergeable='' merge_state='' live_head='' base=''
   local approval_total=0 approval_named=0
@@ -915,20 +920,40 @@ APPROVAL
     fi
   fi
 
+  # Each non-green check says what is actually wrong with it. Failed, still
+  # running, never started and cancelled want four different actions from an
+  # operator - fix it, wait, wait, re-run it - and this fleet spent a day
+  # establishing that a cancelled job means several things and that only its own
+  # timestamps separate them. The gate whose job is to say what stopped the
+  # merge must not hand the next supervisor that same trap.
+  # --allow-red still matches the NAME alone, so the displayed wording can vary
+  # without changing which checks a waiver covers.
   uncovered=''
-  while IFS= read -r name; do
-    [ -n "$name" ] || continue
+  while IFS= read -r red_row; do
+    [ -n "$red_row" ] || continue
+    why=${red_row%% *}
+    name=${red_row#* }
     covered=0
     if [ "${#ALLOW_RED[@]}" -gt 0 ]; then
       for check in "${ALLOW_RED[@]}"; do
         [ "$check" = "$name" ] && covered=1
       done
     fi
-    [ "$covered" -eq 1 ] || {
-      refusals="$refusals  - check '$name' is not green
+    if [ "$covered" -ne 1 ]; then
+      case "$why" in
+        FAILURE|ERROR|STARTUP_FAILURE) reason="failed" ;;
+        TIMED_OUT) reason="timed out" ;;
+        CANCELLED) reason="was cancelled, so it reported no result" ;;
+        ACTION_REQUIRED) reason="needs an action before it can finish" ;;
+        IN_PROGRESS) reason="is still running" ;;
+        QUEUED|WAITING|PENDING|REQUESTED) reason="has not started yet" ;;
+        STALE) reason="is stale" ;;
+        *) reason="is not green (${why:-unreadable})" ;;
+      esac
+      refusals="$refusals  - check '$name' $reason
 "
       uncovered="${uncovered:+$uncovered, }$name"
-    }
+    fi
   done <<EOF
 $red
 EOF

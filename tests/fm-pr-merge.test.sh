@@ -2543,7 +2543,7 @@ test_github_red_checks_refuse_and_allow_red_waives_named() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-red: a red check must refuse"
-  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
+  assert_grep "check 'lint' failed" "$case_dir/stderr" \
     "github-red: the red check was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-red: gh pr merge ran on a red PR"
@@ -2598,7 +2598,7 @@ test_check_runs_never_supersede_status_contexts() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-cross-check-kind: a failing status context must refuse"
-  assert_grep "check 'ci' is not green" "$case_dir/stderr" \
+  assert_grep "check 'ci' failed" "$case_dir/stderr" \
     "github-cross-check-kind: the status context was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-cross-check-kind: a passing check run hid a failing status context"
@@ -2623,7 +2623,7 @@ test_current_failed_check_run_still_refuses() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-current-red: a currently failing check must refuse"
-  assert_grep "check 'ci' is not green" "$case_dir/stderr" \
+  assert_grep "check 'ci' failed" "$case_dir/stderr" \
     "github-current-red: the red check was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-current-red: gh pr merge ran on a currently failing check"
@@ -2647,7 +2647,7 @@ test_late_finishing_old_success_does_not_hide_current_failure() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-old-success-finishes-last: the later-started failure must refuse"
-  assert_grep "check 'ci' is not green" "$case_dir/stderr" \
+  assert_grep "check 'ci' failed" "$case_dir/stderr" \
     "github-old-success-finishes-last: the current failure was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-old-success-finishes-last: completion order hid the current failure"
@@ -2691,7 +2691,7 @@ test_unfinished_rerun_keeps_a_check_red() {
     rc=$?
     set -e
     expect_code 1 "$rc" "github-pending-rerun-$prior: an unfinished re-run must refuse"
-    assert_grep "check 'ci' is not green" "$case_dir/stderr" \
+    assert_grep "check 'ci' is still running" "$case_dir/stderr" \
       "github-pending-rerun-$prior: the pending check was not named"
     assert_no_grep 'pr merge' "$case_dir/gh.log" \
       "github-pending-rerun-$prior: gh pr merge ran with a re-run still in flight"
@@ -2717,7 +2717,7 @@ test_supersession_never_crosses_check_names() {
   rc=$?
   set -e
   expect_code 1 "$rc" "github-cross-name: another check passing must not clear this failure"
-  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
+  assert_grep "check 'lint' failed" "$case_dir/stderr" \
     "github-cross-name: the red check was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "github-cross-name: gh pr merge ran on a red check of a different name"
@@ -2752,7 +2752,7 @@ test_undated_runs_never_supersede() {
     rc=$?
     set -e
     expect_code 1 "$rc" "github-undated-$label: an unproven supersession must refuse"
-    assert_grep "check 'ci' is not green" "$case_dir/stderr" \
+    assert_grep "check 'ci' failed" "$case_dir/stderr" \
       "github-undated-$label: the red check was not named"
     assert_no_grep 'pr merge' "$case_dir/gh.log" \
       "github-undated-$label: gh pr merge ran on an unproven supersession"
@@ -2780,7 +2780,7 @@ test_allow_red_still_waives_only_the_current_failure() {
   rc=$?
   set -e
   expect_code 1 "$rc" "superseded-allow-red-wrong-name: waiving the green check must not merge"
-  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
+  assert_grep "check 'lint' failed" "$case_dir/stderr" \
     "superseded-allow-red-wrong-name: the unwaived red check was not named"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "superseded-allow-red-wrong-name: gh pr merge ran with an unwaived red check"
@@ -3013,7 +3013,7 @@ test_away_grant_does_not_bypass_red_or_identity() {
   rc=$?
   set -e
   expect_code 1 "$rc" "away-grant-red: a grant must not waive red checks"
-  assert_grep "check 'lint' is not green" "$case_dir/stderr" \
+  assert_grep "check 'lint' failed" "$case_dir/stderr" \
     "away-grant-red: C1 did not refuse the red check"
   assert_no_grep 'pr merge' "$case_dir/gh.log" \
     "away-grant-red: gh pr merge ran on a granted red PR"
@@ -4014,3 +4014,49 @@ JSON
 }
 
 test_each_failed_read_says_which_read_failed
+
+# Failed, still running, never started and cancelled want four different actions
+# from an operator. One sentence for all of them hands the next supervisor the
+# trap this fleet spent a day establishing: that a cancelled job means several
+# things and only its own timestamps separate them.
+test_each_non_green_check_says_what_is_wrong_with_it() {
+  local case_dir rc head=2020202020202020202020202020202020202020
+  local n=400 probe
+
+  for probe in \
+    "COMPLETED FAILURE failed" \
+    "COMPLETED CANCELLED was cancelled" \
+    "COMPLETED TIMED_OUT timed out" \
+    "IN_PROGRESS - is still running" \
+    "QUEUED - has not started yet"; do
+    # shellcheck disable=SC2086 # The probe's fields are split deliberately.
+    set -- $probe
+    n=$((n + 1))
+    case_dir=$(make_case "github-check-$2-$n")
+    mkdir -p "$case_dir/wt"
+    add_gh_mocks "$case_dir" "$head"
+    write_github_rollup_json "$case_dir" "$head" "$(check_run ci "$1" "$2")"
+    set +e
+    run_pr_merge "$case_dir" task-x1 "https://github.com/example/repo/pull/$n" \
+      > "$case_dir/stdout" 2> "$case_dir/stderr"
+    rc=$?
+    set -e
+    expect_code 1 "$rc" "github-check-$2: a non-green check must not merge"
+    shift 2
+    assert_grep "check 'ci' $*" "$case_dir/stderr" \
+      "github-check: the refusal did not say what was wrong with the check"
+  done
+
+  # The waiver still matches the name, not the wording.
+  case_dir=$(make_case github-check-waiver-still-name)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" "$head"
+  write_github_rollup_json "$case_dir" "$head" "$(check_run ci COMPLETED CANCELLED)"
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/450 \
+    --allow-red ci > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "github-check-waiver-still-name: --allow-red should still waive by name"$'\n'"$(cat "$case_dir/stderr")"
+  assert_logged_gh_merge "$case_dir" 450 example/repo --squash
+  pass "each non-green check names its own state, and --allow-red still matches on the name"
+}
+
+test_each_non_green_check_says_what_is_wrong_with_it
