@@ -5,15 +5,16 @@
 # BOOTSTRAP_INFO fact, or completed bootstrap no-action fact and is silent when
 # all is well. firstmate consumes the exact 'MISSING: treehouse (install: ...)',
 # 'MISSING: tasks-axi (install: ...)', 'MISSING: quota-axi (install: ...)',
-# 'MISSING: gh-axi (install: ...)', 'PRESENTATION_UNAVAILABLE: lavish-axi ...', and
+# 'MISSING: gh-axi (install: ...)', and
 # 'BOOTSTRAP_INFO: ...' lines, so those contracts are pinned verbatim. The cases
 # are table-driven over the inputs that vary: whether `treehouse get --help`
 # advertises --lease and --no-fetch, which (if any) tasks-axi version is on PATH, whether
 # tasks-axi update advertises --archive-body, whether its mv help advertises
 # multi-ID moves, whether quota-axi is on PATH,
 # whether the local backend config opts out of tasks-axi backlog mutations,
-# which no-mistakes version is on PATH, which gh-axi version is on PATH, and
-# which lavish-axi version is on PATH.
+# which no-mistakes version is on PATH, and which gh-axi version is on PATH.
+# No case installs a presentation tool, because a home needs none: that is the
+# state a clone is in, and every case runs in it.
 # Dedicated fleet-sync cases pin the computed bootstrap timeout, explicit
 # override, blank-env defaulting, partial-output relay, and pre-launch timeout
 # scan.
@@ -50,7 +51,6 @@ make_fake_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
   fm_fake_exit0 "$fakebin" tmux node chrome-devtools-axi
-  fm_fake_lavish_axi "$fakebin" FM_FAKE_LAVISH_AXI_VERSION 0.1.46
   cat > "$fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
@@ -401,39 +401,47 @@ ROWS
   pass "bootstrap enforces gh-axi minimum version"
 }
 
-test_lavish_axi_min_version() {
-  local label version mode case_dir fakebin out unavailable n
-  unavailable='PRESENTATION_UNAVAILABLE: lavish-axi (requires >=0.1.46; install: npm install -g lavish-axi && lavish-axi setup hooks) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish'
-  n=0
-  while IFS='^' read -r label version mode; do
+# A HOME WITH NO PRESENTATION TOOL IS A HEALTHY HOME, and bootstrap says so by
+# saying nothing at all about one. Every page the captain reads is served by
+# this home's own server, so an absent presentation tool is not a missing
+# dependency, not a degraded mode, and not a line to explain away - and a
+# version floor for one would be a dependency reintroduced under another name.
+# Driven in both directions on purpose: with none installed, which is a clone,
+# and with an old one installed, which is where a reintroduced floor would
+# show itself.
+test_no_presentation_tool_is_ever_reported() {
+  local label present case_dir fakebin out n=0
+  while IFS='^' read -r label present; do
     [ -n "$label" ] || continue
     n=$((n + 1))
-    case_dir="$TMP_ROOT/lavish-axi-$n"
+    case_dir="$TMP_ROOT/presentation-$n"
     mkdir -p "$case_dir/home/config"
     printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+    # Pin the backend so the verdict is about the presentation tool and not
+    # about whatever session provider the host this suite runs on resolves to.
+    printf '%s\n' tmux > "$case_dir/home/config/backend"
     fakebin=$(make_fake_toolchain "$case_dir")
-    [ "$version" != absent ] || rm -f "$fakebin/lavish-axi"
+    if [ "$present" = absent ]; then
+      PATH="$fakebin:$BASE_PATH" command -v lavish-axi >/dev/null 2>&1 \
+        && fail "$label: the case's own PATH resolves a presentation tool, so it proves nothing"
+    else
+      cat > "$fakebin/lavish-axi" <<SH
+#!/usr/bin/env bash
+[ "\${1-}" = --version ] && printf '%s\n' '$present'
+exit 0
+SH
+      chmod +x "$fakebin/lavish-axi"
+    fi
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
-      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_LAVISH_AXI_VERSION="$version" "$ROOT/bin/fm-bootstrap.sh") \
-      || fail "$label: optional presentation must not fail bootstrap"
-    assert_not_contains "$out" 'MISSING:' "$label: optional presentation must not block nonvisual dispatch"
-    case "$mode" in
-      empty)
-        [ -z "$out" ] || fail "$label: expected silence, got: $out" ;;
-      unavailable)
-        [ "$out" = "$unavailable" ] || fail "$label: expected '$unavailable', got: $out" ;;
-    esac
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh") \
+      || fail "$label: bootstrap failed"
+    [ -z "$out" ] || fail "$label: expected silence, got: $out"
   done <<'ROWS'
-absent lavish-axi permits text fallback^absent^unavailable
-minimum lavish-axi version is accepted^0.1.46^empty
-newer lavish-axi patch is accepted^0.1.47^empty
-newer lavish-axi minor is accepted^0.2.0^empty
-newer lavish-axi major is accepted^1.0.0^empty
-the patch just below the floor permits text fallback^0.1.45^unavailable
-much older lavish-axi minor permits text fallback^0.0.9^unavailable
-unparseable lavish-axi version permits text fallback^lavish-axi development build^unavailable
+no presentation tool installed, which is a clone^absent
+an old presentation tool installed^0.0.9
+a current presentation tool installed^9.9.9
 ROWS
-  pass "bootstrap permits nonvisual work without compatible lavish-axi and retains its presentation floor"
+  pass "bootstrap reports nothing about a presentation tool in any state, so a clone is not told it is broken"
 }
 
 test_tasks_axi_min_version() {
@@ -1380,71 +1388,6 @@ test_diagram_design_skill_is_reported_as_a_manual_install() {
   pass "diagram-design is reported as a manual install, and both shipped layouts count as installed"
 }
 
-# The board only has one stable address because lavish-axi accepts --name. The
-# published package does NOT carry that flag and reports a HIGHER version than
-# the fork build that does, so a version floor cannot answer the question: a
-# feature-less newer release clears the floor and the board quietly comes up at
-# a URL that changes.
-lavish_help_stub() {  # <fakebin> <version> <mode: named|plain|broken>
-  cat > "$1/lavish-axi" <<SH
-#!/usr/bin/env bash
-if [ "\$1" = --version ]; then printf '%s\n' '$2'; exit 0; fi
-if [ "\$1" = --help ]; then
-  case '$3' in
-    named) printf '%s\n' 'usage: lavish-axi <file> [--name <slug>] [--reopen]'; exit 0 ;;
-    plain) printf '%s\n' 'usage: lavish-axi <file> [--reopen]'; exit 0 ;;
-    *) exit 1 ;;
-  esac
-fi
-exit 0
-SH
-  chmod +x "$1/lavish-axi"
-}
-
-test_lavish_named_session_is_a_capability_probe_not_a_version_floor() {
-  local case_dir out
-  case_dir=$(clone_truth_case lavish)
-
-  # The fork build: LOWER version, has the flag. Must be silent.
-  lavish_help_stub "$case_dir/fakebin" 0.1.71 named
-  out=$(run_clone_bootstrap "$case_dir")
-  case "$out" in
-    *PRESENTATION_UNSTABLE_URL*) fail "a build accepting --name should be silent, got: $out" ;;
-    *PRESENTATION_UNAVAILABLE*) fail "a build over the floor should not be reported unavailable, got: $out" ;;
-  esac
-
-  # The published build: HIGHER version, no flag. This is the case a floor misses.
-  lavish_help_stub "$case_dir/fakebin" 0.1.73 plain
-  out=$(run_clone_bootstrap "$case_dir")
-  case "$out" in
-    *"PRESENTATION_UNSTABLE_URL: lavish-axi 0.1.73 does not accept --name"*) ;;
-    *) fail "a newer build without --name should be reported, got: $out" ;;
-  esac
-  case "$out" in
-    *PRESENTATION_UNAVAILABLE*) fail "a build over the floor must not also report unavailable, got: $out" ;;
-  esac
-
-  # Unreadable help is NOT a pass: it is reported as unverified.
-  lavish_help_stub "$case_dir/fakebin" 0.1.73 broken
-  out=$(run_clone_bootstrap "$case_dir")
-  case "$out" in
-    *"PRESENTATION_UNSTABLE_URL: could not read lavish-axi --help"*) ;;
-    *) fail "an unreadable --help should be reported unverified, got: $out" ;;
-  esac
-
-  # Below the floor, only the pre-existing unavailable line fires.
-  lavish_help_stub "$case_dir/fakebin" 0.1.40 plain
-  out=$(run_clone_bootstrap "$case_dir")
-  case "$out" in
-    *PRESENTATION_UNAVAILABLE*) ;;
-    *) fail "a build below the floor should still report unavailable, got: $out" ;;
-  esac
-  case "$out" in
-    *PRESENTATION_UNSTABLE_URL*) fail "below the floor must not report both lines, got: $out" ;;
-  esac
-  pass "the board --name capability is probed directly, and an unreadable probe reports unverified rather than passing"
-}
-
 # An experimental backend must never be silent, however it was selected. The
 # pre-existing auto-detect notice covers only herdr and cmux, which left an
 # explicitly configured zellij or orca - neither with a dedicated CI lane -
@@ -1860,7 +1803,7 @@ SH
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_gh_axi_min_version
-test_lavish_axi_min_version
+test_no_presentation_tool_is_ever_reported
 test_tasks_axi_min_version
 test_quota_axi_min_version
 test_git_is_required_with_supported_install_instruction
@@ -1888,7 +1831,6 @@ test_crew_dispatch_validation
 test_bootstrap_creates_the_home_data_directory
 test_bootstrap_refuses_a_data_path_that_is_not_a_directory
 test_diagram_design_skill_is_reported_as_a_manual_install
-test_lavish_named_session_is_a_capability_probe_not_a_version_floor
 test_experimental_backend_is_always_stated
 test_claude_permission_starter_is_offered_then_merged_on_consent
 test_claude_permission_probe_counts_every_settings_file

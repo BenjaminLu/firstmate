@@ -1002,39 +1002,31 @@ test_scout_and_secondmate_load_decision_hold_policy() {
   pass "fm-brief.sh: investigation and visual-review completions load the shared decision policy"
 }
 
-# A scout brief offers the Lavish review loop only when bootstrap confirms the
-# supported lavish-axi floor at scaffold time; a missing or older build gets a
-# text-report instruction instead, so a scout never drives a below-floor Lavish.
-test_scout_lavish_line_follows_presentation_floor() {
-  local base label version expect case_dir fakebin brief n=0
-  local hosting='you may host the Lavish review loop yourself'
-  local text_only='deliver your findings as a text report without Lavish'
+# A VISUAL SCOUT IS OFFERED ITS REVIEW LOOP WITH NOTHING INSTALLED. The loop
+# used to be conditional on an external presentation tool, so a clone that had
+# none scaffolded a scout told to deliver text instead. The home serves the
+# artifact itself now, so the offer is unconditional - and this case runs with
+# a PATH that has no presentation tool on it at all, which is the state a
+# clone is in.
+test_scout_visual_review_loop_needs_nothing_installed() {
+  local base case_dir fakebin brief
   base=$(fm_test_base_path_sans "${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" lavish-axi)
-  while IFS='^' read -r label version expect; do
-    [ -n "$label" ] || continue
-    n=$((n + 1))
-    case_dir="$TMP_ROOT/scout-lavish-$n"
-    mkdir -p "$case_dir/home/data"
-    fakebin=$(fm_fakebin "$case_dir")
-    [ "$version" = absent ] || fm_fake_lavish_axi "$fakebin" FM_FAKE_LAVISH_AXI_VERSION "$version"
-    PATH="$fakebin:$base" FM_HOME="$case_dir/home" \
-      "$ROOT/bin/fm-brief.sh" scout-lavish alpha --scout >/dev/null \
-      || fail "$label: scout scaffold failed"
-    brief="$case_dir/home/data/scout-lavish/brief.md"
-    if [ "$expect" = hosting ]; then
-      assert_grep "$hosting" "$brief" "$label: scout brief did not offer the Lavish review loop"
-      assert_no_grep "$text_only" "$brief" "$label: scout brief withheld Lavish from a compatible build"
-    else
-      assert_grep "$text_only" "$brief" "$label: scout brief did not ask for a text report"
-      assert_no_grep "$hosting" "$brief" "$label: scout brief offered a below-floor Lavish"
-    fi
-  done <<'ROWS'
-lavish-axi at the floor^0.1.46^hosting
-lavish-axi above the floor^0.2.0^hosting
-lavish-axi just below the floor^0.1.45^text
-absent lavish-axi^absent^text
-ROWS
-  pass "fm-brief.sh: scout Lavish hosting follows the bootstrap lavish-axi floor"
+  case_dir="$TMP_ROOT/scout-visual"
+  mkdir -p "$case_dir/home/data"
+  fakebin=$(fm_fakebin "$case_dir")
+  PATH="$fakebin:$base" command -v lavish-axi >/dev/null 2>&1 \
+    && fail "the case's own PATH still resolves a presentation tool, so it proves nothing"
+  PATH="$fakebin:$base" FM_HOME="$case_dir/home" \
+    "$ROOT/bin/fm-brief.sh" scout-visual alpha --scout >/dev/null \
+    || fail "scout scaffold failed with no presentation tool installed"
+  brief="$case_dir/home/data/scout-visual/brief.md"
+  assert_grep 'you may host that review loop yourself' "$brief" \
+    "scout brief did not offer the review loop"
+  assert_grep 'bin/fm-board-live.sh publish' "$brief" \
+    "scout brief did not name the command that gives the artifact an address"
+  ! grep -qi lavish "$brief" \
+    || fail "scout brief still names the removed presentation tool"
+  pass "fm-brief.sh: a visual scout gets its review loop with nothing installed"
 }
 
 # Scout and secondmate paths still scaffold well-formed briefs.
@@ -1308,7 +1300,7 @@ test_pause_verb_override_renders_all_brief_scaffolds
 test_ship_and_scout_teach_validation_round_pause
 test_scout_and_secondmate_load_decision_hold_policy
 test_scout_and_secondmate_scaffold
-test_scout_lavish_line_follows_presentation_floor
+test_scout_visual_review_loop_needs_nothing_installed
 test_no_brief_asks_the_worker_for_a_decision_packet
 test_review_brief_posts_on_the_pull_request
 test_review_brief_carries_the_four_disciplines

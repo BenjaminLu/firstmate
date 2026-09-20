@@ -6,9 +6,7 @@
 #          exits 0.
 #          Silent = all good.
 #          Lines: "MISSING: <tool> (install: <command>)",
-#                 "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=<floor>; install: <command>) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
-#                 "PRESENTATION_UNSTABLE_URL: <why the board gets no stable address>",
 #                 "CLAUDE_PERMISSIONS: <n> of this repository's toolchain commands
 #                 are not pre-approved in <settings> ... merge with: <command>",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
@@ -64,19 +62,9 @@
 #          bin/fm-spawn.sh sends --no-fetch unconditionally on that floor.
 #          no-mistakes is also MISSING when its installed version is older than
 #          1.46.0 (structured pipeline attestation floor; see CONTRIBUTING.md).
-#          The AXI-family floor policy is owned beside GH_AXI_MIN and
-#          LAVISH_AXI_MIN below; the per-tool owners point there. An installed
-#          essential build below its floor reports MISSING like no-mistakes.
-#          Missing or incompatible lavish-axi reports PRESENTATION_UNAVAILABLE:
-#          nonvisual dispatch continues with plain-text decisions and reports,
-#          but Lavish use still requires a compatible build at or above its floor.
-#          A compatible build is then asked the separate CAPABILITY question the
-#          floor cannot answer - whether it accepts --name, which is what gives
-#          the board one stable /s/<slug> address. The published package does not
-#          carry that flag and reports a HIGHER version than the fork build that
-#          does, so a floor cannot stand in for the probe; bin/fm-lavish-lib.sh
-#          owns it. A probe that cannot run reports PRESENTATION_UNSTABLE_URL as
-#          unverified rather than passing silently.
+#          The AXI-family floor policy is owned beside GH_AXI_MIN below; the
+#          per-tool owners point there. An installed essential build below its
+#          floor reports MISSING like no-mistakes.
 #          diagram-design is reported MISSING_MANUAL when the skill a decision
 #          packet's figures are drawn through is not installed for this harness:
 #          bootstrap can neither detect it on PATH nor install it. The packet is
@@ -199,9 +187,6 @@
 #          Additive and idempotent: adds only the rules that are absent, keeps
 #          every other setting, and refuses rather than rewriting a settings file
 #          it cannot parse or that is not a regular file.
-#        fm-bootstrap.sh lavish-compatible
-#          Exit 0 when lavish-axi meets LAVISH_AXI_MIN, 1 otherwise, printing
-#          nothing; bin/fm-brief.sh uses it to gate scout Lavish hosting.
 set -u
 
 TYPESAFE_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
@@ -241,8 +226,6 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
-# shellcheck source=bin/fm-lavish-lib.sh disable=SC1091
-. "$SCRIPT_DIR/fm-lavish-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # fm-timing-lib.sh is inert unless FM_TIMING_LOG names a file, which only the
@@ -928,7 +911,7 @@ install_cmd() {
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
     no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
-    gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
+    gh-axi|chrome-devtools-axi) echo "npm install -g $1 && $1 setup hooks" ;;
     tasks-axi|quota-axi) echo "npm install -g $1" ;;
     *) return 1 ;;
   esac
@@ -1025,7 +1008,6 @@ NO_MISTAKES_MIN=1.46.0
 # tasks-axi feature probes are an independent defense-in-depth concern, not part
 # of its floor.
 GH_AXI_MIN=0.1.29
-LAVISH_AXI_MIN=0.1.46
 
 treehouse_supports_required_flags() {
   local help
@@ -1718,11 +1700,6 @@ detect_claude_permissions() {
   echo "CLAUDE_PERMISSIONS: $count of this repository's toolchain commands are not pre-approved in any settings file this session reads, so a worker will stop and ask before ordinary fleet commands such as the validation pipeline - checked: $checked; not checked: precedence between those files, deny rules, and any managed policy - merge the shipped list into $settings with: $FM_ROOT/bin/fm-bootstrap.sh install-permissions"
 }
 
-if [ "${1:-}" = "lavish-compatible" ]; then
-  tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"
-  exit
-fi
-
 # The consent half of the detect-then-ask-then-install rule: only ever reached
 # because the captain approved the CLAUDE_PERMISSIONS line above. Adds the
 # missing rules and nothing else; re-running it after a merge is a no-op.
@@ -1841,41 +1818,12 @@ detect_local_tools() {
   if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
     echo "MISSING: gh-axi (install: $(install_cmd gh-axi))"
   fi
-  if ! tool_version_at_least lavish-axi "$LAVISH_AXI_MIN"; then
-    echo "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=$LAVISH_AXI_MIN; install: $(install_cmd lavish-axi)) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish"
-  else
-    detect_lavish_named_session
-  fi
   if command -v quota-axi >/dev/null 2>&1 && ! fm_quota_axi_compatible; then
     echo "MISSING: quota-axi (install: $(install_cmd quota-axi))"
   fi
   if command -v tasks-axi >/dev/null 2>&1 && ! fm_tasks_axi_compatible; then
     echo "MISSING: tasks-axi (install: $(install_cmd tasks-axi))"
   fi
-}
-
-# The board's stable /s/<slug> URL needs lavish-axi's --name, and the version
-# floor above cannot answer that question - the published release is NEWER than
-# the fork build that carries the flag, so a floor a feature-less release clears
-# reports a working presentation layer and the board quietly comes up at a URL
-# that changes. fm-lavish-lib.sh owns the probe and why it is a probe.
-#
-# Only reached when the floor already passed, so lavish-axi is present and
-# compatible here and the two lines never both fire for one install. An
-# unverifiable probe is reported as unverifiable rather than folded into either
-# verdict: the board degrades to a plain open in that case too, so a silent pass
-# would be the one outcome that hides a URL the captain's rule depends on.
-detect_lavish_named_session() {
-  fm_lavish_named_session_support
-  case $? in
-    0) return 0 ;;
-    1)
-      echo "PRESENTATION_UNSTABLE_URL: lavish-axi $(tool_version lavish-axi) does not accept --name, so the board opens at a generated session URL that changes instead of one stable address - the published package does not carry that flag; install a build that does before relying on one captain-facing URL"
-      ;;
-    *)
-      echo "PRESENTATION_UNSTABLE_URL: could not read lavish-axi --help, so whether the board gets one stable address could not be verified - re-run once lavish-axi answers --help"
-      ;;
-  esac
 }
 
 # A fork's workflows stay DORMANT until its owner enables them in the Actions

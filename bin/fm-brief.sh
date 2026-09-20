@@ -20,8 +20,9 @@
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
-#   It offers the Lavish review loop only when `fm-bootstrap.sh lavish-compatible`
-#   confirms the supported lavish-axi floor; otherwise it asks for a text report.
+#   A visual deliverable is served from this home's own server, so the review
+#   loop it offers needs nothing installed (bin/fm-board-live.sh owns the
+#   publication and the address).
 #   --review writes the reviewer contract: the deliverable is one review POSTED on
 #   the named pull request, and this file is the single owner of what that review
 #   owes (the four review disciplines, the finding format, and the local record).
@@ -520,11 +521,7 @@ exit 0
 fi
 
 if [ "$KIND" = scout ]; then
-if "$SCRIPT_DIR/fm-bootstrap.sh" lavish-compatible >/dev/null 2>&1; then
-  LAVISH_LINE='If your deliverable is a visual artifact the captain will review and iterate on, you may host the Lavish review loop yourself (poll, revise, re-serve, staying alive) instead of handing it back to firstmate. Every string the captain reads on that artifact carries all three of EN / 繁體 / 简体, like every other captain-facing visual surface.'
-else
-  LAVISH_LINE='Lavish is unavailable (lavish-axi is missing or below its supported version floor), so deliver your findings as a text report without Lavish, even for a visual deliverable.'
-fi
+VISUAL_LINE='If your deliverable is a visual artifact the captain will review and iterate on, you may host that review loop yourself (publish, revise, republish, staying alive) instead of handing it back to firstmate. Publish it with '"'"'$FM_ROOT/bin/fm-board-live.sh publish <key> <absolute-page-path>'"'"', which prints the address and needs nothing installed beyond node, and give the captain that address. Every string the captain reads on that artifact carries all three of EN / 繁體 / 简体, like every other captain-facing visual surface.'
 cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
@@ -588,7 +585,7 @@ $INBOX_SECTION
 # Definition of done
 Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
-$LAVISH_LINE
+$VISUAL_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
 When the report is complete, append \`done: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.

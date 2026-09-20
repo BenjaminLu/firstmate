@@ -5,8 +5,11 @@
 # the SVG contract clause by clause, a needs-decision packet owes one figure
 # comparing every option, card emits a board-ready Captain's Call item, render
 # writes one self-contained HTML page whose decision card answers the five
-# questions and whose figures ride it as inline SVG, and serve opens that page
-# with lavish-axi under a stable name and hands the card its URL.
+# questions and whose figures ride it as inline SVG.
+#
+# NO PRESENTATION TOOL IS PUT ON PATH BY ANY CASE. The packet is rendered and
+# served by this home alone, so the state every case runs in is the state a
+# clone is in.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -31,74 +34,14 @@ make_home() {  # <name> -> prints home; sets nothing else
   git -C "$wt" add b.txt
   git -C "$wt" -c user.name=t -c user.email=t@example.invalid commit -qm "add b"
   fm_write_meta "$home/state/pk-1.meta" "worktree=$wt" "project=$repo" "kind=ship"
-  make_lavish_stub "$home" nonames
   printf '%s\n' "$home"
 }
-run_packet_lavish() {  # <home> <args...>: run_packet with the stub's state bound
-  local home=$1; shift
-  LAVISH_FAKE_STATE="$home/lavish-state" run_packet "$home" "$@"
-}
-
 run_packet() {  # <home> <args...>
   local home=$1; shift
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     PATH="$home/fakebin:$TMP_ROOT/nogh:$PATH" "$PACKET" "$@"
 }
 mkdir -p "$TMP_ROOT/nogh"  # no gh on PATH so the PR facts stay offline and deterministic
-# card and serve read lavish-axi's listing; without a stub a developer machine's
-# real server would answer, so every home gets one that lists nothing until a
-# serve opens the page. The listing shapes follow lavish-axi 0.1.71 (with
-# --name, a `name` column and the /s/<slug> URL) and an older release without.
-make_lavish_stub() {  # <home> <names|nonames>: a lavish-axi that records its args
-  local fakebin
-  fakebin=$(fm_fakebin "$1")
-  mkdir -p "$1/lavish-state"
-  cat > "$fakebin/lavish-axi" <<'SH'
-#!/usr/bin/env bash
-set -u
-state=${LAVISH_FAKE_STATE:?}
-# Every invocation in order, so a test can assert what serve asked the vendor
-# for and when. A bare listing logs as `<list>`.
-printf '%s\n' "${*:-<list>}" >> "$state/calls"
-case "${1-}" in
-  --version) printf '0.1.71\n'; exit 0 ;;
-  --help)
-    # Inert: help never opens, lists, or ends a session. A release that names
-    # sessions advertises the flag here; the `names` marker selects it.
-    printf 'help[1]: "Run `lavish-axi <html-file>` to open a session"\n'
-    if [ -e "$state/names" ]; then
-      printf 'help[2]: "Pass `--name <slug>` (lowercase letters, digits, hyphens) to give a session a stable URL"\n'
-    fi
-    exit 0 ;;
-  '')
-    if [ -e "$state/names" ]; then
-      printf 'sessions[1]{file,status,url,name,pending_prompts}:\n'
-      [ -s "$state/open" ] && printf '  %s,open,"http://127.0.0.1:4387/s/%s",%s,0\n' "$(cat "$state/open")" "$(cat "$state/name")" "$(cat "$state/name")"
-      printf 'help[2]: "Run `lavish-axi <html-file>` to open a session","Pass `--name <slug>` (lowercase letters, digits, hyphens) to give a session a stable URL"\n'
-    else
-      printf 'sessions[1]{file,status,url,pending_prompts}:\n'
-      [ -s "$state/open" ] && printf '  %s,open,"http://127.0.0.1:4387/session/deadbeef",0\n' "$(cat "$state/open")"
-      printf 'help[1]: "Run `lavish-axi <html-file>` to open a session"\n'
-    fi
-    exit 0 ;;
-esac
-file=$1; shift
-printf '%s\n' "$*" >> "$state/args"
-name=''
-while [ "$#" -gt 0 ]; do
-  case "$1" in --name) name=$2; shift 2 ;; *) shift ;; esac
-done
-real=$(cd "$(dirname "$file")" && pwd -P)/$(basename "$file")
-printf '%s\n' "$real" > "$state/open"
-printf '%s\n' "$name" > "$state/name"
-printf 'session:\n  file: %s\n  status: opened\n' "$real"
-exit 0
-SH
-  chmod +x "$fakebin/lavish-axi"
-  rm -f "$1/lavish-state/names" "$1/lavish-state/calls"
-  [ "$2" = names ] && : > "$1/lavish-state/names"
-  return 0
-}
 
 fill_prose() {  # <packet>: replace the two prose placeholders with real content
   python3 - "$1" <<'PY'
@@ -1750,6 +1693,10 @@ PY
   # them, so the page and the card do not disagree about what the packet says
   assert_grep 'class="pk-said__link" href="https://ci.example.test/run/7"' "$page" \
     "a trilingual prose line lost the link it named"
+  # The link keeps its own safety attributes and carries nothing for the
+  # external viewer that used to host this page.
+  assert_grep 'rel="noopener"' "$page" "a rendered link lost its safety attributes"
+  ! grep -qi lavish "$page" || fail "the rendered page still carries markup for the removed viewer"
   assert_grep 'data-hant="CI 那一輪"' "$page" "the link label does not switch with the page"
   assert_no_grep 'id="pk-decision"' "$page" "a done packet rendered a decision card"
   [ "$(section_order "$page")" = 'id="s_changed" id="s_session" id="s_evidence" id="s_more" ' ] \
@@ -1827,58 +1774,25 @@ PY
   pass "the rendered decision card answers all five questions and the recommendation"
 }
 
-test_serve_opens_the_page_under_a_stable_name_and_the_card_stays_one_address() {
-  local home out packet page real
-  home=$(make_home serve)
-  make_lavish_stub "$home" names
+# THE PAGE CARRIES NOTHING FOR A TOOL THAT IS NOT THERE. The rendered page used
+# to mark its controls and links for an external viewer that hosted it. Nothing
+# hosts it but this home now, so that markup is a dependency left standing
+# rather than removed, and this case is what keeps it from coming back.
+test_the_page_carries_no_markup_for_a_removed_viewer() {
+  local home packet page
+  home=$(make_home no-viewer-markup)
   run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
   packet="$home/data/pk-1/packet.md"
   page="$home/data/pk-1/packet.html"
   fill_prose "$packet"
   fill_decision "$packet" "$GOOD_DECISION"
   fill_figures "$packet"
-  out=$(run_packet_lavish "$home" serve pk-1) || fail "serve failed: $out"
-  assert_present "$page" "serve did not render the page"
-  assert_contains "$out" "page: $page" "serve did not report the page: $out"
-  assert_contains "$out" "url: http://127.0.0.1:4387/s/packet-pk-1" "serve did not print the named URL: $out"
-  assert_grep '--name packet-pk-1' "$home/lavish-state/args" "serve did not open the page under its stable name"
-  real=$(cd "$(dirname "$page")" && pwd -P)/packet.html
-  assert_equals "$(cat "$home/lavish-state/open")" "$real" "serve opened a different file"
-  # The card carries the whole packet, so there is no second address to send the
-  # captain to and the card never offers one - served page or not.
-  out=$(run_packet_lavish "$home" card pk-1) || fail "card failed after serve: $out"
-  printf '%s' "$out" | jq -e '(has("packet_url") | not) and ((.packet.sections | length) > 0)' >/dev/null \
-    || fail "card sent the captain to a second address: $out"
-  # and composing a card never rewrites the served page behind the reader
-  assert_equals "$(cat "$home/lavish-state/open")" "$real" "card opened or re-served a page of its own"
-  # An older lavish-axi without --name gets the plain open and the keyed URL.
-  home=$(make_home serve-keyed)
-  run_packet "$home" scaffold pk-1 >/dev/null || fail "scaffold failed"
-  fill_prose "$home/data/pk-1/packet.md"
-  out=$(run_packet_lavish "$home" serve pk-1) || fail "serve failed without name support: $out"
-  assert_contains "$out" "url: http://127.0.0.1:4387/session/deadbeef" "serve did not print the keyed URL: $out"
-  assert_no_grep '--name' "$home/lavish-state/args" "serve passed --name to a lavish-axi that lacks it"
-  pass "serve opens the page under a stable name, and a card still sends nobody to it"
-}
-
-test_name_support_probe_never_lists_before_the_session_is_opened() {
-  local home packet first
-  home=$(make_home name-probe-inert)
-  make_lavish_stub "$home" names
-  run_packet "$home" scaffold pk-1 --kind needs-decision >/dev/null || fail "scaffold failed"
-  packet="$home/data/pk-1/packet.md"
-  fill_prose "$packet"
-  fill_decision "$packet" "$GOOD_DECISION"
-  fill_figures "$packet"
-  run_packet_lavish "$home" serve pk-1 >/dev/null || fail "serve failed"
-  # A listing is the read serve's open/reopen decision consumes, so nothing
-  # serve asks before opening the session may be one. Pinning the FIRST call
-  # keeps a future probe from answering a question serve has not asked yet.
-  first=$(sed -n '1p' "$home/lavish-state/calls")
-  case "$first" in
-    '<list>') fail "serve listed sessions before opening one" ;;
-  esac
-  pass "the session-name probe never lists sessions before the page session is opened"
+  run_packet "$home" render pk-1 >/dev/null || fail "render failed"
+  assert_present "$page" "render did not write the page"
+  ! grep -qi lavish "$page" || fail "the rendered page still carries markup for the removed viewer"
+  # And the card still composes with no presentation tool anywhere on PATH.
+  run_packet "$home" card pk-1 >/dev/null || fail "card failed with no presentation tool installed"
+  pass "the rendered page and the card need no presentation tool and carry no markup for one"
 }
 
 test_scaffold_is_generated_from_the_worktree_and_refuses_to_overwrite
@@ -1896,8 +1810,7 @@ test_a_link_the_board_would_refuse_rides_the_card_as_text
 test_path_and_bad_ids_are_refused
 test_render_writes_a_self_contained_page_for_a_done_packet
 test_render_decision_card_answers_the_five_questions
-test_serve_opens_the_page_under_a_stable_name_and_the_card_stays_one_address
-test_name_support_probe_never_lists_before_the_session_is_opened
+test_the_page_carries_no_markup_for_a_removed_viewer
 test_the_card_carries_the_packet_itself
 test_a_needs_decision_packet_with_no_figures_is_refused
 test_an_empty_language_line_is_that_language_missing

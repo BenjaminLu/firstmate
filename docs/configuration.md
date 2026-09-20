@@ -245,6 +245,22 @@ That is accepted exposure rather than a defence, it predates the allowlist this 
 `bin/fm-board-live.mjs`'s header owns what an event may change, why the wire carries whole board state rather than deltas, why a change needing new prose marks the board behind instead of being guessed at, and the inbound message and reply shapes.
 `bin/fm-board-answer.sh`'s header owns what an accepted answer then reaches, and `.agents/skills/bearings/assets/live-transport.js` owns the `window.fmBoardLive` seam a board calls to send one.
 
+## Serving a page from this home
+
+Every page firstmate renders for the captain - the bearings board, a decision packet, and anything shaped like one - is served by this home itself, by the one server "Live bearings board" above describes, on the one port it already holds.
+Nothing is installed to do it, so a clone on a machine configured with nothing gets an address rather than a missing-tool error, and there is no second process to start, to find, or to go stale.
+
+`bin/fm-board-live.sh publish <key> <absolute-page-path>` is the whole interface: it starts this home's server if none is running, records the publication, and prints `url: http://127.0.0.1:<port>/p/<key>`.
+A publication is one file in `state/pages/` named by the key and holding the page's absolute path, so publishing takes effect immediately and a restarted server serves exactly what that directory says.
+
+The server reads that directory on every request and answers from the table it finds there, so a request selects a published key and never names a file.
+`state/` and `data/` are unreachable by it rather than filtered out of it, and a published path that is relative, or a page that is a symlink, is refused rather than followed.
+One publication serves one file, which is the whole surface because the pages this fleet renders inline everything they need.
+
+Every response carries `x-frame-options: DENY` with CSP `frame-ancestors 'none'`, and only `127.0.0.1:<port>` and `localhost:<port>` are answered.
+Both are load-bearing rather than decoration: without frame denial any page on any other origin can frame a captain-facing page and take the captain's click inside a document whose origin is this server's own, and without the `Host` allowlist a name an attacker controls can be pointed at 127.0.0.1 until the browser treats this server as same-origin with them.
+Responses also carry `nosniff`, `no-store`, and `no-referrer`.
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` sets `test.evidence.store_in_repo: false` and pins `commands.lint` to `bin/fm-lint.sh`, the same owner CI invokes.
@@ -564,12 +580,11 @@ On session start the first mate detects what its required toolchain is missing o
 It installs automatically supported tools only after you say go; manual-only tools remain for you to install from the printed instructions.
 Required tools come in two parts: a universal toolchain every home needs regardless of backend, and a per-backend delta that follows the runtime backend actually resolved for this home.
 The essential universal toolchain is node, git, gh with GitHub auth via `gh auth login`, no-mistakes v1.46.0 or newer, compatible gh-axi, chrome-devtools-axi, compatible tasks-axi per "Backlog backend" above, and compatible quota-axi.
-[`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the axi-family floor policy and the gh-axi and lavish-axi floors, while [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) hold their own tools' floor constants.
+[`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the axi-family floor policy and the gh-axi floor, while [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) hold their own tools' floor constants.
 This section is the single owner of that universal toolchain list; backend guides' prerequisites point here and add only their backend-specific tools.
 In that list, no-mistakes runs the validation pipeline, gh-axi and chrome-devtools-axi cover GitHub and browser operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
-Lavish is a presentation-only dependency for visual decisions and reports; nonvisual work can proceed with plain text when it is unavailable.
-Its version floor and the separate question of whether the installed build accepts `--name` are independent: `--name` is what gives the bearings board one stable `/s/<slug>` address, the published package does not carry it, and the published version is HIGHER than the fork build that does - so a floor cannot stand in for the capability and bootstrap probes it directly, reporting `PRESENTATION_UNSTABLE_URL` when the flag is absent or the probe could not run.
-[`bin/fm-lavish-lib.sh`](../bin/fm-lavish-lib.sh) owns that probe.
+No presentation tool appears in that list, and that is the point: every page firstmate renders for the captain is served by this home's own server, so a clone gets the captain's surfaces with nothing installed beyond node.
+"Serving a page from this home" below owns that server, its addresses, and what a response carries.
 The `diagram-design` skill is an optional worker-harness dependency bootstrap does not detect and cannot install: a decision packet's figures are drawn through that skill rather than hand-written, and `bin/fm-packet.sh verify` refuses a packet that owes figures and has none; [`bin/fm-packet.sh`'s header](../bin/fm-packet.sh) owns the figure contract.
 The per-backend delta is required only for the backend resolved from `FM_BACKEND`, then `config/backend`, then runtime auto-detection, then default `tmux`, so a home is never told to install a tool an inactive backend or feature would need.
 That delta is owned in code by `fm_backend_required_tools` in `bin/fm-backend.sh`: the resolved backend's own session-provider CLI (`tmux`, `herdr`, `zellij`, `orca`, or `cmux`), `jq` for the JSON-emitting adapters (`herdr`, `zellij`, `cmux`) whose spawn and liveness paths parse the backend's JSON output, and the `treehouse` worktree provider for every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`).
@@ -582,7 +597,6 @@ When Relay is opted in, bootstrap also requires `curl` and `jq` before arming th
 `tasks-axi` and `quota-axi` are essential bootstrap tools in every profile.
 An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm install -g tasks-axi)`; when `config/backlog-backend` is not `manual`, a home with a configured non-markdown adapter or a markdown backlog refuses lifecycle mutation until compatible `tasks-axi` is on `PATH`, while a manual-backend home keeps its backlog hand-edited.
 An absent or incompatible `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)`.
-An absent or incompatible `lavish-axi` reports `PRESENTATION_UNAVAILABLE` with its required floor, install command, and explicit text fallback; [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns the response and compatibility check before visual use.
 An absent or too-old `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)`; firstmate cannot resolve a profile array without a compatible binary.
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.

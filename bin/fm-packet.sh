@@ -318,11 +318,11 @@
 #            shares the board's stored choice. Copy objects in the decision
 #            block render per language; plain strings render as written. A
 #            packet that fails verify is refused. Prints `page: <path>`.
-# serve      Render, then open the page with lavish-axi - under the stable
-#            session name packet-<task-id> when the installed lavish-axi
-#            advertises --name, else keyed - and print `url: <url>` read from
-#            the server's listing. A session the captain ended is reopened
-#            once, because serve is an explicit ask for their attention.
+# serve      Render, then publish the page from this home's own server and
+#            print `url: <url>`. Nothing is installed to do it and nothing is
+#            probed for: the address is the home's own, and publishing the
+#            same packet again re-points it and prints the same address.
+#            bin/fm-board-live.sh owns the publication and the address.
 # path       Print the packet path for the task.
 #
 # A packet is written when a task's brief asks for one; no brief asks by
@@ -343,8 +343,6 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
-# shellcheck source=bin/fm-lavish-lib.sh
-. "$SCRIPT_DIR/fm-lavish-lib.sh"
 
 PACKET_SCHEMA=fm-packet.v1
 DECISION_SCHEMA=fm-packet-decision.v1
@@ -1509,7 +1507,7 @@ def inline(text):
             label, url = m.group(1), html.unescape(m.group(2))
             if not safe_href(url):
                 return m.group(0)
-            return '<a href="%s" target="_blank" rel="noopener" data-lavish-action="open-link">%s</a>' % (esc(url), label)
+            return '<a href="%s" target="_blank" rel="noopener">%s</a>' % (esc(url), label)
         p = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", link, p)
         out.append(p)
     return "".join(out)
@@ -1598,8 +1596,7 @@ def md_line(value):
         out.append(span("pk-said", *copy_attrs(item["text"])))
     for ref in item.get("links", []):
         text, attrs = copy_attrs(ref["label"])
-        out.append('<a class="pk-said__link" href="%s" target="_blank" rel="noopener" '
-                   'data-lavish-action="open-link"%s>%s</a>'
+        out.append('<a class="pk-said__link" href="%s" target="_blank" rel="noopener"%s>%s</a>'
                    % (esc(ref["url"]), (" " + attrs) if attrs else "", text))
     return "".join(out)
 
@@ -2119,7 +2116,7 @@ a { color: var(--ocean-600); }
     </span>
   </div>
 </header>
-<main class="pk-main" data-lavish-action="packet">
+<main class="pk-main">
   <section class="pk-head">
     <span class="pk-head__badges">KIND_BADGE</span>
     <h1>Packet: TASK_ID</h1>
@@ -2232,58 +2229,33 @@ command_render() {  # <task-id> ; prints `page: <path>`
 }
 
 # ---- serve ------------------------------------------------------------------
-# Verified against lavish-axi 0.1.71: `lavish-axi <file>` exits 0 even when it
-# refuses to reopen a session the captain ended, so liveness is read from the
-# server's own listing (`<file>,<status>,"<url>",...`), exactly as
-# bin/fm-bearings-board.sh does. The installed lavish-axi advertises `--name
-# <slug>` in its help text; an older release gets the plain open and its keyed
-# URL. The probe reads `--help` rather than the bare session listing, because it
-# runs before the page's session is opened and a listing is not inert: it is the
-# same read the open/reopen decision below depends on, so probing with one lets
-# the probe answer a question serve has not asked yet.
+# The packet page is one self-contained file - no network, no CDN, no external
+# fonts - so serving the packet is serving that one file, which is exactly what
+# one publication is. bin/fm-board-live.sh owns the address, what a response
+# carries, and why a request can never name a file - this home has ONE server
+# and the packet is a path on it, never a second one.
 
 page_realpath() {  # <page>
   perl -MCwd=realpath -e '$p = realpath($ARGV[0]); defined($p) or exit 1; print "$p\n"' "$1" 2>/dev/null
 }
 
-page_session_name() {  # <task-id> -> the stable lavish session slug
-  printf 'packet-%s\n' "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+# The key a packet is published under. A task id is already constrained, but
+# this is the name a URL carries, so it is reduced to the publishable alphabet
+# here rather than trusted to be one.
+page_key() {  # <task-id> -> the publication key
+  printf 'packet-%s\n' "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '-')"
 }
 
-
-lavish_open_url() {  # <canonical-page-path> -> the open session's url, or nothing
-  local listing
-  listing=$(lavish-axi 2>/dev/null) || return 1
-  printf '%s\n' "$listing" | awk -v path="$1" '
-    { line = $0; sub(/^[[:space:]]+/, "", line) }
-    index(line, path ",") == 1 {
-      rest = substr(line, length(path) + 2)
-      split(rest, field, ",")
-      if (field[1] == "open") { gsub(/"/, "", field[2]); print field[2]; exit }
-    }'
-}
-
-command_serve() {  # <task-id> ; renders, opens the page, prints `page:` and `url:`
-  local id=${1-} page real url name
-  local -a name_args=()
+command_serve() {  # <task-id> ; renders, publishes the page, prints `page:` and `url:`
+  local id=${1-} page real out
   [ -n "$id" ] || { usage >&2; exit 2; }
   [ "$#" -eq 1 ] || { usage >&2; exit 2; }
-  command -v lavish-axi >/dev/null 2>&1 || fail "lavish-axi is not installed"
   command_render "$id" || exit 1
   page=$(page_path "$id")
   real=$(page_realpath "$page") || fail "cannot resolve the page path: $page"
-  if fm_lavish_named_session_support; then
-    name=$(page_session_name "$id")
-    name_args=(--name "$name")
-  fi
-  lavish-axi "$page" ${name_args[@]+"${name_args[@]}"} >/dev/null || fail "cannot open the packet page with lavish-axi"
-  url=$(lavish_open_url "$real")
-  if [ -z "$url" ]; then
-    lavish-axi "$page" --reopen ${name_args[@]+"${name_args[@]}"} >/dev/null || fail "cannot reopen the packet page with lavish-axi"
-    url=$(lavish_open_url "$real")
-  fi
-  [ -n "$url" ] || fail "the packet page has no open Lavish session after opening it (lavish-axi $(lavish-axi --version 2>/dev/null | tr -d '[:space:]'))"
-  printf 'url: %s\n' "$url"
+  out=$("$SCRIPT_DIR/fm-board-live.sh" publish "$(page_key "$id")" "$real") \
+    || fail "cannot publish the packet page from this home"
+  printf '%s\n' "$out"
 }
 
 case "${1-}" in
