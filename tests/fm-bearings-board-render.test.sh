@@ -854,6 +854,9 @@ test_the_map_says_which_bubbles_are_the_first_mates_own_assessment() {
        options:[{value:"merge", label:"Merge now"}, {value:"hold", label:"Not yet"}]},
       {key:"recorded", type:"decision", repo:"r", title:"The call wrote its own",
        risk:"medium", reversible:"partly", weighed_by:"fleet", blocks:1,
+       allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]},
+      {key:"byhand-full", type:"decision", repo:"r", title:"The first mate filled both slots",
+       risk:"medium", reversible:"partly", weighed_by:"firstmate", blocks:1,
        allow_freeform:true, options:[{value:"a", label:"A"}, {value:"b", label:"B"}]}]}')")
 
   mine=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "merge.t1")')
@@ -865,8 +868,20 @@ test_the_map_says_which_bubbles_are_the_first_mates_own_assessment() {
     || fail "a position the fleet recorded was blamed on the first mate: $out"
   [ "$(printf '%s' "$mine" | jq -r '.dashed')" = "true" ] \
     || fail "a hand-weighted position was drawn as a measurement: $out"
-  # And the note says it, on a plot where no field is missing at all - which is
-  # exactly the case the old single condition suppressed the caveat for.
+  # The `byhand-full` call is the case the old single condition suppressed the
+  # caveat for: nothing about it is missing - the first mate filled both slots -
+  # so the only reason its position is not a fleet measurement is that he wrote
+  # it. Checked on that call directly rather than claimed of the plot, because
+  # the merge card beside it IS missing a field and would satisfy a weaker
+  # reading of this on its own.
+  local full
+  full=$(printf '%s' "$out" | jq -c '.map[] | select(.key == "byhand-full")')
+  [ "$(printf '%s' "$full" | jq -r '.dashed')" = "true" ] \
+    || fail "a fully stated call the first mate weighed was drawn as a measurement: $out"
+  assert_contains "$(printf '%s' "$full" | jq -r '.aria')" "first mate" \
+    "a fully stated call the first mate weighed did not say so: $out"
+  [ "$(printf '%s' "$full" | jq -r '.aria' | grep -c "nobody said whether")" = "0" ] \
+    || fail "a call with nothing missing was described as missing something: $out"
   assert_contains "$(printf '%s' "$out" | jq -r '.map_note')" "his judgement" \
     "the note kept claiming nothing on the plot is weighted by hand: $out"
   pass "the map says which bubbles are the first mate's assessment, not the fleet's"
