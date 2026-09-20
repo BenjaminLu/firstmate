@@ -652,9 +652,19 @@ archived_without_answer() {  # <task-id>
 # nobody typed. So the durability checks no longer fail on this state at all:
 # they report it, and the two commands that own the whole inventory compose
 # one remedy once, from everything they can see.
-drop_remedy_command() {  # <origin> <supplied-ids> <entries> <survivors> <open>
-  local origin=$1 supplied=$2 entries=$3 survivors=$4 open=$5 flags='' entry extra=''
-  for entry in $entries; do
+# A RECONSTRUCTION MUST BE A SUPERSET OF THE INVOCATION IT ANSWERS. Every
+# argument it omits is work that following the message undoes, and when the
+# omitted argument is what made progress the sequence cannot converge. The
+# drops this very run already resolved and validated are exactly that: enter
+# through the singular form the tracked documentation names, with two
+# stranded calls, and a reply that forgot the flag just typed printed the
+# other one, forever.
+drop_remedy_command() {  # <origin> <supplied-ids> <already-dropped> <entries> <survivors> <open>
+  local origin=$1 supplied=$2 already=$3 entries=$4 survivors=$5 open=$6 flags='' entry extra=''
+  for entry in $already $entries; do
+    case "$flags" in
+      *" --drop-unrecoverable $entry"|*" --drop-unrecoverable $entry "*) continue ;;
+    esac
     flags="$flags --drop-unrecoverable $entry"
   done
   # Dropping every attested entry while a status decision is still open
@@ -1007,8 +1017,8 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how>"
 
 # The one refusal both inventory owners raise for unrecoverable entries, from
 # everything they can see rather than from the entry that tripped first.
-fail_unrecoverable_entries() {  # <origin> <supplied> <entries> <survivors> <open>
-  local entries=$3 label
+fail_unrecoverable_entries() {  # <origin> <supplied> <already-dropped> <entries> <survivors> <open>
+  local entries=$4 label
   label=$(printf '%s' "$entries" | tr ' ' ',')
   fail "attested captain call(s) $label $ARCHIVED_UNANSWERABLE; they are not durable captain calls and never can be. To carry each question forward, $RAISE_AGAIN_REMEDY; then retire them from the inventory with $(drop_remedy_command "$@"), which records the drops rather than skipping them"
 }
@@ -2229,8 +2239,8 @@ command_complete() {
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
     [ -z "$unrecoverable" ] \
-      || fail_unrecoverable_entries "$origin" "$supplied" "$unrecoverable" \
-        "$(keys_without "$keys" "$unrecoverable")" "$open"
+      || fail_unrecoverable_entries "$origin" "$supplied" "$dropped_entries" \
+        "$unrecoverable" "$(keys_without "$keys" "$unrecoverable")" "$open"
   fi
 
   if [ -n "$open" ] && [ -z "$keys" ]; then
@@ -2307,9 +2317,10 @@ command_verify() {
     done <<EOF
 $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
-    # Nothing is supplied on a verify, so the remedy names only the metadata.
+    # Nothing is supplied or dropped on a verify, so the remedy names only
+    # what the metadata holds.
     [ -z "$unrecoverable" ] \
-      || fail_unrecoverable_entries "$origin" "" "$unrecoverable" \
+      || fail_unrecoverable_entries "$origin" "" "" "$unrecoverable" \
         "$(keys_without "$keys" "$unrecoverable")" "$open"
   fi
   while IFS=$'\t' read -r key _verb _summary; do

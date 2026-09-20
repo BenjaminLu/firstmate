@@ -4791,7 +4791,12 @@ test_verify_names_a_complete_that_works() {
 run_to_fixed_point() {  # <home> <origin> <first-output> [<lead>]
   local home=$1 origin=$2 out=$3 lead=${4:-} cmd seen='' i=0
   while [ "$i" -lt 6 ]; do
-    cmd=$(named_captain_hold_command "$out" "$lead") || return 1
+    cmd=$(named_captain_hold_command "$out" "$lead") || {
+      # Named nothing runnable is a different failure from did not converge,
+      # and its two sibling paths below each say which they are.
+      printf 'named no command: %s\n' "$out"
+      return 1
+    }
     case " $seen " in
       *" $cmd "*) printf 'loop: %s\n' "$cmd"; return 2 ;;
     esac
@@ -4872,17 +4877,59 @@ test_the_drop_remedy_reaches_a_fixed_point() {
       || fail "could not create $out"
     run_captain "$home" hold "$out" --reason "captain choice pending" >/dev/null \
       || fail "could not hold $out"
+  done
+  # Attested while both were durable, which is how an inventory comes to hold
+  # entries that are only later closed outside this owner - the canonical
+  # shape, and the one where the documented singular drop is enterable.
+  run_captain "$home" complete "$origin" "$call" "$second" >/dev/null \
+    || fail "could not attest the two calls while they were still durable"
+  for out in "$call" "$second"; do
     tasks_in "$home" "done" "$out" >/dev/null || fail "could not close $out"
   done
-  out=$(run_captain "$home" complete "$origin" "$call" "$second" 2>&1) \
-    && fail "the attestation passed two unanswered captain calls: $out"
+  # SEEDED FROM THE DOCUMENTED ENTRY POINT, not from the shape the code makes
+  # convenient. .agents/skills/captain-hold-lifecycle/SKILL.md and
+  # docs/captain-hold-lifecycle.md both name the singular form with no
+  # positional ids, so that is what an agent following this repository's own
+  # instructions types - and entering that way is what left the reconstruction
+  # with a flag to lose.
+  out=$(run_captain "$home" verify "$origin" 2>&1) \
+    && fail "the gate passed two unanswered captain calls: $out"
+  out=$(run_captain "$home" complete "$origin" --drop-unrecoverable "$call" 2>&1) \
+    && fail "the documented singular drop passed two unanswered captain calls: $out"
   out=$(run_to_fixed_point "$home" "$origin" "$out" "retire them from the inventory with ") \
-    || fail "two unrecoverable entries did not converge: $out"
+    || fail "the documented singular drop did not converge: $out"
   assert_contains "$out" "$call" "the converged run did not drop the first entry: $out"
   assert_contains "$out" "$second" "the converged run did not drop the second entry: $out"
   run_captain "$home" verify "$origin" >/dev/null \
     || fail "the gate did not pass after both entries were retired"
   pass "the drop remedy reaches a fixed point in both states it fires in"
+}
+
+# THE DOCUMENTED DEFERRAL FORM, driven exactly as the skill writes it:
+# `hold <id> --reason "<reason>" --until <date>` is a RE-hold of a task that
+# already exists, with no --title and no --repo. Every other --until case in
+# this file is a create, which is the shape the code makes convenient rather
+# than the one the tracked documentation names - and an entry shape nothing
+# drives is how a defect survives a round that was ruled to have fixed it.
+# The next --until case belongs beside this one, not beside a create.
+test_the_documented_deferral_rehold_form_works() {
+  local home show
+  home=$(make_home documented-deferral)
+  tasks_in "$home" add sample-later-rehold "Decide the route" --repo sample >/dev/null \
+    || fail "could not create the re-hold fixture"
+  run_captain "$home" hold sample-later-rehold --reason "captain choice pending" >/dev/null \
+    || fail "could not place the initial hold"
+  run_captain "$home" hold sample-later-rehold \
+    --reason "captain says later" --until 2027-03-01 >/dev/null \
+    || fail "the re-hold form the skill documents was refused"
+  show=$(tasks_in "$home" show sample-later-rehold --full) || fail "the re-held task disappeared"
+  assert_contains "$show" "held: yes" "the documented re-hold did not leave the task held"
+  assert_contains "$show" "hold_until: 2027-03-01" \
+    "the documented re-hold did not record the captain's date"
+  assert_contains "$show" "hold_kind: captain" "the documented re-hold lost the captain hold kind"
+  assert_contains "$show" "hold_reason: captain says later" \
+    "the documented re-hold did not replace the reason the board shows"
+  pass "the deferral re-hold form the skill documents works as written"
 }
 
 # --- cleanup owns the close of a row whose worker is still up ----------------
@@ -5123,6 +5170,7 @@ test_release_frees_held_work
 test_hold_stamp_precedes_hold_visibility
 test_interrupted_answer_preserves_hold_age
 test_deferral_leaves_captains_call_until_due
+test_the_documented_deferral_rehold_form_works
 test_out_of_band_close_is_recordable
 test_visual_review_uses_shared_completion_owner
 test_none_inventory_and_resolved_prose_do_not_create_holds
